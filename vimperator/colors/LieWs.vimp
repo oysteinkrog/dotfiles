@@ -1,0 +1,269 @@
+﻿" Note: "{{{1
+" ==Vimperator_Color_Scheme==
+" name: LieWs
+" Refer to indigo.vimp, sweets.vimp
+
+
+" Color "{{{1
+highlight Boolean color: #5d89ff; background: #1a1b1c;
+highlight Function font-weight: bold; color: #22a5ef; background: #303030;
+highlight Null font-weight: bold; color: #ff9f55; background: #303030;
+highlight Number font-weight: bold; color: #7dd98d; background: #303030;
+highlight Object font-weight: bold; color: #4ea9f8; background: #303030;
+highlight String font-weight: bold; color: #ffc8e6; background: #1a1b1c;
+highlight Mapping font-weight: bold; color: #2f5fcf; background: #303030;
+
+highlight Key font-weight: bold; color: #4156f6; background: #303030;
+
+highlight Disabled color: #8f8f8f; background: #1a1b1c;
+highlight Enabled color: #5fcfff; background: #1a1b1c;
+
+highlight Normal color: #cfcfcf; background: #303030; font-size: 13px;
+highlight ErrorMsg color: #ff4f5e; background: #10101f; font-size: 12px;
+highlight InfoMsg font-weight: bold; color: #c3bcb4; background: #10101f;
+highlight ModeMsg font-weight: bold; color: #ffffff; background: #10101f;
+highlight MoreMsg font-weight: bold; color: #95d5d9; background: #10101f;
+highlight WarningMsg color: #f84865; background: #0f0f00; font-size: 12px;
+highlight Message color: #c3bcb4; background: #303030; font-size: 14px;
+highlight NonText font-weight: bold; color: #4ef9c8; background: #1a1b1c;
+highlight Preview font-weight: bold; color: #c3bcb4; background: #303030;
+highlight Prompt background: url("chrome://liberator/skin/prompt.png"); width: 10px; background-position: center; background-repeat: no-repeat;
+highlight PromptText color: #1c1c1c; background-color: rgba(230, 230, 256, 0.8); border-bottom: 3px solid #bfbfff; padding: 1px 0.5ex; text-shadow: 1px 1px 2px #0f0f2f; font-size: 12px;
+
+" Cmd "{{{
+highlight CmdOutput font-weight: normal; color: #fdfdfd; background: #1f1f1f; font-size: 14px;
+highlight CmdLine   font-weight: normal; color: #cfcfcf; background: #202a2f; font-size: 14px;
+" }}}
+hi ContentSeparator border: none; display: -moz-box;
+" Comp "{{{
+highlight CompGroup color: #cfcfcf; background: #2f2f2f; font-size: 14px;
+highlight CompGroup:not(:first-of-type) color: #cfcfcf; background: #10101f; font-size: 14px;
+highlight CompTitle color: #7824af; background: -moz-linear-gradient(19% 75% 90deg; #cfbfaf, #b2af8f, #b2a089 100%); font-size: 14px;
+highlight CompTitle>* color: #000000; background: #b2a089; border-bottom: 1px solid #5f5f8f; padding: 1px 0.5ex; text-shadow: 1px 1px 2px #0f0f2f; font-size: 14px;
+highlight CompMsg font-weight: none; margin-left: 12px;
+highlight CompItem font-size: 12px;
+highlight CompItem[selected] font-weight: bold; color: #cfcfcf; background: #050c0f; font-size: 13px;
+highlight CompItem>* height: 18px; min-height: 18px; padding: 0 0.5ex;
+highlight CompIcon width: 16px; min-width: 16px; display: inline-block; margin-right: .5ex;
+highlight CompIcon>img max-width: 16px; max-height: 16px; vertical-align: middle;
+highlight CompResult width: 500px; max-width: 500px; overflow: hidden;
+highlight CompDesc width: 500px; max-width: 500px;
+" }}}
+
+highlight Indicator font-weight: bold; color: #415676; background: #303030;
+highlight Filter font-weight: bold; color: #33ff99; background: #303030;
+
+highlight Keyword font-weight: bold; font-size: 15px color: #4e80ff; background: #1a1b1c;
+highlight Tag font-size: 13px; letter-spacing: 2px; color: #1a1b1c; color: #aaffaa;
+
+highlight LineNr font-weight: bold; color: #c3bcb4; background: #303030;
+highlight Question font-weight: bold; color: #3fbf8f; background: #202020;
+
+highlight Search font-weight: bold; color: #cfcfcf; background: #0f0f1f;
+
+highlight StatusLine font-size: 13px; font-weight: normal; color: #ffffff; background: #1f1f1f;
+
+highlight TabNumber font-weight: normal; color: #000000; background: #cfcfff;
+
+highlight Title font-size: 12px; letter-spacing: 2px; color: #333; color: #72dc95;
+highlight URL       font-size: 13px; letter-spacing: 2px; color: #1a1b1c; color: #2f5fcf;
+highlight URL:hover font-size: 13px; letter-spacing: 2px; color: #1a1b1c; color: #ffaacc;
+
+highlight FrameIndicator font-weight: bold; color: #f84865; background: #2f2f2f;
+
+" highlight Bell border: none;background: #d0d0d0;
+highlight Bell display: none;
+
+" Hint "{{{
+highlight Hint font-weight: normal; color: #efefff; background: #0f0f0f; border: none; maring: -0.7em 0 0 -0.7em; padding:0px 5px; font-size: 14px;
+highlight Hint::after content: attr(number);
+highlight HintActive font-weight: normal; color: #1f1f1f; background-color: rgba(100, 100, 100);
+highlight HintElem font-weight: normal; color: #cfcfcf; background-color: rgba(20, 20, 20, 0.8);
+highlight HintImage opacity: .5;
+" shadow (If this setting is too havey, next lines shounld be comment out) {{{
+hi -append Hint background-color: rgba(28, 28, 28, 0.8); border: 1px solid #0c0c2f; -moz-border-radius: 4px; -moz-box-shadow: 0px 0px 1px black; text-shadow: 1px 1px 2px black;
+hi -append HintElem text-decoration: none; -moz-border-radius: 4px; -moz-box-shadow: 0 0 2px #cfcfcf;
+hi -append HintActive text-decoration: none; -moz-border-radius: 4px; -moz-box-shadow: 0 0 2px #0c0c0c;
+" }}}
+"}}}
+
+" Help "{{{
+highlight Help                       font-weight: normal; color: #efefef; background: #1a1b1c;
+highlight HelpArg                    font-weight: normal; color: #4f94ff; background: #1a1b1c;
+highlight HelpBody                   font-weight: normal; color: #99aaff; background: #1a1b1c;
+highlight HelpBorder                 font-weight: normal; color: #7699af; background: #1a1b1c;
+" help's test code ?
+"highlight HelpCode                   font-weight: normal; color: #cfdaff; background: #1a1b1c;
+highlight HelpCode                   font-weight: normal; color: #c3bcb4; background: #1a1b1c;
+highlight HelpDefault                font-weight: normal; color: #5578af; background: #1a1b1c;
+highlight HelpDescription            font-weight: normal; color: #415384; background: #1a1b1c;
+" help's explain
+"highlight HelpEm                     font-weight: normal; color: #65f8aa; background: #1a1b1c;
+highlight HelpEm                     font-weight: normal; font-weight: normal; color: #65f8aa; background: #1a1b1c;
+highlight HelpEx                     font-weight: normal; color: #4f8fcf; background: #1a1b1c;
+highlight HelpExample                font-weight: normal; color: #72afff; background: #1a1b1c;
+highlight HelpExample::before        font-weight: normal; color: #63ff99; background: #1a1b1c;
+highlight HelpHead                   font-weight: normal; color: #88eeff; background: #1a1b1c;
+highlight HelpInfo                   font-weight: normal; color: #acfcec; background: #1a1b1c;
+highlight HelpInfoLabel              font-weight: normal; color: #cfcfff; background: #1a1b1c;
+highlight HelpInfoValue              font-weight: normal; color: #ccffcc; background: #1a1b1c;
+highlight HelpItem                   font-weight: normal; color: #ccccff; background: #1a1b1c;
+highlight HelpKey                    font-weight: normal; color: #af9fcf; background: #1a1b1c;
+" help's link
+highlight HelpLink                   font-weight: normal; color: #6fafff; background: #1a1b1c;
+" help's link on mouse over
+highlight HelpLink[href]:hover       font-weight: normal; color: #cff2ff; background: #1a1b1c;
+highlight HelpList                   font-weight: normal; color: #afffaf; background: #1a1b1c;
+" help's explation
+highlight HelpListItem               font-weight: normal; color: #c3bcb4; background: #1a1b1c;
+highlight HelpNote                   font-weight: normal; color: #aaffaa; background: #1a1b1c;
+highlight HelpOpt                    font-weight: normal; color: #affaaa; background: #1a1b1c;
+highlight HelpOptInfo                font-weight: normal; color: #ccaaee; background: #1a1b1c;
+highlight HelpOptionalArg            font-weight: normal; color: #ccccff; background: #1a1b1c;
+highlight HelpOrderedList            font-weight: normal; color: #ffffcc; background: #1a1b1c;
+highlight HelpParagraph              font-weight: normal; color: #ccccaa; background: #1a1b1c;
+highlight HelpParagraph:first-child  font-weight: normal; color: #99ff99; background: #1a1b1c;
+highlight HelpSpec                   font-weight: normal; color: #8fa4f0; background: #1a1b1c;
+highlight HelpString                 font-weight: normal; color: #00ffcc; background: #1a1b1c;
+highlight HelpString::after          font-weight: normal; color: #00ffaa; background: #1a1b1c;
+highlight HelpString::before         font-weight: normal; color: #ffaaff; background: #1a1b1c;
+highlight HelpSubhead                font-weight: normal; color: #8fdfff; background: #1a1b1c;
+highlight HelpSubsubhead             font-weight: normal; color: #28ff44; background: #1a1b1c;
+highlight HelpTOC                    font-weight: normal; color: #9492ff; background: #1a1b1c;
+highlight HelpTOC>ol                 font-weight: normal; color: #2299ff; background: #1a1b1c;
+highlight HelpTOC>ol ol              font-weight: normal; color: #f99fff; background: #1a1b1c;
+highlight HelpTab                    font-weight: normal; color: #cfafff; background: #1a1b1c;
+highlight HelpTabColumn              font-weight: bold; font-size: 15px; color: #343434; background: #3b54ec;
+highlight HelpTabColumn:first-child  font-weight: normal; font-size 15px; color: #564234; background: #b2a089;
+highlight HelpTabDescription         font-weight: normal; color: #ffffff; background: #1a1b1c;
+highlight HelpTabRow                 font-weight: normal; color: #2288ff; background: #1a1b1c;
+highlight HelpTabTitle               font-weight: normal; color: #33a8ff; background: #1a1b1c;
+highlight HelpTag                    font-weight: normal; color: #cf88cf; background: #1a1b1c;
+highlight HelpTags                   font-weight: normal; color: #aaffaa; background: #1a1b1c;
+highlight HelpTopic                  font-weight: normal; color: #45ff99; background: #1a1b1c;
+highlight HelpType                   font-weight: normal; color: #b8ffa4; background: #1a1b1c;
+highlight HelpWarning                font-weight: normal; color: #fc4765; background: #1a1b1c;
+" }}}
+highlight Logo font-weight: bold; color: #4868f5; background: #303030;
+
+
+" Style "{{{1
+" Tab "{{{2
+style -name tab chrome://* <<EOM
+#content { color: #cfcfcf !important; background-color: #3f3f3f !important;} /* tabbar */
+.tabs-alltabs-button { padding: 2px 0 !important; }
+.tabs-container { height: 20px; border-bottom: 1px solid #000; }
+/* .tabs-container .box-inherit.scrollbox-innerbox { border-bottom: 1px solid #404040; } /* tab bar position: top */
+.tabs-container > stack { display:none; } /* remove tab selection menu */
+
+.tabs-container scrollbox {
+  background-color: #adadad;
+  /* border-bottom: 1px solid #333; */
+}
+
+.tabbrowser-tab {
+  -moz-apperance: none !important;
+  padding: 0 0 0 5pt !important;
+
+  /*margin: 0 !important;*/
+  margin-bottom: 1pt !important;
+  -moz-border-radius-topleft: 10pt !important;
+  -moz-border-radius-topright 0 !important;
+  -moz-border-radius-bottomright: 0 !important;
+  -moz-border-radius-bottomleft: 8pt !important;
+
+  //border-top: 2px solid #cfcf8f !important;
+  //border-bottom: 3px solid #000000 !important;
+  border: none !important;
+
+  background-image: none !important;
+  color: #afafcf !important;
+  background-color: #1f1f1f !important;
+  text-align: left !important;
+  /*text-shadow: none !important;*/
+  text-shadow: 1px 1px 2px #0f0f3f !important;
+}
+
+.tabbrowser-tab[selected=false] {
+  border-top: 1px solid #adadad !important;
+  border-bottom: 1px solid #666 !important;
+  background: #ff0000 !important;
+}
+
+.tabbrowser-tab[selected=true] {
+  font-weight: bold;
+  font-size: 15px;
+  color: #cfcfcf !important;
+  background: #0f0f0f !important;
+  maring: -0.7em 0 0 -0.7em;
+  padding: 0px 5px;
+}
+.tabbrowser-tab[selected=true] .tab-text {
+  font-weight: bold;
+  font-size: 15px;
+  color: #f0f0f0 !important;
+  background-color #415676 !important;
+}
+
+/* This color is tab's empty */
+.tabbrowser-strip { color: #415676 !important; background: #1a1b1c !important; }
+
+/* remove close button */
+.tab-close-button {
+  display: none;
+}
+
+/* remove new tab button */
+/*.tabs-newtab-button {
+  display: none !important;
+}*/
+
+/* splitter */
+.treestyletab-splitter {
+  width: 0 !important;
+}
+.treestyletab-splitter grippy {
+  display: none !important;
+}
+/* set unread tabs style */
+#content tab:not([selected]) {
+  color: #8a9fcf !important; background: #1a1b1c !important;
+  /*
+  color: #8a9fcf  !important; background: #1a1b1c !important;
+  */
+}
+EOM
+
+
+" Feed button "{{{2
+style -name indigo-feed-button chrome://* <<EOM
+    #feed-button {
+        list-style-image: url("chrome://browser/skin/feeds/feedIcon16.png") !important;
+        -moz-image-region: auto !important;
+        border: none !important;
+        min-width: 0 !important;
+    }
+EOM
+
+
+" Sbmcommentsviewer "{{{2
+style -name indigo-sbmcommentsviewer chrome://* <<EOM
+    .liberator-sbmcommentsviewer-content {
+        padding: 0 !important;
+        border: none !important;
+    }
+EOM
+
+
+" statusbar "{{{2
+style -name statusbar chrome://* <<EOM
+#status-bar statusbarpanel { padding: 2px !important; }
+statusbarpanel > * { margin: 0 !important; padding: 0 !important; }
+EOM
+
+
+"}}}1
+" __END__ "{{{1
+" vim: fen:fdm=marker
+" vim: filetype=vimperator
+

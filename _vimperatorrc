@@ -1,0 +1,71 @@
+"3.0
+
+" for nocompatible extensions
+set! extensions.checkCompatibility.6.0=false
+
+" guioptions
+"set toolbars+=addons,bookmarks,nonavigation
+
+" move
+noremap j 3j
+noremap k 3k
+noremap J <C-d>
+noremap K <C-u>
+set scroll=7
+
+" select next/previous tab
+noremap <C-l> gt
+noremap <C-h> gT
+noremap <C-j> gt
+noremap <C-k> gT
+noremap <C-w>l gt
+noremap <C-w>h gT
+
+" move current tab left/right
+map <S-Right> :tablast<CR>
+map <S-Left> :tabfirst<CR>
+"map <C-L> :tabmove! +1<CR>
+"map <C-H> :tabmove! -1<CR>
+
+" Close other tabs
+noremap <C-A-w> :tabonly<CR>
+
+" undo list
+noremap U :undo<Space>
+" ex mode
+cmap <C-d> <Tab>
+cmap <C-n> <Tab>
+cmap <C-p> <S-Tab>
+" Jump from selection in visual mode http://memo.officebrook.net/20090803.html#p01
+vmap <silent> <C-g> y<Esc><Esc>P
+
+
+" turn off highlighting
+nnoremap <silent> gh :nohlsearch<CR>
+
+" hint charanters
+" set hintchars=HSADFJKLEWCMPG
+set hintchars=asdfhjkl 
+" set hintchars=hjklasdfgyuiopqwertnmzxcvb
+
+colorscheme vimPgray
+
+" :[tab]open ????????
+"set complete=slft
+
+" ????URI???????????
+set showstatuslinks=2
+
+" ????????????????????????????
+"set focuscontent
+
+" Open in New Tab
+"set newtab=help,addons,extoptions
+
+" Beep??
+set visualbell
+hi Bell opacity: .3;
+
+" QMarks {{{1
+silent qmark g https://github.com/
+
