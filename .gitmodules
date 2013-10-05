@@ -1,9 +1,10 @@
-[submodule ".zsh-syntax-highlighting"]
+[submodule "zsh-syntax-highlighting"]
 	path = .zsh-syntax-highlighting
 	url = https://github.com/zsh-users/zsh-syntax-highlighting.git
-[submodule ".oh-my-zsh"]
+[submodule "oh-my-zsh"]
 	path = .oh-my-zsh
 	url = https://github.com/robbyrussell/oh-my-zsh.git
-[submodule ".spf13-vim-3"]
+[submodule "spf13-vim-3"]
 	path = .spf13-vim-3
 	url = https://github.com/spf13/spf13-vim.git
+	fetchRecurseSubmodules = true
