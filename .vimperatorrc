@@ -1,5 +1,7 @@
 "3.0
 
+set runtimepath=~/.vimperator
+
 " for nocompatible extensions
 set! extensions.checkCompatibility.6.0=false
 
