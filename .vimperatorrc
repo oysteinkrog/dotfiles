@@ -21,6 +21,8 @@ noremap <C-k> gT
 noremap <C-w>l gt
 noremap <C-w>h gT
 
+noremap <F10> :vimperatortoggle<CR>
+
 " move current tab left/right
 map <S-Right> :tablast<CR>
 map <S-Left> :tabfirst<CR>
@@ -69,3 +71,53 @@ hi Bell opacity: .3;
 " QMarks {{{1
 silent qmark g https://github.com/
 
+"===[ Custom commands ]=================================================
+ 
+" Run :vimperatortoggle to enable or disable Vimperator as needed.
+javascript function vimperatortoggle() { if (is_vimperator_active) { liberator.execute(':disable') } else { liberator.execute(':enable') }; }
+command! vimperatortoggle javascript vimperatortoggle()
+ 
+" Run :disable to disable Vimperator and resume normal Firefox behavior.
+javascript function disable() { is_vimperator_active = false; liberator.execute(':set guioptions=TnbrmB showtabline=1'); modes.passAllKeys = true; }
+command! disable javascript disable()
+ 
+" Run :enable to enable Vimperator.
+javascript function enable() { is_vimperator_active = true; liberator.execute('set guioptions=nbr showtabline=1') }
+command! enable javascript enable()
+:enable
+ 
+" Load configuration file into current browser, useful for updating after editing this file.
+command! sourcerc :source ~/.vimperatorrc
+
+highlight -append StatusLine font-size: 130%;
+highlight -append CmdLine font-size: 130;
+highlight -append TabText font-weight: bold;
+highlight TabIcon display: none;
+
+" Clear special hint filters for everything else
+autocmd LocationChange '.*' :set hinttags&
+
+" Restrict link hints in Google search result list
+autocmd LocationChange 'www.google.com' :set hinttags='//h3[@class="r"]/a'
+
+" Hacker news
+" autocmd LocationChange 'news.ycombinator.com' :set hinttags='//td[@class="title"]/a'
+
+" Reddit
+" autocmd LocationChange 'www.reddit.com' :set hinttags='//p[@class="title"]/a | //div[contains(@class, "expando-button")]'
+
+
+"===[ Status bars ]=====================================================
+ 
+" Make bar yellow when focused.
+" From: http://www.reddit.com/r/linux/comments/99d55/i_could_use_a_little_vimperator_help_also/
+javascript <<EOF
+	(function() {
+		var inputElement = document.getElementById('liberator-commandline-command');
+		function swapBGColor(event) {
+			inputElement.style.backgroundColor = event.type == "focus" ? "yellow" : "";
+		}
+		inputElement.addEventListener('focus', swapBGColor, false);
+		inputElement.addEventListener('blur', swapBGColor, false);
+	})();
+EOF
