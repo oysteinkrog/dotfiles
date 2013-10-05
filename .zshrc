@@ -87,7 +87,8 @@ promptinit
 
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
-alias ls='ls -lsa --color'
+alias ls='ls -ls --color'
+alias la='ls -a --color'
 
 PROMPT=$'%{\e[0;32m%}%B[%b%{\e[0m%}%n%{\e[0;32m%}@%m/%{\e[0m%}%(4c,./%1~,%~)%{\e[0;32m%}%B]%b% %(?,%{\e[0;32m%}:%)%{\e[0m%},%{\e[0;31m%}:(%{\e[0m%}) %# '
 
