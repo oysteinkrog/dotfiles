@@ -90,8 +90,6 @@ alias 'rsync-cp=rsync -a --progress'
 alias ls='ls -ls --color'
 alias la='ls -a --color'
 
-PROMPT=$'%{\e[0;32m%}%B[%b%{\e[0m%}%n%{\e[0;32m%}@%m/%{\e[0m%}%(4c,./%1~,%~)%{\e[0;32m%}%B]%b% %(?,%{\e[0;32m%}:%)%{\e[0m%},%{\e[0;31m%}:(%{\e[0m%}) %# '
-
 # To define styles for nested brackets up to level 4
 ZSH_HIGHLIGHT_STYLES[bracket-level-1]='fg=pink,bold'
 ZSH_HIGHLIGHT_STYLES[bracket-level-2]='fg=red,bold'
@@ -101,3 +99,18 @@ ZSH_HIGHLIGHT_STYLES[bracket-level-4]='fg=magenta,bold'
 # load zsh-syntax-highlighting
 . $HOME/.zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
+if [[ `uname` =~ .*CYGWIN.* ]]; then
+	export SSH_AUTH_SOCK=/tmp/.ssh-socket
+		ssh-add -l 2>&1 >/dev/null
+		if [ $? = 2 ]; then
+		# Exit status 2 means couldn't connect to ssh-agent; start one now
+		ssh-agent -a $SSH_AUTH_SOCK >/tmp/.ssh-script
+		. /tmp/.ssh-script
+		echo $SSH_AGENT_PID >/tmp/.ssh-agent-pid
+	fi
+
+	function kill-agent {
+		pid=`cat /tmp/.ssh-agent-pid`
+		kill $pid
+	}
+fi
