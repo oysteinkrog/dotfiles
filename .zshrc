@@ -78,20 +78,31 @@ promptinit
     #fi
 #fi
 
-# auto screen session on login
-#if [ -n "$SSH_CONNECTION" ] && [ -z "$SCREEN_EXIST" ]; then
-#    export SCREEN_EXIST=1
-#    exec screen -xR
-#    screen -ARR
-#fi
+command_exists ()
+{
+    command "$1" >/dev/null 2>&1;
+}
+
+# auto tmux session
+if command_exists tmux; then
+    if [ "$PS1" != "" -a "${STARTED_TMUX:-x}" = x -a "${SSH_TTY:-x}" != x ]; then
+        STARTED_TMUX=1; export STARTED_TMUX
+        sleep 1
+        ( (tmux has-session -t remote && tmux attach-session -t remote) || (tmux new-session -s remote) ) && exit 0
+        echo "tmux failed to start"
+    fi
+fi
 
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
 
+export CLICOLOR=1
+export LSCOLOR=ExFxBxDxCxegedabagacad
+
 
 if [[ uname == "Darwin" ]]; then
-	export CLICOLOR=1
-	export LSCOLOR=ExFxBxDxCxegedabagacad
+        alias ls='ls -lsG'
+        alias la='ls -aG'
 else
 	alias ls='ls -ls --color'
 	alias la='ls -a --color'
