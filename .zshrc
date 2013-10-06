@@ -87,8 +87,17 @@ promptinit
 
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
-alias ls='ls -ls --color'
-alias la='ls -a --color'
+
+
+if [[ uname == "Darwin" ]]; then
+	export CLICOLOR=1
+	export LSCOLOR=ExFxBxDxCxegedabagacad
+else
+	alias ls='ls -ls --color'
+	alias la='ls -a --color'
+fi
+
+
 
 # To define styles for nested brackets up to level 4
 ZSH_HIGHLIGHT_STYLES[bracket-level-1]='fg=pink,bold'
