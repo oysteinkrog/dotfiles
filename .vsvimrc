@@ -9,19 +9,19 @@ vnoremap <C-C> "+y
 vnoremap <C-Insert> "+y
 
 " CTRL-V and SHIFT-Insert are Paste
-map <C-V>		"+gP
-map <S-Insert>		"+gP
-imap <C-V>		<Esc>"+gpa
+map <C-V>       "+gP
+map <S-Insert>      "+gP
+imap <C-V>      <Esc>"+gpa
 
-cmap <C-V>		<C-R>+
-cmap <S-Insert>		<C-R>+
+cmap <C-V>      <C-R>+
+cmap <S-Insert>     <C-R>+
 
 
-imap <S-Insert>		<C-V>
-vmap <S-Insert>		<C-V>
+imap <S-Insert>     <C-V>
+vmap <S-Insert>     <C-V>
 
 " Use CTRL-Q to do what CTRL-V used to do
-noremap <C-Q>		<C-V>
+noremap <C-Q>       <C-V>
 
 " set 'selection', 'selectmode', 'mousemodel' and 'keymodel' for MS-Windows
 behave mswin
@@ -33,9 +33,9 @@ set backspace=indent,eol,start whichwrap+=<,>,[,]
 vnoremap <BS> d
 
 " Use CTRL-S for saving, also in Insert mode
-noremap <C-S>		:update<CR>
-vnoremap <C-S>		<C-C>:update<CR>
-inoremap <C-S>		<C-O>:update<CR>
+noremap <C-S>       :update<CR>
+vnoremap <C-S>      <C-C>:update<CR>
+inoremap <C-S>      <C-O>:update<CR>
 
 " CTRL-Z is Undo; not in cmdline though
 noremap <C-Z> u
@@ -73,4 +73,17 @@ nmap <silent> <leader>sv :so $MYVIMRC<CR>
 nmap <leader>o o<Esc>
 nmap <leader>O O<Esc>
 
-set ts=4 sts=4 sw=4 expandtab
+"set ts=4 sts=4 sw=4 expandtab
+
+" indentation every four columns
+set tabstop=4
+set softtabstop=4
+
+" Use indents of 4 spaces
+set shiftwidth=4
+
+" Tabs are spaces, not tabs
+set expandtab
+
+" enable line numbers
+set nu
