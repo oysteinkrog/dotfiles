@@ -104,33 +104,28 @@ if [[ uname == "Darwin" ]]; then
         alias ls='ls -lsG'
         alias la='ls -aG'
 else
-	alias ls='ls -ls --color'
-	alias la='ls -a --color'
+    alias ls='ls -ls --color'
+    alias la='ls -a --color'
 fi
 
-
-
 # To define styles for nested brackets up to level 4
-ZSH_HIGHLIGHT_STYLES[bracket-level-1]='fg=pink,bold'
-ZSH_HIGHLIGHT_STYLES[bracket-level-2]='fg=red,bold'
-ZSH_HIGHLIGHT_STYLES[bracket-level-3]='fg=yellow,bold'
-ZSH_HIGHLIGHT_STYLES[bracket-level-4]='fg=magenta,bold'
-
-# load zsh-syntax-highlighting
-. $HOME/.zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+#ZSH_HIGHLIGHT_STYLES[bracket-level-1]='fg=pink,bold'
+#ZSH_HIGHLIGHT_STYLES[bracket-level-2]='fg=red,bold'
+#ZSH_HIGHLIGHT_STYLES[bracket-level-3]='fg=yellow,bold'
+#ZSH_HIGHLIGHT_STYLES[bracket-level-4]='fg=magenta,bold'
 
 if [[ `uname` =~ .*CYGWIN.* ]]; then
-	export SSH_AUTH_SOCK=/tmp/.ssh-socket
-		ssh-add -l 2>&1 >/dev/null
-		if [ $? = 2 ]; then
-		# Exit status 2 means couldn't connect to ssh-agent; start one now
-		ssh-agent -a $SSH_AUTH_SOCK >/tmp/.ssh-script
-		. /tmp/.ssh-script
-		echo $SSH_AGENT_PID >/tmp/.ssh-agent-pid
-	fi
+    export SSH_AUTH_SOCK=/tmp/.ssh-socket
+        ssh-add -l 2>&1 >/dev/null
+        if [ $? = 2 ]; then
+        # Exit status 2 means couldn't connect to ssh-agent; start one now
+        ssh-agent -a $SSH_AUTH_SOCK >/tmp/.ssh-script
+        . /tmp/.ssh-script
+        echo $SSH_AGENT_PID >/tmp/.ssh-agent-pid
+    fi
 
-	function kill-agent {
-		pid=`cat /tmp/.ssh-agent-pid`
-		kill $pid
-	}
+    function kill-agent {
+        pid=`cat /tmp/.ssh-agent-pid`
+        kill $pid
+    }
 fi
