@@ -1,10 +1,12 @@
 [submodule "oh-my-zsh"]
 	path = .oh-my-zsh
 	url = https://github.com/robbyrussell/oh-my-zsh.git
+	branch = master
 [submodule "spf13-vim-3"]
 	path = .spf13-vim-3
 	url = https://github.com/spf13/spf13-vim.git
 	fetchRecurseSubmodules = true
+	branch = master
 [submodule "solarized"]
 	path = solarized
 	url = https://github.com/altercation/solarized.git
