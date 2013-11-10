@@ -41,6 +41,7 @@ ZSH_THEME="ys"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 #plugins=(git)
+plugins=(vim-mode git tmux cp colorize extract)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -53,7 +54,6 @@ SAVEHIST=2000
 setopt autocd extendedglob
 
 bindkey -e #emacs keybindings
-#bindkey -v  #vi keybindings
 
 # End of lines configured by zsh-newuser-install
 #autocorrection
@@ -95,7 +95,6 @@ fi
 
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
-
 export CLICOLOR=1
 export LSCOLOR=ExFxBxDxCxegedabagacad
 
