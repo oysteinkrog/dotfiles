@@ -128,3 +128,5 @@ if [[ `uname` =~ .*CYGWIN.* ]]; then
         kill $pid
     }
 fi
+
+eval `dircolors ~/.dir_colors`
