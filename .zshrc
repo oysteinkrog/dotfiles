@@ -83,6 +83,7 @@ command_exists ()
     command "$1" >/dev/null 2>&1;
 }
 
+alias tmux="tmux -2"
 # auto tmux session
 if command_exists tmux; then
     if [ "$PS1" != "" -a "${STARTED_TMUX:-x}" = x -a "${SSH_TTY:-x}" != x ]; then
@@ -95,6 +96,8 @@ fi
 
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
+#
+
 export CLICOLOR=1
 export LSCOLOR=ExFxBxDxCxegedabagacad
 
@@ -106,12 +109,6 @@ else
     alias ls='ls -ls --color'
     alias la='ls -a --color'
 fi
-
-# To define styles for nested brackets up to level 4
-#ZSH_HIGHLIGHT_STYLES[bracket-level-1]='fg=pink,bold'
-#ZSH_HIGHLIGHT_STYLES[bracket-level-2]='fg=red,bold'
-#ZSH_HIGHLIGHT_STYLES[bracket-level-3]='fg=yellow,bold'
-#ZSH_HIGHLIGHT_STYLES[bracket-level-4]='fg=magenta,bold'
 
 if [[ `uname` =~ .*CYGWIN.* ]]; then
     export SSH_AUTH_SOCK=/tmp/.ssh-socket
