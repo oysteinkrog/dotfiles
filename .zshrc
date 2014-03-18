@@ -41,7 +41,7 @@ ZSH_THEME="ys"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 #plugins=(git)
-plugins=(vim-mode git tmux cp colorize extract)
+plugins=(vim-mode git cp colorize extract)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -83,20 +83,8 @@ command_exists ()
     command "$1" >/dev/null 2>&1;
 }
 
-alias tmux="tmux -2"
-# auto tmux session
-if command_exists tmux; then
-    if [ "$PS1" != "" -a "${STARTED_TMUX:-x}" = x -a "${SSH_TTY:-x}" != x ]; then
-        STARTED_TMUX=1; export STARTED_TMUX
-        sleep 1
-        ( (tmux has-session -t remote && tmux attach-session -t remote) || (tmux new-session -s remote) ) && exit 0
-        echo "tmux failed to start"
-    fi
-fi
-
 alias 'rsync-mv=rsync -a --progress --remove-source-files'
 alias 'rsync-cp=rsync -a --progress'
-#
 
 export CLICOLOR=1
 export LSCOLOR=ExFxBxDxCxegedabagacad
