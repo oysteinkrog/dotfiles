@@ -99,19 +99,7 @@ else
 fi
 
 if [[ `uname` =~ .*CYGWIN.* ]]; then
-    export SSH_AUTH_SOCK=/tmp/.ssh-socket
-        ssh-add -l 2>&1 >/dev/null
-        if [ $? = 2 ]; then
-        # Exit status 2 means couldn't connect to ssh-agent; start one now
-        ssh-agent -a $SSH_AUTH_SOCK >/tmp/.ssh-script
-        . /tmp/.ssh-script
-        echo $SSH_AGENT_PID >/tmp/.ssh-agent-pid
-    fi
-
-    function kill-agent {
-        pid=`cat /tmp/.ssh-agent-pid`
-        kill $pid
-    }
+	eval $(/usr/bin/ssh-pageant -ra /tmp/.ssh-pageant)
 fi
 
 eval `dircolors ~/.dir_colors`
