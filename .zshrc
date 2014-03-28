@@ -57,6 +57,7 @@ bindkey -e #emacs keybindings
 
 # End of lines configured by zsh-newuser-install
 #autocorrection
+#
 autoload -Uz compinit
 compinit
 zstyle ':completion:*:descriptions' format '%U%B%d%b%u'
@@ -69,6 +70,7 @@ zstyle ':completion::complete:*' use-cache 1
 # prompt
 autoload -U promptinit
 promptinit
+
 
 command_exists ()
 {
@@ -91,7 +93,14 @@ else
 fi
 
 if [[ `uname` =~ .*CYGWIN.* ]]; then
+    # start ssh-pageant (if needed, the -r reuses the socket if already open)
     eval $(/usr/bin/ssh-pageant -ra /tmp/.ssh-pageant)
+
+    if [[ ( -z `/cygdrive/c/Windows/system32/whoami /priv |grep SeCreateSymbolicLinkPrivilege`) ]]; then
+        echo "Warning, you do not have the SeCreateSymbolicLinkPrivilege!, cygwin will not be able to use native symlinking" 
+    else
+        export CYGWIN="winsymlinks:native"
+    fi
 fi
 
 eval `dircolors ~/.dir_colors`
