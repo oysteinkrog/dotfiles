@@ -70,14 +70,6 @@ zstyle ':completion::complete:*' use-cache 1
 autoload -U promptinit
 promptinit
 
-
-#if [[ "$TERM" != "dumb" ]]; then
-    #if [[ -x `which dircolors` ]]; then
-        #eval `dircolors -b`
-        #alias 'ls=ls -lsah --color=auto'
-    #fi
-#fi
-
 command_exists ()
 {
     command "$1" >/dev/null 2>&1;
@@ -91,15 +83,15 @@ export LSCOLOR=ExFxBxDxCxegedabagacad
 
 
 if [[ uname == "Darwin" ]]; then
-        alias ls='ls -lsG'
-        alias la='ls -aG'
+    alias ls='ls -lsG'
+    alias la='ls -aG'
 else
     alias ls='ls -ls --color'
     alias la='ls -a --color'
 fi
 
 if [[ `uname` =~ .*CYGWIN.* ]]; then
-	eval $(/usr/bin/ssh-pageant -ra /tmp/.ssh-pageant)
+    eval $(/usr/bin/ssh-pageant -ra /tmp/.ssh-pageant)
 fi
 
 eval `dircolors ~/.dir_colors`
