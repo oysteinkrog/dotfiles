@@ -11,7 +11,7 @@ run_credential_helper()
     elif [ "$(expr substr $(uname -s) 1 9)" == "CYGWIN_NT" ]; then
         cygpath 'C:\\Users\\Øystein\\AppData\\Roaming\\GitCredStore\\git-credential-winstore.exe'
     elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
-        C:\\Users\\Øystein\\AppData\\Roaming\\GitCredStore\\git-credential-winstore.exe
+        echo "/c/Users/Øystein/AppData/Roaming/GitCredStore/git-credential-winstore.exe"
     fi
 
 }
