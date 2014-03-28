@@ -6,4 +6,5 @@
 [core]
     autocrlf = false
     symlinks = true
-
+[credential]
+    helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"

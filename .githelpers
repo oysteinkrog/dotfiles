@@ -1,0 +1,17 @@
+#!/bin/bash
+
+run_credential_helper()
+{
+    if [ "$(uname)" == "Darwin" ]; then
+        # Do something under Mac OS X platform
+        echo ""
+    elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+        # Do something under Linux platform
+        echo ""
+    elif [ "$(expr substr $(uname -s) 1 9)" == "CYGWIN_NT" ]; then
+        cygpath 'C:\\Users\\Øystein\\AppData\\Roaming\\GitCredStore\\git-credential-winstore.exe'
+    elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
+        C:\\Users\\Øystein\\AppData\\Roaming\\GitCredStore\\git-credential-winstore.exe
+    fi
+
+}
