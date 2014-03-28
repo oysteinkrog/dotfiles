@@ -7,3 +7,10 @@ let g:solarized_termcolors = 256
 let g:solarized_visibility = "high"
 let g:solarized_termtrans = 0
 let g:solarized_contrast = "high"
+
+
+filetype plugin indent on
+syntax enable
+
+let g:indent_guides_enable_on_vim_startup = 0
+
