@@ -3,3 +3,7 @@
     email = oystein.krog@gmail.com
 [push]
     default = simple
+[core]
+    autocrlf = false
+    symlinks = true
+
