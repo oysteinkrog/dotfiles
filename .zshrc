@@ -40,7 +40,6 @@ ZSH_THEME="ys"
 # Which plugins would you like to load? (plugins can be found in ~/.oh-my-zsh/plugins/*)
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
-#plugins=(git)
 plugins=(vim-mode git cp colorize extract)
 
 source $ZSH/oh-my-zsh.sh
@@ -53,13 +52,13 @@ SAVEHIST=2000
 
 setopt autocd extendedglob
 
-bindkey -e #emacs keybindings
+#bindkey -e #emacs keybindings
 
 # End of lines configured by zsh-newuser-install
 #autocorrection
 #
 autoload -Uz compinit
-compinit
+compinit -u
 zstyle ':completion:*:descriptions' format '%U%B%d%b%u'
 zstyle ':completion:*:warnings' format '%BSorry, no matches for: %d%b'
 setopt correctall
