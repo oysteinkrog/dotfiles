@@ -82,6 +82,12 @@ alias 'rsync-cp=rsync -a --progress'
 export CLICOLOR=1
 export LSCOLOR=ExFxBxDxCxegedabagacad
 
+if [ "$TERM" != "dumb" ]; then
+    [ -e "$HOME/.dir_colors" ] && DIR_COLORS="$HOME/.dir_colors"
+    [ -e "$DIR_COLORS" ] || DIR_COLORS=""
+    eval "`dircolors -b $DIR_COLORS`"
+    alias ls='ls --color=auto'
+fi
 
 if [[ uname == "Darwin" ]]; then
     alias ls='ls -lsG'
@@ -101,5 +107,3 @@ if [[ `uname` =~ .*CYGWIN.* ]]; then
         export CYGWIN="winsymlinks:native"
     fi
 fi
-
-eval `dircolors ~/.dir_colors`
