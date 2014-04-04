@@ -78,6 +78,8 @@ if [[ `uname` =~ .*CYGWIN.* ]]; then
     else
         export CYGWIN="winsymlinks:native"
     fi
+    alias cyg='apt-cyg -m http://mirrors.kernel.org/sources.redhat.com/cygwin/'
+    alias cyp='apt-cyg -m http://mirrors.kernel.org/sources.redhat.com/cygwinports/'
 fi
 
 # misc
