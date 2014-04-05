@@ -51,6 +51,9 @@ setopt extendedglob
 # make cd push the old directory onto the directory stack
 setopt auto_pushd
 
+# red
+export GREP_COLOR="0;31"
+
 export CLICOLOR=1
 export LSCOLOR=ExFxBxDxCxegedabagacad
 
