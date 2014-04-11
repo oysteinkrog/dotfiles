@@ -1,45 +1,40 @@
 [user]
     name = Øystein Krog
     email = oystein.krog@gmail.com
-[push]
-    default = simple
 [core]
     autocrlf = false
     symlinks = true
+
 [credential]
     helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
+
+[push]
+    #default = simple
+    default = upstream
+[pull]
+    default = current
+[branch]
+    autosetuprebase = always
+[apply]
+    whitespace = nowarn
 
 [color]
     branch = auto
     diff = auto
     status = auto
-
 [color "branch"]
     current = red reverse
     local = blue
     remote = green
-
 [color "diff"]
     meta = yellow bold
     frag = magenta bold
     old = red bold
     new = green bold
-
 [color "status"]
     added = yellow
     changed = green
     untracked = cyan
-
-[push]
-    default = upstream
-[pull]
-    default = current
-[diff]
-  memonicprefix = true
-[branch]
-  autosetuprebase = always
-[apply]
-  whitespace = nowarn
 
 [alias]
     st = status -s
