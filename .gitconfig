@@ -18,6 +18,23 @@
 [apply]
     whitespace = nowarn
 
+[diff]
+    memonicprefix = true
+    tool = semanticdiff
+[difftool]
+    prompt = false
+[difftool "semanticdiff"]
+    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(cygpath -w $LOCAL)" -d "$(cygpath -w $REMOTE)"
+
+[merge]
+    tool = semanticmerge
+[mergetool]
+    prompt = false
+    keepBackup = false
+[mergetool "semanticmerge"]
+    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\"
+    trustExitCode = true
+
 [color]
     branch = auto
     diff = auto
