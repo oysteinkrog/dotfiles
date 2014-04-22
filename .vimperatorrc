@@ -105,14 +105,14 @@ autocmd LocationChange 'www.google.com' :set hinttags='//h3[@class="r"]/a'
 " Change status bar color when focusedd
 " From: http://www.reddit.com/r/linux/comments/99d55/i_could_use_a_little_vimperator_help_also/
 javascript <<EOF
-	(function() {
-		var inputElement = document.getElementById('liberator-commandline-command');
-		function swapBGColor(event) {
-			inputElement.style.padding = event.type == "focus" ? "10px" : "none";
-			inputElement.style.border = event.type == "focus" ? "thick solid 2px" : "none";
-			inputElement.style.background = event.type == "focus" ? "#00565C" : "";
-		}
-		inputElement.addEventListener('focus', swapBGColor, false);
-		inputElement.addEventListener('blur', swapBGColor, false);
-	})();
+    (function() {
+        var inputElement = document.getElementById('liberator-commandline-command');
+        function swapBGColor(event) {
+            inputElement.style.padding = event.type == "focus" ? "10px" : "none";
+            inputElement.style.border = event.type == "focus" ? "thick solid 2px" : "none";
+            inputElement.style.background = event.type == "focus" ? "#00565C" : "";
+        }
+        inputElement.addEventListener('focus', swapBGColor, false);
+        inputElement.addEventListener('blur', swapBGColor, false);
+    })();
 EOF
