@@ -8,20 +8,29 @@ set! extensions.checkCompatibility.6.0=false
 " guioptions
 "set toolbars+=addons,bookmarks,nonavigation
 
-" move
-noremap j 3j
-noremap k 3k
-noremap J <C-d>
-noremap K <C-u>
+" colemak
+noremap <F2> :tabopen ~/.vimperator/plugin/colemak.png<CR>
+noremap h <Nop>
+noremap H <Nop>
+noremap n h
+noremap k n
+noremap N H
+noremap K N
+noremap e 3j
+noremap u 3k
+noremap j u
+noremap i l
+noremap l i
+noremap L I
+noremap I L
+
 set scroll=7
 
 " select next/previous tab
-noremap <C-l> gt
-noremap <C-h> gT
-noremap <C-j> gt
-noremap <C-k> gT
-noremap <C-w>l gt
-noremap <C-w>h gT
+noremap <C-i> gt
+noremap <C-n> gT
+noremap <C-e> gt
+noremap <C-u> gT
 
 " fix ctrl-a
 :inoremap <C-a> <Ins><C-a><Ins>
@@ -39,21 +48,23 @@ noremap <C-A-w> :tabonly<CR>
 
 " undo list
 noremap U :undo<Space>
+
 " ex mode
 cmap <C-d> <Tab>
 cmap <C-n> <Tab>
 cmap <C-p> <S-Tab>
+
 " Jump from selection in visual mode http://memo.officebrook.net/20090803.html#p01
 vmap <silent> <C-g> y<Esc><Esc>P
-
 
 " turn off highlighting
 nnoremap <silent> gh :nohlsearch<CR>
 
 " hint charanters
 " set hintchars=HSADFJKLEWCMPG
-set hintchars=asdfhjkl 
+" set hintchars=asdfhjkl 
 " set hintchars=hjklasdfgyuiopqwertnmzxcvb
+set hintchars=tnesrioa
 
 colorscheme vimPgray
 
