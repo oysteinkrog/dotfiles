@@ -1,3 +1,5 @@
+#/bin/sh
+
 # This script creates symlinks from the home directory to any desired dotfiles in ~/dotfiles
 ############################
 
@@ -5,7 +7,7 @@
 
 dir=~/.dotfiles
 olddir=~/.dotfiles_old
-files=".gitconfig .zshrc .vimrc.bundles.local .vimrc.local .vsvimrc .zshrc .oh-my-zsh .spf13-vim-3 .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers"
+files=".gitconfig .vimrc.bundles.local .vimrc.local .vsvimrc .zprezto .spf13-vim-3 .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers"
 
 
 ##########
@@ -28,3 +30,4 @@ for file in $files; do
     ln -s $dir/$file ~/$file
 done
 
+zsh prezto.sh

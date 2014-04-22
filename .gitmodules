@@ -11,3 +11,6 @@
 	path = solarized
 	url = https://github.com/altercation/solarized.git
 	branch = master
+[submodule ".zprezto"]
+	path = .zprezto
+	url = https://github.com/oysteinkrog/prezto.git
