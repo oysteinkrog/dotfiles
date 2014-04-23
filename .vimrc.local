@@ -14,3 +14,18 @@ syntax enable
 
 let g:indent_guides_enable_on_vim_startup = 0
 
+" colemak
+noremap <F2> :tabopen ~/.vimperator/plugin/colemak.png<CR>
+noremap h <Nop>
+noremap H <Nop>
+noremap n h
+noremap k n
+noremap N H
+noremap K N
+noremap e j
+noremap u k
+noremap j u
+noremap i l
+noremap l i
+noremap L I
+noremap I L
