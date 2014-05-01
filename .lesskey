@@ -1,0 +1,19 @@
+#command
+e forw-line
+E forw-line-force
+u back-line
+U back-line-force
+l forw-screen
+y back-screen
+
+f forw-screen
+b back-screen
+
+/ forw-search
+? back-search
+k repeat-search
+K reverse-search
+
+g goto-line
+G goto-end
+% percent
