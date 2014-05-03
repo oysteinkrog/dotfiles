@@ -14,3 +14,6 @@
 [submodule ".zprezto"]
 	path = .zprezto
 	url = https://github.com/oysteinkrog/prezto.git
+[submodule "zaw"]
+	path = zaw
+	url = https://github.com/zsh-users/zaw.git
