@@ -27,8 +27,8 @@ noremap I L
 set scroll=7
 
 " select next/previous tab
-noremap <C-i> gt
-noremap <C-n> gT
+noremap <C-i> L
+noremap <C-n> H
 noremap <C-e> gt
 noremap <C-u> gT
 
