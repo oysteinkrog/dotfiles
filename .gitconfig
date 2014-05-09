@@ -32,6 +32,9 @@
 [mergetool]
     prompt = false
     keepBackup = false
+[mergetool "vimdiff"]
+    trustExitCode = true
+    conflictstyle = diff3
 [mergetool "semanticmerge"]
     cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\"
     trustExitCode = true
