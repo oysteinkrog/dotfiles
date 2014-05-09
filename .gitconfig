@@ -29,6 +29,9 @@
 
 [merge]
     tool = splice
+[mergetool "splice"]
+    cmd = "vim -f $BASE $LOCAL $REMOTE $MERGED -c 'SpliceInit'"
+    trustExitCode = true
 [mergetool]
     prompt = false
     keepBackup = false
