@@ -29,3 +29,6 @@ noremap i l
 noremap l i
 noremap L I
 noremap I L
+
+" "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
+nmap <silent> cp "_cw<C-R>"<Esc>

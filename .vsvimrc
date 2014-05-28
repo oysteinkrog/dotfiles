@@ -68,6 +68,9 @@ onoremap <C-A> <C-C>gggH<C-O>G
 snoremap <C-A> <C-C>gggH<C-O>G
 xnoremap <C-A> <C-C>ggVG
 
+" https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
+nmap <silent> cp "_cw<C-R>"<Esc>
+
 "noremap <Left>  <NOP>
 "noremap <Right> <NOP>
 "noremap <Up>    <NOP>
