@@ -1,5 +1,5 @@
 BoldAsFont=no
-Font=Bitstream Vera Sans Mono for Po
+Font=Bitstream Vera Sans Mono
 FontHeight=10
 FontSmoothing=full
 ForegroundColour=131,148,150
@@ -30,3 +30,5 @@ RightClickAction=paste
 Columns=172
 Rows=53
 BoldAsColour=no
+AllowBlinking=yes
+ZoomShortcuts=no
