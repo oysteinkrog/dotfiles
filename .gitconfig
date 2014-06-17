@@ -43,6 +43,7 @@
     trustExitCode = true
 
 [color]
+    ui = true
     branch = auto
     diff = auto
     status = auto
