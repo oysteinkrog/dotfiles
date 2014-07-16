@@ -1,5 +1,10 @@
 " copied from Vim 7.3's mswin.vim:
 
+" Map Leader key to ,"
+let mapleader = ","
+let g:mapleader = ","
+nnoremap \ ,
+
 " colemak
 noremap h <Nop>
 noremap H <Nop>
@@ -80,8 +85,12 @@ nmap <silent> cp "_cw<C-R>"<Esc>
 "vnoremap <Up>    <NOP>
 "vnoremap <Down>  <NOP>
 
+" SEARCHING
 "Ignore case in searches always.
 set ignorecase
+set smartcase
+set incsearch
+set hlsearch
 
 "Quickly edit/reload the vimrc file
 nmap <silent> <leader>ev :e $MYVIMRC<CR>
@@ -91,8 +100,6 @@ nmap <silent> <leader>sv :so $MYVIMRC<CR>
 nmap <leader>o o<Esc>
 nmap <leader>O O<Esc>
 
-"set ts=4 sts=4 sw=4 expandtab
-
 " indentation every four columns
 set tabstop=4
 set softtabstop=4
@@ -100,8 +107,20 @@ set softtabstop=4
 " Use indents of 4 spaces
 set shiftwidth=4
 
-" Tabs are spaces, not tabs
-set expandtab
+set smarttab " Use 'shiftwidth' when using <Tab> in front of a line."
+set autoindent
+set shiftround
+set showmatch
+set expandtab " Tabs are spaces, not tabs
 
 " enable line numbers
 set nu
+
+set wildmenu
+set cursorline
+
+// close all tabs
+// :tabonly not implemented yet
+map <leader>to :vsc File.CloseAllButThis<cr>
+
+map <leader>y :vsc File.CopyFullPath<cr>
