@@ -24,6 +24,11 @@ noremap l i
 noremap L I
 noremap I L
 
+" Map Leader key to ,"
+let mapleader = ","
+let g:mapleader = ","
+nnoremap \ ,
+
 set scroll=7
 
 " select next/previous tab
