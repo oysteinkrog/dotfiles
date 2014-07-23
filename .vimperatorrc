@@ -49,7 +49,8 @@ map <S-Left> :tabfirst<CR>
 "map <C-H> :tabmove! -1<CR>
 
 " Close other tabs
-noremap <C-A-w> :tabonly<CR>
+noremap <C-A-w> :tabonly<CR>u
+map <leader>to :tabonly<CR>u
 
 " undo list
 noremap U :undo<Space>
