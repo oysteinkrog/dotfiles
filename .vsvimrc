@@ -124,3 +124,6 @@ set cursorline
 map <leader>to :vsc File.CloseAllButThis<cr>
 
 map <leader>y :vsc File.CopyFullPath<cr>
+
+"This unsets the "last search pattern" register by hitting return
+nnoremap <CR> :noh<CR><CR>
