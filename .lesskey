@@ -3,8 +3,8 @@ e forw-line
 E forw-line-force
 u back-line
 U back-line-force
-l forw-screen
-y back-screen
+y forw-screen
+l back-screen
 
 f forw-screen
 b back-screen
