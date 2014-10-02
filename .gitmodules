@@ -17,3 +17,6 @@
 [submodule "zaw"]
 	path = zaw
 	url = https://github.com/zsh-users/zaw.git
+[submodule "powerline-fonts"]
+	path = powerline-fonts
+	url = https://github.com/Lokaltog/powerline-fonts
