@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 
 #assume changes added to index
@@ -12,21 +12,45 @@ then
 fi
 #echo $FILE
 
-#get changed line 
-LINE=`git blame $FILE |grep "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
-if [ -z "$LINE" ]
+#get changed lines
+LINES=`git blame $FILE |grep "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
+#echo $BLAMELINES
+#IFS=$'\n' read -d '' -r -a LINES < $BLAMELINES
+#echo "${LINES[@]}"
+#`git blame $FILE |grep "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
+if [ -z "$LINES" ]
 then
-    echo "Failed to get changed line!"
+    echo "Failed to get changed lines!"
     exit 1
 fi
 #echo $LINE
 
-#git previous commit on that line
-PRECOMMIT=`git blame -L $LINE $FILE HEAD~1 |head -n1|awk '{ print $1 }'`
-if [ -z "$PRECOMMIT" ]
-then
-    echo "Failed to get previous commit for line"
-    exit 1
-fi
-echo $PRECOMMIT
+# read all line numbers and get prev commit hash for each
+LINESARR=($LINES)
+for LINE in "${LINESARR[@]}"
+do
+    HASH=`git blame -L $LINE $FILE HEAD~1 |head -n1|awk '{ print $1 }'`
+    if [ -z "$HASH" ]
+    then
+        echo "Failed to get previous commit hash for line $LINE"
+        exit 1
+    fi
+
+    HASHESARR[ $i ]="$HASH"
+    (( i++ ))
+    #echo $HASH
+done
+
+FIRSTHASH=${HASHESARR[0]}
+for HASH in "${HASHESARR[@]}"
+do
+    if [ "$FIRSTHASH" != "$HASH" ]
+    then
+        echo "Changes have different parent commit"
+        echo $HASHESARR
+        exit 1
+    fi
+done
+
+echo $FIRSTHASH
 
