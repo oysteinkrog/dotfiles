@@ -4,12 +4,14 @@
 #assume changes added to index
 
 #get changed file (from index)
+REPOROOT=`git rev-parse --show-toplevel`
 FILE=`git diff --cached --name-only`
 if [ -z "$FILE" ]
 then
     echo "Add changes to index!"
     exit 1
 fi
+FILE=$REPOROOT/$FILE
 #echo $FILE
 
 #get changed lines
