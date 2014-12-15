@@ -9,7 +9,7 @@
     fscach = true
 
 [credential]
-    helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
+	helper = !'C:\\Users\\Øystein\\AppData\\Roaming\\GitCredStore\\git-credential-winstore.exe'
 
 [push]
     #default = simple
