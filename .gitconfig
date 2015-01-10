@@ -43,6 +43,8 @@
 [mergetool "semanticmerge"]
     cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -a -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\"
     trustExitCode = true
+[mergetool "tortoise"]
+    cmd = \""c:/Program Files/TortoiseSVN/bin/TortoiseMerge.exe"\" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
 
 [color]
     ui = true
