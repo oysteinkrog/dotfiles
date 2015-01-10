@@ -1,2 +1,3 @@
 Bundle 'sjl/splice.vim'
 Bundle 'sirtaj/vim-openscad'
+Bundle 'Firef0x/PKGBUILD.vim'
