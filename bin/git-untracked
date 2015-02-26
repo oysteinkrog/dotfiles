@@ -1,0 +1,3 @@
+#!/bin/sh
+
+git status | perl -ne '$u=1 if /^# Untracked files:/; print "$1\n" if $u && /^#\t(\S+)/;'

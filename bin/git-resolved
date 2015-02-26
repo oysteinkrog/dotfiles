@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# git adds all conflicts. TODO(sdh): find other idicators
+
+git status | egrep 'both (modified|added):' | sed 's/.*://' | xargs git add
