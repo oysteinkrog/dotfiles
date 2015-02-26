@@ -1,0 +1,381 @@
+#!/usr/bin/perl
+
+# git ir - Interactive Rebase
+# Usage:
+#   git ir [rebase options, other options]
+#   git ir --must           Note: must be used in pairs.
+#   git ir [--push|--pop]
+#   git ir --branch BRANCH
+
+############################################################
+# KNOWN ISSUES
+# 1. multiple branches on the same commit aren't both moved
+############################################################
+
+use strict;
+use File::Temp qw/tempfile/;
+
+my $verbose = int($ENV{'VERBOSE'});
+
+sub usage {
+    print STDERR <<EOF;
+Usage: git ir --onto COMMIT [OPTIONS...] --all|COMMIT...
+Options:
+  --onto COMMIT    The new base for the tree
+  --from COMMIT    Sets the a common base commit
+  --all            Rebases all branches (that are descended from --from)
+  --nohooks        Don't run post-rebase-tree hooks
+  --               All following args are passed directly to rebase
+
+Plumbing commands:
+  --rewrite        Rewrites the TODO, expanding extended commands
+  --must COMMAND   Attempts to run COMMAND, rewriting to TODO if it fails
+  --branch BRANCH  Appends a command to TODO to set BRANCH to the current commit
+  --push           Pushes the current commit to the commit stack in TODO
+  --pop            Pops the commit from the commit stack in TODO
+EOF
+    exit $_[0];
+}
+
+sub debug {
+  print STDERR "$_[0]\n" if $verbose >= $_[1];
+}
+
+sub run {
+    debug "> @_", 1;
+    system "@_";
+}
+
+sub out {
+    debug "> $_[0]", 1;
+    my $result = `$_[0]`;
+    chomp $result;
+    debug "= $result", 2;
+    return $result;
+}
+
+sub barf {
+  print STDERR "@_\n";
+  exit 1;
+}
+
+sub get_hash {
+    my $hash = out "git rev-parse $_[0]";
+    barf "Unable to parse commit $_[0]" if $?;
+    return $hash;
+}
+
+sub hash_exists {
+    run "git rev-parse $_[0] > /dev/null 2>&1";
+    return not $?;
+}
+
+sub append {
+    return $_[0] ? "$_[0],$_[1]" : $_[1];
+}
+
+sub post_process {
+  my $file = shift;
+  open F, $file;
+  my @lines = <F>;
+  close F;
+  open F, ">$file";
+  foreach (@lines) {
+    if (/^(\s*)(?:!|exec!) (.*)$/) {
+      # need to escape single quotes in cmd
+      my ($spaces, $cmd) = ($1, $2);
+      $cmd =~ s/'/'\\''/g;
+      $_ = "${spaces}x git ir --must '$cmd'\n";
+    }
+    s/^(\s*)(?:b|branch) /$1x git ir --branch$ENV{'NOHOOKS'} /;
+    s/^(\s*)(?:\(|push)(?!>\S)/$1x git ir --push/;
+    s/^(\s*)(?:\)|pop)(?!>\S)/$1x git ir --pop/;
+    print F $_;
+    chomp $_; debug $_, 1;
+  }
+  close F;
+}
+
+# Handle special commands, regardless of EDITOR.
+if ($ARGV[0] eq '--must') {
+  run "$ARGV[1]";
+  my $result = ($? == -1) || ($? & 255) ? 255 : ($? >> 8);
+  if ($result) {
+    my $cmd = $ARGV[1]; $cmd =~ s/[$`"\n\\]/\\\\\\$&/g;
+    #$ENV{'PREPEND'} = "x git ir --must '$cmd'";
+    #$ENV{'EDITOR'} = "$0 __PREPEND__";
+    $ENV{'GIT_EDITOR'} = "sed -i \"1i x git ir --must \\\"$cmd\\\"\"";
+    #   escaping: cmd = ["foo"\] -> [\\\"foo\\\"\\\\]
+    #   editor = [sed -i "1i x git ir --must \"\\\"foo\\\"\\\\\""]
+    #   sed arg = [1i x git ir --must "\"foo\"\\"]
+    #   git ir arg = ["foo"\]
+    #print STDERR "FAIL: $ENV{'EDITOR'} $ENV{'PREPEND'}\n";
+    system 'git', 'rebase', '--edit-todo';
+  }
+  exit $result;
+}
+
+if ($ARGV[0] eq '--branch') {
+  my $hooks = $ARGV[1] ne '--nohooks';
+  shift unless $hooks;
+  shift; my $branch = shift;
+  my $cur = out 'git rev-parse HEAD';
+  $ENV{'APPEND'} = "x git checkout $branch; git reset --hard $cur";
+  my $hook = (out 'git rev-parse --show-toplevel') . '/.git/hooks/post-rebase-tree';
+  $ENV{'APPEND'} .= "; $hook $branch" if $hooks and -e $hook;
+  $ENV{'GIT_EDITOR'} = "$0 __APPEND__";
+  system 'git', 'rebase', '--edit-todo';
+  exit;
+}
+
+if ($ARGV[0] eq '--push') {
+  my $cur = out 'git rev-parse HEAD';
+  $ENV{'APPEND'} = "STACK $cur";
+  $ENV{'GIT_EDITOR'} = "$0 __APPEND__";
+  system 'git', 'rebase', '--edit-todo';
+  exit;
+}
+
+if ($ARGV[0] eq '--pop') {
+  $ENV{'GIT_EDITOR'} = "$0 __POP__";
+  system 'git', 'rebase', '--edit-todo';
+  exit;
+}
+
+if ($ARGV[0] eq '--rewrite') {
+  $ENV{'GIT_EDITOR'} = "$0 __REWRITE__";
+  system 'git', 'rebase', '--edit-todo';
+  exit;
+}
+
+# Handle EDITOR commands.
+if ($ENV{'GIT_EDITOR'} =~ /^$0 /) {
+  my $cmd = shift;
+  my $file = shift;
+  if ($cmd eq '__PREPEND__') {
+    $/ = undef;
+    open F, "$file";
+    my $todo = <F>;
+    close F;
+    open F, ">$file";
+    print F "$ENV{'PREPEND'}\n";
+    print F $todo;
+    close F;
+  } elsif ($cmd eq '__APPEND__') {
+    open F, "$file";
+    my @lines = <F>;
+    close F;
+    open F, ">$file";
+    my $found = 0;
+    foreach (@lines) {
+      if (/^STACK/ and not $found) {
+        print F "$ENV{'APPEND'}\n";
+        $found = 1;
+      }
+      print F $_;
+    }
+    print F "$ENV{'APPEND'}\n" unless $found;
+    close F;
+  } elsif ($cmd eq '__POP__') {
+    open F, "$file";
+    my @lines = <F>;
+    close F;
+    open F, ">$file";
+    my $found = 0;
+    foreach (@lines) {
+      if (/^STACK ([0-9a-f]+)/ and not $found) {
+        $found = 1;
+        system 'git', 'checkout', $1;
+      } else {
+        print F $_;
+      }
+    }
+    close F;
+  } elsif ($cmd eq '__INIT__') {
+    # Overwrite the file (only if it's the first time around).
+    if (-s $ENV{'INIT'}) {
+      system "cp $ENV{'INIT'} $file";
+      unlink $ENV{'INIT'};
+    }
+    # Invoke the normal editor only if interactive
+    system $ENV{'OLDEDITOR'}, $file;
+    my $result = ($? == -1) || ($? & 255) ? 255 : ($? >> 8);
+    # Post-process the file
+    post_process $file;
+    exit $result;
+  } elsif ($cmd eq '__REWRITE__') {
+    post_process $file;
+  } else {
+    barf "Error: unknown editor command: $cmd";
+  }
+  exit
+}
+
+# Handle the main rebase command.
+system 'GIT_EDITOR=: git rebase --edit-todo 2> /dev/null'
+  or barf 'A rebase is already in progress.';
+
+my @rebase_args = ();
+my @branches = ();
+my $onto = '';
+my $from = '';
+my $all = 0;
+delete $ENV{'NOHOOKS'};
+
+while (@ARGV) {
+  $_ = shift;
+  if ($_ eq '--from') {
+    $from = shift;
+  } elsif ($_ eq '--onto') {
+    $onto = shift;
+  } elsif ($_ eq '--all') {
+    $all = 1;
+  } elsif ($_ eq '--nohooks') {
+    $ENV{'NOHOOKS'} = ' --nohooks';
+  } elsif (s/^-v/-/) {
+    $verbose += 1;
+    unshift @ARGV, $_ if $_ ne '-';
+  } elsif ($_ eq '--help') {
+    usage;
+  } elsif ($_ eq '--') {
+    @rebase_args = @ARGV;
+    @ARGV = ();
+  } elsif (/^[^-]/) {
+    push @branches, $_;
+  } else {
+    usage 1;
+  }
+}
+usage 1 unless (@branches or $all) and $onto;
+
+$onto = get_hash $onto;
+$from = get_hash $from if $from;
+if ($all) {
+  open BRANCHES, "git branch|";
+  while (<BRANCHES>) {
+    chomp $_;
+    s/^[* ].//;
+    next if /[\(\)]/;
+    push @branches, $_;
+  }
+}
+
+# Map out the commits: hash <--> branch name
+my %branches = ();
+my %bases = ();
+my %names = ();
+my @scan = ();
+foreach (@branches) {
+  next if $branches{$_};
+  debug "Checking branch $_", 1;
+  my $commit = get_hash $_;
+  my $relative = $from ? $from : $onto;
+  my $ontobase = out "git merge-base $onto $commit";
+  my $frombase = $from && out "git merge-base $from $commit";
+  my $basebase = $from && out "git merge-base $frombase $ontobase";
+  # There are a lot of cases to consider here...
+  if ($ontobase eq $commit or $frombase eq $commit or $frombase ne $from) {
+     #or ($onto eq $ontobase and $from eq $basebase)) {
+    debug "Skipping branch $_", 1;
+    next;
+  }
+  my $base = $basebase ne $ontobase ? $ontobase : $frombase;
+
+  push @scan, $commit;
+  push @branches, $_;
+  $branches{$_} = $commit;
+  $names{$commit} = append $names{$commit}, $_;
+  $bases{$base} = 1;
+}
+
+my @bases = keys %bases;
+debug "\@bases = @bases", 1;
+debug "\@branches = @branches", 1;
+debug "\$onto = $onto", 1;
+barf 'Nothing to do' unless @bases;
+
+# Map parent <--> children
+my %parents = ();
+my %children = ();
+while (my $commit = pop @scan) {
+  print "Checking ", `git show --oneline -s --decorate $commit` if $verbose > 0;
+  next if $bases{$commit} or exists $parents{$commit};
+  my $parent = get_hash "$commit^";
+  barf "Commit has multiple parents: " . `git show --oneline --decorate -s $commit`
+    if hash_exists "$commit^2";
+  $parents{$commit} = $parent;
+  $children{$parent} = append $children{$parent}, $commit;
+  push @scan, $parent unless $bases{$parent};
+}
+
+# Build up the interactive input.
+my $spec = '';
+my $indent = '';
+my %rebased = ();
+sub add { $spec .= "$indent@_\n"; }
+sub pushC { add '('; $indent = "$indent  "; }
+sub popC { $indent =~ s/..//; add ')'; }
+sub rebase {
+  my $base = $_[0];
+  my $summarize = $_[1];
+  debug "Rebasing children of $base", 1;
+  my @children = split /,/, $children{$base};
+  my $sum = '';
+  $sum = out("git show --color=never --oneline -s $base") if $summarize or @children > 1;
+  foreach my $commit (@children) {
+    pushC if @children > 1;
+    my $pick = out "git show --color=never --oneline -s $commit";
+    add "# $sum" if $sum;
+    add "pick $pick";
+    if ($names{$commit}) {
+      foreach my $branch (split /,/, $names{$commit}) {
+        add "branch $branch";
+      }
+    }
+    rebase($commit);
+    popC if @children > 1;
+  }
+}
+
+foreach my $commit (@bases) {
+  pushC if @bases > 1;
+  rebase $commit, 1;
+  popC if @bases > 1;
+}
+
+$spec .= <<EOF;
+
+#
+# Commands:
+# p, pick   = use commit
+# r, reword = use commit, but edit the commit message
+# e, edit   = use commit, but stop for amending
+# s, squash = use commit, but meld into previous commit
+# f, fixup  = like "squash", but discard this commit's log message
+# x, exec   = run command (the rest of the line) using shell
+#
+# Extended Commands:
+# !, exec!  = mandatory command (the rest of the line), reinserted on failure
+# b, branch = sets the named branch to the current commit
+# (, push   = pushes the current commit onto the stack
+# ), pop    = pops the current commit from the stack
+#
+# These lines can be re-ordered; they are executed from top to bottom.
+#
+# If you remove a line here THAT COMMIT WILL BE LOST.
+#
+# However, if you remove everything, the rebase will be aborted.
+#
+# Note that empty commits are commented out
+EOF
+
+# Finally do the actual rebase.
+$ENV{'OLDEDITOR'} = defined $ENV{'GIT_EDITOR'} ? $ENV{'GIT_EDITOR'}
+                  : defined $ENV{'VISUAL'} ? $ENV{'VISUAL'} : $ENV{'EDITOR'};
+$ENV{'GIT_EDITOR'} = "$0 __INIT__";
+my ($specfile, $specname) = tempfile();
+print $specfile $spec;
+close $specfile;
+$ENV{'INIT'} = $specname;
+$ENV{'VERBOSE'} = $verbose;
+run "git rebase -i --onto $onto $onto^ $onto"; # irrelevant which branch
