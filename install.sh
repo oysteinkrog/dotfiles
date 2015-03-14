@@ -7,7 +7,7 @@
 
 dir=~/.dotfiles
 olddir=~/.dotfiles_old
-files=".gitconfig .vimrc.bundles.local .vimrc.local .vimrc.bundles.local .vsvimrc .zprezto .spf13-vim-3 .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc"
+files=".gitconfig .vimrc .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc"
 
 
 ##########

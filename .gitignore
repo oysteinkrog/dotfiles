@@ -1,2 +1,4 @@
 ./vimperator/info
 /.vimperator/info
+.vim/bundle/*
+

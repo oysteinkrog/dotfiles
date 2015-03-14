@@ -1,0 +1,34 @@
+set nocompatible              " be iMproved, required
+
+filetype off                  " required
+" set the runtime path to include Vundle and initialize
+set rtp+=~/.vim/bundle/Vundle.vim
+call vundle#begin()
+
+Plugin 'gmarik/Vundle.vim'
+
+Plugin 'mileszs/ack.vim'
+
+Plugin 'tpope/vim-surround'
+"Plugin 'spf13/vim-autoclose'
+
+Plugin 'altercation/vim-colors-solarized'
+Plugin 'tpope/vim-fugitive'
+Plugin 'L9'
+Plugin 'kien/ctrlp.vim'
+Plugin 'bling/vim-airline'
+Plugin 'scrooloose/syntastic'
+Plugin 'scrooloose/nerdcommenter'
+Plugin 'scrooloose/nerdtree'
+Plugin 'jistr/vim-nerdtree-tabs'
+
+Plugin 'nathanaelkane/vim-indent-guides'
+
+Plugin 'sjl/splice.vim'
+Plugin 'yuratomo/dotnet-complete'
+Plugin 'vim-scripts/openscad.vim'
+Plugin 'Firef0x/PKGBUILD.vim'
+
+" All of your Plugins must be added before the following line
+call vundle#end()            " required
+filetype plugin indent on    " required
