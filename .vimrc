@@ -94,6 +94,7 @@ highlight clear LineNr " Current line number row will have same background color
 set backspace=indent,eol,start " Backspace for dummies
 set linespace=0 " No extra spaces between rows
 set number " Line numbers on
+set relativenumber
 set showmatch " Show matching brackets/parenthesis
 set incsearch " Find as you type search
 set hlsearch " Highlight search terms
