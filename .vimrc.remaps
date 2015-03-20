@@ -1,0 +1,32 @@
+let mapleader = ','
+let maplocalleader = '_'
+
+" clear search highlighting rather
+nmap <silent> <leader>/ :nohlsearch<CR>
+
+" "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
+nmap <silent> cp "_cw<C-R>"<Esc>
+
+" Paste and then format the pasted text
+nnoremap fp pv`.= 
+
+" Paste over selection, and then format the pasted text
+vnoremap fp "_dPv`.= 
+
+" colemak {
+noremap <F2> :tabopen ~/.vimperator/plugin/colemak.png<CR>
+noremap h <Nop>
+noremap H <Nop>
+noremap n h
+noremap k n
+noremap N H
+noremap K N
+noremap e j
+noremap u k
+noremap j u
+noremap i l
+noremap l i
+noremap L I
+noremap I L
+"}
+

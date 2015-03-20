@@ -36,6 +36,10 @@ if filereadable(expand("~/.vimrc.bundles"))
     source ~/.vimrc.bundles
 endif
 
+if filereadable(expand("~/.vimrc.remaps"))
+    source ~/.vimrc.remaps
+endif
+
 filetype plugin indent on " Automatically detect file types.
 syntax on " Syntax highlighting
 set mouse=a " Automatically enable mouse usage
@@ -128,11 +132,6 @@ set splitbelow " Puts new split windows to the bottom of the current
 "set matchpairs+=<:> " Match, to be used with %
 set pastetoggle=<F12> " pastetoggle (sane indentation on pastes)
 
-let mapleader = ','
-let maplocalleader = '_'
-
-" clear search highlighting rather
-nmap <silent> <leader>/ :nohlsearch<CR>
 
 " Ctags {
 set tags=./tags;/,~/.vimtags
@@ -237,23 +236,6 @@ if isdirectory(expand("~/.vim/bundle/vim-airline/"))
 endif
 " }
 
-" colemak {
-noremap <F2> :tabopen ~/.vimperator/plugin/colemak.png<CR>
-noremap h <Nop>
-noremap H <Nop>
-noremap n h
-noremap k n
-noremap N H
-noremap K N
-noremap e j
-noremap u k
-noremap j u
-noremap i l
-noremap l i
-noremap L I
-noremap I L
-"}
-
 " Functions {
 " Initialize directories {
 function! InitializeDirectories()
@@ -340,9 +322,6 @@ command! -complete=file -nargs=+ Shell call s:RunShellCommand(<q-args>)
 " e.g. Grep current file for <search_term>: Shell grep -Hn <search_term> %
 " }
 " }
-
-" "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
-nmap <silent> cp "_cw<C-R>"<Esc>
 
 if &term =~ '256color'
     " disable Background Color Erase (BCE) so that color schemes
