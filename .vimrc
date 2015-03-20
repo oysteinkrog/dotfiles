@@ -27,6 +27,11 @@ endif
 " }
 " }
 
+" Filetypes {
+au BufNewFile,BufRead *.xaml set filetype=xml
+au BufNewFile,BufRead *.scad set filetype=openscad
+" }
+
 if filereadable(expand("~/.vimrc.bundles"))
     source ~/.vimrc.bundles
 endif
@@ -345,6 +350,3 @@ if &term =~ '256color'
     " see also http://snk.tuxfamily.org/log/vim-256color-bce.html
     set t_ut=
 endif
-
-" Used to enable XAML syntax highlighting by setting the filetype to XML
-au BufNewFile,BufRead *.xaml set filetype=xml
