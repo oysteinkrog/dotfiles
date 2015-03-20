@@ -1,34 +1,35 @@
 set nocompatible              " be iMproved, required
 
 filetype off                  " required
-" set the runtime path to include Vundle and initialize
-set rtp+=~/.vim/bundle/Vundle.vim
-call vundle#begin()
 
-Plugin 'gmarik/Vundle.vim'
+set rtp+=~/.vim/autoload
 
-Plugin 'mileszs/ack.vim'
+call plug#begin('~/.vim/plugged')
 
-Plugin 'tpope/vim-surround'
-"Plugin 'spf13/vim-autoclose'
+Plug 'gmarik/Vundle.vim'
 
-Plugin 'altercation/vim-colors-solarized'
-Plugin 'tpope/vim-fugitive'
-Plugin 'L9'
-Plugin 'kien/ctrlp.vim'
-Plugin 'bling/vim-airline'
-Plugin 'scrooloose/syntastic'
-Plugin 'scrooloose/nerdcommenter'
-Plugin 'scrooloose/nerdtree'
-Plugin 'jistr/vim-nerdtree-tabs'
+Plug 'mileszs/ack.vim'
 
-Plugin 'nathanaelkane/vim-indent-guides'
+Plug 'tpope/vim-surround'
+"Plug 'spf13/vim-autoclose'
 
-Plugin 'sjl/splice.vim'
-Plugin 'yuratomo/dotnet-complete'
-Plugin 'vim-scripts/openscad.vim'
-Plugin 'Firef0x/PKGBUILD.vim'
+Plug 'altercation/vim-colors-solarized'
+Plug 'tpope/vim-fugitive'
+Plug 'L9'
+Plug 'kien/ctrlp.vim'
+Plug 'bling/vim-airline'
+Plug 'scrooloose/syntastic'
+Plug 'scrooloose/nerdcommenter'
+Plug 'scrooloose/nerdtree'
+Plug 'jistr/vim-nerdtree-tabs'
 
-" All of your Plugins must be added before the following line
-call vundle#end()            " required
+Plug 'nathanaelkane/vim-indent-guides'
+
+Plug 'sjl/splice.vim'
+Plug 'yuratomo/dotnet-complete'
+Plug 'vim-scripts/openscad.vim', { 'for':  'openscad' }
+Plug 'Firef0x/PKGBUILD.vim'
+
+call plug#end()
+
 filetype plugin indent on    " required
