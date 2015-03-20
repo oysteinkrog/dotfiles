@@ -41,7 +41,7 @@
     trustExitCode = true
     conflictstyle = diff3
 [mergetool "semanticmerge"]
-    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\" --automatic --nolangwarn --silent
+    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\" --automatic --nolangwarn
     trustExitCode = true
 [mergetool "tortoise"]
     cmd = \""c:/Program Files/TortoiseSVN/bin/TortoiseMerge.exe"\" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
