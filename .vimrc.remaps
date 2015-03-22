@@ -14,7 +14,6 @@ nnoremap fp pv`.=
 vnoremap fp "_dPv`.= 
 
 " colemak {
-noremap <F2> :tabopen ~/.vimperator/plugin/colemak.png<CR>
 noremap h <Nop>
 noremap H <Nop>
 noremap n h
@@ -30,3 +29,26 @@ noremap L I
 noremap I L
 "}
 
+
+function! Setup_ExecNDisplay()
+    execute "w"
+    execute "silent !chmod +x %:p"
+    let n=expand('%:t')
+    execute "silent !%:p 2>&1 | tee ~/.vim/output_".n
+    " I prefer vsplit
+    "execute "split ~/.vim/output_".n
+    execute "vsplit ~/.vim/output_".n
+    execute "redraw!"
+    set autoread
+endfunction
+
+function! ExecNDisplay()
+    execute "w"
+    let n=expand('%:t')
+    execute "silent !%:p 2>&1 | tee ~/.vim/output_".n
+    " I use set autoread
+    "execute "1 . 'wincmd e'"
+endfunction
+
+nmap <F9> :call Setup_ExecNDisplay()<CR>
+nmap <F2> :call ExecNDisplay()<CR>
