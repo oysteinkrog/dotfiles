@@ -29,6 +29,8 @@ Plug 'sjl/splice.vim'
 Plug 'yuratomo/dotnet-complete'
 Plug 'vim-scripts/openscad.vim', { 'for':  'openscad' }
 Plug 'Firef0x/PKGBUILD.vim'
+Plug 'hdima/python-syntax'
+Plug 'klen/python-mode'
 
 call plug#end()
 
