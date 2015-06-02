@@ -195,17 +195,19 @@ if isdirectory(expand("~/.vim/bundle/ctrlp.vim/"))
     let g:ctrlp_custom_ignore = {
                 \ 'dir': '\.git$\|\.hg$\|\.svn$',
                 \ 'file': '\.exe$\|\.so$\|\.dll$\|\.pyc$' }
-    " On Windows use "dir" as fallback command.
-    if WINDOWS()
-        let s:ctrlp_fallback = 'dir %s /-n /b /s /a-d'
-    elseif executable('ag')
+    if executable('ag')
         let s:ctrlp_fallback = 'ag %s --nocolor -l -g ""'
     elseif executable('ack-grep')
         let s:ctrlp_fallback = 'ack-grep %s --nocolor -f'
     elseif executable('ack')
         let s:ctrlp_fallback = 'ack %s --nocolor -f'
     else
-        let s:ctrlp_fallback = 'find %s -type f'
+        " On Windows use "dir" as fallback command.
+        if WINDOWS()
+            let s:ctrlp_fallback = 'dir %s /-n /b /s /a-d'
+        else
+            let s:ctrlp_fallback = 'find %s -type f'
+        endif
     endif
     let g:ctrlp_user_command = {
                 \ 'types': {
@@ -356,3 +358,4 @@ if &term =~ '256color'
     " see also http://snk.tuxfamily.org/log/vim-256color-bce.html
     set t_ut=
 endif
+
