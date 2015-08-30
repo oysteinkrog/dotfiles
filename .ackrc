@@ -1,3 +1,4 @@
  --type-add=csproj:ext:csproj
  --type-add=xaml:ext:xaml
  --type-add=config:ext:config
+ --type-add=scad:ext:scad
