@@ -13,7 +13,7 @@
 
 [push]
     #default = simple
-    default = upstream
+	default = current
 [pull]
     default = current
 [branch]
