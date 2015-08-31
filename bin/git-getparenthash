@@ -13,9 +13,8 @@ then
 fi
 FILE=$REPOROOT/$FILE
 #echo $FILE
-
 #get changed lines
-LINES=`git blame $FILE |grep "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
+LINES=`git blame $FILE |grep -a "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
 #echo $BLAMELINES
 #IFS=$'\n' read -d '' -r -a LINES < $BLAMELINES
 #echo "${LINES[@]}"
