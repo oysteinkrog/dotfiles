@@ -2,3 +2,4 @@
  --type-add=xaml:ext:xaml
  --type-add=config:ext:config
  --type-add=scad:ext:scad
+ --type-add=cs:ext:cs
