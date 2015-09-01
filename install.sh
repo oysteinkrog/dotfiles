@@ -31,4 +31,4 @@ for file in $files; do
     ln -s $dir/$file ~/$file
 done
 
-zsh prezto.sh
+zsh install-prezto.sh
