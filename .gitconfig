@@ -1,6 +1,10 @@
 [user]
     name = Øystein Krog
     email = oystein.krog@gmail.com
+
+[init]
+    templateDir = ~/.dotfiles/.git_template
+
 [core]
     autocrlf = false
     symlinks = true
