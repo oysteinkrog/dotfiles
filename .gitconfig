@@ -35,20 +35,20 @@
 
 [merge]
     tool = splice
-[mergetool "splice"]
-    cmd = "vim -f $BASE $LOCAL $REMOTE $MERGED -c 'SpliceInit'"
-    trustExitCode = true
 [mergetool]
     prompt = false
     keepBackup = false
+[mergetool "splice"]
+    cmd = "vim -f $BASE $LOCAL $REMOTE $MERGED -c 'SpliceInit'"
+    trustExitCode = true
 [mergetool "vimdiff"]
     trustExitCode = true
     conflictstyle = diff3
 [mergetool "semanticmerge"]
-    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -d \"$LOCAL\" -s \"$REMOTE\" -b \"$BASE\" -r \"$MERGED\" --automatic --nolangwarn
+    cmd = \""$LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe\"" -d \"`cygpath -wa "$LOCAL"`\" -s \"`cygpath -wa "$REMOTE"`\" -b \"`cygpath -wa "$BASE"`\" -r \"`cygpath -wa "$MERGED"`\" --automatic --nolangwarn
     trustExitCode = true
 [mergetool "tortoise"]
-    cmd = \""$PROGRAMFILES/TortoiseGit/bin/TortoiseGitMerge.exe"\" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
+    cmd = \""C:/Program Files/TortoiseGit/bin/TortoiseGitMerge.exe\"" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
 
 [color]
     ui = true
@@ -169,3 +169,5 @@
 
 [rerere]
     enabled = true
+[hub]
+	protocol = https
