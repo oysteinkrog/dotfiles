@@ -30,4 +30,6 @@ for file in $files; do
     ln -s $dir/$file ~/$file
 done
 
+#mklink /J ".git_template" ".dotfiles/.git_template"
+
 zsh prezto.sh

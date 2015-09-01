@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+#
+# A Git pre-commit hook that checks for certain illegal words.
+# Can be 'installed globally' as of Git 1.7.1 using init.templatedir
+#
+# Copyright 2014, Andreas Gullberg Larsen (anjdreas@gmail.com)
+#
+# Inspired by:
+# https://github.com/kvz/dotfiles/blob/master/.gittemplate/hooks/pre-commit
+#
+# Some common caveats have been taken care of:
+# - Works with files that contain spaces
+# - Works on initial commits
+# - Will skip files that are about to be deleted
+# - Uses file as staged in git, not how it currently is in your working dir
+#
+#
+# To install standalone type:
+# $ mkdir -p ~/.gittemplate/hooks
+# $ Add this file to the same folder
+# $ git config --global init.templatedir '~/.gittemplate'
+#
+# Now in new (or existing) repos, type
+# $ git init
+#
+# To reset all hooks by template in an existing repo type
+# $ rm .git/hooks/* && git init
+#
+# This will copy any non-existing files in ~/.gittemplate into your
+# new/current repo's .git dir. This only works from git 1.7.1 and up
+#
+# Tip
+# - If you ever want to check in code and disable the pre-commit one time:
+# $ git commit -n
+#
+# Prior Art
+# - http://mark-story.com/posts/view/using-git-commit-hooks-to-prevent-stupid-mistakes
+# - http://stackoverflow.com/a/8842663/151666
+# - https://github.com/phpbb/phpbb/blob/develop-olympus/git-tools/hooks/pre-commit
+
+# Necessary check for initial commit
+against="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+git rev-parse --verify HEAD >/dev/null 2>&1 && against="HEAD"
+
+function hasExpression() {
+    if git diff --staged | grep -iq $1
+    then
+        echo "Found: $1"gc
+        return 1
+    fi
+    return 0
+}
+
+#set the IFS (Internal Field Separator) variable so that it splits fields by tab and newline and don't threat space as a filed separator.
+IFS=$'\t\n'
+expressions=("DO NOT COMMIT") # Add more strings with space separator
+
+for expr in "${expressions[@]}"
+do
+    tmp=$(hasExpression $expr)
+    #echo "Is: [$tmp]"
+    if [[ -n "$tmp" ]]
+    then
+        echo "NOT ALLOWED: \"$expr\""
+        exit 1;
+    fi
+done
+unset $IFS #or IFS=$' \t\n'
+
+# A git hook script to find and fix trailing whitespace
+# in your commits. Bypass it with the --no-verify option
+# to git-commit
+if git-rev-parse --verify HEAD >/dev/null 2>&1 ; then
+    against=HEAD
+else
+    # Initial commit: diff against an empty tree object
+    against=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+fi
+
+# Find files with trailing whitespace
+for FILE in `exec git diff-index --check --cached $against -- | sed '/^[+-]/d' | sed -r 's/:[0-9]+:.*//' | uniq` ; do
+    # Fix them!
+    sed -i 's/[[:space:]]*$//' "$FILE"
+done
+
+echo "No errors detected."
