@@ -7,7 +7,7 @@
 
 dir=~/.dotfiles
 olddir=~/.dotfiles_old
-files=".gitconfig .vimrc .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc"
+files=".gitconfig .vimrc .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template"
 
 
 ##########
@@ -30,7 +30,5 @@ for file in $files; do
     echo "Creating symlink to $file in home directory."
     ln -s $dir/$file ~/$file
 done
-
-#mklink /J ".git_template" ".dotfiles/.git_template"
 
 zsh prezto.sh
