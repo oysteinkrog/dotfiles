@@ -1,11 +1,18 @@
+" vim: set sw=4 ts=4 sts=4 et tw=78 foldmarker={,} foldlevel=0 foldmethod=marker spell:
+
 let mapleader = ','
 let maplocalleader = '_'
+nnoremap \ ,
 
 " clear search highlighting rather
 nmap <silent> <leader>/ :nohlsearch<CR>
 
 " "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
 nmap <silent> cp "_cw<C-R>"<Esc>
+
+"Adding a line above/below and remain in Normal mode
+nmap <leader>o o<Esc>
+nmap <leader>O O<Esc>
 
 " Paste and then format the pasted text
 nnoremap fp pv`.= 
@@ -29,7 +36,7 @@ noremap L I
 noremap I L
 "}
 
-
+" functions"{
 function! Setup_ExecNDisplay()
     execute "w"
     execute "silent !chmod +x %:p"
@@ -49,6 +56,18 @@ function! ExecNDisplay()
     " I use set autoread
     "execute "1 . 'wincmd e'"
 endfunction
+"}
 
 nmap <F9> :call Setup_ExecNDisplay()<CR>
 nmap <F2> :call ExecNDisplay()<CR>
+
+"Quickly edit/reload the vimrc file
+nmap <silent> <leader>ev :e $MYVIMRC<CR>
+nmap <silent> <leader>sv :so $MYVIMRC<CR>
+
+" paste over and blackhole over
+xnoremap <leader>p "_dP
+
+" return => unset "last search pattern" register
+nnoremap <CR> :noh<CR><CR>
+

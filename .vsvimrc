@@ -1,25 +1,46 @@
-" copied from Vim 7.3's mswin.vim:
+" vim: set sw=4 ts=4 sts=4 et tw=78 foldmarker={,} foldlevel=0 foldmethod=marker spell:
 
-" Map Leader key to ,"
-let mapleader = ","
-let g:mapleader = ","
-nnoremap \ ,
+so ~/.dotfiles/.vimrc.remaps
 
-" colemak
-noremap h <Nop>
-noremap H <Nop>
-noremap n h
-noremap k n
-noremap N H
-noremap K N
-noremap e j
-noremap u k
-noremap j u
-noremap i l
-noremap l i
-noremap L I
-noremap I L
-"
+set vsvim_useeditordefaults
+
+" set 'selection', 'selectmode', 'mousemodel' and 'keymodel' for MS-Windows
+behave mswin
+
+" backspace and cursor keys wrap to previous/next line
+set backspace=indent,eol,start 
+
+" vsvim says: "Option is not supported: '+='"
+"set whichwrap+=<,>,[,]
+
+" SEARCHING
+"Ignore case in searches always.
+set ignorecase
+set smartcase
+set incsearch
+set hlsearch
+
+" indentation every four columns
+set tabstop=4
+set softtabstop=4
+
+" Use indents of 4 spaces
+set shiftwidth=4
+
+"set smarttab " Use 'shiftwidth' when using <Tab> in front of a line."
+set autoindent
+"set shiftround
+"set showmatch
+set expandtab " Tabs are spaces, not tabs
+
+" enable line numbers
+set nu
+
+" set wildmenu
+set cursorline
+
+
+
 " CTRL-X and SHIFT-Del are Cut
 vnoremap <C-X> "+x
 vnoremap <S-Del> "+x
@@ -36,18 +57,11 @@ imap <C-V>      <Esc>"+gpa
 cmap <C-V>      <C-R>+
 cmap <S-Insert>     <C-R>+
 
-
 imap <S-Insert>     <C-V>
 vmap <S-Insert>     <C-V>
 
 " Use CTRL-Q to do what CTRL-V used to do
 noremap <C-Q>       <C-V>
-
-" set 'selection', 'selectmode', 'mousemodel' and 'keymodel' for MS-Windows
-behave mswin
-
-" backspace and cursor keys wrap to previous/next line
-set backspace=indent,eol,start whichwrap+=<,>,[,]
 
 " backspace in Visual mode deletes selection
 vnoremap <BS> d
@@ -73,9 +87,6 @@ onoremap <C-A> <C-C>gggH<C-O>G
 snoremap <C-A> <C-C>gggH<C-O>G
 xnoremap <C-A> <C-C>ggVG
 
-" https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
-nmap <silent> cp "_cw<C-R>"<Esc>
-
 "noremap <Left>  <NOP>
 "noremap <Right> <NOP>
 "noremap <Up>    <NOP>
@@ -85,45 +96,12 @@ nmap <silent> cp "_cw<C-R>"<Esc>
 "vnoremap <Up>    <NOP>
 "vnoremap <Down>  <NOP>
 
-" SEARCHING
-"Ignore case in searches always.
-set ignorecase
-set smartcase
-set incsearch
-set hlsearch
 
 "Quickly edit/reload the vimrc file
-nmap <silent> <leader>ev :e $MYVIMRC<CR>
-nmap <silent> <leader>sv :so $MYVIMRC<CR>
+nmap <leader>ev :e ~/.vsvimrc<CR>
+nmap <leader>sv :so ~/.vsvimrc<CR>
 
-"Adding a line above/below and remain in Normal mode
-nmap <leader>o o<Esc>
-nmap <leader>O O<Esc>
-
-" indentation every four columns
-set tabstop=4
-set softtabstop=4
-
-" Use indents of 4 spaces
-set shiftwidth=4
-
-set smarttab " Use 'shiftwidth' when using <Tab> in front of a line."
-set autoindent
-set shiftround
-set showmatch
-set expandtab " Tabs are spaces, not tabs
-
-" enable line numbers
-set nu
-
-set wildmenu
-set cursorline
-
-// close all tabs
-// :tabonly not implemented yet
+" close all tabs
+" :tabonly not implemented yet
 map <leader>to :vsc File.CloseAllButThis<cr>
-
 map <leader>y :vsc File.CopyFullPath<cr>
-
-"This unsets the "last search pattern" register by hitting return
-nnoremap <CR> :noh<CR><CR>
