@@ -11,6 +11,7 @@ files=".gitconfig .vimrc .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperato
 
 
 ##########
+export MSYS=winsymlinks:nativestrict
 
 # create .dotfiles_old in homedir
 echo "Creating $olddir for backup of any existing dotfiles in ~"
