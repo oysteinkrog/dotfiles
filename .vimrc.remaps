@@ -73,3 +73,9 @@ nnoremap <CR> :noh<CR><CR>
 
 " ctrl-r to search+replace current selection
 vnoremap <C-r> "hy:%s/<C-r>h//gc<left><left><left>
+
+nnoremap <S-n> :execute 'silent! tabmove ' . (tabpagenr()-2)<CR>
+nnoremap <S-i> :execute 'silent! tabmove ' . (tabpagenr()+1)<CR>
+nnoremap <C-n> :tabprevious<CR>
+nnoremap <C-i> :tabnext<CR>
+
