@@ -105,3 +105,5 @@ nmap <leader>sv :so ~/.vsvimrc<CR>
 " :tabonly not implemented yet
 map <leader>to :vsc File.CloseAllButThis<cr>
 map <leader>y :vsc File.CopyFullPath<cr>
+
+map <leader>c :vsc ReSharper.ReSharper_LineComment<cr>
