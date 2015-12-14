@@ -4,17 +4,17 @@
 #assume changes added to index
 
 #get changed file (from index)
-REPOROOT=`git rev-parse --show-toplevel`
-FILE=`git diff --cached --name-only`
+REPOROOT="`git rev-parse --show-toplevel`"
+FILE="`git diff --cached --name-only`"
 if [ -z "$FILE" ]
 then
     echo "Add changes to index!"
     exit 1
 fi
-FILE=$REPOROOT/$FILE
+FILE="$REPOROOT/$FILE"
 #echo $FILE
 #get changed lines
-LINES=`git blame $FILE |grep -a "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
+LINES=`git blame "$FILE" |grep -a "Not Committed Yet"|awk -F"[()]" '{ print $2 }' | awk -F" " '{print $7}'`
 #echo $BLAMELINES
 #IFS=$'\n' read -d '' -r -a LINES < $BLAMELINES
 #echo "${LINES[@]}"
