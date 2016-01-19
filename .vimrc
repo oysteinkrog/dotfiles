@@ -32,7 +32,7 @@ endif
 if has('gui_running')
     set guioptions-=T           " remove the toolbar
     set lines=40                " 40 lines of text instead of 24,
-    set columns=80
+    set columns=120
     set langmenu=en_US.UTF-8    " sets the language of the menu (gvim)
     "language en                 " sets the language of the messages / ui (vim)
 
