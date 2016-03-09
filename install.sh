@@ -5,9 +5,12 @@
 
 ########## Variables
 
+# fix zsh iteration over space-separated words
+setopt shwordsplit      # this can be unset by saying: unsetopt shwordsplit
+
 dir=~/.dotfiles
 olddir=~/.dotfiles_old
-files=".gitconfig .vimrc .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template"
+files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim"
 
 
 ##########
@@ -24,11 +27,11 @@ cd $dir
 echo "...done"
 
 # move any existing .dotfiles in homedir to dotfiles_old directory, then create symlinks 
+echo "Moving any existing dotfiles from ~ to $olddir"
 for file in $files; do
-    echo "Moving any existing dotfiles from ~ to $olddir"
     mv ~/$file $olddir/
-    echo "Creating symlink to $file in home directory."
-    ln -s $dir/$file ~/$file
+    echo "$dir/$file => ~/$file"
+    ln -sf $dir/$file ~/$file
 done
 
 zsh install-prezto.sh
