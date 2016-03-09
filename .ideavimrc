@@ -1,0 +1,110 @@
+" vim: set sw=4 ts=4 sts=4 et tw=78 foldmarker={,} foldlevel=0 foldmethod=marker spell:
+
+so ~/.dotfiles/.vimrc.remaps
+
+set surround
+set clipboard+=unnamed
+
+" set 'selection', 'selectmode', 'mousemodel' and 'keymodel' for MS-Windows
+behave mswin
+
+" backspace and cursor keys wrap to previous/next line
+set backspace=indent,eol,start 
+
+" vsvim says: "Option is not supported: '+='"
+"set whichwrap+=<,>,[,]
+
+" SEARCHING
+"Ignore case in searches always.
+set ignorecase
+set smartcase
+set incsearch
+set hlsearch
+
+" indentation every four columns
+set tabstop=4
+set softtabstop=4
+
+" Use indents of 4 spaces
+set shiftwidth=4
+
+"set smarttab " Use 'shiftwidth' when using <Tab> in front of a line."
+set autoindent
+"set shiftround
+"set showmatch
+set expandtab " Tabs are spaces, not tabs
+
+" enable line numbers
+set nu
+
+" set wildmenu
+set cursorline
+
+
+
+" CTRL-X and SHIFT-Del are Cut
+vnoremap <C-X> "+x
+vnoremap <S-Del> "+x
+
+" CTRL-C and CTRL-Insert are Copy
+vnoremap <C-C> "+y
+vnoremap <C-Insert> "+y
+
+" CTRL-V and SHIFT-Insert are Paste
+map <C-V>       "+gP
+map <S-Insert>      "+gP
+imap <C-V>      <Esc>"+gpa
+
+cmap <C-V>      <C-R>+
+cmap <S-Insert>     <C-R>+
+
+imap <S-Insert>     <C-V>
+vmap <S-Insert>     <C-V>
+
+" Use CTRL-Q to do what CTRL-V used to do
+noremap <C-Q>       <C-V>
+
+" backspace in Visual mode deletes selection
+vnoremap <BS> d
+
+" Use CTRL-S for saving, also in Insert mode
+noremap <C-S>       :w<CR>
+vnoremap <C-S>      <C-C>:w<CR>
+inoremap <C-S>      <C-O>:w<CR>
+
+" CTRL-Z is Undo; not in cmdline though
+noremap <C-Z> u
+inoremap <C-Z> <C-O>u
+
+" CTRL-Y is Redo (although not repeat); not in cmdline though
+noremap <C-Y> <C-R>
+inoremap <C-Y> <C-O><C-R>
+
+" CTRL-A is Select all
+noremap <C-A> gggH<C-O>G
+inoremap <C-A> <C-O>gg<C-O>gH<C-O>G
+cnoremap <C-A> <C-C>gggH<C-O>G
+onoremap <C-A> <C-C>gggH<C-O>G
+snoremap <C-A> <C-C>gggH<C-O>G
+xnoremap <C-A> <C-C>ggVG
+
+"noremap <Left>  <NOP>
+"noremap <Right> <NOP>
+"noremap <Up>    <NOP>
+"noremap <Down>  <NOP>
+"vnoremap <Left>  <NOP>
+"vnoremap <Right> <NOP>
+"vnoremap <Up>    <NOP>
+"vnoremap <Down>  <NOP>
+
+
+"Quickly edit/reload the vimrc file
+nmap <leader>ev :e ~/.ideavimrc<CR>
+nmap <leader>sv :so ~/.ideavimrc<CR>
+
+" close all tabs
+" :tabonly not implemented yet
+map <leader>to :action CloseAllEditorsButActive<cr>
+map <leader>y :action CopyPaths<cr>
+
+map <leader>c :action CommentByLineComment<cr>
