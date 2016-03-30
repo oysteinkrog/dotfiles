@@ -10,7 +10,7 @@
     symlinks = true
     filemode = true
     preloadindex = true
-    fscach = true
+    fscache = true
 
 [credential]
     helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"

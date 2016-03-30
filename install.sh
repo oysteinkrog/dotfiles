@@ -10,7 +10,7 @@ setopt shwordsplit      # this can be unset by saying: unsetopt shwordsplit
 
 dir=~/.dotfiles
 olddir=~/.dotfiles_old
-files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim"
+files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .ideavimrc .zprezto .vimperator .vimperatorrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim"
 
 
 ##########
