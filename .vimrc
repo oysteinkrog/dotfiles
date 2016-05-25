@@ -189,7 +189,7 @@ let g:indent_guides_enable_on_vim_startup = 0
 " }
 
 " ctrlp {
-if isdirectory(expand("~/.vim/bundle/ctrlp.vim/"))
+if isdirectory(expand("~/.vim/plugged/ctrlp.vim/"))
     let g:ctrlp_working_path_mode = 'ra'
     nnoremap <silent> <D-t> :CtrlP<CR>
     nnoremap <silent> <D-r> :CtrlPMRU<CR>
@@ -217,7 +217,7 @@ if isdirectory(expand("~/.vim/bundle/ctrlp.vim/"))
                 \ },
                 \ 'fallback': s:ctrlp_fallback
                 \ }
-    if isdirectory(expand("~/.vim/bundle/ctrlp-funky/"))
+    if isdirectory(expand("~/.vim/plugged/ctrlp-funky/"))
         " CtrlP extensions
         let g:ctrlp_extensions = ['funky']
         "funky
