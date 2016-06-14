@@ -25,6 +25,9 @@
 [apply]
     whitespace = nowarn
 
+[submodule]
+    fetchJobs = 4
+
 [diff]
     memonicprefix = true
     tool = semanticdiff
