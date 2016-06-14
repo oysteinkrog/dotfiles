@@ -11,6 +11,7 @@
     filemode = true
     preloadindex = true
     fscache = true
+    pager = "diff-so-fancy | less --tabs=4 -RFX"
 
 [credential]
     helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
@@ -27,6 +28,14 @@
 
 [submodule]
     fetchJobs = 4
+
+[interactive]
+    diffFilter = diff-so-fancy
+
+[pager]
+    log = "diff-so-fancy | less --tabs=4 -RFX"
+    show = "diff-so-fancy | less --tabs=4 -RFX"
+    diff = "diff-so-fancy | less --tabs=4 -RFX"
 
 [diff]
     memonicprefix = true
