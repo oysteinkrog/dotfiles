@@ -30,6 +30,7 @@
 
 [diff]
     memonicprefix = true
+    compactionHeuristic = true
     tool = semanticdiff
 [difftool]
     prompt = false
