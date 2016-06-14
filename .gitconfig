@@ -184,3 +184,5 @@
     enabled = true
 [hub]
 	protocol = https
+[diff-so-fancy]
+	markEmptyLines = false
