@@ -13,7 +13,25 @@ Plug 'mileszs/ack.vim'
 Plug 'tpope/vim-surround'
 "Plug 'spf13/vim-autoclose'
 
-Plug 'altercation/vim-colors-solarized'
+if has('nvim')
+    Plug 'https://github.com/arakashic/nvim-colors-solarized.git'
+
+    function! BuildYCM(info)
+        " info is a dictionary with 3 fields
+        " - name:   name of the plugin
+        " - status: 'installed', 'updated', or 'unchanged'
+        " - force:  set on PlugInstall! or PlugUpdate!
+        if a:info.status == 'installed' || a:info.force
+            !./install.py
+        endif
+    endfunction
+
+    Plug 'Valloric/YouCompleteMe', { 'do': function('BuildYCM') }
+
+else
+    Plug 'altercation/vim-colors-solarized'
+endif
+
 Plug 'tpope/vim-fugitive'
 Plug 'L9'
 Plug 'kien/ctrlp.vim'
