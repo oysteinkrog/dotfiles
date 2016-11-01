@@ -25,6 +25,8 @@
     autosetuprebase = always
 [apply]
     whitespace = nowarn
+[rebase]
+    autoSquash = false
 
 [submodule]
     fetchJobs = 4
