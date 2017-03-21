@@ -8,8 +8,10 @@
 # fix zsh iteration over space-separated words
 setopt shwordsplit      # this can be unset by saying: unsetopt shwordsplit
 
-dir=~/.dotfiles
-olddir=~/.dotfiles_old
+HOME"/c/users/oyste"
+#HOME=
+dir=$HOME/.dotfiles
+olddir=$HOME/.dotfiles_old
 files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .ideavimrc .zprezto .vimperator .vimperatorrc .cvimrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim .config"
 
 
@@ -29,9 +31,14 @@ echo "...done"
 # move any existing .dotfiles in homedir to dotfiles_old directory, then create symlinks 
 echo "Moving any existing dotfiles from ~ to $olddir"
 for file in $files; do
-    mv ~/$file $olddir/
-    echo "$dir/$file => ~/$file"
-    ln -sf $dir/$file ~/$file
+    mv $HOME/$file $olddir/
+    echo "$dir/$file => $HOME/$file"
+    ln -sf $dir/$file $HOME/$file
 done
 
-zsh install-prezto.sh
+# setup prezto
+setopt EXTENDED_GLOB
+for file in $dir/.zprezto/runcoms/^README.md(.N); do
+    echo "$dir/$file => $HOME/$file"
+  ln -sf "$file" "$HOME/.${file:t}"
+done
