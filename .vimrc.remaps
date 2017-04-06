@@ -79,3 +79,12 @@ nnoremap <S-i> :execute 'silent! tabmove ' . (tabpagenr()+1)<CR>
 nnoremap <C-n> :tabprevious<CR>
 nnoremap <C-i> :tabnext<CR>
 
+" git{
+nnoremap <silent> <Leader>p :Pick<CR><CR>
+nnoremap <silent> <Leader>s :Squash<CR><CR>
+nnoremap <silent> <Leader>e :Edit<CR><CR>
+nnoremap <silent> <Leader>r :Reword<CR><CR>
+nnoremap <silent> <Leader>f :Fixup<CR><CR>
+nnoremap <silent> <Leader>c :Cycle<CR><CR>
+"}
+
