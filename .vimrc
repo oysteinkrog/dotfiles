@@ -196,7 +196,9 @@ if isdirectory(expand("~/.vim/plugged/ctrlp.vim/"))
     let g:ctrlp_custom_ignore = {
                 \ 'dir': '\.git$\|\.hg$\|\.svn$',
                 \ 'file': '\.exe$\|\.so$\|\.dll$\|\.pyc$' }
-    if executable('ag')
+    if executable('rg')
+        let s:ctrlp_fallback = 'rg --files  %s'
+    elseif executable('ag')
         let s:ctrlp_fallback = 'ag %s --nocolor -l -g ""'
     elseif executable('ack-grep')
         let s:ctrlp_fallback = 'ack-grep %s --nocolor -f'
