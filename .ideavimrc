@@ -11,6 +11,9 @@ behave mswin
 " backspace and cursor keys wrap to previous/next line
 set backspace=indent,eol,start 
 
+set visualbell
+set noerrorbells
+
 " vsvim says: "Option is not supported: '+='"
 "set whichwrap+=<,>,[,]
 
