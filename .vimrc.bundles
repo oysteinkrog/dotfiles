@@ -45,7 +45,7 @@ else
 endif
 
 Plug 'tpope/vim-fugitive'
-Plug 'L9'
+Plug 'vim-scripts/L9'
 Plug 'kien/ctrlp.vim'
 Plug 'bling/vim-airline'
 Plug 'scrooloose/syntastic'
@@ -62,7 +62,7 @@ Plug 'Firef0x/PKGBUILD.vim'
 Plug 'hdima/python-syntax'
 Plug 'klen/python-mode'
 
-Plug 'slj/gundo.vim'
+Plug 'sjl/gundo.vim'
 
 call plug#end()
 
