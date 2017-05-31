@@ -2,6 +2,9 @@
 
 so ~/.dotfiles/.vimrc.remaps
 
+" "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
+nmap <silent> cp "_cw<C-R>"<Esc>
+
 set surround
 set clipboard+=unnamed
 
