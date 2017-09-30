@@ -18,11 +18,13 @@ Plug 'gmarik/Vundle.vim'
 
 Plug 'mileszs/ack.vim'
 
-Plug 'terryma/vim-smooth-scroll'
+Plug 'dkprice/vim-easygrep'
+
+"Plug 'terryma/vim-smooth-scroll'
 Plug 'matze/vim-move'
-Plug 'justinmk/vim-sneak'
+"Plug 'justinmk/vim-sneak'
 Plug 'tpope/vim-surround'
-Plug 'tpope/vim-repeat'
+"Plug 'tpope/vim-repeat'
 "Plug 'spf13/vim-autoclose'
 
 if has('nvim')
@@ -47,7 +49,7 @@ endif
 Plug 'tpope/vim-fugitive'
 Plug 'vim-scripts/L9'
 Plug 'kien/ctrlp.vim'
-Plug 'bling/vim-airline'
+"Plug 'bling/vim-airline'
 Plug 'scrooloose/syntastic'
 Plug 'scrooloose/nerdcommenter'
 Plug 'scrooloose/nerdtree'
@@ -62,7 +64,7 @@ Plug 'Firef0x/PKGBUILD.vim'
 Plug 'hdima/python-syntax'
 Plug 'klen/python-mode'
 
-Plug 'sjl/gundo.vim'
+"Plug 'sjl/gundo.vim'
 
 call plug#end()
 
