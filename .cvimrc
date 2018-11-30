@@ -1,27 +1,7 @@
-" colemak
-map h <Nop>
-map H <Nop>
-map n scrollLeft
-map k n
-map N H
-map K N
-map e scrollDown
-map u scrollUp
-map j u
-map i scrollRight
-map l i
-map L I
-map I L
+let configpath ='c:/Users/oyste/.dotfiles/.cvimrc'
+set localconfig
 
-" Map Leader key to ,"
-let mapleader = ","
-map \ ,
-
-" select next/previous tab
-map <C-n> previousTab
-map <C-i> nextTab
-"map <C-e> gt
-"map <C-u> gT
+unmapAll
 
 " general
 set autohidecursor " auto hide cursor when scrolling
@@ -30,8 +10,145 @@ set cncpcompletion " ^N/^P completion
 set nativelinkorder " new tabs follow chrome logic
 set noautofocus " forbid websites to autofocus
 set sortlinkhints " sort hints based on the distance from the top left corner
-let blacklists = [ 'https://inbox.google.com/*', 'https://gmail.com/*', 'https://outlook.office.com/owa/*', 'https://outlook.office365.com/owa/*', 'https://www.typing.com/student/*', 'https://feedly.com/*', 'http://www.memrise.com/course/*/*/garden/review/', 'https://feedly.com/*', 'slack.com' ] " ignore these websites
-let hintcharacters = 'lpufyw;qntesiroa' " Colemak toprow/homerow
+let hintcharacters = 'lpufywqntesiroa' " Colemak toprow/homerow
+let scrollstep = 75
+let barposition = "bottom"
+let mapleader = ","
+
+set typelinkhints
+"set numerichints
+
+set smoothscroll
+set noautofocus
+
+map j scrollDown
+map ; scrollUp
+
+map / openSearchBar
+map ' previousSearchResult
+map n nextSearchResult
+map ? openSearchBarReverse
+
+"page movement
+map u scrollUp
+map e scrollDown
+map n scrollLeft
+map i scrollRight
+map gg scrollToTop
+map G scrollToBottom
+map l scrollPageUp
+map y scrollPageDown
+
+"history/tab movement
+map <C-l> goBack
+map <C-y> goForward
+map L previousTab
+map Y nextTab
+
+"find movement
+map n nextSearchResult
+map N previousSearchResult
+
+map f createHint
+map F createTabbedHint
+
+map : openCommandBar
+
+map gi goToInput
+
+map r reloadTab
+map R reloadTabUncached
+
+map w :new<cr>
+map t :tabnew<cr>
+map T :duplicate<cr>
+
+map <Leader>td :tabdetach<cr>
+
+map zi zoomPageIn
+map zo zoomPageOut
+
+map x closeTab
+
+map . repeatCommand
+
+map yy yankDocumentUrl
+"map Y yankUrl
+
+map d :open<space>
+
+map M* addQuickMark
+map a* openQuickMark
+
+map <Leader>h :tabnew https://github.com/1995eaton/chromium-vim<cr>
+
+map <C-v> centerMatchH
+
+let qmark m = ["http://modesttree.center"]
+let qmark b = ["http://modesttree.center:7001/allPlans.action"]
+
+let qmark c = ["https://calendar.google.com"]
+let qmark e = ["https://mail.google.com"]
+let qmark f = ["http://www.facebook.com"]
+let qmark g = ["http://www.github.com"]
+let qmark i = ["http://www.inoreader.com/"]
+let qmark l = ["http://localhost:63034/Project"]
+let qmark s = ["http://modest-internal:9002/Registration/LogOn"]
+let qmark t = ["https://trello.com/"]
+let qmark v = ["https://www.reddit.com/r/vim"]
+let qmark z = ["https://www.github.com/modesttree/zenject"]
+
+let qmark p = ["https://getpocket.com"]
+let qmark o = ["https://getpocket.com/a/queue/list/prioritized/"]
+
+let qmark j = ["http://modest-internal:8080/secure/Dashboard.jspa"]
+
+" ignore these websites
+let blacklists = [
+'https://inbox.google.com/*',
+'https://gmail.com/*', 
+'https://outlook.office.com/owa/*',
+'https://outlook.office365.com/owa/*',
+'https://www.typing.com/student/*',
+'https://feedly.com/*',
+'http://www.memrise.com/course/*/*/garden/review/',
+'https://feedly.com/*',
+'https://slack.com' ]
+
+site '*://*.youtube.com/*' {
+    unmap L
+}
+
+site '*://*getpocket.com/*' {
+    unmapAll
+    map w :new<cr>
+    map H goBack
+    map L goForward
+}
+
+site '*://mail.google.com/*' {
+    unmapAll
+    map w :new<cr>
+    map t :tabnew<cr>
+    map H goBack
+    map L goForward
+}
+
+site '*://*.reddit.com/*' {
+    unmapAll
+    map w :new<cr>
+    map t :tabnew<cr>
+}
+
+site '*://*.inoreader.com/*' {
+    unmapAll
+    map w :new<cr>
+    map t :tabnew<cr>
+}
+
+site '*://*.trello.com/*' {
+    unmap <C-v>
+}
 
 " explicitly allow autofocus on some websites
 site '*://*google.*/*' {
@@ -40,3 +157,4 @@ site '*://*google.*/*' {
 site '*://*wordreference.com/*' {
   set autofocus
 }
+
