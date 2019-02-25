@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# check that the regex search correctly matches the changes you want.
+git diff -U0 | grepdiff $1 --output-matching=hunk  
+
+# then apply the changes to the index
+git diff -U0 | grepdiff $1 --output-matching=hunk | git apply --cached --unidiff-zero 
