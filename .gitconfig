@@ -11,7 +11,10 @@
     filemode = true
     preloadindex = true
     fscache = true
+    commitGraph = true
     #pager = "diff-so-fancy | less --tabs=4 -RFX"
+[commit]
+    verbose = true
 
 [credential]
     helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
@@ -23,10 +26,14 @@
     default = current
 [branch]
     autosetuprebase = always
+    sort = authordate
 [apply]
     whitespace = nowarn
 [rebase]
     autoSquash = false
+    useBuiltin = true
+[stash]
+    useBuiltin = true
 
 [submodule]
     fetchJobs = 4
@@ -46,7 +53,7 @@
 [difftool]
     prompt = false
 [difftool "semanticdiff"]
-    cmd = $LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(cygpath -w $LOCAL)" -d "$(cygpath -w $REMOTE)"
+    cmd = $LOCALAPPDATA/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(cygpath -w $LOCAL)" -d "$(cygpath -w $REMOTE)"
 
 [merge]
     tool = splice
@@ -60,7 +67,7 @@
     trustExitCode = true
     conflictstyle = diff3
 [mergetool "semanticmerge"]
-    cmd = \""$LOCALAPPDATA/PlasticSCM4/semanticmerge/semanticmergetool.exe\"" -d \"`cygpath -wa "$LOCAL"`\" -s \"`cygpath -wa "$REMOTE"`\" -b \"`cygpath -wa "$BASE"`\" -r \"`cygpath -wa "$MERGED"`\" --automatic --nolangwarn
+    cmd = \""$LOCALAPPDATA/semanticmerge/semanticmergetool.exe\"" -d \"`cygpath -wa "$LOCAL"`\" -s \"`cygpath -wa "$REMOTE"`\" -b \"`cygpath -wa "$BASE"`\" -r \"`cygpath -wa "$MERGED"`\" --automatic --nolangwarn
     trustExitCode = true
 [mergetool "tortoise"]
     cmd = \""C:/Program Files/TortoiseGit/bin/TortoiseGitMerge.exe\"" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
@@ -186,3 +193,5 @@
     enabled = true
 [hub]
 	protocol = https
+[winUpdater]
+	recentlySeenVersion = 2.20.1.windows.1
