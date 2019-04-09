@@ -33,3 +33,5 @@ BoldAsColour=no
 AllowBlinking=yes
 ZoomShortcuts=no
 CursorBlinks=yes
+ThemeFile=flat-ui
+ClicksPlaceCursor=yes
