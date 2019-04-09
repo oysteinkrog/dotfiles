@@ -65,6 +65,9 @@ Plug 'hdima/python-syntax'
 Plug 'klen/python-mode'
 
 "Plug 'sjl/gundo.vim'
+"
+Plug 'xolox/vim-misc'
+Plug 'xolox/vim-reload'
 
 call plug#end()
 
