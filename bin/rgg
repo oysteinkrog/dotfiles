@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec rg --follow --color=never --no-heading --hidden --files -g *$1*
