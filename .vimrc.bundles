@@ -69,6 +69,8 @@ Plug 'klen/python-mode'
 Plug 'xolox/vim-misc'
 Plug 'xolox/vim-reload'
 
+Plug 'dag/vim-fish'
+
 call plug#end()
 
 filetype plugin indent on    " required
