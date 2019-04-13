@@ -6,29 +6,24 @@
 # - Extraction of git info: https://github.com/sorin-ionescu/prezto/blob/d275f316ffdd0bbd075afbff677c3e00791fba16/modules/git/functions/git-info#L180-L441
 
 function fish_default_mode_prompt --description "Display the default mode for the prompt"
-    echo -n (set_color blue)(prompt_pwd)' '
-    set_color -o
-    if test "$fish_key_bindings" = "fish_vi_key_bindings"
-        or test "$fish_key_bindings" = "fish_hybrid_key_bindings"
-        switch $fish_bind_mode
-            case default
-                echo -n (set_color green)'❮'(set_color yellow)'❮'(set_color red)'❮ '
-            case insert
-                echo -n (set_color red)'❯'(set_color yellow)'❯'(set_color green)'❯ '
-            case replace_one
-                echo -n (set_color red)'❯'(set_color yellow)'❯'(set_color green)'❯ '
-            case visual
-                echo -n (set_color green)'❮'(set_color yellow)'❮'(set_color red)'❮ '
-        end
-    else
-        echo -n (set_color red)'❯'(set_color yellow)'❯'(set_color green)'❯ '
-    end
-    set_color normal
 end
 
 function fish_prompt
     if test -n "$SSH_TTY"
         echo -n (set_color brred)"$USER"(set_color white)'@'(set_color yellow)(prompt_hostname)' '
+    end
+
+    echo -n (set_color blue)(prompt_pwd)' '
+    set_color -o
+    switch $fish_bind_mode
+        case default
+            echo -n (set_color green)'❮'(set_color yellow)'❮'(set_color red)'❮ '
+        case insert
+            echo -n (set_color red)'❯'(set_color yellow)'❯'(set_color green)'❯ '
+        case replace_one
+            echo -n (set_color red)'❯'(set_color yellow)'❯'(set_color green)'❯ '
+        case visual
+            echo -n (set_color green)'❮'(set_color yellow)'❮'(set_color red)'❮ '
     end
 
     set_color -o
