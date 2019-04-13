@@ -57,7 +57,13 @@ abbr gcSf 'git commit -S --amend --reuse-message HEAD'
 abbr gcF 'git commit --verbose --amend'
 abbr gcSF 'git commit -S --verbose --amend'
 abbr gcp 'git cherry-pick --ff'
+function fcp --description 'git cherry pick with fzy selection' -a branch
+    git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $branch|fzy|cut -d' ' -f2|xargs git cherry-pick --ff
+end
 abbr gcpx 'git cherry-pick -x'
+function fcpx --description 'git cherry pick -x with fzy selection' -a branch
+    git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $branch|fzy|cut -d' ' -f2|xargs git cherry-pick --x
+end
 abbr gcpff 'git cherry-pick --ff'
 abbr gcP 'git cherry-pick --no-commit'
 abbr gcpa 'git cherry-pick --abort'
@@ -171,8 +177,10 @@ abbr ggph 'git-getparenthash'
 
 # Index (i)
 abbr gia 'git add'
+abbr fia "git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git add"
 abbr giaa 'git add --all'
 abbr giA 'git add --patch'
+abbr fiA "git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git add --patch"
 abbr giu 'git add --update'
 abbr gid 'git diff --no-ext-diff --cached'
 abbr giD 'git diff --no-ext-diff --cached --word-diff'
@@ -274,6 +282,7 @@ abbr gws 'git status --ignore-submodules=$_git_status_ignore_submodules --short'
 abbr gwS 'git status --ignore-submodules=$_git_status_ignore_submodules'
 abbr gwd 'git diff --no-ext-diff'
 abbr gwD 'git diff --no-ext-diff --word-diff'
+abbr fwd "git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git diff --no-ext-diff"
 abbr gwr 'git reset --soft'
 abbr gwrm 'git reset --mixed'
 abbr gwR 'git reset --hard'
