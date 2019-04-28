@@ -3,4 +3,5 @@
 .vim/bundle/*
 .vim/plugged/*
 .config/fisher
+.config/hub
 
