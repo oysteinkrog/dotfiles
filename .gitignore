@@ -3,5 +3,6 @@
 .vim/bundle/*
 .vim/plugged/*
 .config/fisher
+.config/fish/fish_variables
 .config/hub
 
