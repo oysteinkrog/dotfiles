@@ -107,6 +107,9 @@ end
 function gco
   git checkout $argv
 end
+function fcof
+  git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git checkout --force
+end
 function gcO
   git checkout --patch $argv
 end
@@ -489,6 +492,9 @@ function glss
 end
 function gld
   git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
+end
+function fld
+  git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $argv | fzy | cut -d' ' -f2 | xargs   git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
 end
 function glp
   git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
