@@ -15,8 +15,36 @@ set _git_log_short_format '%C(green)%h %C(yellow)[%<(14)%ad] %Creset%s%Cred%d%Cb
 set _git_status_ignore_submodules 'none'
 
 #
-# abbres
+# functions
 #
+#
+
+# strip out ansi color and movement sequences
+function strip_ansi
+  sed "s,\x1B\[[0-9;]*[a-zA-Z],,g" $argv
+end
+
+# strip out ansi color sequences
+function strip_colors
+  sed "s,\x1B\[[0-9;]*m,,g"
+end
+
+function select_line
+  fzy $argv | strip_ansi
+  #~/.skim/bin/sk --ansi --layout=reverse-list $argv
+end
+
+function git_log_get_commit
+  cut -d' ' -f2
+end
+
+function git_status_get_commit
+  cut -d' ' -f3
+end
+
+function select_line_commit
+  select_line | git_log_get_commit
+end
 
 # Git
 function g
@@ -104,11 +132,14 @@ end
 function gcx
   git commit --fixup $argv
 end
+function fcx
+  glss --color=always $argv | select_line_commit | xargs git commit --fixup
+end
 function gco
   git checkout $argv
 end
 function fcof
-  git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git checkout --force
+  gws --color=always | git_status_get_commit | xargs git checkout --force
 end
 function gcO
   git checkout --patch $argv
@@ -128,14 +159,14 @@ end
 function gcp
   git cherry-pick --ff $argv
 end
-function fcp --description 'git cherry pick with fzy selection' -a branch
-    git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $branch|fzy|cut -d' ' -f2|xargs git cherry-pick --ff
+function fcp --description 'git cherry pick with line selection'
+    glss --color=always $argv | select_line_commit | xargs git cherry-pick --ff
 end
 function gcpx
   git cherry-pick -x $argv
 end
-function fcpx --description 'git cherry pick -x with fzy selection' -a branch
-    git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $branch|fzy|cut -d' ' -f2|xargs git cherry-pick --x
+function fcpx --description 'git cherry pick -x with line selection'
+    glss --color=always $argv | select_line_commit | xargs git cherry-pick --x
 end
 function gcpff
   git cherry-pick --ff $argv
@@ -441,7 +472,7 @@ function gia
   git add $argv
 end
 function fia
-  git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git add $argv
+  gws --color=always | select_line_status | xargs git add $argv
 end
 function giaa
   git add --all $argv
@@ -450,7 +481,7 @@ function giA
   git add --patch $argv
 end
 function fiA
-  git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git add --patch $argv
+  gws --color=always | select_line_status | xargs git add --patch $argv
 end
 function giu
   git add --update $argv
@@ -494,7 +525,7 @@ function gld
   git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
 end
 function fld
-  git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $argv | fzy | cut -d' ' -f2 | xargs   git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
+  glss --color=always $argv | select_line_commit | xargs git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
 end
 function glp
   git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
@@ -723,7 +754,7 @@ function gwD
   git diff --no-ext-diff --word-diff $argv
 end
 function fwd
-  git status --ignore-submodules=$_git_status_ignore_submodules --short | fzy | cut -d' ' -f3 | xargs git diff --no-ext-diff $argv
+  gws --color=always | select_line_status | xargs git diff --no-ext-diff $argv
 end
 function gwr
   git reset --soft $argv
