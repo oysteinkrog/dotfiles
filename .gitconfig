@@ -12,12 +12,17 @@
     preloadindex = true
     fscache = true
     commitGraph = true
+	editor = vim
+    longpaths = true
     #pager = "diff-so-fancy | less --tabs=4 -RFX"
 [commit]
     verbose = true
 
 [credential]
-    helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
+    #helper = !"`sh -c 'source ~/.githelpers && run_credential_helper'`"
+    helper = "/c/Users/oyste/.dotfiles/bin/gcmw/git-credential-manager.exe"
+    ;helper = "~/.dotfiles/bin/gcmw/git-credential-manager.exe"
+    ;helper = \"$(wslpath $(cmd.exe /C \"echo %LOCALAPPDATA%\"\
 
 [push]
     #default = simple
@@ -53,7 +58,7 @@
 [difftool]
     prompt = false
 [difftool "semanticdiff"]
-    cmd = $LOCALAPPDATA/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(cygpath -w $LOCAL)" -d "$(cygpath -w $REMOTE)"
+    cmd = $LOCALAPPDATA/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(wslpath -w $LOCAL)" -d "$(wslpath -w $REMOTE)"
 
 [merge]
     tool = splice
@@ -66,8 +71,11 @@
 [mergetool "vimdiff"]
     trustExitCode = true
     conflictstyle = diff3
+;[mergetool "semanticmerge"]
+    ;cmd = \"$(echo $(cmd.exe /C \"echo %LOCALAPPDATA%\"\"\\semanticmerge\\semanticmergetool.exe\")) -d $(wslpath -wa \"$LOCAL\") -s $(wslpath -wa \"$REMOTE\") -b $(wslpath -wa \"$BASE\") -r $(wslpath -wa \"$MERGED\") --automatic --nolangwarn \"
+    ;trustExitCode = true
 [mergetool "semanticmerge"]
-    cmd = \""$LOCALAPPDATA/semanticmerge/semanticmergetool.exe\"" -d \"`cygpath -wa "$LOCAL"`\" -s \"`cygpath -wa "$REMOTE"`\" -b \"`cygpath -wa "$BASE"`\" -r \"`cygpath -wa "$MERGED"`\" --automatic --nolangwarn
+    cmd = /c/Users/oyste/.dotfiles/win_merge.sh merge $LOCAL $REMOTE $BASE $MERGED
     trustExitCode = true
 [mergetool "tortoise"]
     cmd = \""C:/Program Files/TortoiseGit/bin/TortoiseGitMerge.exe\"" -base:"$BASE" -theirs:"$REMOTE" -mine:"$LOCAL" -merged:"$MERGED"
