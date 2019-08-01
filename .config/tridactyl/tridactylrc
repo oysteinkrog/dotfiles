@@ -1,0 +1,68 @@
+"3.0
+
+
+set theme greenmat
+set searchengine google
+
+sanitise tridactyllocal tridactylsync
+
+" Sane hinting mode
+"set hintfiltermode vimperator-reflow
+set hintfiltermode simple
+"set hintfiltermode "simple", "vimperator", "vimperator-reflow"
+
+" hint charanters
+"set hintnames numeric
+" set hintchars HSADFJKLEWCMPG
+" set hintchars asdfhjkl 
+" set hintchars hjklasdfgyuiopqwertnmzxcvb
+set hintchars tnesrioa
+
+" Defaults to 300ms but I'm a 'move fast and close the wrong tabs' kinda chap
+set hintdelay 100
+
+" Make Tridactyl work on more sites at the expense of some security
+set csp clobber
+fixamo_quiet
+
+" Sanity before custom bindings
+reset all
+
+" Change between tabs
+bind L tabprev
+bind Y tabnext_gt
+
+" Relocate tabs
+bind <c-L>  tabmove +1
+bind <c-Y>  tabmove -1
+
+" Scroll by half page
+bind <c-e> scrollpage 0.5
+bind <c-u> scrollpage -0.5
+
+" Scroll slowly
+bind U scrollpx -50
+bind e scrollline 5
+bind u scrollline -5
+bind U scrollpx 50
+
+set smoothscroll true
+
+" Go forwards and backwards through history
+bind <c-l> back
+bind <c-y> forward
+
+" Close other tabs
+bind ,to tabonly
+
+" undo list
+bind U undo
+
+bind f hint
+
+" Only hint search results on Google
+bindurl www.google.com f hint -Jc .rc > .r > a
+bindurl www.google.com F hint -Jtc .rc>.r>a
+
+" This will have to do until someone writes us a nice syntax file :)
+" vim: set filetype=vim:
