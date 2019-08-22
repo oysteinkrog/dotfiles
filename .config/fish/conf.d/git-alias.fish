@@ -46,6 +46,10 @@ function select_line_commit
   select_line | git_log_get_commit
 end
 
+function select_line_status
+  select_line | git_status_get_commit
+end
+
 # Git
 function g
   git $argv
@@ -472,7 +476,7 @@ function gia
   git add $argv
 end
 function fia
-  gws --color=always | select_line_status | xargs git add $argv
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git add $argv
 end
 function giaa
   git add --all $argv
@@ -481,7 +485,7 @@ function giA
   git add --patch $argv
 end
 function fiA
-  gws --color=always | select_line_status | xargs git add --patch $argv
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git add --patch $argv
 end
 function giu
   git add --update $argv
@@ -529,6 +533,9 @@ function fld
 end
 function glp
   git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
+end
+function flp
+  gws --color=always | select_line_status | xargs git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv 
 end
 function glo
   git log --topo-order --pretty=format:"$_git_log_oneline_format" $argv
