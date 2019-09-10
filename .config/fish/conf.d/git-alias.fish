@@ -535,7 +535,7 @@ function glp
   git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
 end
 function flp
-  gws --color=always | select_line_status | xargs git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv 
+  gwsc | select_line_status | xargs git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv 
 end
 function glo
   git log --topo-order --pretty=format:"$_git_log_oneline_format" $argv
@@ -750,6 +750,9 @@ end
 # Working Copy (w)
 function gws
   git status --ignore-submodules=$_git_status_ignore_submodules --short $argv
+end
+function gwsc
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv
 end
 function gwS
   git status --ignore-submodules=$_git_status_ignore_submodules $argv
