@@ -478,8 +478,14 @@ end
 function fia
   git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git add $argv
 end
+function fir
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git reset $argv
+end
 function giaa
   git add --all $argv
+end
+function giaf
+  git add "**/*.$argv"
 end
 function giA
   git add --patch $argv
