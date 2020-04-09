@@ -25,8 +25,22 @@ do_diff() {
 
 winpath()
 {
-    $(wslpath -wa $@)
+    set -e
+    if grep -qEi "(Microsoft|WSL)" /proc/version &> /dev/null ; then
+        $(wslpath -wa $@)
+    else
+        $(cygpath -wa $@)
+        echo "Anything else"
+    fi
+    #if {
+        #[ -e /proc/sys/kernel/osrelease ] &&
+            #IFS= read -r os < /proc/sys/kernel/osrelease &&
+            #[[ $os == *Microsoft  ]]
+    #} ; then
+    #else
+    #fi
 }
+
 case "$1" in
     diff)  do_diff "$2" "$3" ;;
     semanticmerge)
