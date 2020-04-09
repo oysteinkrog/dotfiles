@@ -28,7 +28,7 @@ Plug 'tpope/vim-surround'
 "Plug 'spf13/vim-autoclose'
 
 if has('nvim')
-    Plug 'https://github.com/arakashic/nvim-colors-solarized.git'
+    "Plug 'https://github.com/arakashic/nvim-colors-solarized.git'
 
     function! BuildYCM(info)
         " info is a dictionary with 3 fields
@@ -43,8 +43,10 @@ if has('nvim')
     Plug 'Valloric/YouCompleteMe', { 'do': function('BuildYCM') }
 
 else
-    Plug 'altercation/vim-colors-solarized'
+    "Plug 'altercation/vim-colors-solarized'
 endif
+
+Plug 'rafi/awesome-vim-colorschemes'
 
 Plug 'tpope/vim-fugitive'
 Plug 'vim-scripts/L9'
