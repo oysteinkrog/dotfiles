@@ -1,0 +1,20 @@
+#!/bin/bash
+
+dir=${PWD##*/}
+# the current stable branch suffix, based on directory pattern (e.g desktop_master or desktop_9.4 is parsed as master and 9.4 respectively)
+branch_suffix=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
+# the current git branch issue number
+branch_issue_=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
+branch_issue=${1:-$branch_issue}
+
+if [ "$branch_suffix" == "master" ] 
+then
+    git checkout master
+    git branch -D issue/${branch_issue}
+else
+    git checkout stable/${branch_suffix}
+    git branch -D issue/${branch_issue}_${branch_suffix}
+fi
+
+git push my --delete issue/${branch_issue}
+
