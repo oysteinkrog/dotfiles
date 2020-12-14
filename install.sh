@@ -8,8 +8,7 @@
 # fix zsh iteration over space-separated words
 setopt shwordsplit      # this can be unset by saying: unsetopt shwordsplit
 
-HOME"/c/users/oyste"
-#HOME=
+HOME="/c/users/oystein"
 dir=$HOME/.dotfiles
 olddir=$HOME/.dotfiles_old
 files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .ideavimrc .zprezto .vimperator .vimperatorrc .cvimrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim .config"
