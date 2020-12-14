@@ -30,7 +30,7 @@ function strip_colors
 end
 
 function select_line
-  fzf --reverse --ansi --no-sort $argv | strip_ansi
+  fzf -x --reverse --ansi --no-sort $argv | strip_ansi
   #fzy $argv | strip_ansi
   #~/.skim/bin/sk --ansi --layout=reverse-list $argv
 end
