@@ -25,3 +25,5 @@ function fish_user_key_bindings --description "User key bindings for fish"
     bind \cf 'fzy_select_directory'
 end
 
+
+fzf_key_bindings
