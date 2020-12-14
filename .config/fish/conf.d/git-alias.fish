@@ -40,7 +40,8 @@ function git_log_get_commit
 end
 
 function git_status_get_commit
-  cut -d' ' -f3
+  awk '{print $2}'
+  #cut -d' ' -f3
 end
 
 function select_line_commit
