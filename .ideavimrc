@@ -3,9 +3,16 @@
 so ~/.dotfiles/.vimrc.remaps
 
 " "https://stackoverflow.com/questions/2471175/vim-replace-word-with-contents-of-paste-buffer
-nmap <silent> cp "_cw<C-R>"<Esc>
+nmap <silent> cp "_cw<C-V><C-c>
 
+" emulated plugins
+set highlightedyank
 set surround
+set exchange
+set ReplaceWithRegister
+set argtextobj
+set textobj-entire
+
 set clipboard+=unnamed
 
 " set 'selection', 'selectmode', 'mousemodel' and 'keymodel' for MS-Windows
