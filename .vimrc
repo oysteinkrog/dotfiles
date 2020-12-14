@@ -71,6 +71,14 @@ set mouse=a " Automatically enable mouse usage
 set mousehide " Hide the mouse cursor while typing
 scriptencoding utf-8
 
+let g:solarized_termcolors = 256
+let g:solarized_visibility = "high"
+let g:solarized_termtrans = 0
+let g:solarized_contrast = "high"
+
+colorscheme solarized
+set background=dark
+
 set shortmess+=filmnrxoOtT " Abbrev. of messages (avoids 'hit enter')
 set viewoptions=folds,options,cursor,unix,slash " Better Unix / Windows compatibility
 set virtualedit=onemore " Allow for cursor beyond last character
@@ -107,13 +115,7 @@ if has('persistent_undo')
 endif
 
 
-set background=dark
-colorscheme solarized8
 
-let g:solarized_termcolors = 256
-let g:solarized_visibility = "high"
-let g:solarized_termtrans = 0
-let g:solarized_contrast = "high"
 
 set tabpagemax=15 " Only show 15 tabs
 set showmode " Display the current mode
