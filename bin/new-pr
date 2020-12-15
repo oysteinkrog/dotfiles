@@ -1,0 +1,22 @@
+#!/bin/bash
+tags=$1
+if [ -z "$1" ]
+  then
+    echo "No tag provided"
+    exit 1
+fi
+
+dir=${PWD##*/}
+
+# this is what dir/branch we are on, e.g master or stable 9.3
+branch=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
+# current local branch/issue
+branch_current=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
+
+token=$(cat ~/.config/jiratoken)
+issue_title=$(curl -s -u ${token} "https://initialforce.atlassian.net/rest/api/2/issue/DESKTOP-${branch_current}" |jq ".fields.summary")
+issue_title_noquotes=${issue_title:1:-1}
+
+hub pull-request -b InitialForce:master -l "${tags}" -r marvingbh,awalio,stianeklund -m "DESKTOP-$branch_current ${issue_title_noquotes}
+
+https://initialforce.atlassian.net/browse/DESKTOP-${branch_current}"
