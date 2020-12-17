@@ -13,10 +13,27 @@ branch=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
 # current local branch/issue
 branch_current=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
 
-token=$(cat ~/.config/jiratoken)
-issue_title=$(curl -s -u ${token} "https://initialforce.atlassian.net/rest/api/2/issue/DESKTOP-${branch_current}" |jq ".fields.summary")
+jira_url="https://initialforce.atlassian.net"
+jira_token=$(cat ~/.config/jiratoken)
+
+jira_issue="DESKTOP-${branch_current}"
+
+
+issue_title=$(curl -s -u ${jira_token} "${jira_url}/rest/api/2/issue/${jira_issue}" |jq ".fields.summary")
 issue_title_noquotes=${issue_title:1:-1}
 
+echo "Creating PR"
 hub pull-request -b InitialForce:master -l "${tags}" -r marvingbh,awalio,stianeklund -m "DESKTOP-$branch_current ${issue_title_noquotes}
 
-https://initialforce.atlassian.net/browse/DESKTOP-${branch_current}"
+#https://initialforce.atlassian.net/browse/DESKTOP-${branch_current}"
+
+jira_transitions_url="${jira_url}/rest/api/latest/issue/${jira_issue}/transitions?expand=transitions.fields"
+jira_transitions=$(curl -s -u ${jira_token} ${jira_transitions_url})
+# find transition id for under review state
+jira_transition_id=$(echo ${jira_transitions}|jq -r '.transitions|map(select(.name | contains("Review"))|.id)|.[0]')
+
+echo "Setting jira issue ${jira_issue} to review"
+$(curl -s -u ${jira_token} -X POST \
+-data "{"transition":{\"id\":\"${jira_transition_id}\"}}" \
+-H "Content-Type: application/json" "${jira_url}/rest/api/latest/issue/${jira_issue}/transitions?expand=transitions.fields")
+
