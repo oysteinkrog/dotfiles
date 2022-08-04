@@ -5,16 +5,17 @@ dir=${PWD##*/}
 branch_suffix=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
 # the current git branch issue number
 branch_issue_=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
-branch_issue=${1:-$branch_issue}
+branch_issue=${1:-$branch_issue_}
 
 if [ "$branch_suffix" == "master" ] 
 then
     git checkout master
     git branch -D issue/${branch_issue}
+    git push my --delete issue/${branch_issue}
 else
     git checkout stable/${branch_suffix}
     git branch -D issue/${branch_issue}_${branch_suffix}
+    git push my --delete issue/${branch_issue}_${branch_suffix}
 fi
 
-git push my --delete issue/${branch_issue}
 

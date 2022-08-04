@@ -6,6 +6,8 @@ if [ -z "$1" ]
     exit 1
 fi
 
+#reviewers=""
+reviewers="marvingbh,stianeklund,l3oferreira,ninameed,Sigvess92"
 dir=${PWD##*/}
 
 # this is what dir/branch we are on, e.g master or stable 9.3
@@ -32,10 +34,10 @@ branch_issue=${1:-$branch_issue_}
 if [ "$branch_suffix" == "master" ] 
 then
     echo "Creating PR (to master)"
-    PRLINK=$(hub pull-request -b InitialForce:master -l "${tags}" -r marvingbh,awalio,stianeklund,l3oferreira,ninameed -m "DESKTOP-$branch_current ${issue_title_noquotes}")
+    PRLINK=$(hub pull-request -b InitialForce:master -l "${tags}" -r "${reviewers}" -m "DESKTOP-$branch_current ${issue_title_noquotes}")
 else
     echo "Creating PR (to stable/${branch_suffix})"
-    PRLINK=$(hub pull-request -b InitialForce:stable/${branch_suffix} -l "${tags},backport" -r marvingbh,awalio,stianeklund,l3oferreira,ninameed -m "DESKTOP-$branch_current ${issue_title_noquotes}")
+    PRLINK=$(hub pull-request -b InitialForce:stable/${branch_suffix} -l "${tags},backport" -r "${reviewers}" -m "DESKTOP-$branch_current ${issue_title_noquotes}")
 fi
 
 echo $PRLINK
@@ -48,26 +50,27 @@ jira_transitions=$(curl -s -u ${jira_token} ${jira_transitions_url})
 jira_transition_id=$(echo ${jira_transitions}|jq -r '.transitions|map(select(.name | contains("Review"))|.id)|.[0]')
 
 
-echo "Setting jira issue ${jira_issue} to review (${jira_transition_id})"
-$(curl -0 \
-    -u ${jira_token} \
-    -H "Content-Type: application/json" \
-    -X POST "${jira_url}/rest/api/latest/issue/${jira_issue}/transitions?expand=transitions.fields" \
-    -d @- << EOF
-{
-    "update": {
-        "comment": [
-            {
-                "add": {
-                    "body": "PR created ${PRLINK}"
-                }
-            }
-        ]
-        },
-    "transition": {
-        "id": "${jira_transition_id}"
-        }
-}
-EOF
-)
+#echo "Setting jira issue ${jira_issue} to review (${jira_transition_id})"
+#$(curl -0 \
+#    -s \
+#    -u ${jira_token} \
+#    -H "Content-Type: application/json" \
+#    -X POST "${jira_url}/rest/api/latest/issue/${jira_issue}/transitions?expand=transitions.fields" \
+#    -d @- << EOF
+#{
+#    "update": {
+#        "comment": [
+#            {
+#                "add": {
+#                    "body": "PR created ${PRLINK}"
+#                }
+#            }
+#        ]
+#        },
+#    "transition": {
+#        "id": "${jira_transition_id}"
+#        }
+#}
+#EOF
+#)
 
