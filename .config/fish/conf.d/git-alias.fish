@@ -30,7 +30,7 @@ function strip_colors
 end
 
 function select_line
-  fzf -x --reverse --ansi --no-sort $argv | strip_ansi
+  fzf --reverse --ansi --no-sort $argv | strip_ansi
   #fzy $argv | strip_ansi
   #~/.skim/bin/sk --ansi --layout=reverse-list $argv
 end
@@ -56,6 +56,11 @@ end
 function g
   git $argv
 end
+
+function gup
+  gfr && gRu
+end
+
 
 # Branch (b)
 function gb
@@ -136,10 +141,14 @@ function gcma
   git commit --all --message $argv
 end
 function gcx
-  git commit --fixup $argv
+  if count $argv > /dev/null
+      git commit --fixup $argv
+  else
+      glss --color=always $argv | select_line_commit | xargs git commit --fixup
+  end
 end
 function fcx
-  glss --color=always $argv | select_line_commit | xargs git commit --fixup
+  gcx $argv
 end
 function gco
   git checkout $argv
@@ -188,6 +197,9 @@ function gcpc
 end
 function gcr
   git revert $argv
+end
+function fcr
+  glss --color=always $argv | select_line_commit | xargs git revert $argv
 end
 function gcR
   git reset "HEAD^" $argv
@@ -478,10 +490,10 @@ function gia
   git add $argv
 end
 function fia
-  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git add $argv
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line | awk '{print $2}' | xargs git add $argv
 end
 function fir
-  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git reset $argv
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line | awk '{print $2}' | xargs git reset $argv
 end
 function giaa
   git add --all $argv
@@ -493,7 +505,7 @@ function giA
   git add --patch $argv
 end
 function fiA
-  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | xargs git add --patch $argv
+  git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | awk '{print $2}' | xargs git add --patch $argv
 end
 function giu
   git add --update $argv

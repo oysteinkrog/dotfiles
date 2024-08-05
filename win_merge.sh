@@ -19,7 +19,7 @@ resolve_path() {
 do_diff() {
     local tmp_local="$(get_filename $1)"
     local remote="$(resolve_path "$2")"
-    cp "$1" "/mnt/c/Windows/Temp/$tmp_local"
+    cp "$1" "/c/Windows/Temp/$tmp_local"
     "$VS_MERGE" /t "C:\\Windows\\Temp\\$tmp_local" "$remote" Source Target
 }
 
@@ -44,11 +44,14 @@ winpath()
 case "$1" in
     diff)  do_diff "$2" "$3" ;;
     semanticmerge)
-        TOOL='/mnt/c/Users/oyste/AppData/Local/semanticmerge/semanticmergetool.exe'
+        TOOL='/c/Users/oyste/AppData/Local/semanticmerge/semanticmergetool.exe'
         // remove first parameter
         shift
         "$TOOL" $@ ;;
     tortoisemerge)
-        TOOL='/mnt/c/Program Files/TortoiseGit/bin/TortoiseGitMerge.exe'
+        TOOL='/c/Program Files/TortoiseGit/bin/TortoiseGitMerge.exe'
         "$TOOL" -mine:"$(wslpath -wa $2)" -theirs:"$(wslpath -wa $3)" -base:"$(wslpath -wa $4)" -merged:"$(wslpath -wa $5)" ;;
+    ridermerge)
+        TOOL='/c/Users/oystein/AppData/Local/JetBrains/Toolbox/apps/Rider/ch-0/231.9161.46/bin/rider64.exe'
+        "$TOOL" merge "$(wslpath -wa $2)" "$(wslpath -wa $3)" "$(wslpath -wa $4)" "$(wslpath -wa $5)" ;;
 esac
