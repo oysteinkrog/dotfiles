@@ -20,14 +20,7 @@
 
 [credential]
     useHttpPath = true
-    ;helper = !"`~/.githelpers`"
-	;helper = manager
 	helper = /c/Program\\ Files/Git/mingw64/libexec/git-core/git-credential-manager.exe
-    ;helper = \"$(wslpath $(cmd.exe /C \"echo %LOCALAPPDATA%\"\
-    ;helper = '/c/Program Files (x86)/Git Credential Manager Core/git-credential-manager-core.exe'
-    ;helper = '/c/Program Files (x86)/Git Credential Manager Core/git-credential-manager-core.exe'
-    ;helper = "/c/Program\\ Files\\ \\(x86\\)/Git\\ Credential\\ Manager\\ Core/git-credential-manager-core.exe"
-	;helper = manager-core
 [credential "https://dev.azure.com"]
 	useHttpPath = true
 
