@@ -1,0 +1,14 @@
+# Colemak remappings for readline
+# Based on vim colemak configuration
+
+set editing-mode vi
+
+# Remap movement keys in normal/command mode
+set keymap vi-command
+"n": backward-char
+"e": next-line  
+"u": previous-line
+"i": forward-char
+
+# Keep insert mode mappings standard
+set keymap vi-insert
