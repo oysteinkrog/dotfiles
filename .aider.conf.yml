@@ -284,4 +284,4 @@ vim: true
 
 
 # multiple files
-read: [CONVENTIONS.md]
+read: [CONVENTIONS.md, ARCHITECTURE.md]
