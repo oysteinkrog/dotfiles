@@ -5,10 +5,24 @@ set editing-mode vi
 
 # Remap movement keys in normal/command mode
 set keymap vi-command
+
+# Basic movement remaps
 "n": backward-char
 "e": next-line  
 "u": previous-line
 "i": forward-char
+
+# Word movement remaps (j is 'e' in colemak)
+"j": vi-end-word
+"J": vi-end-word
+
+# Insert mode remaps (l is 'i' in colemak)
+"l": vi-insertion-mode
+"L": vi-insert-beg
+
+# Search remaps (h is 'n' in colemak)
+"h": vi-search-again
+"H": vi-search-again
 
 # Keep insert mode mappings standard
 set keymap vi-insert
