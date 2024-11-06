@@ -64,7 +64,7 @@ Plug 'yuratomo/dotnet-complete'
 Plug 'oysteinkrog/vim-openscad', { 'for':  'openscad' }
 Plug 'Firef0x/PKGBUILD.vim'
 Plug 'hdima/python-syntax'
-Plug 'klen/python-mode'
+"Plug 'klen/python-mode'
 
 "Plug 'sjl/gundo.vim'
 "
