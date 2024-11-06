@@ -23,27 +23,43 @@ vnoremap fp "_dPv`.=
 " colemak {
 " swap find next/left
 nnoremap n h
+vnoremap n h
 nnoremap N H
+vnoremap N H
 nnoremap h n
+vnoremap h n
 nnoremap H N
+vnoremap H N
 
 " swap end word/down
 nnoremap e j
+vnoremap e j
 nnoremap E J
+vnoremap E J
 nnoremap j e
+vnoremap j e
 "nnoremap J E
+"vnoremap J E
 
 " swap undo/up
 nnoremap u k
+vnoremap u k
 nnoremap U K
+vnoremap U K
 nnoremap k u
+vnoremap k u
 nnoremap K U
+vnoremap K U
 
 " swap insertmode/right
 nnoremap i l
+vnoremap i l
 nnoremap I L
+vnoremap I L
 nnoremap l i
+vnoremap l i
 nnoremap L I
+vnoremap L I
 "}
 
 " functions"{
