@@ -6,3 +6,5 @@
 .config/fish/fish_variables
 .config/hub
 
+.aider*
+.env
