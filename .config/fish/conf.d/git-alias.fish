@@ -115,6 +115,47 @@ function gbX
   git branch --delete --force $argv
 end
 
+# Issue branch variants (i)
+function ib
+    gb "issue/$argv"
+end
+
+function ibc
+    gbc "issue/$argv"
+end
+
+function ibd
+    gbd "issue/$argv"
+end
+
+function ibD
+    gbD "issue/$argv"
+end
+
+function ibm
+    gbm "issue/$argv"
+end
+
+function ibM
+    gbM "issue/$argv"
+end
+
+function ibr
+    gbr "issue/$argv"
+end
+
+function ibR
+    gbR "issue/$argv"
+end
+
+function ibx
+    gbx "issue/$argv"
+end
+
+function ibX
+    gbX "issue/$argv"
+end
+
 # Commit (c)
 function gc
   git commit --verbose $argv
