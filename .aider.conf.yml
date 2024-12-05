@@ -172,7 +172,7 @@ auto-commits: true
 attribute-author: false
 
 ## Attribute aider commits in the git committer name (default: True)
-attribute-committer: true
+attribute-committer: false
 
 ## Prefix commit messages with 'aider: ' (default: False)
 #attribute-commit-message: false
