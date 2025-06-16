@@ -192,7 +192,13 @@ function fcx
   gcx $argv
 end
 function gco
-  git checkout $argv
+  # If argument is just digits (e.g., "12345"), prepend "issue/" to checkout "issue/12345"
+  # Otherwise, pass through arguments unchanged for normal git checkout behavior
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git checkout "issue/$argv[1]"
+  else
+    git checkout $argv
+  end
 end
 function fcof
   gws --color=always | git_status_get_commit | xargs git checkout --force
