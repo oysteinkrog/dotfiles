@@ -24,6 +24,15 @@ function strip_ansi
   sed "s,\x1B\[[0-9;]*[a-zA-Z],,g" $argv
 end
 
+# Transform branch arguments: if single argument is just digits, prepend "issue/"
+function _git_transform_branch_args
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    echo "issue/$argv[1]"
+  else
+    echo $argv
+  end
+end
+
 # strip out ansi color sequences
 function strip_colors
   sed "s,\x1B\[[0-9;]*m,,g"
@@ -194,11 +203,7 @@ end
 function gco
   # If argument is just digits (e.g., "12345"), prepend "issue/" to checkout "issue/12345"
   # Otherwise, pass through arguments unchanged for normal git checkout behavior
-  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
-    git checkout "issue/$argv[1]"
-  else
-    git checkout $argv
-  end
+  git checkout (_git_transform_branch_args $argv)
 end
 function fcof
   gws --color=always | git_status_get_commit | xargs git checkout --force
@@ -219,22 +224,22 @@ function gcSF
   git commit -S --verbose --amend $argv
 end
 function gcp
-  git cherry-pick --ff $argv
+  git cherry-pick --ff (_git_transform_branch_args $argv)
 end
 function fcp --description 'git cherry pick with line selection'
     glss --color=always $argv | select_line_commit | xargs git cherry-pick --ff
 end
 function gcpx
-  git cherry-pick -x $argv
+  git cherry-pick -x (_git_transform_branch_args $argv)
 end
 function fcpx --description 'git cherry pick -x with line selection'
     glss --color=always $argv | select_line_commit | xargs git cherry-pick --x
 end
 function gcpff
-  git cherry-pick --ff $argv
+  git cherry-pick --ff (_git_transform_branch_args $argv)
 end
 function gcP
-  git cherry-pick --no-commit $argv
+  git cherry-pick --no-commit (_git_transform_branch_args $argv)
 end
 function gcpa
   git cherry-pick --abort $argv
@@ -252,10 +257,10 @@ function gcR
   git reset "HEAD^" $argv
 end
 function gcs
-  git show $argv
+  git show (_git_transform_branch_args $argv)
 end
 function gcsS
-  git show --pretty=short --show-signature $argv
+  git show --pretty=short --show-signature (_git_transform_branch_args $argv)
 end
 function gcl
   git-commit-lost $argv
@@ -584,40 +589,40 @@ end
 
 # Log (l)
 function gl
-  git log --topo-order --pretty=format:"$_git_log_medium_format" $argv
+  git log --topo-order --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
 end
 function gls
-  git log --topo-order --stat --pretty=format:"$_git_log_medium_format" $argv
+  git log --topo-order --stat --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
 end
 function glss
-  git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative $argv
+  git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative (_git_transform_branch_args $argv)
 end
 function gld
-  git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
+  git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
 end
 function fld
   glss --color=always $argv | select_line_commit | xargs git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
 end
 function glp
-  git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
+  git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
 end
 function flp
   gwsc | select_line_status | xargs git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv 
 end
 function glo
-  git log --topo-order --pretty=format:"$_git_log_oneline_format" $argv
+  git log --topo-order --pretty=format:"$_git_log_oneline_format" (_git_transform_branch_args $argv)
 end
 function glg
   git log --topo-order --all --graph --pretty=format:"$_git_log_oneline_format" $argv
 end
 function glb
-  git log --topo-order --pretty=format:"$_git_log_brief_format" $argv
+  git log --topo-order --pretty=format:"$_git_log_brief_format" (_git_transform_branch_args $argv)
 end
 function glc
   git shortlog --summary --numbered $argv
 end
 function glS
-  git log --show-signature $argv
+  git log --show-signature (_git_transform_branch_args $argv)
 end
 function gll
     git log --oneline "$argv" |awk  \'{print $1}\' |tac|xargs $argv
@@ -625,7 +630,7 @@ end
 
 # Merge (m)
 function gm
-  git merge $argv
+  git merge (_git_transform_branch_args $argv)
 end
 function gmC
   git merge --no-commit $argv
@@ -668,7 +673,7 @@ end
 
 # Rebase (r)
 function gr
-  git rebase $argv
+  git rebase (_git_transform_branch_args $argv)
 end
 function gru
   git rebase @\{u\} $argv
@@ -825,10 +830,10 @@ function gwS
   git status --ignore-submodules=$_git_status_ignore_submodules $argv
 end
 function gwd
-  git diff --no-ext-diff $argv
+  git diff --no-ext-diff (_git_transform_branch_args $argv)
 end
 function gwD
-  git diff --no-ext-diff --word-diff $argv
+  git diff --no-ext-diff --word-diff (_git_transform_branch_args $argv)
 end
 function fwd
   gws --color=always | select_line_status | xargs git diff --no-ext-diff $argv
