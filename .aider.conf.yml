@@ -277,10 +277,25 @@ vim: true
 #encoding: utf-8
 
 ## Specify the config file (default: search for .aider.conf.yml in git root, cwd or home directory)
-#config:
+#config: xxx
 
-## Run aider in your browser
-#gui: false
+## Specify the .env file to load (default: .env in git root)
+#env-file: .env
+
+## Enable/disable suggesting shell commands (default: True)
+#suggest-shell-commands: true
+
+## Enable/disable fancy input with history and completion (default: True)
+#fancy-input: true
+
+## Enable/disable multi-line input mode with Meta-Enter to submit (default: False)
+multiline: true
+
+## Enable/disable detection and offering to add URLs to chat (default: True)
+#detect-urls: true
+
+## Specify which editor to use for the /editor command
+#editor: xxx
 
 
 # multiple files
