@@ -15,3 +15,16 @@ set -U FZF_DEFAULT_OPTS "--height 40% --layout=reverse --border"
 
 # opam configuration
 #source /c/users/oystein/.opam/opam-init/init.fish > /dev/null 2> /dev/null; or true
+
+# Set NVM default Node version
+if test -d ~/.nvm
+    nvm use 22 >/dev/null 2>&1
+end
+
+# bun
+set --export BUN_INSTALL "$HOME/.bun"
+set --export PATH $BUN_INSTALL/bin $PATH
+
+# dotnet alias
+alias dotnet="dotnet.exe"
+alias claude="/c/users/oystein/.claude/local/claude"
