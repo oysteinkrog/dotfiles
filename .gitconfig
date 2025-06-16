@@ -7,26 +7,44 @@
 
 [core]
     autocrlf = false
+    safecrlf = warn
     symlinks = true
     filemode = true
     preloadindex = true
     fscache = true
+    ;fsmonitor = true
+    ;useBuiltinFSMonitor = false
     commitGraph = true
-	editor = vim
+    editor = vim
     longpaths = true
+    compression = 9
+    packedGitLimit = 512m 
+    packedGitWindowSize = 512m 
+
+[safe]
+    directory = C:/BuildAgent/work/
+    directory = C:/BuildAgent/work/Desktop/build
+
+[advice]
+    useBuiltinFSMonitor = false
+
+[pack] 
+    deltaCacheSize = 2047m 
+    packSizeLimit = 2047m 
+    windowMemory = 2047m
     #pager = "diff-so-fancy | less --tabs=4 -RFX"
 [commit]
     verbose = true
 
 [credential]
     useHttpPath = true
-	helper = /c/Program\\ Files/Git/mingw64/libexec/git-core/git-credential-manager.exe
+    helper = /c/Program\\ Files/Git/mingw64/libexec/git-core/git-credential-wincred.exe
 [credential "https://dev.azure.com"]
-	useHttpPath = true
+    useHttpPath = true
 
 [push]
     #default = simple
-	default = current
+    default = current
 [pull]
     default = current
 [branch]
@@ -54,11 +72,14 @@
 [diff]
     memonicprefix = true
     compactionHeuristic = true
-    tool = semanticdiff
+    tool = rider
 [difftool]
     prompt = false
 [difftool "semanticdiff"]
     cmd = $LOCALAPPDATA/semanticmerge/semanticmergetool.exe -nolangwarn -s "$(wslpath -w $LOCAL)" -d "$(wslpath -w $REMOTE)"
+[difftool "rider"]
+    cmd = D:\\\\Program\\ Files\\\\Jetbrains\\\\apps\\\\Rider\\\\ch-0\\\\181.4379.788\\\\bin\\\\rider64.exe diff "$LOCAL" "$REMOTE"
+
 
 [merge]
     tool = tortoise
@@ -75,10 +96,13 @@
     ;cmd = \"$(echo $(cmd.exe /C \"echo %LOCALAPPDATA%\"\"\\semanticmerge\\semanticmergetool.exe\")) -d $(wslpath -wa \"$LOCAL\") -s $(wslpath -wa \"$REMOTE\") -b $(wslpath -wa \"$BASE\") -r $(wslpath -wa \"$MERGED\") --automatic --nolangwarn \"
     ;trustExitCode = true
 [mergetool "semanticmerge"]
-    cmd = /c/Users/oyste/.dotfiles/win_merge.sh semanticmerge $LOCAL $REMOTE $BASE $MERGED
+    cmd = /c/Users/oystein/.dotfiles/win_merge.sh semanticmerge $LOCAL $REMOTE $BASE $MERGED
     trustExitCode = true
 [mergetool "tortoise"]
-    cmd = /c/Users/oyste/.dotfiles/win_merge.sh tortoisemerge "$LOCAL" "$REMOTE" "$BASE" "$MERGED"
+    cmd = /c/Users/oystein/.dotfiles/win_merge.sh tortoisemerge "$LOCAL" "$REMOTE" "$BASE" "$MERGED"
+[mergetool "rider"]
+    cmd = /c/Users/oystein/.dotfiles/win_merge.sh ridermerge "$LOCAL" "$REMOTE" "$BASE" "$MERGED"
+    trustExitCode = true
 
 [color]
     ui = true
@@ -200,6 +224,11 @@
 [rerere]
     enabled = true
 [hub]
-	protocol = https
+    protocol = https
 [winUpdater]
-	recentlySeenVersion = 2.25.0.windows.1
+    recentlySeenVersion = 2.25.0.windows.1
+[filter "lfs"]
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+	clean = git-lfs clean -- %f
