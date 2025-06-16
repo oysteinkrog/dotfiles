@@ -7,7 +7,7 @@ if [ -z "$1" ]
 fi
 
 #reviewers=""
-reviewers="marvingbh,stianeklund,l3oferreira,manoel-eduardo,Sigvess92"
+reviewers="marvingbh,stianeklund,l3oferreira,Sigvess92,richardinitial"
 dir=${PWD##*/}
 
 # this is what dir/branch we are on, e.g master or stable 9.3
