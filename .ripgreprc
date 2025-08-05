@@ -1,0 +1,6 @@
+# Ripgrep configuration file
+# Enable smart case searching (case insensitive unless uppercase letters are used)
+--smart-case
+
+# Search hidden files and directories (including .dotfolders)
+--hidden
