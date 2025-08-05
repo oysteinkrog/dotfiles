@@ -1,3 +1,3 @@
-function claude  --description 'alias claude=SHELL=/bin/bash claude'
-    SHELL=/bin/bash command claude $argv
+function claude  --description 'alias claude=/c/users/oystein/.claude/local/claude'
+    SHELL=/bin/bash /c/users/oystein/.claude/local/claude $argv
 end
