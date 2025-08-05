@@ -2,7 +2,7 @@
 
 dir=${PWD##*/}
 branch=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
-if [ "$branch" == "master" ]
+if [[ "$branch" == "master"* ]]
 then
     git branch issue/$1 if/master && git checkout issue/$1
 else
