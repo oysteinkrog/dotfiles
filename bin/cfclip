@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Concatenate file contents and copy to Windows clipboard.
+# If run with no args it consumes newline-separated paths on STDIN.
+
+set -euo pipefail
+
+# Read file list from args or STDIN
+if [[ "$#" -gt 0 ]]; then
+  mapfile -t files < <(printf '%s\n' "$@")
+else
+  mapfile -t files
+fi
+
+# Optional: filter out non-regular or binary files
+is_text() {                           # treat UTF-8 *and* US-ASCII as OK
+  file --brief --mime "$1" \
+  | grep -qE 'charset=(utf-8|us-ascii)'
+  return $?
+}
+
+for f in "${files[@]}"; do
+  if [[ -f "$f" ]] && is_text "$f"; then
+    printf -- '----- %s -----\n' "$f"
+    cat "$f"
+    printf '\n\n'
+  else
+    printf -- '----- %s (skipped: not UTF-8 text) -----\n\n' "$f" >&2
+  fi
+done \
+| iconv -f utf-8 -t utf-16le \
+| clip.exe
