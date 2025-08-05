@@ -27,4 +27,6 @@ set --export PATH $BUN_INSTALL/bin $PATH
 
 # dotnet alias
 alias dotnet="dotnet.exe"
-alias claude="/c/users/oystein/.claude/local/claude"
+
+# ripgrep config
+set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
