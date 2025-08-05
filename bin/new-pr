@@ -31,13 +31,13 @@ branch_suffix=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
 branch_issue_=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
 branch_issue=${1:-$branch_issue_}
 
-if [ "$branch_suffix" == "master" ] 
+if [[ "$dir" == *"_stable"* ]]
 then
-    echo "Creating PR (to master)"
-    PRLINK=$(hub pull-request -b InitialForce:master -l "${tags}" -r "${reviewers}" -m "DESKTOP-$branch_current ${issue_title_noquotes}")
-else
     echo "Creating PR (to stable/${branch_suffix})"
     PRLINK=$(hub pull-request -b InitialForce:stable/${branch_suffix} -l "${tags},backport" -r "${reviewers}" -m "DESKTOP-$branch_current ${issue_title_noquotes}\n\n https://initialforce.atlassian.net/browse/DESKTOP-$branch_current")
+else
+    echo "Creating PR (to master)"
+    PRLINK=$(hub pull-request -b InitialForce:master -l "${tags}" -r "${reviewers}" -m "DESKTOP-$branch_current ${issue_title_noquotes}")
 fi
 
 echo $PRLINK
