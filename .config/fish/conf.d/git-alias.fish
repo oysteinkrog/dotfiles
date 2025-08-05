@@ -29,7 +29,9 @@ function _git_transform_branch_args
   if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
     echo "issue/$argv[1]"
   else
-    echo $argv
+    for arg in $argv
+      echo $arg
+    end
   end
 end
 
@@ -73,7 +75,7 @@ end
 
 # Branch (b)
 function gb
-  git branch $argv
+  git branch --sort=-committerdate $argv
 end
 function gba
   git branch --all --verbose $argv
@@ -82,10 +84,10 @@ function gbc
   git checkout -b $argv
 end
 function gbd
-  git branch --delete $argv
+  git branch --delete (_git_transform_branch_args $argv)
 end
 function gbD
-  git branch --delete --force $argv
+  git branch --delete --force (_git_transform_branch_args $argv)
 end
 function gbl
   git branch --verbose $argv
@@ -194,7 +196,7 @@ function gcx
   if count $argv > /dev/null
       git commit --fixup $argv
   else
-      glss --color=always $argv | select_line_commit | xargs git commit --fixup
+      git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative --color=always | select_line_commit | xargs git commit --fixup
   end
 end
 function fcx
@@ -224,22 +226,38 @@ function gcSF
   git commit -S --verbose --amend $argv
 end
 function gcp
-  git cherry-pick --ff (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git cherry-pick --ff "issue/$argv[1]"
+  else
+    git cherry-pick --ff $argv
+  end
 end
 function fcp --description 'git cherry pick with line selection'
     glss --color=always $argv | select_line_commit | xargs git cherry-pick --ff
 end
 function gcpx
-  git cherry-pick -x (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git cherry-pick -x "issue/$argv[1]"
+  else
+    git cherry-pick -x $argv
+  end
 end
 function fcpx --description 'git cherry pick -x with line selection'
     glss --color=always $argv | select_line_commit | xargs git cherry-pick --x
 end
 function gcpff
-  git cherry-pick --ff (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git cherry-pick --ff "issue/$argv[1]"
+  else
+    git cherry-pick --ff $argv
+  end
 end
 function gcP
-  git cherry-pick --no-commit (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git cherry-pick --no-commit "issue/$argv[1]"
+  else
+    git cherry-pick --no-commit $argv
+  end
 end
 function gcpa
   git cherry-pick --abort $argv
@@ -257,10 +275,18 @@ function gcR
   git reset "HEAD^" $argv
 end
 function gcs
-  git show (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git show "issue/$argv[1]"
+  else
+    git show $argv
+  end
 end
 function gcsS
-  git show --pretty=short --show-signature (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git show --pretty=short --show-signature "issue/$argv[1]"
+  else
+    git show --pretty=short --show-signature $argv
+  end
 end
 function gcl
   git-commit-lost $argv
@@ -589,40 +615,68 @@ end
 
 # Log (l)
 function gl
-  git log --topo-order --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --pretty=format:"$_git_log_medium_format" "issue/$argv[1]"
+  else
+    git log --topo-order --pretty=format:"$_git_log_medium_format" $argv
+  end
 end
 function gls
-  git log --topo-order --stat --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --stat --pretty=format:"$_git_log_medium_format" "issue/$argv[1]"
+  else
+    git log --topo-order --stat --pretty=format:"$_git_log_medium_format" $argv
+  end
 end
 function glss
   git log --graph --pretty=format:"$_git_log_short_format" --decorate --date=relative (_git_transform_branch_args $argv)
 end
 function gld
-  git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" "issue/$argv[1]"
+  else
+    git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
+  end
 end
 function fld
   glss --color=always $argv | select_line_commit | xargs git log --topo-order --stat --patch --full-diff --pretty=format:"$_git_log_medium_format" $argv
 end
 function glp
-  git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" "issue/$argv[1]"
+  else
+    git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv
+  end
 end
 function flp
   gwsc | select_line_status | xargs git log --topo-order --stat --patch --pretty=format:"$_git_log_medium_format" $argv 
 end
 function glo
-  git log --topo-order --pretty=format:"$_git_log_oneline_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --pretty=format:"$_git_log_oneline_format" "issue/$argv[1]"
+  else
+    git log --topo-order --pretty=format:"$_git_log_oneline_format" $argv
+  end
 end
 function glg
   git log --topo-order --all --graph --pretty=format:"$_git_log_oneline_format" $argv
 end
 function glb
-  git log --topo-order --pretty=format:"$_git_log_brief_format" (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --topo-order --pretty=format:"$_git_log_brief_format" "issue/$argv[1]"
+  else
+    git log --topo-order --pretty=format:"$_git_log_brief_format" $argv
+  end
 end
 function glc
   git shortlog --summary --numbered $argv
 end
 function glS
-  git log --show-signature (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git log --show-signature "issue/$argv[1]"
+  else
+    git log --show-signature $argv
+  end
 end
 function gll
     git log --oneline "$argv" |awk  \'{print $1}\' |tac|xargs $argv
@@ -630,7 +684,11 @@ end
 
 # Merge (m)
 function gm
-  git merge (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git merge "issue/$argv[1]"
+  else
+    git merge $argv
+  end
 end
 function gmC
   git merge --no-commit $argv
@@ -673,7 +731,11 @@ end
 
 # Rebase (r)
 function gr
-  git rebase (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git rebase "issue/$argv[1]"
+  else
+    git rebase $argv
+  end
 end
 function gru
   git rebase @\{u\} $argv
@@ -830,22 +892,30 @@ function gwS
   git status --ignore-submodules=$_git_status_ignore_submodules $argv
 end
 function gwd
-  git diff --no-ext-diff (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git diff --no-ext-diff "issue/$argv[1]"
+  else
+    git diff --no-ext-diff $argv
+  end
 end
 function gwD
-  git diff --no-ext-diff --word-diff (_git_transform_branch_args $argv)
+  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
+    git diff --no-ext-diff --word-diff "issue/$argv[1]"
+  else
+    git diff --no-ext-diff --word-diff $argv
+  end
 end
 function fwd
   gws --color=always | select_line_status | xargs git diff --no-ext-diff $argv
 end
 function gwr
-  git reset --soft $argv
+  git reset --soft (_git_transform_branch_args $argv)
 end
 function gwrm
   git reset --mixed $argv
 end
 function gwR
-  git reset --hard $argv
+  git reset --hard (_git_transform_branch_args $argv)
 end
 function gwc
   git clean -n $argv
