@@ -8,3 +8,4 @@
 
 .aider*
 .env
+bin/pandoc
