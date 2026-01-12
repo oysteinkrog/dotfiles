@@ -9,3 +9,9 @@
 .aider*
 .env
 bin/pandoc
+
+# Claude Code sensitive files
+.claude/.credentials.json
+.claude/credentials.json
+.claude/auth.json
+.claude-users/
