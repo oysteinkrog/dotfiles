@@ -1,0 +1,7 @@
+{
+  "model": "opus",
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.dotfiles/bin/claude-user-status.py 2>/dev/null || echo 'no user'"
+  }
+}
