@@ -1,21 +1,53 @@
 #!/bin/bash
 
 dir=${PWD##*/}
-# the current stable branch suffix, based on directory pattern (e.g desktop_master or desktop_9.4 is parsed as master and 9.4 respectively)
-branch_suffix=$(echo $dir | sed -e 's/_/\n/g' |tail -n 1)
-# the current git branch issue number
-branch_issue_=$(git branch | grep \* | cut -d ' ' -f2  | cut -d '/' -f2 | cut -d '_' -f1 )
-branch_issue=${1:-$branch_issue_}
+# the current stable branch suffix, based on directory pattern
+# e.g desktop_master or desktop_master5 -> master, desktop_9.4 -> 9.4
+# Strip trailing digits from workspace copies (desktop_master5 -> desktop_master -> master)
+branch_suffix=$(echo $dir | sed -e 's/[0-9]*$//' -e 's/_/\n/g' | tail -n 1)
 
-if [ "$branch_suffix" == "master" ] 
-then
-    git checkout master
-    git branch -D issue/${branch_issue}
-    git push my --delete issue/${branch_issue}
-else
-    git checkout stable/${branch_suffix}
-    git branch -D issue/${branch_issue}_${branch_suffix}
-    git push my --delete issue/${branch_issue}_${branch_suffix}
+# Get current branch name (empty if in detached HEAD)
+current_branch=$(git branch --show-current)
+
+# Use argument if provided, otherwise use current branch
+branch_to_delete=${1:-$current_branch}
+
+# If no branch to delete (detached HEAD and no argument), abort
+if [ -z "$branch_to_delete" ]; then
+    echo "Error: In detached HEAD state. Please provide branch name as argument."
+    exit 1
 fi
+
+# Determine the base branch to checkout
+if [ "$branch_suffix" == "master" ]; then
+    base_branch="master"
+else
+    base_branch="stable/${branch_suffix}"
+fi
+
+# Don't try to delete if we're already on the base branch
+if [ "$branch_to_delete" == "$base_branch" ]; then
+    echo "Already on base branch $base_branch, nothing to delete"
+    exit 0
+fi
+
+# Abort if there are uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "Error: You have uncommitted changes. Please commit or discard them first."
+    exit 1
+fi
+
+echo "Fetching latest and switching to $base_branch..."
+git fetch if
+git checkout "$base_branch" 2>/dev/null || git checkout -B "$base_branch" "if/$base_branch"
+git reset --hard "if/$base_branch"
+
+echo "Deleting local branch: $branch_to_delete"
+git branch -D "$branch_to_delete"
+
+echo "Deleting remote branch: my/$branch_to_delete"
+git push my --delete "$branch_to_delete" 2>/dev/null || echo "Remote branch not found or already deleted"
+
+echo "Done!"
 
 
