@@ -21,3 +21,6 @@
 [submodule "diff-so-fancy"]
 	path = diff-so-fancy
 	url = https://github.com/so-fancy/diff-so-fancy.git
+[submodule ".claude/skills/humanizer"]
+	path = .claude/skills/humanizer
+	url = https://github.com/blader/humanizer.git
