@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""
+project - Git Worktree Manager
+
+Manage named git worktrees for a mono-repo workflow.
+Replaces launch-claude-tabs.sh, list-worktrees.sh, new-issue, and close-issue.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+
+CONFIG_DIR = Path.home() / ".config" / "project"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+REGISTRY_FILE = CONFIG_DIR / "registry.json"
+
+DEFAULT_CONFIG = {
+    "main_repo": "/c/work/desktop_master",
+    "work_dir": "/c/work",
+    "dir_prefix": "dt-",
+    "upstream_remote": "if",
+    "fork_remote": "my",
+    "default_base": "master",
+    "launch": {
+        "terminal": "wezterm",
+        "shell_command": "fish -l -c 'claude --dangerously-skip-permissions --continue; exec fish'",
+    },
+}
+
+
+# ── Colors ───────────────────────────────────────────────────────────────────
+
+def _supports_color():
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+def _c(code, text):
+    if _supports_color():
+        return f"\033[{code}m{text}\033[0m"
+    return str(text)
+
+
+def red(t):    return _c("31", t)
+def green(t):  return _c("32", t)
+def yellow(t): return _c("33", t)
+def blue(t):   return _c("34", t)
+def cyan(t):   return _c("36", t)
+def gray(t):   return _c("90", t)
+def bold(t):   return _c("1", t)
+
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+class Config:
+    def __init__(self):
+        self._data = {}
+        self._load()
+
+    def _load(self):
+        if CONFIG_FILE.exists():
+            try:
+                self._data = json.loads(CONFIG_FILE.read_text())
+            except json.JSONDecodeError:
+                die(f"Corrupt config: {CONFIG_FILE}")
+        else:
+            self._data = dict(DEFAULT_CONFIG)
+
+    def save(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(CONFIG_FILE, self._data)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            return super().__getattribute__(name)
+        try:
+            return self._data[name]
+        except KeyError:
+            raise AttributeError(f"Config has no key '{name}'")
+
+    @property
+    def data(self):
+        return dict(self._data)
+
+
+# ── Registry ─────────────────────────────────────────────────────────────────
+
+class Registry:
+    def __init__(self):
+        self._data = {"projects": {}}
+        self._load()
+
+    def _load(self):
+        if REGISTRY_FILE.exists():
+            try:
+                self._data = json.loads(REGISTRY_FILE.read_text())
+            except json.JSONDecodeError:
+                die(f"Corrupt registry: {REGISTRY_FILE}")
+
+    def save(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(REGISTRY_FILE, self._data)
+
+    @property
+    def projects(self):
+        return self._data.get("projects", {})
+
+    def add(self, tag, path, branch, base, issue=None):
+        self._data.setdefault("projects", {})[tag] = {
+            "path": str(path),
+            "branch": branch,
+            "base": base,
+            "created": datetime.now().isoformat(timespec="seconds"),
+            "issue": issue,
+        }
+        self.save()
+
+    def remove(self, tag):
+        self._data.get("projects", {}).pop(tag, None)
+        self.save()
+
+    def get(self, tag):
+        return self._data.get("projects", {}).get(tag)
+
+    def tags(self):
+        return list(self._data.get("projects", {}).keys())
+
+
+# ── Git helpers ──────────────────────────────────────────────────────────────
+
+class Git:
+    def __init__(self, repo):
+        self.repo = str(repo)
+
+    def run(self, *args, check=True, capture=True):
+        cmd = ["git", "-C", self.repo] + list(args)
+        try:
+            r = subprocess.run(cmd, capture_output=capture, text=True, check=check)
+            return r.stdout.strip() if capture else None
+        except subprocess.CalledProcessError as e:
+            if check:
+                stderr = e.stderr.strip() if e.stderr else ""
+                die(f"git {' '.join(args)} failed:\n  {stderr}")
+            return None
+
+    def run_ok(self, *args):
+        """Run and return True if exit code 0."""
+        cmd = ["git", "-C", self.repo] + list(args)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.returncode == 0
+
+    def fetch(self, remote):
+        info(f"Fetching {remote}...")
+        self.run("fetch", remote, capture=False)
+
+    def worktree_add(self, path, branch, base):
+        self.run("worktree", "add", "-b", branch, str(path), base, capture=False)
+
+    def worktree_remove(self, path, force=False):
+        args = ["worktree", "remove", str(path)]
+        if force:
+            args.append("--force")
+        self.run(*args, capture=False)
+
+    def worktree_move(self, old_path, new_path):
+        self.run("worktree", "move", str(old_path), str(new_path), capture=False)
+
+    def worktree_list(self):
+        """Parse `git worktree list --porcelain` into dicts."""
+        raw = self.run("worktree", "list", "--porcelain")
+        worktrees = []
+        current = {}
+        for line in raw.splitlines():
+            if line.startswith("worktree "):
+                if current:
+                    worktrees.append(current)
+                current = {"path": line[len("worktree "):]}
+            elif line.startswith("HEAD "):
+                current["head"] = line[len("HEAD "):]
+            elif line.startswith("branch "):
+                ref = line[len("branch "):]
+                current["branch"] = ref.removeprefix("refs/heads/")
+            elif line == "detached":
+                current["detached"] = True
+            elif line == "bare":
+                current["bare"] = True
+        if current:
+            worktrees.append(current)
+        return worktrees
+
+    def branch_delete(self, branch):
+        self.run("branch", "-D", branch, check=False)
+
+    def push_delete(self, remote, branch):
+        return self.run_ok("push", remote, "--delete", branch)
+
+    def is_dirty(self, path):
+        """Check if worktree at path has uncommitted changes."""
+        cmd = ["git", "-C", str(path), "status", "--porcelain"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return bool(r.stdout.strip())
+
+    def untracked_files(self, path):
+        """Return list of untracked files in worktree."""
+        cmd = ["git", "-C", str(path), "ls-files", "--others", "--exclude-standard"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return [f for f in r.stdout.strip().splitlines() if f]
+
+    def uncommitted_changes(self, path):
+        """Return list of files with staged or unstaged changes."""
+        cmd = ["git", "-C", str(path), "diff", "--name-only", "HEAD"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        files = [f for f in r.stdout.strip().splitlines() if f]
+        # Also include staged changes
+        cmd2 = ["git", "-C", str(path), "diff", "--cached", "--name-only"]
+        r2 = subprocess.run(cmd2, capture_output=True, text=True)
+        files += [f for f in r2.stdout.strip().splitlines() if f and f not in files]
+        return files
+
+    def is_pushed(self, path, branch, remote):
+        """Check if local branch is pushed to remote."""
+        local = self._rev_parse(path, branch)
+        remote_ref = self._rev_parse(path, f"{remote}/{branch}")
+        if not remote_ref:
+            return False
+        if not local:
+            return False
+        # Check that remote contains local HEAD
+        cmd = ["git", "-C", str(path), "merge-base", "--is-ancestor", local, remote_ref]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.returncode == 0
+
+    def unpushed_commits(self, path, branch, remote):
+        """Return count of commits in branch not in remote."""
+        ref = f"{remote}/{branch}"
+        cmd = ["git", "-C", str(path), "rev-list", "--count", f"{ref}..{branch}"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            return -1  # remote branch doesn't exist
+        return int(r.stdout.strip())
+
+    def _rev_parse(self, path, ref):
+        cmd = ["git", "-C", str(path), "rev-parse", "--verify", "--quiet", ref]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    def ahead_behind(self, path, branch, upstream_remote):
+        """Return (ahead, behind) counts relative to upstream."""
+        # Try multiple upstream refs
+        for ref in [f"{upstream_remote}/{branch}", f"{upstream_remote}/master"]:
+            cmd = ["git", "-C", str(path), "rev-list", "--left-right", "--count",
+                   f"{branch}...{ref}"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0:
+                parts = r.stdout.strip().split()
+                if len(parts) == 2:
+                    return int(parts[0]), int(parts[1])
+        return 0, 0
+
+
+# ── Utilities ────────────────────────────────────────────────────────────────
+
+def die(msg):
+    print(f"{red('error:')} {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def warn(msg):
+    print(f"{yellow('warning:')} {msg}", file=sys.stderr)
+
+
+def info(msg):
+    print(f"{gray(msg)}", file=sys.stderr)
+
+
+def _atomic_write(path, data):
+    """Write JSON atomically with backup."""
+    path = Path(path)
+    # Backup existing
+    if path.exists():
+        bak = path.with_suffix(path.suffix + ".bak")
+        try:
+            bak.write_text(path.read_text())
+        except OSError:
+            pass
+    # Write to temp then rename
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            json.dump(data, f, indent=2)
+            f.write("\n")
+            fcntl.flock(f, fcntl.LOCK_UN)
+        os.replace(tmp, path)
+    except Exception:
+        os.unlink(tmp)
+        raise
+
+
+def validate_tag(tag):
+    if not tag or len(tag) > 40:
+        die(f"Tag must be 1-40 characters, got {len(tag) if tag else 0}")
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$', tag):
+        die(f"Invalid tag '{tag}': use alphanumeric, hyphens, dots, underscores")
+    return tag
+
+
+def extract_issue_from_branch(branch):
+    """Extract Jira issue number from branch name patterns."""
+    # Match: DESKTOP-12345, issue/DESKTOP-12345, issue/12345
+    patterns = [
+        r'DESKTOP-(\d+)',
+        r'issue/(\d+)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, branch)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _claude_path_encode(path):
+    """Encode a filesystem path to Claude Code's project folder name."""
+    return "-" + re.sub(r'[/\\._]', '-', str(path).strip("/"))
+
+
+def migrate_claude_sessions(old_path, new_path):
+    """Move Claude Code session data when a worktree path changes."""
+    claude_dir = Path.home() / ".claude"
+    projects_dir = claude_dir / "projects"
+    if not projects_dir.exists():
+        return
+
+    old_folder = _claude_path_encode(old_path)
+    new_folder = _claude_path_encode(new_path)
+    old_dir = projects_dir / old_folder
+    new_dir = projects_dir / new_folder
+
+    if not old_dir.exists():
+        return
+
+    if new_dir.exists():
+        warn(f"Claude sessions folder already exists: {new_dir}")
+        return
+
+    # Rename project folder
+    old_dir.rename(new_dir)
+    info(f"Moved Claude sessions: {old_folder} -> {new_folder}")
+
+    # Update paths inside session files and index
+    old_str = str(old_path)
+    new_str = str(new_path)
+
+    def _rewrite_file(filepath):
+        """Replace old_str with new_str in a text file."""
+        try:
+            text = filepath.read_text()
+            if old_str in text or old_folder in text:
+                text = text.replace(old_str, new_str).replace(old_folder, new_folder)
+                filepath.write_text(text)
+        except Exception:
+            pass
+
+    # Update JSONL session files (cwd, paths in tool results)
+    for jsonl in new_dir.glob("*.jsonl"):
+        _rewrite_file(jsonl)
+
+    # Update sessions-index.json (projectPath, fullPath)
+    index = new_dir / "sessions-index.json"
+    _rewrite_file(index)
+
+    # Update history.jsonl
+    history = claude_dir / "history.jsonl"
+    _rewrite_file(history)
+
+
+def wsl_to_win(path):
+    """Convert /c/foo to C:\\foo for Windows executables."""
+    s = str(path)
+    m = re.match(r'^/([a-zA-Z])/(.*)', s)
+    if m:
+        drive = m.group(1).upper()
+        rest = m.group(2).replace("/", "\\")
+        return f"{drive}:\\{rest}"
+    return s
+
+
+# ── Subcommands ──────────────────────────────────────────────────────────────
+
+def cmd_config_init(args):
+    """Initialize or show config."""
+    if CONFIG_FILE.exists() and not args.force:
+        print(f"Config already exists: {CONFIG_FILE}")
+        print(json.dumps(json.loads(CONFIG_FILE.read_text()), indent=2))
+        return
+    cfg = Config()
+    cfg.save()
+    print(f"Created config: {CONFIG_FILE}")
+    print(json.dumps(cfg.data, indent=2))
+
+
+def cmd_new(args):
+    """Create a new worktree project."""
+    cfg = Config()
+    reg = Registry()
+    git = Git(cfg.main_repo)
+
+    tag = validate_tag(args.tag)
+
+    if reg.get(tag):
+        die(f"Project '{tag}' already exists in registry")
+
+    # Derive branch name
+    if args.branch:
+        branch = args.branch
+    elif args.issue:
+        branch = f"DESKTOP-{args.issue}-{tag}"
+    else:
+        branch = tag
+
+    # Resolve base ref
+    upstream = cfg.upstream_remote
+    if args.base:
+        base_ref = args.base
+        # Add remote prefix if not already present
+        if "/" not in base_ref:
+            # Check for stable/ pattern
+            if re.match(r'^\d+\.\d+', base_ref):
+                base_ref = f"{upstream}/stable/{base_ref}"
+            else:
+                base_ref = f"{upstream}/{base_ref}"
+    else:
+        base_ref = f"{upstream}/{cfg.default_base}"
+
+    worktree_path = Path(cfg.work_dir) / f"{cfg.dir_prefix}{tag}"
+
+    if worktree_path.exists():
+        die(f"Directory already exists: {worktree_path}")
+
+    # Fetch and create
+    git.fetch(upstream)
+    info(f"Creating worktree: {branch} at {worktree_path} from {base_ref}")
+    git.worktree_add(worktree_path, branch, base_ref)
+
+    # Register
+    issue = args.issue if hasattr(args, "issue") else None
+    reg.add(tag, worktree_path, branch, base_ref, issue=issue)
+
+    print()
+    print(f"  {green('Created')} project {bold(tag)}")
+    if issue:
+        print(f"  Issue:   DESKTOP-{issue}")
+    print(f"  Branch:  {branch}")
+    print(f"  Base:    {base_ref}")
+    print(f"  Path:    {worktree_path}")
+    print()
+    print(f"  cd {worktree_path}")
+
+
+def cmd_done(args):
+    """Remove a project worktree and clean up."""
+    cfg = Config()
+    reg = Registry()
+    git = Git(cfg.main_repo)
+
+    tag = args.tag
+    project = reg.get(tag)
+    if not project:
+        die(f"Unknown project '{tag}'. Use 'project list' to see projects.")
+
+    wt_path = Path(project["path"])
+    branch = project["branch"]
+
+    # ── Safety checks ────────────────────────────────────────────────────
+    problems = []
+
+    if wt_path.exists():
+        # Check for untracked files
+        untracked = git.untracked_files(wt_path)
+        if untracked:
+            problems.append(("Untracked files", untracked))
+
+        # Check for uncommitted changes (staged + unstaged)
+        uncommitted = git.uncommitted_changes(wt_path)
+        if uncommitted:
+            problems.append(("Uncommitted changes", uncommitted))
+
+        # Check if branch is pushed to fork remote
+        unpushed = git.unpushed_commits(wt_path, branch, cfg.fork_remote)
+        if unpushed == -1:
+            problems.append(("Branch not pushed", [f"{branch} has no remote tracking branch on {cfg.fork_remote}"]))
+        elif unpushed > 0:
+            problems.append(("Unpushed commits", [f"{unpushed} commit(s) not pushed to {cfg.fork_remote}/{branch}"]))
+
+    if problems and not args.force:
+        print(f"\n{red('Cannot remove')} project {bold(tag)}:\n")
+        for label, items in problems:
+            print(f"  {yellow(label)}:")
+            shown = items[:10]
+            for item in shown:
+                print(f"    - {item}")
+            if len(items) > 10:
+                print(f"    ... and {len(items) - 10} more")
+            print()
+        die("Resolve issues above or use --force to override.")
+
+    # ── Confirmation ─────────────────────────────────────────────────────
+    if not args.force:
+        print(f"\nWill remove project {bold(tag)}:")
+        print(f"  Path:   {wt_path}")
+        print(f"  Branch: {branch}")
+        if not args.keep_local:
+            print(f"  Delete local branch: yes")
+        if not args.keep_remote:
+            print(f"  Delete remote branch: {cfg.fork_remote}/{branch}")
+        resp = input("\nProceed? [y/N] ")
+        if resp.lower() != "y":
+            print("Cancelled.")
+            return
+
+    # ── Remove worktree ──────────────────────────────────────────────────
+    if wt_path.exists():
+        info(f"Removing worktree at {wt_path}...")
+        git.worktree_remove(wt_path, force=args.force)
+    else:
+        warn(f"Worktree path not found: {wt_path}")
+
+    # Delete local branch
+    if not args.keep_local:
+        info(f"Deleting local branch {branch}...")
+        git.branch_delete(branch)
+
+    # Delete remote branch
+    if not args.keep_remote:
+        info(f"Deleting remote branch {cfg.fork_remote}/{branch}...")
+        if not git.push_delete(cfg.fork_remote, branch):
+            warn(f"Could not delete remote branch (may already be gone)")
+
+    # Remove from registry
+    reg.remove(tag)
+
+    print(f"\n  {green('Removed')} project {bold(tag)}")
+
+
+def cmd_list(args):
+    """List projects."""
+    cfg = Config()
+    reg = Registry()
+
+    # Handle --tags-only early
+    if args.tags_only:
+        for tag in sorted(reg.tags()):
+            print(tag)
+        return
+
+    projects = reg.projects
+    git = Git(cfg.main_repo)
+
+    # Collect untracked worktrees if --all
+    untracked = []
+    if args.all:
+        registered_paths = {p["path"] for p in projects.values()}
+        for wt in git.worktree_list():
+            path = wt.get("path", "")
+            if path not in registered_paths and not wt.get("bare"):
+                untracked.append(wt)
+
+    if not projects and not untracked:
+        print("No projects registered. Use 'project new <tag>' to create one.")
+        return
+
+    if args.json_output:
+        out = dict(projects)
+        if untracked:
+            out["_untracked"] = untracked
+        print(json.dumps(out, indent=2))
+        return
+
+    if args.short:
+        for tag in sorted(projects):
+            p = projects[tag]
+            issue_str = f"#{p['issue']}" if p.get('issue') else ""
+            print(f"{tag:16s} {issue_str:8s} {p['branch']:28s} {p['path']}")
+        return
+
+    # Full table output - check if any project has an issue
+    any_has_issue = any(p.get("issue") for p in projects.values())
+
+    def _get_status(tag):
+        p = projects[tag]
+        wt_path = Path(p["path"])
+        branch = p["branch"]
+        issue = p.get("issue")
+        if not wt_path.exists():
+            status = red("missing")
+        elif git.is_dirty(wt_path):
+            status = yellow("dirty")
+        else:
+            ahead, behind = git.ahead_behind(wt_path, branch, cfg.upstream_remote)
+            parts = []
+            if ahead:
+                parts.append(f"{ahead} ahead")
+            if behind:
+                parts.append(f"{behind} behind")
+            status = green(", ".join(parts)) if parts else green("clean")
+        return (tag, issue, branch, status, str(wt_path))
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_get_status, tag): tag for tag in sorted(projects)}
+        for future in as_completed(futures):
+            rows.append(future.result())
+    rows.sort(key=lambda r: r[0])
+
+    # Add untracked
+    for wt in untracked:
+        branch = wt.get("branch", "(detached)")
+        path = wt["path"]
+        issue = extract_issue_from_branch(branch)
+        rows.append(("?", issue, branch, gray("untracked"), path))
+        if issue:
+            any_has_issue = True
+
+    if not rows:
+        return
+
+    # Calculate column widths
+    tag_w = max(len(r[0]) for r in rows)
+    branch_w = max(len(r[2]) for r in rows)
+
+    # Print header and rows
+    if any_has_issue:
+        hdr = f"{'TAG':<{tag_w}}  {'ISSUE':>7}  {'BRANCH':<{branch_w}}  {'STATUS':12s}  PATH"
+        print(gray(hdr))
+        print(gray("-" * len(hdr)))
+        for tag, issue, branch, status, path in rows:
+            issue_str = f"#{issue}" if issue else ""
+            print(f"{tag:<{tag_w}}  {issue_str:>7}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
+    else:
+        hdr = f"{'TAG':<{tag_w}}  {'BRANCH':<{branch_w}}  {'STATUS':12s}  PATH"
+        print(gray(hdr))
+        print(gray("-" * len(hdr)))
+        for tag, issue, branch, status, path in rows:
+            print(f"{tag:<{tag_w}}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
+
+
+def cmd_launch(args):
+    """Launch terminal tabs for projects."""
+    cfg = Config()
+    reg = Registry()
+
+    projects = reg.projects
+    if not projects:
+        die("No projects to launch. Use 'project new' first.")
+
+    # Filter
+    if args.only:
+        tags = [t.strip() for t in args.only.split(",")]
+        projects = {t: projects[t] for t in tags if t in projects}
+        missing = [t for t in tags if t not in reg.projects]
+        if missing:
+            warn(f"Unknown tags: {', '.join(missing)}")
+
+    if not projects:
+        die("No matching projects to launch.")
+
+    launch_cfg = cfg.launch
+    terminal = launch_cfg.get("terminal", "wezterm")
+    shell_cmd = launch_cfg.get("shell_command",
+        "fish -l -c 'claude --dangerously-skip-permissions --continue; exec fish'")
+
+    if args.wt:
+        terminal = "wt"
+    if args.no_claude:
+        shell_cmd = "fish -l"
+
+    # Find wezterm
+    wez = None
+    if terminal == "wezterm":
+        for candidate in ["wezterm", "wezterm.exe", "/c/Program Files/WezTerm/wezterm.exe"]:
+            if subprocess.run(["which", candidate], capture_output=True).returncode == 0 or Path(candidate).exists():
+                wez = candidate
+                break
+        if not wez:
+            die("wezterm not found. Install WezTerm or use --wt for Windows Terminal.")
+
+    if args.dry_run:
+        print(f"[{terminal} mode] Would launch {len(projects)} tab(s):\n")
+
+    for tag in sorted(projects):
+        p = projects[tag]
+        wt_path = p["path"]
+        win_path = wsl_to_win(wt_path)
+
+        if terminal == "wezterm":
+            import shlex
+            spawn_cmd = [wez, "cli", "spawn", "--cwd", win_path, "--",
+                         "wsl.exe", "-e"] + shlex.split(shell_cmd)
+            title_cmd_tpl = [wez, "cli", "set-tab-title", "--pane-id", "{pane_id}", tag]
+
+            if args.dry_run:
+                print(f"  {' '.join(spawn_cmd)}")
+                print(f"  {wez} cli set-tab-title '{tag}'")
+            else:
+                try:
+                    r = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
+                    pane_id = r.stdout.strip()
+                    if pane_id:
+                        title_cmd = [wez, "cli", "set-tab-title", "--pane-id", pane_id, tag]
+                        subprocess.run(title_cmd, capture_output=True)
+                except subprocess.CalledProcessError as e:
+                    warn(f"Failed to launch tab for {tag}: {e}")
+
+        elif terminal == "wt":
+            # Windows Terminal via wt.exe
+            wt_cmd = f"wt.exe -w 0 nt -p Ubuntu -d '{win_path}' --title '{tag}' wsl.exe -e {shell_cmd}"
+            if args.dry_run:
+                print(f"  {wt_cmd}")
+            else:
+                subprocess.run(wt_cmd, shell=True, check=False)
+
+    if args.dry_run:
+        print()
+
+
+def cmd_adopt(args):
+    """Import an existing worktree into the registry."""
+    cfg = Config()
+    reg = Registry()
+    git = Git(cfg.main_repo)
+
+    tag = validate_tag(args.tag)
+    wt_path = Path(args.path).resolve()
+
+    if reg.get(tag):
+        die(f"Tag '{tag}' already exists in registry")
+
+    if not wt_path.exists():
+        die(f"Path does not exist: {wt_path}")
+
+    # Detect branch from the worktree
+    try:
+        branch_out = subprocess.run(
+            ["git", "-C", str(wt_path), "branch", "--show-current"],
+            capture_output=True, text=True, check=True
+        )
+        branch = branch_out.stdout.strip()
+    except subprocess.CalledProcessError:
+        die(f"Could not detect branch at {wt_path}")
+
+    if not branch:
+        die(f"Worktree at {wt_path} is in detached HEAD state")
+
+    # Determine base
+    upstream = cfg.upstream_remote
+    if args.base:
+        base = args.base
+        if "/" not in base:
+            if re.match(r'^\d+\.\d+', base):
+                base = f"{upstream}/stable/{base}"
+            else:
+                base = f"{upstream}/{base}"
+    else:
+        base = f"{upstream}/{cfg.default_base}"
+
+    # Determine issue: explicit arg, or auto-detect from branch
+    if hasattr(args, "issue") and args.issue:
+        issue = args.issue
+    else:
+        issue = extract_issue_from_branch(branch)
+
+    # Optionally move to standard naming
+    final_path = wt_path
+    if args.move:
+        new_path = Path(cfg.work_dir) / f"{cfg.dir_prefix}{tag}"
+        if new_path.exists():
+            die(f"Target path already exists: {new_path}")
+        info(f"Moving worktree: {wt_path} -> {new_path}")
+        git.worktree_move(wt_path, new_path)
+        final_path = new_path
+
+    reg.add(tag, final_path, branch, base, issue=issue)
+
+    print(f"\n  {green('Adopted')} project {bold(tag)}")
+    if issue:
+        print(f"  Issue:   DESKTOP-{issue}")
+    print(f"  Branch:  {branch}")
+    print(f"  Base:    {base}")
+    print(f"  Path:    {final_path}")
+
+
+def cmd_path(args):
+    """Print the path for a project tag."""
+    reg = Registry()
+    project = reg.get(args.tag)
+    if not project:
+        print(f"Unknown project: {args.tag}", file=sys.stderr)
+        sys.exit(1)
+    print(project["path"])
+
+
+def cmd_rename(args):
+    """Rename a project tag (and optionally move directory)."""
+    cfg = Config()
+    reg = Registry()
+    git = Git(cfg.main_repo)
+
+    old_tag = args.old_tag
+    new_tag = validate_tag(args.new_tag)
+
+    project = reg.get(old_tag)
+    if not project:
+        die(f"Unknown project '{old_tag}'")
+
+    same_tag = (old_tag == new_tag)
+    if not same_tag and reg.get(new_tag):
+        die(f"Tag '{new_tag}' already exists")
+
+    old_path = Path(project["path"])
+    new_path = old_path
+    target_path = Path(cfg.work_dir) / f"{cfg.dir_prefix}{new_tag}"
+
+    # Move directory if requested and not already at target
+    if args.move and old_path != target_path:
+        if target_path.exists():
+            die(f"Target path already exists: {target_path}")
+        if old_path.exists():
+            info(f"Moving worktree: {old_path} -> {target_path}")
+            git.worktree_move(old_path, target_path)
+            new_path = target_path
+        else:
+            warn(f"Old path doesn't exist, just updating registry")
+            new_path = target_path
+    elif args.move and old_path == target_path:
+        info(f"Already at target path: {old_path}")
+
+    # Migrate Claude Code sessions if path changed
+    if new_path != old_path:
+        migrate_claude_sessions(old_path, new_path)
+
+    # Update registry
+    if same_tag:
+        # Just update path
+        reg._data["projects"][old_tag]["path"] = str(new_path)
+        reg.save()
+    else:
+        # Copy data to new key, remove old
+        reg._data["projects"][new_tag] = {
+            **project,
+            "path": str(new_path),
+        }
+        reg.remove(old_tag)
+
+    if same_tag:
+        print(f"\n  {green('Moved')} {bold(old_tag)}")
+    else:
+        print(f"\n  {green('Renamed')} {bold(old_tag)} -> {bold(new_tag)}")
+    print(f"  Path:    {new_path}")
+
+
+# ── CLI Setup ────────────────────────────────────────────────────────────────
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="project",
+        description="Git worktree manager for named projects",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  project new rawcodecs --issue 11301
+  project new ci-fix --branch fix-master-ci --base 25.3
+  project list
+  project launch --dry-run
+  project done rawcodecs
+  project adopt rawcodecs /c/WORK/desktop_master2
+  project path rawcodecs
+""",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # config
+    p_cfg = sub.add_parser("config", help="Manage configuration")
+    p_cfg.add_argument("--init", action="store_true", help="Create default config")
+    p_cfg.add_argument("--force", action="store_true", help="Overwrite existing config")
+
+    # new
+    p_new = sub.add_parser("new", help="Create a new worktree project")
+    p_new.add_argument("tag", help="Short project tag (e.g. rawcodecs, ci-fix)")
+    p_new.add_argument("--issue", "-i", type=int, help="Issue number (creates DESKTOP-N branch)")
+    p_new.add_argument("--branch", "-b", help="Explicit branch name")
+    p_new.add_argument("--base", help="Base ref (e.g. master, 25.3)")
+
+    # done
+    p_done = sub.add_parser("done", help="Remove project worktree and clean up")
+    p_done.add_argument("tag", help="Project tag to remove")
+    p_done.add_argument("--force", "-f", action="store_true", help="Skip confirmation and dirty check")
+    p_done.add_argument("--keep-local", action="store_true", help="Keep local branch")
+    p_done.add_argument("--keep-remote", action="store_true", help="Keep remote branch")
+
+    # list
+    p_list = sub.add_parser("list", aliases=["ls"], help="List projects")
+    p_list.add_argument("--all", "-a", action="store_true", help="Include untracked worktrees")
+    p_list.add_argument("--check-remote", action="store_true", help="Verify remote branches exist")
+    p_list.add_argument("--json", dest="json_output", action="store_true", help="JSON output")
+    p_list.add_argument("--short", "-s", action="store_true", help="Compact output")
+    p_list.add_argument("--tags-only", action="store_true", help="Just tag names (for completion)")
+
+    # launch
+    p_launch = sub.add_parser("launch", help="Open terminal tabs for projects")
+    p_launch.add_argument("--only", help="Comma-separated list of tags")
+    p_launch.add_argument("--dry-run", action="store_true", help="Print commands only")
+    p_launch.add_argument("--no-claude", action="store_true", help="Don't start Claude in tabs")
+    p_launch.add_argument("--wt", action="store_true", help="Use Windows Terminal instead of WezTerm")
+
+    # adopt
+    p_adopt = sub.add_parser("adopt", help="Import existing worktree into registry")
+    p_adopt.add_argument("tag", help="Tag name for the project")
+    p_adopt.add_argument("path", help="Path to existing worktree")
+    p_adopt.add_argument("--base", help="Base ref")
+    p_adopt.add_argument("--issue", "-i", type=int, help="Issue number")
+    p_adopt.add_argument("--move", action="store_true", help="Move worktree to dt-<tag> naming")
+
+    # path
+    p_path = sub.add_parser("path", help="Print worktree path for a tag")
+    p_path.add_argument("tag", help="Project tag")
+
+    # rename
+    p_rename = sub.add_parser("rename", aliases=["mv"], help="Rename a project tag")
+    p_rename.add_argument("old_tag", help="Current tag name")
+    p_rename.add_argument("new_tag", help="New tag name")
+    p_rename.add_argument("--no-move", dest="move", action="store_false", default=True,
+                          help="Don't move directory (just rename in registry)")
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    dispatch = {
+        "config": cmd_config_init,
+        "new": cmd_new,
+        "done": cmd_done,
+        "list": cmd_list,
+        "ls": cmd_list,
+        "launch": cmd_launch,
+        "adopt": cmd_adopt,
+        "path": cmd_path,
+        "rename": cmd_rename,
+        "mv": cmd_rename,
+    }
+
+    handler = dispatch.get(args.command)
+    if handler:
+        handler(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
