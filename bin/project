@@ -395,6 +395,17 @@ def wsl_to_win(path):
     return s
 
 
+def detect_current_project():
+    """Detect project tag from current working directory."""
+    cwd = str(Path.cwd()).lower()
+    reg = Registry()
+    for tag, p in reg.projects.items():
+        project_path = str(Path(p["path"])).lower()
+        if cwd == project_path or cwd.startswith(project_path + "/"):
+            return tag
+    return None
+
+
 # ── Subcommands ──────────────────────────────────────────────────────────────
 
 def cmd_config_init(args):
@@ -901,7 +912,7 @@ def build_parser():
 
     # done
     p_done = sub.add_parser("done", help="Remove project worktree and clean up")
-    p_done.add_argument("tag", help="Project tag to remove")
+    p_done.add_argument("tag", nargs="?", help="Project tag to remove (default: detect from cwd)")
     p_done.add_argument("--force", "-f", action="store_true", help="Skip confirmation and dirty check")
     p_done.add_argument("--keep-local", action="store_true", help="Keep local branch")
     p_done.add_argument("--keep-remote", action="store_true", help="Keep remote branch")
@@ -931,12 +942,12 @@ def build_parser():
 
     # path
     p_path = sub.add_parser("path", help="Print worktree path for a tag")
-    p_path.add_argument("tag", help="Project tag")
+    p_path.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
 
     # rename
     p_rename = sub.add_parser("rename", aliases=["mv"], help="Rename a project tag")
-    p_rename.add_argument("old_tag", help="Current tag name")
-    p_rename.add_argument("new_tag", help="New tag name")
+    p_rename.add_argument("tags", nargs="+", metavar="TAG",
+                          help="<new_tag> (detect old from cwd) or <old_tag> <new_tag>")
     p_rename.add_argument("--no-move", dest="move", action="store_false", default=True,
                           help="Don't move directory (just rename in registry)")
 
@@ -950,6 +961,29 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(0)
+
+    # Auto-detect tag from cwd when not provided
+    if args.command in ("done", "path") and not args.tag:
+        detected = detect_current_project()
+        if not detected:
+            die(f"Not inside a registered project. Specify a tag or cd into a project.")
+        args.tag = detected
+        info(f"Detected project: {detected}")
+
+    if args.command in ("rename", "mv"):
+        tags = args.tags
+        if len(tags) == 1:
+            detected = detect_current_project()
+            if not detected:
+                die(f"Not inside a registered project. Provide both old and new tag names.")
+            args.old_tag = detected
+            args.new_tag = tags[0]
+            info(f"Detected project: {detected}")
+        elif len(tags) == 2:
+            args.old_tag = tags[0]
+            args.new_tag = tags[1]
+        else:
+            die("rename expects 1 or 2 arguments: [old_tag] <new_tag>")
 
     dispatch = {
         "config": cmd_config_init,
