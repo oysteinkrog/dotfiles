@@ -135,6 +135,18 @@ class Registry:
     def tags(self):
         return list(self._data.get("projects", {}).keys())
 
+    def set_frozen(self, tag, frozen):
+        p = self.get(tag)
+        if not p:
+            return False
+        p["frozen"] = frozen
+        self.save()
+        return True
+
+    def is_frozen(self, tag):
+        p = self.get(tag)
+        return bool(p and p.get("frozen"))
+
 
 # ── Git helpers ──────────────────────────────────────────────────────────────
 
@@ -871,41 +883,51 @@ def cmd_list(args):
             print(tag)
         return
 
-    projects = reg.projects
+    all_projects = reg.projects
     git = Git(cfg.main_repo)
+
+    # Split active vs frozen
+    active_projects = {t: p for t, p in all_projects.items() if not p.get("frozen")}
+    frozen_projects = {t: p for t, p in all_projects.items() if p.get("frozen")}
 
     # Collect untracked worktrees if --all
     untracked = []
     if args.all:
-        registered_paths = {p["path"] for p in projects.values()}
+        registered_paths = {p["path"] for p in all_projects.values()}
         for wt in git.worktree_list():
             path = wt.get("path", "")
             if path not in registered_paths and not wt.get("bare"):
                 untracked.append(wt)
 
-    if not projects and not untracked:
+    if not all_projects and not untracked:
         print("No projects registered. Use 'project new <tag>' to create one.")
         return
 
     if args.json_output:
-        out = dict(projects)
+        out = dict(all_projects)
         if untracked:
             out["_untracked"] = untracked
         print(json.dumps(out, indent=2))
         return
 
     if args.short:
-        for tag in sorted(projects):
-            p = projects[tag]
+        for tag in sorted(active_projects):
+            p = active_projects[tag]
             issue_str = f"#{p['issue']}" if p.get('issue') else ""
             print(f"{tag:16s} {issue_str:8s} {p['branch']:28s} {p['path']}")
+        if frozen_projects:
+            print()
+            for tag in sorted(frozen_projects):
+                p = frozen_projects[tag]
+                issue_str = f"#{p['issue']}" if p.get('issue') else ""
+                print(f"\u2744 {tag:14s} {issue_str:8s} {p['branch']:28s} {p['path']}")
         return
 
     # Full table output - check if any project has an issue
-    any_has_issue = any(p.get("issue") for p in projects.values())
+    any_has_issue = any(p.get("issue") for p in all_projects.values())
 
     def _get_status(tag):
-        p = projects[tag]
+        p = all_projects[tag]
         wt_path = Path(p["path"])
         branch = p["branch"]
         issue = p.get("issue")
@@ -923,43 +945,86 @@ def cmd_list(args):
             status = green(", ".join(parts)) if parts else green("clean")
         return (tag, issue, branch, status, str(wt_path))
 
-    rows = []
+    active_rows = []
+    frozen_rows = []
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_get_status, tag): tag for tag in sorted(projects)}
+        futures = {pool.submit(_get_status, tag): tag for tag in sorted(all_projects)}
         for future in as_completed(futures):
-            rows.append(future.result())
-    rows.sort(key=lambda r: r[0])
+            row = future.result()
+            tag = row[0]
+            if tag in frozen_projects:
+                frozen_rows.append(row)
+            else:
+                active_rows.append(row)
+    active_rows.sort(key=lambda r: r[0])
+    frozen_rows.sort(key=lambda r: r[0])
 
     # Add untracked
     for wt in untracked:
         branch = wt.get("branch", "(detached)")
         path = wt["path"]
         issue = extract_issue_from_branch(branch)
-        rows.append(("?", issue, branch, gray("untracked"), path))
+        active_rows.append(("?", issue, branch, gray("untracked"), path))
         if issue:
             any_has_issue = True
 
-    if not rows:
+    all_rows = active_rows + frozen_rows
+    if not all_rows:
         return
 
-    # Calculate column widths
-    tag_w = max(len(r[0]) for r in rows)
-    branch_w = max(len(r[2]) for r in rows)
+    # Calculate column widths across all rows for alignment
+    tag_w = max(len(r[0]) for r in all_rows)
+    branch_w = max(len(r[2]) for r in all_rows)
 
-    # Print header and rows
+    def _print_rows(rows):
+        if any_has_issue:
+            for tag, issue, branch, status, path in rows:
+                issue_str = f"#{issue}" if issue else ""
+                print(f"{tag:<{tag_w}}  {issue_str:>7}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
+        else:
+            for tag, issue, branch, status, path in rows:
+                print(f"{tag:<{tag_w}}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
+
+    # Print header
     if any_has_issue:
         hdr = f"{'TAG':<{tag_w}}  {'ISSUE':>7}  {'BRANCH':<{branch_w}}  {'STATUS':12s}  PATH"
-        print(gray(hdr))
-        print(gray("-" * len(hdr)))
-        for tag, issue, branch, status, path in rows:
-            issue_str = f"#{issue}" if issue else ""
-            print(f"{tag:<{tag_w}}  {issue_str:>7}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
     else:
         hdr = f"{'TAG':<{tag_w}}  {'BRANCH':<{branch_w}}  {'STATUS':12s}  PATH"
-        print(gray(hdr))
-        print(gray("-" * len(hdr)))
-        for tag, issue, branch, status, path in rows:
-            print(f"{tag:<{tag_w}}  {branch:<{branch_w}}  {status:12s}  {gray(path)}")
+    print(gray(hdr))
+    print(gray("-" * len(hdr)))
+
+    _print_rows(active_rows)
+
+    if frozen_rows:
+        print()
+        print(gray(f"\u2744 Frozen ({len(frozen_rows)})"))
+        _print_rows(frozen_rows)
+
+
+def cmd_freeze(args):
+    """Freeze a project (exclude from launch, listed separately)."""
+    reg = Registry()
+    tag = args.tag
+    if not reg.get(tag):
+        die(f"Unknown project: {tag}")
+    if reg.is_frozen(tag):
+        warn(f"Project '{tag}' is already frozen")
+        return
+    reg.set_frozen(tag, True)
+    print(f"  {bold(tag)} is now frozen")
+
+
+def cmd_thaw(args):
+    """Thaw (unfreeze) a project."""
+    reg = Registry()
+    tag = args.tag
+    if not reg.get(tag):
+        die(f"Unknown project: {tag}")
+    if not reg.is_frozen(tag):
+        warn(f"Project '{tag}' is not frozen")
+        return
+    reg.set_frozen(tag, False)
+    print(f"  {bold(tag)} is now active")
 
 
 def cmd_launch(args):
@@ -978,6 +1043,12 @@ def cmd_launch(args):
         missing = [t for t in tags if t not in reg.projects]
         if missing:
             warn(f"Unknown tags: {', '.join(missing)}")
+    elif not args.frozen:
+        # Skip frozen projects unless explicitly requested
+        skipped = [t for t in projects if projects[t].get("frozen")]
+        projects = {t: p for t, p in projects.items() if not p.get("frozen")}
+        if skipped:
+            info(f"Skipping {len(skipped)} frozen project(s): {', '.join(sorted(skipped))}")
 
     if not projects:
         die("No matching projects to launch.")
@@ -1009,29 +1080,29 @@ def cmd_launch(args):
         p = projects[tag]
         wt_path = p["path"]
         win_path = wsl_to_win(wt_path)
+        tab_title = f"\u2744 {tag}" if p.get("frozen") else tag
 
         if terminal == "wezterm":
             import shlex
             spawn_cmd = [wez, "cli", "spawn", "--cwd", win_path, "--",
                          "wsl.exe", "-e"] + shlex.split(shell_cmd)
-            title_cmd_tpl = [wez, "cli", "set-tab-title", "--pane-id", "{pane_id}", tag]
 
             if args.dry_run:
                 print(f"  {' '.join(spawn_cmd)}")
-                print(f"  {wez} cli set-tab-title '{tag}'")
+                print(f"  {wez} cli set-tab-title '{tab_title}'")
             else:
                 try:
                     r = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
                     pane_id = r.stdout.strip()
                     if pane_id:
-                        title_cmd = [wez, "cli", "set-tab-title", "--pane-id", pane_id, tag]
+                        title_cmd = [wez, "cli", "set-tab-title", "--pane-id", pane_id, tab_title]
                         subprocess.run(title_cmd, capture_output=True)
                 except subprocess.CalledProcessError as e:
                     warn(f"Failed to launch tab for {tag}: {e}")
 
         elif terminal == "wt":
             # Windows Terminal via wt.exe
-            wt_cmd = f"wt.exe -w 0 nt -p Ubuntu -d '{win_path}' --title '{tag}' wsl.exe -e {shell_cmd}"
+            wt_cmd = f"wt.exe -w 0 nt -p Ubuntu -d '{win_path}' --title '{tab_title}' wsl.exe -e {shell_cmd}"
             if args.dry_run:
                 print(f"  {wt_cmd}")
             else:
@@ -1242,6 +1313,7 @@ def build_parser():
     p_launch.add_argument("--dry-run", action="store_true", help="Print commands only")
     p_launch.add_argument("--no-claude", action="store_true", help="Don't start Claude in tabs")
     p_launch.add_argument("--wt", action="store_true", help="Use Windows Terminal instead of WezTerm")
+    p_launch.add_argument("--frozen", action="store_true", help="Include frozen projects")
 
     # adopt
     p_adopt = sub.add_parser("adopt", help="Import existing worktree into registry")
@@ -1262,6 +1334,12 @@ def build_parser():
     p_rename.add_argument("--no-move", dest="move", action="store_false", default=True,
                           help="Don't move directory (just rename in registry)")
 
+    # freeze / thaw
+    p_freeze = sub.add_parser("freeze", help="Freeze a project (skip in launch, listed separately)")
+    p_freeze.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
+    p_thaw = sub.add_parser("thaw", aliases=["unfreeze"], help="Unfreeze a project")
+    p_thaw.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
+
     return parser
 
 
@@ -1274,7 +1352,7 @@ def main():
         sys.exit(0)
 
     # Auto-detect tag from cwd when not provided
-    if args.command in ("done", "path") and not args.tag:
+    if args.command in ("done", "path", "freeze", "thaw", "unfreeze") and not args.tag:
         detected = detect_current_project()
         if not detected:
             die(f"Not inside a registered project. Specify a tag or cd into a project.")
@@ -1307,6 +1385,9 @@ def main():
         "path": cmd_path,
         "rename": cmd_rename,
         "mv": cmd_rename,
+        "freeze": cmd_freeze,
+        "thaw": cmd_thaw,
+        "unfreeze": cmd_thaw,
     }
 
     # Opportunistically clean up stale directories from prior locked renames
