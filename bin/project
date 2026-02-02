@@ -1001,6 +1001,20 @@ def cmd_list(args):
         _print_rows(frozen_rows)
 
 
+def _set_wezterm_tab_title(title):
+    """Set the current wezterm tab's title (if running in wezterm)."""
+    pane_id = os.environ.get("WEZTERM_PANE")
+    if not pane_id:
+        return
+    try:
+        subprocess.run(
+            ["wezterm.exe", "cli", "set-tab-title", "--pane-id", pane_id, title],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 def cmd_freeze(args):
     """Freeze a project (exclude from launch, listed separately)."""
     reg = Registry()
@@ -1011,6 +1025,7 @@ def cmd_freeze(args):
         warn(f"Project '{tag}' is already frozen")
         return
     reg.set_frozen(tag, True)
+    _set_wezterm_tab_title(f"\u2744 {tag}")
     print(f"  {bold(tag)} is now frozen")
 
 
@@ -1024,6 +1039,7 @@ def cmd_thaw(args):
         warn(f"Project '{tag}' is not frozen")
         return
     reg.set_frozen(tag, False)
+    _set_wezterm_tab_title(tag)
     print(f"  {bold(tag)} is now active")
 
 
@@ -1036,11 +1052,13 @@ def cmd_launch(args):
     if not projects:
         die("No projects to launch. Use 'project new' first.")
 
-    # Filter
-    if args.only:
-        tags = [t.strip() for t in args.only.split(",")]
-        projects = {t: projects[t] for t in tags if t in projects}
-        missing = [t for t in tags if t not in reg.projects]
+    # Filter by explicit tags (positional or --only)
+    explicit_tags = args.tags or (
+        [t.strip() for t in args.only.split(",")] if args.only else None
+    )
+    if explicit_tags:
+        projects = {t: projects[t] for t in explicit_tags if t in projects}
+        missing = [t for t in explicit_tags if t not in reg.projects]
         if missing:
             warn(f"Unknown tags: {', '.join(missing)}")
     elif not args.frozen:
@@ -1309,7 +1327,8 @@ def build_parser():
 
     # launch
     p_launch = sub.add_parser("launch", help="Open terminal tabs for projects")
-    p_launch.add_argument("--only", help="Comma-separated list of tags")
+    p_launch.add_argument("tags", nargs="*", help="Project tags to launch (default: all active)")
+    p_launch.add_argument("--only", help="Comma-separated list of tags (deprecated, use positional)")
     p_launch.add_argument("--dry-run", action="store_true", help="Print commands only")
     p_launch.add_argument("--no-claude", action="store_true", help="Don't start Claude in tabs")
     p_launch.add_argument("--wt", action="store_true", help="Use Windows Terminal instead of WezTerm")
