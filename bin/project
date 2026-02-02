@@ -145,7 +145,9 @@ class Git:
     def run(self, *args, check=True, capture=True):
         cmd = ["git", "-C", self.repo] + list(args)
         try:
-            r = subprocess.run(cmd, capture_output=capture, text=True, check=check)
+            r = subprocess.run(cmd, capture_output=capture, text=True, check=check, cwd=self.repo)
+            if not check and r.returncode != 0:
+                return None
             return r.stdout.strip() if capture else None
         except subprocess.CalledProcessError as e:
             if check:
@@ -156,7 +158,7 @@ class Git:
     def run_ok(self, *args):
         """Run and return True if exit code 0."""
         cmd = ["git", "-C", self.repo] + list(args)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.repo)
         return r.returncode == 0
 
     def fetch(self, remote):
@@ -166,14 +168,14 @@ class Git:
     def worktree_add(self, path, branch, base):
         self.run("worktree", "add", "-b", branch, str(path), base, capture=False)
 
-    def worktree_remove(self, path, force=False):
+    def worktree_remove(self, path, force=False, check=True):
         args = ["worktree", "remove", str(path)]
         if force:
             args.append("--force")
-        self.run(*args, capture=False)
+        return self.run(*args, capture=True, check=check)
 
-    def worktree_move(self, old_path, new_path):
-        self.run("worktree", "move", str(old_path), str(new_path), capture=False)
+    def worktree_move(self, old_path, new_path, check=True):
+        return self.run("worktree", "move", str(old_path), str(new_path), capture=True, check=check)
 
     def worktree_list(self):
         """Parse `git worktree list --porcelain` into dicts."""
@@ -315,6 +317,151 @@ def validate_tag(tag):
     return tag
 
 
+def _normalize_wsl_path(path):
+    """Normalize a path to lowercase WSL format: /c/work/foo"""
+    s = str(path).rstrip("/\\")
+    # Handle file:// URLs (e.g., file:///C:/path, file://hostname/C:/path)
+    s = re.sub(r'^file://[^/]*/', '/', s)
+    # Handle UNC-style admin shares: /C$/path or C$/path (after file:// stripped)
+    s = re.sub(r'^/?([a-zA-Z])\$[/\\]?', lambda m: '/' + m.group(1).lower() + '/', s)
+    # Handle UNC paths like //hostname/c$/path or \\hostname\c$\path
+    s = re.sub(r'^[/\\]{2}[^/\\]+[/\\]([a-zA-Z])\$[/\\]?', lambda m: '/' + m.group(1).lower() + '/', s)
+    # Handle Windows drive letters: C:\path, C:/path, /C:/path -> /c/path
+    s = re.sub(r'^/?([a-zA-Z]):[/\\]?', lambda m: '/' + m.group(1).lower() + '/', s)
+    # Normalize slashes and lowercase
+    s = s.replace("\\", "/").lower()
+    # Remove trailing slash and double slashes
+    s = re.sub(r'/+', '/', s)
+    return s.rstrip("/")
+
+
+def _get_wezterm_panes():
+    """Return parsed wezterm pane list, or empty list on failure."""
+    try:
+        r = subprocess.run(
+            ["wezterm.exe", "cli", "list", "--format", "json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            return json.loads(r.stdout)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
+    return []
+
+
+def find_directory_locks(path):
+    """Find processes locking a directory on Windows/WSL.
+    Checks wezterm tabs and WSL processes with CWD inside the path.
+    Returns list of (type, id, description) tuples.
+    type is 'pane' for wezterm panes, 'pid' for WSL processes."""
+    path_str = _normalize_wsl_path(Path(path).resolve())
+    locks = []
+
+    # Check wezterm tabs
+    debug = os.environ.get("PROJECT_DEBUG")
+    for pane in _get_wezterm_panes():
+        raw_cwd = pane.get("cwd", "")
+        cwd = _normalize_wsl_path(raw_cwd)
+        if debug:
+            print(f"  [debug] tab {pane.get('tab_id')}: {raw_cwd!r} -> {cwd!r}", file=sys.stderr)
+        if cwd == path_str or cwd.startswith(path_str + "/"):
+            title = pane.get("title", "unknown")
+            pane_id = pane.get("pane_id", "?")
+            tab_id = pane.get("tab_id", "?")
+            locks.append(("pane", str(pane_id), f"wezterm tab {tab_id}: {title}"))
+    if debug:
+        print(f"  [debug] looking for: {path_str!r}", file=sys.stderr)
+
+    # Check WSL processes with CWD inside the path
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cwd = (entry / "cwd").resolve()
+            cwd_str = _normalize_wsl_path(cwd)
+            if cwd_str == path_str or cwd_str.startswith(path_str + "/"):
+                cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
+                cmd = cmdline.replace("\0", " ").strip()[:80]
+                if cmd:
+                    locks.append(("pid", entry.name, f"pid {entry.name}: {cmd}"))
+        except (OSError, ValueError):
+            continue
+
+    return locks
+
+
+def _is_current_pane(pane_id):
+    """Check if a wezterm pane ID is the pane running this script."""
+    wez_pane = os.environ.get("WEZTERM_PANE")
+    return wez_pane is not None and str(pane_id) == wez_pane
+
+
+def close_wezterm_panes(locks):
+    """Close wezterm panes from a locks list, skipping the current pane.
+    Returns (closed_count, skipped_self)."""
+    closed = 0
+    skipped_self = False
+    for lock_type, lock_id, desc in locks:
+        if lock_type != "pane":
+            continue
+        if _is_current_pane(lock_id):
+            skipped_self = True
+            continue
+        try:
+            subprocess.run(
+                ["wezterm.exe", "cli", "kill-pane", "--pane-id", lock_id],
+                capture_output=True, text=True, timeout=5,
+            )
+            info(f"Closed {desc}")
+            closed += 1
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    return closed, skipped_self
+
+
+def report_directory_locks(path):
+    """Print which processes are locking a directory."""
+    locks = find_directory_locks(path)
+    if locks:
+        print(f"\n{yellow('Directory is locked by:')}", file=sys.stderr)
+        for _type, _id, desc in locks:
+            print(f"  {desc}", file=sys.stderr)
+        print(f"\n  Close these, then retry.", file=sys.stderr)
+    else:
+        # Locks held by Windows-side processes (wsl.exe, wslhost.exe) that
+        # WSL can't introspect.  This happens when a terminal tab was opened
+        # in the directory even if no WSL process still has its CWD there.
+        win_path = str(path).replace("/c/", "C:\\").replace("/", "\\")
+        print(f"\n{yellow('Directory is locked by a Windows process.')}", file=sys.stderr)
+
+        # Show wezterm tabs that might be candidates
+        try:
+            r = subprocess.run(
+                ["wezterm.exe", "cli", "list", "--format", "json"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                import json
+                tabs = json.loads(r.stdout)
+                work_tabs = []
+                for pane in tabs:
+                    raw_cwd = pane.get("cwd", "")
+                    if "/work/" in raw_cwd.lower() or "\\work\\" in raw_cwd.lower():
+                        work_tabs.append((pane.get("tab_id", "?"), pane.get("title", "?"), raw_cwd))
+                if work_tabs:
+                    print(f"\n  Open wezterm tabs in /work/:", file=sys.stderr)
+                    for tab_id, title, cwd in work_tabs[:5]:
+                        print(f"    tab {tab_id}: {title}", file=sys.stderr)
+                    if len(work_tabs) > 5:
+                        print(f"    ... and {len(work_tabs) - 5} more", file=sys.stderr)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+        print(f"\n  Close any terminals opened in {path}", file=sys.stderr)
+        print(f"  Or run from admin PowerShell: handle.exe \"{win_path}\"", file=sys.stderr)
+        print(f"  Debug: PROJECT_DEBUG=1 project rename ...", file=sys.stderr)
+
+
 def extract_issue_from_branch(branch):
     """Extract Jira issue number from branch name patterns."""
     # Match: DESKTOP-12345, issue/DESKTOP-12345, issue/12345
@@ -384,6 +531,120 @@ def migrate_claude_sessions(old_path, new_path):
     _rewrite_file(history)
 
 
+def _worktree_copy_fallback(old_path, new_path):
+    """Copy a worktree when move fails (locked directory on Windows).
+
+    Uses robocopy to copy the tree, then updates git's internal
+    worktree tracking to point to the new location.  Tries to close
+    locking wezterm panes and remove the old directory.
+    """
+    info("Directory locked, falling back to copy...")
+    win_old = wsl_to_win(old_path)
+    win_new = wsl_to_win(new_path)
+
+    # robocopy /E = copy subdirs including empty, exit codes 0-7 are success
+    r = subprocess.run(
+        ["robocopy.exe", win_old, win_new, "/E", "/NFL", "/NDL",
+         "/NJH", "/NJS", "/NC", "/NS", "/NP"],
+        capture_output=True, text=True,
+    )
+    if r.returncode >= 8:
+        die(f"robocopy failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
+
+    # Read the .git file to find the worktree tracking dir
+    git_file = new_path / ".git"
+    if not git_file.is_file():
+        die(f"No .git file in copied worktree at {new_path}")
+    gitdir_ref = git_file.read_text().strip()
+    if not gitdir_ref.startswith("gitdir: "):
+        die(f"Unexpected .git contents: {gitdir_ref}")
+    tracking_dir = Path(gitdir_ref[len("gitdir: "):])
+    gitdir_file = tracking_dir / "gitdir"
+
+    if not gitdir_file.exists():
+        die(f"Git tracking dir not found: {tracking_dir}")
+
+    # Update the tracking dir's gitdir to point to the new location
+    gitdir_file.write_text(str(new_path / ".git") + "\n")
+    info(f"Updated git worktree tracking: {gitdir_file}")
+
+    # Try to release the lock and remove old directory
+    _try_remove_old_worktree(old_path)
+
+    return new_path
+
+
+def _queue_stale_dir(path):
+    """Add a directory to the stale cleanup queue."""
+    stale_file = CONFIG_DIR / "stale_dirs.json"
+    stale = []
+    if stale_file.exists():
+        try:
+            stale = json.loads(stale_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    entry = str(path)
+    if entry not in stale:
+        stale.append(entry)
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        stale_file.write_text(json.dumps(stale, indent=2) + "\n")
+
+
+def _try_remove_old_worktree(old_path):
+    """Try to close locking panes and remove a stale worktree directory."""
+    import time
+
+    locks = find_directory_locks(old_path)
+    if locks:
+        closed, _skipped = close_wezterm_panes(locks)
+        if closed:
+            time.sleep(1)  # give Windows time to release handles
+
+    # Try removal
+    try:
+        subprocess.run(
+            ["cmd.exe", "/c", "rmdir", "/s", "/q", wsl_to_win(old_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+    if old_path.exists():
+        _queue_stale_dir(old_path)
+        warn(f"Old directory still locked, queued for cleanup: {old_path}")
+
+
+def _cleanup_stale_dirs():
+    """Remove previously locked directories that may now be unlocked."""
+    stale_file = CONFIG_DIR / "stale_dirs.json"
+    if not stale_file.exists():
+        return
+    try:
+        stale = json.loads(stale_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    remaining = []
+    for dir_path in stale:
+        p = Path(dir_path)
+        if not p.exists():
+            continue
+        try:
+            subprocess.run(
+                ["cmd.exe", "/c", "rmdir", "/s", "/q", wsl_to_win(p)],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        if p.exists():
+            remaining.append(dir_path)
+        else:
+            info(f"Cleaned up stale directory: {dir_path}")
+    if remaining:
+        stale_file.write_text(json.dumps(remaining, indent=2) + "\n")
+    else:
+        stale_file.unlink(missing_ok=True)
+
+
 def wsl_to_win(path):
     """Convert /c/foo to C:\\foo for Windows executables."""
     s = str(path)
@@ -397,7 +658,7 @@ def wsl_to_win(path):
 
 def detect_current_project():
     """Detect project tag from current working directory."""
-    cwd = str(Path.cwd()).lower()
+    cwd = os.environ.get("PROJECT_ORIG_CWD", str(Path.cwd())).lower()
     reg = Registry()
     for tag, p in reg.projects.items():
         project_path = str(Path(p["path"])).lower()
@@ -540,11 +801,43 @@ def cmd_done(args):
             return
 
     # ── Remove worktree ──────────────────────────────────────────────────
+    wt_removed = False
     if wt_path.exists():
+        # Move our CWD out of the worktree so Windows allows deletion
+        try:
+            if Path(os.getcwd()).resolve().is_relative_to(wt_path.resolve()):
+                os.chdir(cfg.main_repo)
+        except (OSError, ValueError):
+            pass
         info(f"Removing worktree at {wt_path}...")
-        git.worktree_remove(wt_path, force=args.force)
+        result = git.worktree_remove(wt_path, force=args.force, check=False)
+        if result is None:
+            # Try closing other wezterm panes that lock the directory
+            import time
+            locks = find_directory_locks(wt_path)
+            closed, skipped_self = close_wezterm_panes(locks)
+            if closed:
+                time.sleep(1)
+                result = git.worktree_remove(wt_path, force=args.force, check=False)
+            if result is None:
+                if skipped_self or not locks:
+                    # We're running inside the locking tab, or it's an
+                    # opaque Windows handle.  Proceed with cleanup and
+                    # defer directory removal.
+                    warn(f"Directory locked by current session, deferring removal")
+                    _queue_stale_dir(wt_path)
+                    # Detach git worktree tracking so the dir is just dead files
+                    git.run("worktree", "prune", check=False)
+                else:
+                    report_directory_locks(wt_path)
+                    sys.exit(1)
+            else:
+                wt_removed = True
+        else:
+            wt_removed = True
     else:
         warn(f"Worktree path not found: {wt_path}")
+        wt_removed = True
 
     # Delete local branch
     if not args.keep_local:
@@ -561,6 +854,10 @@ def cmd_done(args):
     reg.remove(tag)
 
     print(f"\n  {green('Removed')} project {bold(tag)}")
+    if not wt_removed:
+        print(f"  {yellow('Note:')} directory will be cleaned up on next run")
+    # Tell the shell wrapper to cd out of the deleted worktree
+    print(f"__POSTCD__{cfg.main_repo}")
 
 
 def cmd_list(args):
@@ -847,8 +1144,19 @@ def cmd_rename(args):
             die(f"Target path already exists: {target_path}")
         if old_path.exists():
             info(f"Moving worktree: {old_path} -> {target_path}")
-            git.worktree_move(old_path, target_path)
-            new_path = target_path
+            # On Windows/WSL, move our CWD out so the directory isn't locked.
+            # The shell wrapper handles cd'ing the interactive shell.
+            try:
+                if Path(os.getcwd()).resolve().is_relative_to(old_path.resolve()):
+                    os.chdir(cfg.main_repo)
+            except (OSError, ValueError):
+                pass
+            result = git.worktree_move(old_path, target_path, check=False)
+            if result is None:  # run returns None on failure with check=False
+                # Fallback: copy + repoint git tracking (Windows often locks dirs)
+                new_path = _worktree_copy_fallback(old_path, target_path)
+            else:
+                new_path = target_path
         else:
             warn(f"Old path doesn't exist, just updating registry")
             new_path = target_path
@@ -877,6 +1185,9 @@ def cmd_rename(args):
     else:
         print(f"\n  {green('Renamed')} {bold(old_tag)} -> {bold(new_tag)}")
     print(f"  Path:    {new_path}")
+    # Tell the shell wrapper to cd to the new path
+    if new_path != old_path:
+        print(f"__POSTCD__{new_path}")
 
 
 # ── CLI Setup ────────────────────────────────────────────────────────────────
@@ -997,6 +1308,9 @@ def main():
         "rename": cmd_rename,
         "mv": cmd_rename,
     }
+
+    # Opportunistically clean up stale directories from prior locked renames
+    _cleanup_stale_dirs()
 
     handler = dispatch.get(args.command)
     if handler:
