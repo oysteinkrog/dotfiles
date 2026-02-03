@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-project - Git Worktree Manager
+grove - Git Worktree Manager
 
 Manage named git worktrees for a mono-repo workflow.
-Replaces launch-claude-tabs.sh, list-worktrees.sh, new-issue, and close-issue.
 """
 
 import argparse
@@ -21,9 +20,18 @@ from pathlib import Path
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
-CONFIG_DIR = Path.home() / ".config" / "project"
+_OLD_CONFIG_DIR = Path.home() / ".config" / "project"
+CONFIG_DIR = Path.home() / ".config" / "grove"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 REGISTRY_FILE = CONFIG_DIR / "registry.json"
+
+def _migrate_config_dir():
+    """One-time migration from ~/.config/project to ~/.config/grove."""
+    if _OLD_CONFIG_DIR.exists() and not CONFIG_DIR.exists():
+        _OLD_CONFIG_DIR.rename(CONFIG_DIR)
+
+
+_migrate_config_dir()
 
 DEFAULT_CONFIG = {
     "main_repo": "/c/work/desktop_master",
@@ -370,7 +378,7 @@ def find_directory_locks(path):
     locks = []
 
     # Check wezterm tabs
-    debug = os.environ.get("PROJECT_DEBUG")
+    debug = os.environ.get("GROVE_DEBUG")
     for pane in _get_wezterm_panes():
         raw_cwd = pane.get("cwd", "")
         cwd = _normalize_wsl_path(raw_cwd)
@@ -471,7 +479,7 @@ def report_directory_locks(path):
 
         print(f"\n  Close any terminals opened in {path}", file=sys.stderr)
         print(f"  Or run from admin PowerShell: handle.exe \"{win_path}\"", file=sys.stderr)
-        print(f"  Debug: PROJECT_DEBUG=1 project rename ...", file=sys.stderr)
+        print(f"  Debug: GROVE_DEBUG=1 project rename ...", file=sys.stderr)
 
 
 def extract_issue_from_branch(branch):
@@ -670,7 +678,7 @@ def wsl_to_win(path):
 
 def detect_current_project():
     """Detect project tag from current working directory."""
-    cwd = os.environ.get("PROJECT_ORIG_CWD", str(Path.cwd())).lower()
+    cwd = os.environ.get("GROVE_ORIG_CWD", str(Path.cwd())).lower()
     reg = Registry()
     for tag, p in reg.projects.items():
         project_path = str(Path(p["path"])).lower()
@@ -760,7 +768,7 @@ def cmd_fork(args):
     source_tag = args.source
     source = reg.get(source_tag)
     if not source:
-        die(f"Unknown project '{source_tag}'. Use 'project list' to see projects.")
+        die(f"Unknown project '{source_tag}'. Use 'grove list' to see projects.")
 
     new_tag = validate_tag(args.tag)
     if reg.get(new_tag):
@@ -806,7 +814,7 @@ def cmd_done(args):
     tag = args.tag
     project = reg.get(tag)
     if not project:
-        die(f"Unknown project '{tag}'. Use 'project list' to see projects.")
+        die(f"Unknown project '{tag}'. Use 'grove list' to see projects.")
 
     wt_path = Path(project["path"])
     branch = project["branch"]
@@ -946,7 +954,7 @@ def cmd_list(args):
                 untracked.append(wt)
 
     if not all_projects and not untracked:
-        print("No projects registered. Use 'project new <tag>' to create one.")
+        print("No projects registered. Use 'grove new <tag>' to create one.")
         return
 
     if args.json_output:
@@ -1096,7 +1104,7 @@ def cmd_launch(args):
 
     projects = reg.projects
     if not projects:
-        die("No projects to launch. Use 'project new' first.")
+        die("No projects to launch. Use 'grove new' first.")
 
     # Filter by explicit tags (positional or --only)
     explicit_tags = args.tags or (
@@ -1242,6 +1250,19 @@ def cmd_adopt(args):
     print(f"  Path:    {final_path}")
 
 
+def cmd_cd(args):
+    """Change directory to a project's worktree."""
+    reg = Registry()
+    project = reg.get(args.tag)
+    if not project:
+        die(f"Unknown project '{args.tag}'. Use 'grove list' to see projects.")
+    wt_path = Path(project["path"])
+    if not wt_path.exists():
+        die(f"Worktree path does not exist: {wt_path}")
+    _set_wezterm_tab_title(args.tag)
+    print(f"__POSTCD__{wt_path}")
+
+
 def cmd_path(args):
     """Print the path for a project tag."""
     reg = Registry()
@@ -1329,17 +1350,17 @@ def cmd_rename(args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="project",
+        prog="grove",
         description="Git worktree manager for named projects",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
-  project new rawcodecs --issue 11301
-  project new ci-fix --branch fix-master-ci --base 25.3
-  project list
-  project launch --dry-run
-  project done rawcodecs
-  project adopt rawcodecs /c/WORK/desktop_master2
-  project path rawcodecs
+  grove new rawcodecs --issue 11301
+  grove new ci-fix --branch fix-master-ci --base 25.3
+  grove list
+  grove cd rawcodecs
+  grove launch --dry-run
+  grove done rawcodecs
+  grove adopt rawcodecs /c/WORK/desktop_master2
 """,
     )
     sub = parser.add_subparsers(dest="command")
@@ -1395,6 +1416,10 @@ def build_parser():
     p_adopt.add_argument("--issue", "-i", type=int, help="Issue number")
     p_adopt.add_argument("--move", action="store_true", help="Move worktree to dt-<tag> naming")
 
+    # cd
+    p_cd = sub.add_parser("cd", help="Change directory to a project worktree")
+    p_cd.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
+
     # path
     p_path = sub.add_parser("path", help="Print worktree path for a tag")
     p_path.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
@@ -1424,10 +1449,10 @@ def main():
         sys.exit(0)
 
     # Auto-detect tag from cwd when not provided
-    if args.command in ("done", "path", "freeze", "thaw", "unfreeze") and not args.tag:
+    if args.command in ("cd", "done", "path", "freeze", "thaw", "unfreeze") and not args.tag:
         detected = detect_current_project()
         if not detected:
-            die(f"Not inside a registered project. Specify a tag or cd into a project.")
+            die(f"Not inside a registered project. Specify a tag or cd into one.")
         args.tag = detected
         info(f"Detected project: {detected}")
 
@@ -1470,6 +1495,7 @@ def main():
         "ls": cmd_list,
         "launch": cmd_launch,
         "adopt": cmd_adopt,
+        "cd": cmd_cd,
         "path": cmd_path,
         "rename": cmd_rename,
         "mv": cmd_rename,
