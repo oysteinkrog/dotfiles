@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -123,6 +124,35 @@ def set_active_user(name: str | None):
         ACTIVE_FILE.unlink()
 
 
+def get_week_usage() -> dict:
+    """Get usage stats for current week."""
+    stats_path = CLAUDE_DIR / "stats-cache.json"
+    if not stats_path.exists():
+        return {}
+
+    try:
+        stats = json.loads(stats_path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+    daily_activity = stats.get('dailyActivity', [])
+    if not daily_activity:
+        return {}
+
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())
+
+    week_stats = {'messages': 0, 'sessions': 0, 'tools': 0}
+    for entry in daily_activity:
+        entry_date = datetime.strptime(entry['date'], '%Y-%m-%d').date()
+        if entry_date >= week_start:
+            week_stats['messages'] += entry.get('messageCount', 0)
+            week_stats['sessions'] += entry.get('sessionCount', 0)
+            week_stats['tools'] += entry.get('toolCallCount', 0)
+
+    return week_stats
+
+
 def list_users():
     """List all stored users."""
     ensure_dirs()
@@ -135,7 +165,11 @@ def list_users():
         print("Use 'add <name>' to add a new user.")
         return
 
+    # Get shared usage stats for OAuth users
+    week_usage = get_week_usage()
+
     print("Stored users:")
+    has_oauth = False
     for user in sorted(users):
         marker = " *" if user == active else "  "
         user_dir = USERS_DIR / user
@@ -144,19 +178,27 @@ def list_users():
         # Build info string
         info_parts = []
         auth_type = token_info.get('type', '')
-        if auth_type:
-            info_parts.append(auth_type)
-        if 'email' in token_info:
-            info_parts.append(token_info['email'])
-        if 'api_key' in token_info:
-            info_parts.append(f"key: {token_info['api_key']}")
-        elif 'token' in token_info:
-            info_parts.append(f"token: {token_info['token']}")
+
+        if auth_type == 'api_key':
+            info_parts.append("api_key")
+            if 'api_key' in token_info:
+                info_parts.append(f"key: {token_info['api_key']}")
+        elif auth_type == 'oauth':
+            has_oauth = True
+            if 'email' in token_info:
+                info_parts.append(token_info['email'])
+            elif 'token' in token_info:
+                info_parts.append(f"token: {token_info['token']}")
         elif token_info.get('has_creds'):
             info_parts.append("(credentials present)")
 
         info_str = f" [{', '.join(info_parts)}]" if info_parts else ""
         print(f"{marker} {user}{info_str}")
+
+    # Show shared OAuth usage stats
+    if has_oauth and week_usage:
+        print()
+        print(f"  Week total (shared): {week_usage['messages']:,} msgs, {week_usage['tools']:,} tools")
 
 
 def save_current_user(name: str):
@@ -424,6 +466,91 @@ def status():
         print(f"  - {f.name}")
 
 
+def is_api_key_user(user_name: str | None = None) -> bool:
+    """Check if the user is an API key user (not OAuth)."""
+    if user_name:
+        user_dir = USERS_DIR / user_name
+    else:
+        # Check current active config
+        settings_path = CLAUDE_DIR / "settings.json"
+        if settings_path.exists():
+            try:
+                data = json.loads(settings_path.read_text())
+                return 'apiKeyHelper' in data
+            except json.JSONDecodeError:
+                pass
+        return False
+
+    if user_dir.exists():
+        token_info = get_token_info(user_dir)
+        return token_info.get('type') == 'api_key'
+    return False
+
+
+def usage():
+    """Show usage statistics for OAuth accounts."""
+    active = get_active_user()
+
+    # Check if using API key
+    if is_api_key_user(active):
+        print("Usage tracking is only available for OAuth accounts, not API keys.")
+        print("API key usage is tracked in the Anthropic Console.")
+        return
+
+    # Load stats cache
+    stats_path = CLAUDE_DIR / "stats-cache.json"
+    if not stats_path.exists():
+        print("No usage statistics found.")
+        return
+
+    try:
+        stats = json.loads(stats_path.read_text())
+    except json.JSONDecodeError:
+        print("Error reading stats file.")
+        return
+
+    daily_activity = stats.get('dailyActivity', [])
+    if not daily_activity:
+        print("No activity data found.")
+        return
+
+    # Get today's date and week start (Monday)
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())
+
+    # Calculate stats
+    today_stats = {'messages': 0, 'sessions': 0, 'tools': 0}
+    week_stats = {'messages': 0, 'sessions': 0, 'tools': 0}
+
+    for entry in daily_activity:
+        entry_date = datetime.strptime(entry['date'], '%Y-%m-%d').date()
+
+        if entry_date == today:
+            today_stats['messages'] = entry.get('messageCount', 0)
+            today_stats['sessions'] = entry.get('sessionCount', 0)
+            today_stats['tools'] = entry.get('toolCallCount', 0)
+
+        if entry_date >= week_start:
+            week_stats['messages'] += entry.get('messageCount', 0)
+            week_stats['sessions'] += entry.get('sessionCount', 0)
+            week_stats['tools'] += entry.get('toolCallCount', 0)
+
+    print(f"Usage Statistics for: {active or 'current user'}")
+    print("=" * 45)
+    print()
+    print(f"Today ({today.strftime('%Y-%m-%d')}):")
+    print(f"  Messages:   {today_stats['messages']:,}")
+    print(f"  Sessions:   {today_stats['sessions']:,}")
+    print(f"  Tool calls: {today_stats['tools']:,}")
+    print()
+    print(f"This week ({week_start.strftime('%Y-%m-%d')} - {today.strftime('%Y-%m-%d')}):")
+    print(f"  Messages:   {week_stats['messages']:,}")
+    print(f"  Sessions:   {week_stats['sessions']:,}")
+    print(f"  Tool calls: {week_stats['tools']:,}")
+    print()
+    print("Note: Local activity counts across all users, not per-user API quota.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Manage multiple Claude Code users",
@@ -439,6 +566,7 @@ Examples:
   %(prog)s remove olduser    Remove stored user
   %(prog)s rename old new    Rename a stored user
   %(prog)s status            Show current status
+  %(prog)s usage             Show usage stats (OAuth only)
         """
     )
 
@@ -479,6 +607,9 @@ Examples:
     # status
     subparsers.add_parser("status", aliases=["st"], help="Show current status")
 
+    # usage
+    subparsers.add_parser("usage", aliases=["u"], help="Show usage statistics (OAuth only)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -503,6 +634,8 @@ Examples:
         next_user()
     elif args.command in ("status", "st"):
         status()
+    elif args.command in ("usage", "u"):
+        usage()
 
 
 if __name__ == "__main__":
