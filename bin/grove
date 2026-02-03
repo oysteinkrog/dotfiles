@@ -551,6 +551,50 @@ def migrate_claude_sessions(old_path, new_path):
     _rewrite_file(history)
 
 
+def copy_claude_sessions(src_path, dst_path):
+    """Copy Claude Code session data from one worktree to another."""
+    import shutil
+
+    claude_dir = Path.home() / ".claude"
+    projects_dir = claude_dir / "projects"
+    if not projects_dir.exists():
+        return
+
+    src_folder = _claude_path_encode(src_path)
+    dst_folder = _claude_path_encode(dst_path)
+    src_dir = projects_dir / src_folder
+    dst_dir = projects_dir / dst_folder
+
+    if not src_dir.exists():
+        return
+
+    if dst_dir.exists():
+        warn(f"Claude sessions folder already exists: {dst_dir}")
+        return
+
+    shutil.copytree(src_dir, dst_dir)
+    info(f"Copied Claude sessions: {src_folder} -> {dst_folder}")
+
+    # Rewrite paths in the copy to point to the new worktree
+    src_str = str(src_path)
+    dst_str = str(dst_path)
+
+    def _rewrite_file(filepath):
+        try:
+            text = filepath.read_text()
+            if src_str in text or src_folder in text:
+                text = text.replace(src_str, dst_str).replace(src_folder, dst_folder)
+                filepath.write_text(text)
+        except Exception:
+            pass
+
+    for jsonl in dst_dir.glob("*.jsonl"):
+        _rewrite_file(jsonl)
+
+    index = dst_dir / "sessions-index.json"
+    _rewrite_file(index)
+
+
 def _worktree_copy_fallback(old_path, new_path):
     """Copy a worktree when move fails (locked directory on Windows).
 
@@ -793,6 +837,9 @@ def cmd_fork(args):
 
     issue = args.issue if hasattr(args, "issue") else None
     reg.add(new_tag, worktree_path, branch, base_ref, issue=issue)
+
+    # Copy Claude Code sessions from source project
+    copy_claude_sessions(Path(source["path"]), worktree_path)
 
     print()
     print(f"  {green('Created')} project {bold(new_tag)} (forked from {bold(source_tag)})")
