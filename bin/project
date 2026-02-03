@@ -747,8 +747,54 @@ def cmd_new(args):
     print(f"  Branch:  {branch}")
     print(f"  Base:    {base_ref}")
     print(f"  Path:    {worktree_path}")
+    _set_wezterm_tab_title(tag)
+    print(f"__POSTCD__{worktree_path}")
+
+
+def cmd_fork(args):
+    """Fork an existing project into a new worktree."""
+    cfg = Config()
+    reg = Registry()
+    git = Git(cfg.main_repo)
+
+    source_tag = args.source
+    source = reg.get(source_tag)
+    if not source:
+        die(f"Unknown project '{source_tag}'. Use 'project list' to see projects.")
+
+    new_tag = validate_tag(args.tag)
+    if reg.get(new_tag):
+        die(f"Project '{new_tag}' already exists in registry")
+
+    # Derive branch name
+    if args.branch:
+        branch = args.branch
+    elif args.issue:
+        branch = f"DESKTOP-{args.issue}-{new_tag}"
+    else:
+        branch = new_tag
+
+    base_ref = source["branch"]
+    worktree_path = Path(cfg.work_dir) / f"{cfg.dir_prefix}{new_tag}"
+
+    if worktree_path.exists():
+        die(f"Directory already exists: {worktree_path}")
+
+    info(f"Creating worktree: {branch} at {worktree_path} from {base_ref}")
+    git.worktree_add(worktree_path, branch, base_ref)
+
+    issue = args.issue if hasattr(args, "issue") else None
+    reg.add(new_tag, worktree_path, branch, base_ref, issue=issue)
+
     print()
-    print(f"  cd {worktree_path}")
+    print(f"  {green('Created')} project {bold(new_tag)} (forked from {bold(source_tag)})")
+    if issue:
+        print(f"  Issue:   DESKTOP-{issue}")
+    print(f"  Branch:  {branch}")
+    print(f"  Base:    {base_ref}")
+    print(f"  Path:    {worktree_path}")
+    _set_wezterm_tab_title(new_tag)
+    print(f"__POSTCD__{worktree_path}")
 
 
 def cmd_done(args):
@@ -1310,6 +1356,13 @@ def build_parser():
     p_new.add_argument("--branch", "-b", help="Explicit branch name")
     p_new.add_argument("--base", help="Base ref (e.g. master, 25.3)")
 
+    # fork
+    p_fork = sub.add_parser("fork", help="Fork an existing project into a new worktree")
+    p_fork.add_argument("tags", nargs="+", metavar="TAG",
+                        help="<new_tag> (detect source from cwd) or <source> <new_tag>")
+    p_fork.add_argument("--issue", "-i", type=int, help="Issue number (creates DESKTOP-N branch)")
+    p_fork.add_argument("--branch", "-b", help="Explicit branch name")
+
     # done
     p_done = sub.add_parser("done", help="Remove project worktree and clean up")
     p_done.add_argument("tag", nargs="?", help="Project tag to remove (default: detect from cwd)")
@@ -1393,9 +1446,25 @@ def main():
         else:
             die("rename expects 1 or 2 arguments: [old_tag] <new_tag>")
 
+    if args.command == "fork":
+        tags = args.tags
+        if len(tags) == 1:
+            detected = detect_current_project()
+            if not detected:
+                die(f"Not inside a registered project. Provide both source and new tag names.")
+            args.source = detected
+            args.tag = tags[0]
+            info(f"Detected source project: {detected}")
+        elif len(tags) == 2:
+            args.source = tags[0]
+            args.tag = tags[1]
+        else:
+            die("fork expects 1 or 2 arguments: [source] <new_tag>")
+
     dispatch = {
         "config": cmd_config_init,
         "new": cmd_new,
+        "fork": cmd_fork,
         "done": cmd_done,
         "list": cmd_list,
         "ls": cmd_list,
