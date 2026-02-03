@@ -28,7 +28,7 @@ directory under `/c/work/`.
 - **Config**: `~/.config/grove/config.json` (repo paths, remotes, branch conventions)
 - **Registry**: `~/.config/grove/registry.json` (tag -> path/branch/issue mappings)
 - **Shell wrapper**: `~/.dotfiles/.config/fish/functions/grove.fish` (handles `cd` via `__POSTCD__`)
-- **Shorthand**: `p <tag>` is an alias for `grove cd <tag>`
+- **Shorthand**: `gr <tag>` is an alias for `grove cd <tag>`
 
 ## Worktree Layout
 

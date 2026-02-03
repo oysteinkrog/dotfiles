@@ -479,7 +479,7 @@ def report_directory_locks(path):
 
         print(f"\n  Close any terminals opened in {path}", file=sys.stderr)
         print(f"  Or run from admin PowerShell: handle.exe \"{win_path}\"", file=sys.stderr)
-        print(f"  Debug: GROVE_DEBUG=1 project rename ...", file=sys.stderr)
+        print(f"  Debug: GROVE_DEBUG=1 grove rename ...", file=sys.stderr)
 
 
 def extract_issue_from_branch(branch):
