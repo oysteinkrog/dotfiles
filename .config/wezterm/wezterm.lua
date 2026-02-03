@@ -5,18 +5,24 @@ local config = wezterm.config_builder()
 -- Quake-style: top of screen, full width, 40% height, no title bar
 config.window_decorations = 'RESIZE'
 
+local function reposition_window(win)
+  local screen = wezterm.gui.screens().main
+  local width = screen.width * 0.9
+  local height = screen.height * 0.8
+  win:set_position(screen.x + 70, screen.y)
+  win:set_inner_size(width, height)
+end
+
 wezterm.on('gui-startup', function(cmd)
   local screen = wezterm.gui.screens().main
-  local width = screen.width * 0.8
-  local x = screen.x + (screen.width - width) / 2
   local tab, pane, window = mux.spawn_window(cmd or {
     position = {
-      x = x,
+      x = screen.x + 70,
       y = screen.y,
       origin = 'MainScreen',
     },
   })
-  window:gui_window():set_inner_size(width, screen.height * 0.7)
+  window:gui_window():set_inner_size(screen.width * 0.9, screen.height * 0.8)
 end)
 
 -- Default program: Ubuntu WSL
@@ -42,6 +48,14 @@ config.keys = {
         end
       end),
     },
+  },
+  { key = 'DownArrow', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTabRelative(1) },
+  { key = 'UpArrow', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTabRelative(-1) },
+  { key = 'e', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTabRelative(1) },
+  { key = 'u', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTabRelative(-1) },
+  { key = 'p', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function(window, pane)
+      reposition_window(window)
+    end),
   },
 }
 
