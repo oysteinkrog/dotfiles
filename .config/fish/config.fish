@@ -30,3 +30,10 @@ alias dotnet="dotnet.exe"
 
 # ripgrep config
 set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
+
+# Auto-start shared MCP services via PM2
+if type -q pm2
+    if not pm2 pid pal-mcp >/dev/null 2>&1; or test (pm2 pid pal-mcp 2>/dev/null) = "0"
+        pm2 start ~/.config/pm2/ecosystem.config.js 2>/dev/null
+    end
+end
