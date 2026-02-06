@@ -28,8 +28,8 @@
       "env": {}
     },
     "google-workspace": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4802/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4802/mcp"
     }
   }
 }
