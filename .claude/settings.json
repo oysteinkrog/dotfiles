@@ -1,6 +1,8 @@
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:8080"
+  },
+  "permissions": {
+    "defaultMode": "default"
   },
   "hooks": {
     "Stop": [
@@ -19,9 +21,9 @@
     "type": "command",
     "command": "input=$(cat); user=$(python3 ~/.dotfiles/bin/claude-user-status.py 2>/dev/null); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s %s' \"$user\" \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
-  "syntaxHighlightingDisabled": false,
-  "autoUpdatesChannel": "latest",
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
-  }
+    "rust-analyzer-lsp@claude-plugins-official": false
+  },
+  "syntaxHighlightingDisabled": false,
+  "autoUpdatesChannel": "latest"
 }

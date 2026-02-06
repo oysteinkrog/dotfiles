@@ -1,12 +1,21 @@
 {
   "mcpServers": {
-    "pal": {
+    "cdb-interactive": {
       "type": "stdio",
-      "command": "/c/WORK/pal-mcp-server/.pal_venv/bin/python",
+      "command": "cmd.exe",
       "args": [
-        "/c/WORK/pal-mcp-server/server.py"
+        "/c", "python",
+        "/c/WORK/mcp-cdb-interactive/server.py",
+        "--timeout", "120",
+        "--verbose"
       ],
-      "env": {}
+      "env": {
+        "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
+      }
+    },
+    "pal": {
+      "type": "sse",
+      "url": "http://127.0.0.1:4801/sse"
     },
     "atlassian": {
       "type": "stdio",
@@ -19,13 +28,8 @@
       "env": {}
     },
     "google-workspace": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@presto-ai/google-workspace-mcp"
-      ],
-      "env": {}
+      "type": "sse",
+      "url": "http://127.0.0.1:4802/sse"
     }
   }
 }
