@@ -1,18 +1,5 @@
 {
   "mcpServers": {
-    "cdb-interactive": {
-      "type": "stdio",
-      "command": "cmd.exe",
-      "args": [
-        "/c", "python",
-        "/c/WORK/mcp-cdb-interactive/server.py",
-        "--timeout", "120",
-        "--verbose"
-      ],
-      "env": {
-        "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
-      }
-    },
     "pal": {
       "type": "sse",
       "url": "http://127.0.0.1:4801/sse"
@@ -20,16 +7,59 @@
     "atlassian": {
       "type": "stdio",
       "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "https://mcp.atlassian.com/v1/mcp"
-      ],
+      "args": ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/mcp"],
       "env": {}
     },
     "google-workspace": {
       "type": "http",
       "url": "http://127.0.0.1:4802/mcp"
+    },
+    "cdb-interactive": {
+      "type": "stdio",
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "C:\\Python313\\python.exe",
+        "C:\\WORK\\desktop\\mocapzero\\Tools\\mcp-cdb-interactive\\server.py",
+        "--cdb-path",
+        "C:\\Users\\oystein\\AppData\\Local\\Microsoft\\WindowsApps\\cdbX64.exe",
+        "--timeout", "120",
+        "--verbose"
+      ],
+      "env": {
+        "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
+      }
+    },
+    "motioncatalyst-ui": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/c/work/desktop/yadif/Tools/mcp-flaui-wrapper/index.js"],
+      "env": {}
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "slack": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "TODO_xoxb-your-bot-token",
+        "SLACK_TEAM_ID": "TODO_T01234567"
+      }
+    },
+    "sentry": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server@latest", "--access-token", "TODO_your-sentry-token"]
     }
   }
 }
