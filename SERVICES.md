@@ -23,18 +23,30 @@ pm2 restart all               # restart everything
 pm2 start ~/.config/pm2/ecosystem.config.js  # start all (idempotent)
 ```
 
-## Per-instance MCP servers (not shared)
+## Remote MCP servers (shared, no local process)
 
-These spawn per Claude Code session via stdio:
+These connect to hosted endpoints — zero local overhead:
+
+| Server | Endpoint | What |
+|--------|----------|------|
+| **context7** | `mcp.context7.com/mcp` | Up-to-date library docs. Add "use context7" to prompts. |
+| **github** | `api.githubcopilot.com/mcp/` | GitHub API — PRs, issues, code search, CI workflows. Needs `GITHUB_PERSONAL_ACCESS_TOKEN`. |
+
+## Per-instance MCP servers (stdio, not shared)
+
+These spawn per Claude Code session:
 
 | Server | Notes |
 |--------|-------|
 | **atlassian** | Proxies to `mcp.atlassian.com` via mcp-remote. |
+| **slack** | Slack workspace access. Needs `SLACK_BOT_TOKEN` + `SLACK_TEAM_ID`. |
+| **sentry** | Error tracking. Needs Sentry auth token. |
 | **cdb-interactive** | Windows debugger (CDB). Disabled by default. |
 | **motioncatalyst-ui** | FlaUI UI automation. Disabled by default. |
 
 ## Config files
 
 - `~/.claude/settings.json` — `ANTHROPIC_BASE_URL` points to better-ccflare on `:4800`
-- `~/.claude.json` `"mcpServers"` — pal (`type: sse`), google-workspace (`type: http`) point at shared services
+- `~/.claude.json` `"mcpServers"` — all MCP server configs (shared + per-instance)
+- `~/.config/pm2/ecosystem.config.js` — PM2 process definitions
 - `~/.config/fish/config.fish` — auto-starts PM2 on first shell open
