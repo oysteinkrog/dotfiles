@@ -1,5 +1,6 @@
 {
   "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:4800"
   },
   "permissions": {
     "defaultMode": "default"
