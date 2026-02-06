@@ -32,9 +32,10 @@ module.exports = {
     },
     {
       name: "google-workspace-mcp",
-      script: "npx",
-      args: "-y supergateway --stdio \"npx -y @presto-ai/google-workspace-mcp\" --port 4802",
-      env: { DISPLAY: ":0" },
+      script: "/c/users/oystein/.local/bin/uvx",
+      args: "workspace-mcp --transport streamable-http --single-user",
+      interpreter: "none",
+      env: { WORKSPACE_MCP_PORT: "4802", DISPLAY: ":0" },
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
