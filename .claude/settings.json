@@ -1,6 +1,7 @@
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:4800"
+    "ANTHROPIC_BASE_URL": "http://localhost:4800",
+    "CLAUDE_ENABLE_TEAM_MODE": "1"
   },
   "permissions": {
     "defaultMode": "default"
@@ -8,10 +9,35 @@
   "hooks": {
     "Stop": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\'",
+            "command": "echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\' && ~/.dotfiles/bin/claude-sound task_complete",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.dotfiles/bin/claude-sound need_input",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.dotfiles/bin/claude-sound error",
             "async": true
           }
         ]
