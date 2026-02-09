@@ -49,8 +49,11 @@
     },
     "slack": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-slack"]
+      "command": "/c/users/oystein/bin/slack-mcp",
+      "env": {
+        "HOME": "${HOME}",
+        "PATH": "${PATH}"
+      }
     },
     "sentry": {
       "type": "stdio",
