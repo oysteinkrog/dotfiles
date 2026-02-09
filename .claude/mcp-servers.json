@@ -52,8 +52,8 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-slack"],
       "env": {
-        "SLACK_BOT_TOKEN": "TODO_xoxb-your-bot-token",
-        "SLACK_TEAM_ID": "TODO_T01234567"
+        "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+        "SLACK_TEAM_ID": "${SLACK_TEAM_ID}"
       }
     },
     "sentry": {
