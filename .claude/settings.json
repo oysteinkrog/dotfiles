@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\' && ~/.dotfiles/bin/claude-sound task_complete",
+            "command": "echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\' && ~/.dotfiles/bin/claude-sound complete",
             "async": true
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.dotfiles/bin/claude-sound need_input",
+            "command": "~/.dotfiles/bin/claude-sound input",
             "async": true
           }
         ]
