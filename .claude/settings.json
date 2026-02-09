@@ -1,8 +1,7 @@
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4800",
-    "CLAUDE_ENABLE_TEAM_MODE": "1",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4-5-20250929"
+    "CLAUDE_ENABLE_TEAM_MODE": "1"
   },
   "permissions": {
     "defaultMode": "default"
