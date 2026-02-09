@@ -1,0 +1,8 @@
+#!/bin/bash
+# Wrapper that sources secrets and launches the Slack MCP server
+# Secrets are in fish format, so we parse them manually
+SECRETS_FILE="$HOME/.config/fish/conf.d/secrets.fish"
+if [ -f "$SECRETS_FILE" ]; then
+    eval "$(grep '^set -gx' "$SECRETS_FILE" | sed 's/^set -gx \([^ ]*\) "\(.*\)"/export \1="\2"/')"
+fi
+exec npx -y @modelcontextprotocol/server-slack "$@"
