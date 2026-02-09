@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# claude-sound - Play game sound effects for Claude Code hooks
+# Usage: claude-sound <category>
+# Categories: task_complete, need_input, error, tool_start
+#
+# Plays a random sound from the matching category.
+# Sounds are stored in ~/.dotfiles/sounds/claude/
+
+SOUND_DIR="$HOME/.dotfiles/sounds/claude"
+CATEGORY="${1:-task_complete}"
+POWERSHELL="/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+
+# Find all sounds matching the category prefix
+mapfile -t sounds < <(find "$SOUND_DIR" -maxdepth 1 -name "${CATEGORY}_*" \( -name '*.wav' -o -name '*.mp3' \) 2>/dev/null)
+
+if [[ ${#sounds[@]} -eq 0 ]]; then
+    exit 0
+fi
+
+# Pick a random sound
+sound="${sounds[$((RANDOM % ${#sounds[@]}))]}"
+
+# Convert WSL path to Windows path for PowerShell
+win_path=$(wslpath -w "$sound" 2>/dev/null)
+if [[ -z "$win_path" ]]; then
+    # Fallback: manual conversion /c/... -> C:\...
+    win_path=$(echo "$sound" | sed 's|^/c/|C:\\|' | sed 's|/|\\|g')
+fi
+
+# Play via PowerShell (works on WSL)
+"$POWERSHELL" -NoProfile -NonInteractive -Command "
+    Add-Type -AssemblyName PresentationCore
+    \$player = New-Object System.Windows.Media.MediaPlayer
+    \$player.Open([Uri]'$win_path')
+    \$player.Play()
+    Start-Sleep -Milliseconds 3000
+" &>/dev/null &
