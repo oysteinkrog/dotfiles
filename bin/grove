@@ -14,8 +14,13 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+
+# Force line-buffered stdout so output streams in real-time when piped
+# (e.g. through the fish shell wrapper).
+if not sys.stdout.isatty():
+    sys.stdout.reconfigure(line_buffering=True)
 
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -42,6 +47,7 @@ DEFAULT_CONFIG = {
     "default_base": "master",
     "launch": {
         "terminal": "wezterm",
+        "wezterm_path": None,
         "shell_command": "fish -l -c 'claude --dangerously-skip-permissions --continue; exec fish'",
     },
 }
@@ -155,6 +161,40 @@ class Registry:
         p = self.get(tag)
         return bool(p and p.get("frozen"))
 
+    def set_freeze_expires(self, tag, expires_iso):
+        """Set or clear the freeze expiry timestamp (ISO 8601 string or None)."""
+        p = self.get(tag)
+        if not p:
+            return False
+        if expires_iso:
+            p["freeze_expires"] = expires_iso
+        else:
+            p.pop("freeze_expires", None)
+        self.save()
+        return True
+
+    def get_freeze_expires(self, tag):
+        """Return freeze expiry as datetime, or None."""
+        p = self.get(tag)
+        if not p or not p.get("freeze_expires"):
+            return None
+        try:
+            return datetime.fromisoformat(p["freeze_expires"])
+        except (ValueError, TypeError):
+            return None
+
+    def frozen_with_expiry(self):
+        """Return list of (tag, project, expires_dt) for frozen projects with an expiry."""
+        result = []
+        for tag, p in self.projects.items():
+            if p.get("frozen") and p.get("freeze_expires"):
+                try:
+                    dt = datetime.fromisoformat(p["freeze_expires"])
+                    result.append((tag, p, dt))
+                except (ValueError, TypeError):
+                    pass
+        return result
+
 
 # ── Git helpers ──────────────────────────────────────────────────────────────
 
@@ -187,6 +227,10 @@ class Git:
 
     def worktree_add(self, path, branch, base):
         self.run("worktree", "add", "-b", branch, str(path), base, capture=False)
+
+    def worktree_add_existing(self, path, branch, check=True):
+        """Add a worktree for an existing branch (no -b)."""
+        return self.run("worktree", "add", str(path), branch, capture=False, check=check)
 
     def worktree_remove(self, path, force=False, check=True):
         args = ["worktree", "remove", str(path)]
@@ -222,6 +266,16 @@ class Git:
 
     def branch_delete(self, branch):
         self.run("branch", "-D", branch, check=False)
+
+    def push(self, path, remote, branch, check=True):
+        """Push branch to remote."""
+        cmd = ["git", "-C", str(path), "push", "-u", remote, branch]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            if check:
+                die(f"git push failed: {r.stderr.strip()}")
+            return False
+        return True
 
     def push_delete(self, remote, branch):
         return self.run_ok("push", remote, "--delete", branch)
@@ -276,6 +330,15 @@ class Git:
         r = subprocess.run(cmd, capture_output=True, text=True)
         return r.stdout.strip() if r.returncode == 0 else None
 
+    def is_merged(self, path, branch, upstream_remote, base="master"):
+        """Check if branch is fully merged into upstream base."""
+        for ref in [f"{upstream_remote}/{base}", f"{upstream_remote}/master"]:
+            cmd = ["git", "-C", str(path), "rev-list", "--count", f"{ref}..{branch}"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0 and int(r.stdout.strip()) == 0:
+                return True
+        return False
+
     def ahead_behind(self, path, branch, upstream_remote):
         """Return (ahead, behind) counts relative to upstream."""
         # Try multiple upstream refs
@@ -303,6 +366,136 @@ def warn(msg):
 
 def info(msg):
     print(f"{gray(msg)}", file=sys.stderr)
+
+
+def _parse_duration(s):
+    """Parse a human-friendly duration string into a timedelta.
+
+    Supports: 30m, 2h, 3d, 1w (minutes, hours, days, weeks).
+    Plain integers are treated as hours.
+    """
+    s = s.strip().lower()
+    m = re.fullmatch(r'(\d+)\s*([mhdw]?)', s)
+    if not m:
+        die(f"Invalid duration '{s}'. Use e.g. 30m, 2h, 3d, 1w")
+    value = int(m.group(1))
+    unit = m.group(2) or 'h'
+    units = {'m': 'minutes', 'h': 'hours', 'd': 'days', 'w': 'weeks'}
+    if unit not in units:
+        die(f"Unknown duration unit '{unit}'. Use m/h/d/w")
+    return timedelta(**{units[unit]: value})
+
+
+def _format_remaining(dt):
+    """Format a future datetime as a human-readable remaining time."""
+    delta = dt - datetime.now()
+    if delta.total_seconds() <= 0:
+        return "expired"
+    total_mins = int(delta.total_seconds() / 60)
+    if total_mins < 60:
+        return f"{total_mins}m left"
+    total_hours = total_mins / 60
+    if total_hours < 24:
+        h = int(total_hours)
+        m = total_mins % 60
+        return f"{h}h{m}m left" if m else f"{h}h left"
+    days = int(total_hours / 24)
+    hours = int(total_hours) % 24
+    return f"{days}d{hours}h left" if hours else f"{days}d left"
+
+
+def _auto_commit_and_push(cfg, git, tag, project):
+    """Auto-commit WIP changes and push to fork remote. Used by freeze expiry."""
+    wt_path = Path(project["path"])
+    branch = project["branch"]
+
+    if not wt_path.exists():
+        warn(f"Worktree path gone for '{tag}', skipping commit/push")
+        return True
+
+    # Auto-commit if dirty (untracked + uncommitted)
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(wt_path), "status", "--porcelain"],
+            capture_output=True, text=True,
+        )
+        if r.stdout.strip():
+            info(f"[{tag}] Saving uncommitted changes as WIP commit...")
+            subprocess.run(
+                ["git", "-C", str(wt_path), "add", "-A"],
+                capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(wt_path), "commit", "-m",
+                 f"WIP: auto-save before freeze expiry ({tag})"],
+                capture_output=True, text=True,
+            )
+    except OSError as e:
+        warn(f"[{tag}] Failed to auto-commit: {e}")
+        return False
+
+    # Push to fork remote
+    info(f"[{tag}] Pushing to {cfg.fork_remote}/{branch}...")
+    if not git.push(wt_path, cfg.fork_remote, branch, check=False):
+        warn(f"[{tag}] Push to {cfg.fork_remote} failed")
+        return False
+
+    return True
+
+
+def _remove_worktree_keep_branches(cfg, git, tag, project):
+    """Remove worktree directory but keep local and remote branches."""
+    import time
+    wt_path = Path(project["path"])
+
+    if not wt_path.exists():
+        return True
+
+    # Move CWD out if needed
+    try:
+        if Path(os.getcwd()).resolve().is_relative_to(wt_path.resolve()):
+            os.chdir(cfg.main_repo)
+    except (OSError, ValueError):
+        pass
+
+    result = git.worktree_remove(wt_path, force=True, check=False)
+    if result is None:
+        locks = find_directory_locks(wt_path)
+        closed, _skipped = close_wezterm_panes(locks)
+        if closed:
+            time.sleep(1)
+            result = git.worktree_remove(wt_path, force=True, check=False)
+        if result is None:
+            _queue_stale_dir(wt_path)
+            git.run("worktree", "prune", check=False)
+            warn(f"[{tag}] Directory locked, deferred removal")
+            return False
+    return True
+
+
+def _process_expired_freezes():
+    """Check for frozen projects whose lifetime has expired and clean them up."""
+    reg = Registry()
+    expired = [(tag, p, dt) for tag, p, dt in reg.frozen_with_expiry()
+               if dt <= datetime.now()]
+    if not expired:
+        return
+
+    cfg = Config()
+    git = Git(cfg.main_repo)
+
+    for tag, project, expires_dt in expired:
+        print(f"\n  {yellow('Freeze expired:')} {bold(tag)} (was {expires_dt.isoformat(timespec='minutes')})")
+
+        # 1. Auto-commit + push
+        _auto_commit_and_push(cfg, git, tag, project)
+
+        # 2. Remove worktree (keep branches)
+        _remove_worktree_keep_branches(cfg, git, tag, project)
+
+        # 3. Remove from registry
+        reg.remove(tag)
+        print(f"  {green('Cleaned up')} expired project {bold(tag)} (branch {project['branch']} kept)")
 
 
 def _atomic_write(path, data):
@@ -355,11 +548,23 @@ def _normalize_wsl_path(path):
     return s.rstrip("/")
 
 
+def _wezterm_exe():
+    """Return the configured wezterm executable path."""
+    try:
+        cfg = Config()
+        path = cfg.launch.get("wezterm_path")
+        if path:
+            return path
+    except Exception:
+        pass
+    return "wezterm.exe"
+
+
 def _get_wezterm_panes():
     """Return parsed wezterm pane list, or empty list on failure."""
     try:
         r = subprocess.run(
-            ["wezterm.exe", "cli", "list", "--format", "json"],
+            [_wezterm_exe(), "cli", "list", "--format", "json"],
             capture_output=True, text=True, timeout=5,
         )
         if r.returncode == 0:
@@ -429,7 +634,7 @@ def close_wezterm_panes(locks):
             continue
         try:
             subprocess.run(
-                ["wezterm.exe", "cli", "kill-pane", "--pane-id", lock_id],
+                [_wezterm_exe(), "cli", "kill-pane", "--pane-id", lock_id],
                 capture_output=True, text=True, timeout=5,
             )
             info(f"Closed {desc}")
@@ -457,7 +662,7 @@ def report_directory_locks(path):
         # Show wezterm tabs that might be candidates
         try:
             r = subprocess.run(
-                ["wezterm.exe", "cli", "list", "--format", "json"],
+                [_wezterm_exe(), "cli", "list", "--format", "json"],
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode == 0:
@@ -596,44 +801,82 @@ def copy_claude_sessions(src_path, dst_path):
 
 
 def _worktree_copy_fallback(old_path, new_path):
-    """Copy a worktree when move fails (locked directory on Windows).
+    """Re-create a worktree at a new path when move fails (locked directory on Windows).
 
-    Uses robocopy to copy the tree, then updates git's internal
-    worktree tracking to point to the new location.  Tries to close
-    locking wezterm panes and remove the old directory.
+    Instead of copying the entire tree (slow with LFS), this:
+    1. Detects the branch from the old worktree
+    2. Auto-commits any dirty state as a WIP commit
+    3. Force-removes the old worktree
+    4. Creates a fresh worktree at the new path on the same branch
+
+    LFS objects are already in the shared cache, so checkout is fast.
     """
-    info("Directory locked, falling back to copy...")
-    win_old = wsl_to_win(old_path)
-    win_new = wsl_to_win(new_path)
+    import time
 
-    # robocopy /E = copy subdirs including empty, exit codes 0-7 are success
-    r = subprocess.run(
-        ["robocopy.exe", win_old, win_new, "/E", "/NFL", "/NDL",
-         "/NJH", "/NJS", "/NC", "/NS", "/NP"],
-        capture_output=True, text=True,
-    )
-    if r.returncode >= 8:
-        die(f"robocopy failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
+    # Detect branch from the old worktree
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(old_path), "branch", "--show-current"],
+            capture_output=True, text=True, check=True,
+        )
+        branch = r.stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        branch = None
 
-    # Read the .git file to find the worktree tracking dir
-    git_file = new_path / ".git"
-    if not git_file.is_file():
-        die(f"No .git file in copied worktree at {new_path}")
-    gitdir_ref = git_file.read_text().strip()
-    if not gitdir_ref.startswith("gitdir: "):
-        die(f"Unexpected .git contents: {gitdir_ref}")
-    tracking_dir = Path(gitdir_ref[len("gitdir: "):])
-    gitdir_file = tracking_dir / "gitdir"
+    if not branch:
+        die(f"Cannot detect branch for worktree at {old_path} — aborting rename.\n"
+            "  Use --no-move to rename the tag only.")
 
-    if not gitdir_file.exists():
-        die(f"Git tracking dir not found: {tracking_dir}")
+    # Auto-commit dirty state so changes aren't lost
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(old_path), "status", "--porcelain"],
+            capture_output=True, text=True,
+        )
+        if r.stdout.strip():
+            info("Worktree has uncommitted changes, saving as WIP commit...")
+            subprocess.run(
+                ["git", "-C", str(old_path), "add", "-A"],
+                capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(old_path), "commit", "-m", "WIP: auto-save before grove rename"],
+                capture_output=True, text=True,
+            )
+    except OSError:
+        pass
 
-    # Update the tracking dir's gitdir to point to the new location
-    gitdir_file.write_text(str(new_path / ".git") + "\n")
-    info(f"Updated git worktree tracking: {gitdir_file}")
+    # Close locking panes and force-remove the old worktree
+    info("Removing old worktree and re-creating at new path...")
+    locks = find_directory_locks(old_path)
+    if locks:
+        closed, _skipped = close_wezterm_panes(locks)
+        if closed:
+            time.sleep(1)
 
-    # Try to release the lock and remove old directory
-    _try_remove_old_worktree(old_path)
+    # Try git worktree remove --force first
+    cfg = Config()
+    git = Git(cfg.main_repo)
+    result = git.worktree_remove(old_path, force=True, check=False)
+    if result is None and old_path.exists():
+        # git couldn't remove it, try rmdir on Windows side
+        try:
+            subprocess.run(
+                ["cmd.exe", "/c", "rmdir", "/s", "/q", wsl_to_win(old_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            # Also prune stale worktree entries
+            git.run("worktree", "prune", check=False)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    if old_path.exists():
+        _queue_stale_dir(old_path)
+        warn(f"Old directory still locked, queued for cleanup: {old_path}")
+
+    # Re-create worktree at new path with the existing branch
+    info(f"Creating worktree at {new_path} on branch {branch}")
+    git.worktree_add_existing(new_path, branch)
 
     return new_path
 
@@ -799,8 +1042,12 @@ def cmd_new(args):
     print(f"  Branch:  {branch}")
     print(f"  Base:    {base_ref}")
     print(f"  Path:    {worktree_path}")
-    _set_wezterm_tab_title(tag)
-    print(f"__POSTCD__{worktree_path}")
+
+    if not args.no_launch:
+        _launch_project(cfg, tag, reg.get(tag), no_continue=True)
+    else:
+        _set_wezterm_tab_title(tag)
+        print(f"__POSTCD__{worktree_path}")
 
 
 def cmd_fork(args):
@@ -866,6 +1113,9 @@ def cmd_done(args):
     wt_path = Path(project["path"])
     branch = project["branch"]
 
+    # ── Fetch upstream so merge/push checks use current state ───────────
+    git.fetch(cfg.upstream_remote)
+
     # ── Safety checks ────────────────────────────────────────────────────
     problems = []
 
@@ -880,12 +1130,15 @@ def cmd_done(args):
         if uncommitted:
             problems.append(("Uncommitted changes", uncommitted))
 
-        # Check if branch is pushed to fork remote
-        unpushed = git.unpushed_commits(wt_path, branch, cfg.fork_remote)
-        if unpushed == -1:
-            problems.append(("Branch not pushed", [f"{branch} has no remote tracking branch on {cfg.fork_remote}"]))
-        elif unpushed > 0:
-            problems.append(("Unpushed commits", [f"{unpushed} commit(s) not pushed to {cfg.fork_remote}/{branch}"]))
+        # Check if branch is pushed to fork remote (skip if already merged upstream)
+        base = project.get("base", cfg.default_base).split("/")[-1]
+        merged = git.is_merged(wt_path, branch, cfg.upstream_remote, base)
+        if not merged:
+            unpushed = git.unpushed_commits(wt_path, branch, cfg.fork_remote)
+            if unpushed == -1:
+                problems.append(("Branch not pushed", [f"{branch} has no remote tracking branch on {cfg.fork_remote}"]))
+            elif unpushed > 0:
+                problems.append(("Unpushed commits", [f"{unpushed} commit(s) not pushed to {cfg.fork_remote}/{branch}"]))
 
     if problems and not args.force:
         print(f"\n{red('Cannot remove')} project {bold(tag)}:\n")
@@ -908,7 +1161,9 @@ def cmd_done(args):
             print(f"  Delete local branch: yes")
         if not args.keep_remote:
             print(f"  Delete remote branch: {cfg.fork_remote}/{branch}")
-        resp = input("\nProceed? [y/N] ")
+        sys.stdout.flush()
+        print("\nProceed? [y/N] ", end="", file=sys.stderr, flush=True)
+        resp = sys.stdin.readline().strip()
         if resp.lower() != "y":
             print("Cancelled.")
             return
@@ -1021,7 +1276,14 @@ def cmd_list(args):
             for tag in sorted(frozen_projects):
                 p = frozen_projects[tag]
                 issue_str = f"#{p['issue']}" if p.get('issue') else ""
-                print(f"\u2744 {tag:14s} {issue_str:8s} {p['branch']:28s} {p['path']}")
+                expires_str = ""
+                if p.get("freeze_expires"):
+                    try:
+                        dt = datetime.fromisoformat(p["freeze_expires"])
+                        expires_str = f"  {yellow(_format_remaining(dt))}"
+                    except (ValueError, TypeError):
+                        pass
+                print(f"\u2744 {tag:14s} {issue_str:8s} {p['branch']:28s} {p['path']}{expires_str}")
         return
 
     # Full table output - check if any project has an issue
@@ -1099,7 +1361,19 @@ def cmd_list(args):
     if frozen_rows:
         print()
         print(gray(f"\u2744 Frozen ({len(frozen_rows)})"))
-        _print_rows(frozen_rows)
+        # Append expiry info to frozen rows
+        annotated = []
+        for tag, issue, branch, status, path in frozen_rows:
+            p = frozen_projects.get(tag)
+            if p and p.get("freeze_expires"):
+                try:
+                    dt = datetime.fromisoformat(p["freeze_expires"])
+                    remaining = _format_remaining(dt)
+                    status = f"{status} {yellow(remaining)}"
+                except (ValueError, TypeError):
+                    pass
+            annotated.append((tag, issue, branch, status, path))
+        _print_rows(annotated)
 
 
 def _set_wezterm_tab_title(title):
@@ -1109,7 +1383,7 @@ def _set_wezterm_tab_title(title):
         return
     try:
         subprocess.run(
-            ["wezterm.exe", "cli", "set-tab-title", "--pane-id", pane_id, title],
+            [_wezterm_exe(), "cli", "set-tab-title", "--pane-id", pane_id, title],
             capture_output=True, text=True, timeout=5,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -1122,12 +1396,22 @@ def cmd_freeze(args):
     tag = args.tag
     if not reg.get(tag):
         die(f"Unknown project: {tag}")
-    if reg.is_frozen(tag):
+    if reg.is_frozen(tag) and not args.lifetime:
         warn(f"Project '{tag}' is already frozen")
         return
     reg.set_frozen(tag, True)
-    _set_wezterm_tab_title(f"\u2744 {tag}")
-    print(f"  {bold(tag)} is now frozen")
+
+    if args.lifetime:
+        delta = _parse_duration(args.lifetime)
+        expires = datetime.now() + delta
+        reg.set_freeze_expires(tag, expires.isoformat(timespec="seconds"))
+        _set_wezterm_tab_title(f"\u2744 {tag}")
+        print(f"  {bold(tag)} is now frozen (expires {_format_remaining(expires)}, at {expires.strftime('%Y-%m-%d %H:%M')})")
+        print(f"  On expiry: WIP commit \u2192 push to {Config().fork_remote} \u2192 remove worktree (branch kept)")
+    else:
+        reg.set_freeze_expires(tag, None)  # clear any previous expiry
+        _set_wezterm_tab_title(f"\u2744 {tag}")
+        print(f"  {bold(tag)} is now frozen")
 
 
 def cmd_thaw(args):
@@ -1140,8 +1424,79 @@ def cmd_thaw(args):
         warn(f"Project '{tag}' is not frozen")
         return
     reg.set_frozen(tag, False)
+    reg.set_freeze_expires(tag, None)  # clear any expiry timer
     _set_wezterm_tab_title(tag)
     print(f"  {bold(tag)} is now active")
+
+
+def _find_wezterm():
+    """Find the wezterm executable, checking config first."""
+    configured = _wezterm_exe()
+    if configured != "wezterm.exe":
+        return configured
+    for candidate in ["wezterm", "wezterm.exe", "/c/Program Files/WezTerm/wezterm.exe"]:
+        if subprocess.run(["which", candidate], capture_output=True).returncode == 0 or Path(candidate).exists():
+            return candidate
+    return None
+
+
+def _launch_project(cfg, tag, project, no_continue=False, no_claude=False,
+                     terminal=None, dry_run=False):
+    """Launch a single project in a new terminal tab.
+
+    Args:
+        cfg: Config instance
+        tag: Project tag name
+        project: Project dict from registry
+        no_continue: If True, strip --continue from the claude command
+        no_claude: If True, launch shell without Claude
+        terminal: Override terminal type (default: from config)
+        dry_run: If True, just print the command
+    """
+    launch_cfg = cfg.launch
+    if terminal is None:
+        terminal = launch_cfg.get("terminal", "wezterm")
+    shell_cmd = launch_cfg.get("shell_command",
+        "fish -l -c 'claude --dangerously-skip-permissions --continue; exec fish'")
+
+    if no_claude:
+        shell_cmd = "fish -l"
+    elif no_continue:
+        shell_cmd = shell_cmd.replace(" --continue", "")
+
+    wt_path = project["path"]
+    win_path = wsl_to_win(wt_path)
+    tab_title = f"\u2744 {tag}" if project.get("frozen") else tag
+
+    if terminal == "wezterm":
+        wez = _find_wezterm()
+        if not wez:
+            warn("wezterm not found, skipping launch")
+            return
+        import shlex
+        spawn_cmd = [wez, "cli", "spawn", "--cwd", win_path, "--",
+                     "wsl.exe", "-e"] + shlex.split(shell_cmd)
+        if dry_run:
+            print(f"  {' '.join(spawn_cmd)}")
+            print(f"  {wez} cli set-tab-title '{tab_title}'")
+        else:
+            try:
+                r = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
+                pane_id = r.stdout.strip()
+                if pane_id:
+                    title_cmd = [wez, "cli", "set-tab-title", "--pane-id", pane_id, tab_title]
+                    subprocess.run(title_cmd, capture_output=True)
+                info(f"Launched tab for {bold(tag)}")
+            except subprocess.CalledProcessError as e:
+                warn(f"Failed to launch tab for {tag}: {e}")
+
+    elif terminal == "wt":
+        wt_cmd = f"wt.exe -w 0 nt -p Ubuntu -d '{win_path}' --title '{tab_title}' wsl.exe -e {shell_cmd}"
+        if dry_run:
+            print(f"  {wt_cmd}")
+        else:
+            subprocess.run(wt_cmd, shell=True, check=False)
+            info(f"Launched tab for {bold(tag)}")
 
 
 def cmd_launch(args):
@@ -1172,60 +1527,18 @@ def cmd_launch(args):
     if not projects:
         die("No matching projects to launch.")
 
-    launch_cfg = cfg.launch
-    terminal = launch_cfg.get("terminal", "wezterm")
-    shell_cmd = launch_cfg.get("shell_command",
-        "fish -l -c 'claude --dangerously-skip-permissions --continue; exec fish'")
-
-    if args.wt:
-        terminal = "wt"
-    if args.no_claude:
-        shell_cmd = "fish -l"
-
-    # Find wezterm
-    wez = None
-    if terminal == "wezterm":
-        for candidate in ["wezterm", "wezterm.exe", "/c/Program Files/WezTerm/wezterm.exe"]:
-            if subprocess.run(["which", candidate], capture_output=True).returncode == 0 or Path(candidate).exists():
-                wez = candidate
-                break
-        if not wez:
-            die("wezterm not found. Install WezTerm or use --wt for Windows Terminal.")
+    terminal = "wt" if args.wt else None
+    no_continue = getattr(args, "no_continue", False)
+    no_claude = args.no_claude
 
     if args.dry_run:
-        print(f"[{terminal} mode] Would launch {len(projects)} tab(s):\n")
+        term_name = terminal or cfg.launch.get("terminal", "wezterm")
+        print(f"[{term_name} mode] Would launch {len(projects)} tab(s):\n")
 
     for tag in sorted(projects):
-        p = projects[tag]
-        wt_path = p["path"]
-        win_path = wsl_to_win(wt_path)
-        tab_title = f"\u2744 {tag}" if p.get("frozen") else tag
-
-        if terminal == "wezterm":
-            import shlex
-            spawn_cmd = [wez, "cli", "spawn", "--cwd", win_path, "--",
-                         "wsl.exe", "-e"] + shlex.split(shell_cmd)
-
-            if args.dry_run:
-                print(f"  {' '.join(spawn_cmd)}")
-                print(f"  {wez} cli set-tab-title '{tab_title}'")
-            else:
-                try:
-                    r = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
-                    pane_id = r.stdout.strip()
-                    if pane_id:
-                        title_cmd = [wez, "cli", "set-tab-title", "--pane-id", pane_id, tab_title]
-                        subprocess.run(title_cmd, capture_output=True)
-                except subprocess.CalledProcessError as e:
-                    warn(f"Failed to launch tab for {tag}: {e}")
-
-        elif terminal == "wt":
-            # Windows Terminal via wt.exe
-            wt_cmd = f"wt.exe -w 0 nt -p Ubuntu -d '{win_path}' --title '{tab_title}' wsl.exe -e {shell_cmd}"
-            if args.dry_run:
-                print(f"  {wt_cmd}")
-            else:
-                subprocess.run(wt_cmd, shell=True, check=False)
+        _launch_project(cfg, tag, projects[tag],
+                        no_continue=no_continue, no_claude=no_claude,
+                        terminal=terminal, dry_run=args.dry_run)
 
     if args.dry_run:
         print()
@@ -1423,6 +1736,7 @@ def build_parser():
     p_new.add_argument("--issue", "-i", type=int, help="Issue number (creates DESKTOP-N branch)")
     p_new.add_argument("--branch", "-b", help="Explicit branch name")
     p_new.add_argument("--base", help="Base ref (e.g. master, 25.3)")
+    p_new.add_argument("--no-launch", action="store_true", help="Don't launch terminal tab after creation")
 
     # fork
     p_fork = sub.add_parser("fork", help="Fork an existing project into a new worktree")
@@ -1454,6 +1768,8 @@ def build_parser():
     p_launch.add_argument("--no-claude", action="store_true", help="Don't start Claude in tabs")
     p_launch.add_argument("--wt", action="store_true", help="Use Windows Terminal instead of WezTerm")
     p_launch.add_argument("--frozen", action="store_true", help="Include frozen projects")
+    p_launch.add_argument("--no-continue", action="store_true",
+                          help="Start fresh Claude session instead of --continue")
 
     # adopt
     p_adopt = sub.add_parser("adopt", help="Import existing worktree into registry")
@@ -1481,6 +1797,9 @@ def build_parser():
     # freeze / thaw
     p_freeze = sub.add_parser("freeze", help="Freeze a project (skip in launch, listed separately)")
     p_freeze.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
+    p_freeze.add_argument("--lifetime", "--timeout", metavar="DURATION",
+                          help="Auto-expire after duration (e.g. 30m, 2h, 3d, 1w). "
+                               "On expiry: WIP commit, push to fork, remove worktree (branch kept)")
     p_thaw = sub.add_parser("thaw", aliases=["unfreeze"], help="Unfreeze a project")
     p_thaw.add_argument("tag", nargs="?", help="Project tag (default: detect from cwd)")
 
@@ -1553,6 +1872,8 @@ def main():
 
     # Opportunistically clean up stale directories from prior locked renames
     _cleanup_stale_dirs()
+    # Process any frozen projects whose lifetime has expired
+    _process_expired_freezes()
 
     handler = dispatch.get(args.command)
     if handler:
