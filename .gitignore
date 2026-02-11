@@ -30,3 +30,8 @@ bin/pandoc
 .claude/telemetry/
 .claude/todos/
 .claude-users/
+.claude/secrets/
+.claude/tasks/
+.claude/teams/
+.claude/plugins/
+bin/__pycache__/

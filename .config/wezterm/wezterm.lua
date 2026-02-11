@@ -2,6 +2,32 @@ local wezterm = require 'wezterm'
 local mux = wezterm.mux
 local config = wezterm.config_builder()
 
+-- Tab priority: 0=normal, 1=important, 2=urgent
+local tab_priorities = {}
+local priority_colors = { '#555555', '#F39C12', '#E74C3C' }
+
+-- Claude state dot colors (set via user var from claude-sound hooks)
+local claude_state_colors = {
+  working  = '#3498DB', -- blue: Claude is working
+  complete = '#2ECC71', -- green: task finished
+  input    = '#F39C12', -- amber: needs your input
+  error    = '#E74C3C', -- red: something failed
+}
+
+-- Close all tabs except the active one
+wezterm.on("close_other_tabs", function(window, pane)
+  local current_tab = pane:tab()
+  local mux_win = window:mux_window()
+
+  for _, tab in ipairs(mux_win:tabs()) do
+    if tab:tab_id() ~= current_tab:tab_id() then
+      for _, p in ipairs(tab:panes()) do
+        p:kill()
+      end
+    end
+  end
+end)
+
 -- Quake-style: top of screen, full width, 40% height, no title bar
 config.window_decorations = 'RESIZE'
 
@@ -57,6 +83,14 @@ config.keys = {
       reposition_window(window)
     end),
   },
+  { key = 'o', mods = 'CTRL|SHIFT', action = wezterm.action.EmitEvent("close_other_tabs") },
+  { key = 'a', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function(window, pane)
+      local id = pane:tab():tab_id()
+      local cur = tab_priorities[id] or 0
+      tab_priorities[id] = (cur + 1) % 3
+      window:invalidate()
+    end),
+  },
 }
 
 config.window_close_confirmation = 'NeverPrompt'
@@ -71,13 +105,31 @@ config.vertical_tab_cell_height = 1
 
 -- Pad tab index to fixed width so titles align
 -- Prefer explicitly set tab title (from `wezterm cli set-tab-title`)
+-- Priority dot: Ctrl+Shift+I cycles normal(gray) → important(amber) → urgent(red)
 wezterm.on('format-tab-title', function(tab)
   local idx = string.format('%2d', tab.tab_index + 1)
   local title = tab.tab_title
   if not title or #title == 0 then
     title = tab.active_pane.title
   end
-  return ' ' .. idx .. ': ' .. title .. ' '
+  -- Claude state (from hooks) takes precedence over manual priority
+  local claude_state = tab.active_pane.user_vars.claude_state
+  local dot_color
+  if claude_state and claude_state_colors[claude_state] then
+    dot_color = claude_state_colors[claude_state]
+  else
+    local pri = tab_priorities[tab.tab_id] or 0
+    dot_color = priority_colors[pri + 1]
+  end
+  local fg = tab.is_active and '#FFFFFF' or '#AAAAAA'
+  return {
+    { Foreground = { Color = fg } },
+    { Text = ' ' .. idx .. ' ' },
+    { Foreground = { Color = dot_color } },
+    { Text = '●' },
+    { Foreground = { Color = fg } },
+    { Text = ' ' .. title .. ' ' },
+  }
 end)
 
 -- Copy on select (send to clipboard instead of primary selection)

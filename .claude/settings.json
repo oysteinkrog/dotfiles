@@ -75,5 +75,6 @@
     "rust-analyzer-lsp@claude-plugins-official": false
   },
   "syntaxHighlightingDisabled": false,
-  "autoUpdatesChannel": "latest"
+  "autoUpdatesChannel": "latest",
+  "effortLevel": "low"
 }

@@ -13,17 +13,20 @@ function grove --description "Git worktree manager (with shell cd support)"
         # cd to work_dir parent so the worktree directory is unlocked
         cd /c/WORK
 
-        # Run the real command, capture output
-        set -l tmpout (mktemp)
-        command grove $argv >$tmpout 2>&1
-        set -l cmd_status $status
-
-        # Print output, filtering out __POSTCD__ directive
-        grep -v '^__POSTCD__' $tmpout
-
-        # Extract __POSTCD__ path
-        set -l postcd (grep '^__POSTCD__' $tmpout | sed 's/^__POSTCD__//')
-        rm -f $tmpout
+        # Run the real command, streaming stdout in real-time while
+        # capturing __POSTCD__ directives.  stderr goes directly to the
+        # terminal (used for prompts, warnings, progress).  Python's
+        # line-buffering (set in grove when piped) ensures lines appear
+        # immediately.
+        set -l postcd ""
+        command grove $argv | while read -l line
+            if string match -q '__POSTCD__*' $line
+                set postcd (string replace '__POSTCD__' '' $line)
+            else
+                echo $line
+            end
+        end
+        set -l cmd_status $pipestatus[1]
 
         if test $cmd_status -ne 0
             # Command failed, go back
