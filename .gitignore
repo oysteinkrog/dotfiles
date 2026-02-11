@@ -4,8 +4,8 @@
 .vim/plugged/*
 .config/fisher
 .config/fish/fish_variables
-.config/fish/conf.d/secrets.fish
 .config/hub
+.config/secrets/
 
 .aider*
 .env
