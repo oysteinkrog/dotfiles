@@ -57,8 +57,27 @@
     },
     "sentry": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@sentry/mcp-server@latest", "--access-token", "TODO_your-sentry-token"]
+      "command": "/c/users/oystein/bin/sentry-mcp",
+      "env": {
+        "HOME": "${HOME}",
+        "PATH": "${PATH}"
+      }
+    },
+    "hubspot": {
+      "type": "stdio",
+      "command": "/c/users/oystein/bin/hubspot-mcp",
+      "env": {
+        "HOME": "${HOME}",
+        "PATH": "${PATH}"
+      }
+    },
+    "zendesk": {
+      "type": "stdio",
+      "command": "/c/users/oystein/bin/zendesk-mcp",
+      "env": {
+        "HOME": "${HOME}",
+        "PATH": "${PATH}"
+      }
     }
   }
 }
