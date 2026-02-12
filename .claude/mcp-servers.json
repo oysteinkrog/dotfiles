@@ -5,10 +5,8 @@
       "url": "http://127.0.0.1:4801/sse"
     },
     "atlassian": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/mcp"],
-      "env": {}
+      "type": "sse",
+      "url": "http://127.0.0.1:4808/sse"
     },
     "google-workspace": {
       "type": "http",
@@ -48,44 +46,24 @@
       }
     },
     "slack": {
-      "type": "stdio",
-      "command": "/c/users/oystein/bin/slack-mcp",
-      "env": {
-        "HOME": "${HOME}",
-        "PATH": "${PATH}"
-      }
+      "type": "sse",
+      "url": "http://127.0.0.1:4803/sse"
     },
     "sentry": {
-      "type": "stdio",
-      "command": "/c/users/oystein/bin/sentry-mcp",
-      "env": {
-        "HOME": "${HOME}",
-        "PATH": "${PATH}"
-      }
+      "type": "sse",
+      "url": "http://127.0.0.1:4804/sse"
     },
     "hubspot": {
-      "type": "stdio",
-      "command": "/c/users/oystein/bin/hubspot-mcp",
-      "env": {
-        "HOME": "${HOME}",
-        "PATH": "${PATH}"
-      }
+      "type": "sse",
+      "url": "http://127.0.0.1:4805/sse"
     },
     "zendesk": {
-      "type": "stdio",
-      "command": "/c/users/oystein/bin/zendesk-mcp",
-      "env": {
-        "HOME": "${HOME}",
-        "PATH": "${PATH}"
-      }
+      "type": "sse",
+      "url": "http://127.0.0.1:4806/sse"
     },
     "apify": {
-      "type": "stdio",
-      "command": "/c/users/oystein/bin/apify-mcp",
-      "env": {
-        "HOME": "${HOME}",
-        "PATH": "${PATH}"
-      }
+      "type": "sse",
+      "url": "http://127.0.0.1:4807/sse"
     }
   }
 }

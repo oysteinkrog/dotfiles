@@ -1,10 +1,10 @@
 #!/bin/bash
 # Wrapper that launches the HubSpot MCP server with credentials
-# Secrets sourced from fish config (not tracked in dotfiles)
-SECRETS_FILE="$HOME/.config/fish/conf.d/secrets.fish"
+SECRETS_FILE="$HOME/.config/secrets/.env"
 if [ -f "$SECRETS_FILE" ]; then
     while IFS= read -r line; do
-        if [[ "$line" =~ ^set\ -gx\ ([A-Za-z_][A-Za-z0-9_]*)\ \"(.*)\"$ ]]; then
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
             export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
         fi
     done < "$SECRETS_FILE"
