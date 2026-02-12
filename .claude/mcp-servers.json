@@ -78,6 +78,14 @@
         "HOME": "${HOME}",
         "PATH": "${PATH}"
       }
+    },
+    "apify": {
+      "type": "stdio",
+      "command": "/c/users/oystein/bin/apify-mcp",
+      "env": {
+        "HOME": "${HOME}",
+        "PATH": "${PATH}"
+      }
     }
   }
 }
