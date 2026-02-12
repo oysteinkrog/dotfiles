@@ -1,332 +1,327 @@
 ---
 name: prd-start
-description: >-
-  Migrate docs from bd (beads) to br (beads_rust). Use when updating AGENTS.md,
-  converting bd commands, "bd sync" → "br sync --flush-only", or beads migration.
+description: "Generate a Product Requirements Document (PRD) for task orchestration. Creates PRDs with user stories that can be converted to beads issues or prd.json for automated execution. Triggers on: create a prd, write prd for, plan this feature, requirements for, spec out."
 ---
 
-<!-- TOC: Philosophy | THE EXACT PROMPT | Decision Tree | Command Map | Transform Patterns | Validation Loop | Risk Tiers | References -->
+# Ralph TUI PRD Generator
 
-# bd → br Migration
-
-> **Core Philosophy:** One behavioral change, mechanical transforms. The ONLY difference is git handling—everything else is find-replace.
-
-## Why This Matters
-
-Incomplete migrations leave broken docs. Agents follow stale `bd sync` instructions, expect auto-commit, and lose work. This skill ensures **complete, verified migrations**.
+Create detailed Product Requirements Documents optimized for AI agent execution via ralph-tui.
 
 ---
 
-## THE EXACT PROMPT — Single File Migration
+## The Job
 
-```
-Migrate this file from bd (beads) to br (beads_rust).
+1. Receive a feature description from the user
+2. Ask 3-5 essential clarifying questions (with lettered options) - one set at a time
+3. **Always ask about quality gates** (what commands must pass)
+4. After each answer, ask follow-up questions if needed (adaptive exploration)
+5. Generate a structured PRD when you have enough context
+6. Output the PRD wrapped in `[PRD]...[/PRD]` markers for TUI parsing
 
-Apply transforms IN THIS ORDER (order matters):
-1. Section headers: "bd (beads)" → "br (beads_rust)"
-2. Add non-invasive note after beads section header
-3. Commands: `bd X` → `br X` for ready/list/show/create/update/close/dep/stats
-4. Sync command: `bd sync` → `br sync --flush-only`
-5. Add git steps after EVERY sync:
-   git add .beads/
-   git commit -m "sync beads"
-6. Issue IDs: bd-### → br-### in thread_ids, subjects, reasons, commits
-7. Links: beads_viewer → beads_rust (if present)
-
-Remove completely:
-- Daemon references
-- Auto-commit assumptions
-- Hook installation mentions
-- RPC mode
-
-Keep unchanged:
-- SQLite/WAL cautions
-- bv integration
-- Priority system (P0-P4)
-
-VERIFY after editing:
-grep -c '`bd ' file.md     # Must be 0
-grep -c 'bd sync' file.md  # Must be 0
-grep -c 'br sync --flush-only' file.md  # Must be > 0
-```
-
-### Why This Prompt Works
-
-- **Ordered transforms**: Dependencies exist (sync must change before adding git steps)
-- **Explicit removals**: Daemon/RPC don't exist in br—leaving them confuses agents
-- **Keep list**: Prevents accidental removal of still-valid patterns
-- **Built-in verification**: Grep commands catch missed transforms
-- **No degrees of freedom**: This is a LOW freedom task—exact transforms required
+**Important:** Do NOT start implementing. Just create the PRD.
 
 ---
 
-## Decision Tree: What Are You Migrating?
+## Step 1: Clarifying Questions (Iterative)
+
+Ask questions one set at a time. Each answer should inform your next questions. Focus on:
+
+- **Problem/Goal:** What problem does this solve?
+- **Core Functionality:** What are the key actions?
+- **Scope/Boundaries:** What should it NOT do?
+- **Success Criteria:** How do we know it's done?
+- **Integration:** How does it fit with existing features?
+- **Quality Gates:** What commands must pass for each story? (REQUIRED)
+
+### Format Questions Like This:
 
 ```
-What are you migrating?
-│
-├─ Single file (AGENTS.md)
-│  │
-│  └─ Follow THE EXACT PROMPT above
-│     Use: ./scripts/verify-migration.sh file.md
-│
-├─ Multiple files (batch)
-│  │
-│  ├─ <10 files → Sequential: apply prompt to each
-│  │
-│  └─ 10+ files → Parallel subagents
-│     Batch ~10 files per agent
-│     See: [BULK.md](references/BULK.md)
-│
-└─ Verify existing migration
-   │
-   └─ Run: ./scripts/find-bd-refs.sh /path
-      Any output = incomplete migration
+1. What is the primary goal of this feature?
+   A. Improve user onboarding experience
+   B. Increase user retention
+   C. Reduce support burden
+   D. Other: [please specify]
+
+2. Who is the target user?
+   A. New users only
+   B. Existing users only
+   C. All users
+   D. Admin users only
 ```
+
+This lets users respond with "1A, 2C" for quick iteration.
+
+### Quality Gates Question (REQUIRED)
+
+Always ask about quality gates - these are project-specific:
+
+```
+What quality commands must pass for each user story?
+   A. pnpm typecheck && pnpm lint
+   B. npm run typecheck && npm run lint
+   C. bun run typecheck && bun run lint
+   D. Other: [specify your commands]
+
+For UI stories, should we include browser verification?
+   A. Yes, use dev-browser skill to verify visually
+   B. No, automated tests are sufficient
+```
+
+### Adaptive Questioning
+
+After each response, decide whether to:
+- Ask follow-up questions (if answers reveal complexity)
+- Ask about a new aspect (if current area is clear)
+- Generate the PRD (if you have enough context)
+
+Typically 2-4 rounds of questions are needed.
 
 ---
 
-## The One Behavioral Difference
+## Step 2: PRD Structure
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    bd (Go)              br (Rust)               │
-├─────────────────────────────────────────────────────────────────┤
-│  bd sync                     →    br sync --flush-only          │
-│  (auto-commits to git)            (exports JSONL only)          │
-│                                                                 │
-│                              +    git add .beads/               │
-│                              +    git commit -m "..."           │
-└─────────────────────────────────────────────────────────────────┘
+Generate the PRD with these sections:
 
-Everything else is literally s/bd/br/g
-```
+### 1. Introduction/Overview
+Brief description of the feature and the problem it solves.
 
----
+### 2. Goals
+Specific, measurable objectives (bullet list).
 
-## Command Map
-
-| bd | br | Change Type |
-|----|-----|-------------|
-| `bd ready` | `br ready` | Name only |
-| `bd list` | `br list` | Name only |
-| `bd show <id>` | `br show <id>` | Name only |
-| `bd create` | `br create` | Name only |
-| `bd update` | `br update` | Name only |
-| `bd close` | `br close` | Name only |
-| `bd dep add` | `br dep add` | Name only |
-| `bd stats` | `br stats` | Name only |
-| `bd sync` | `br sync --flush-only` + git | **BEHAVIORAL** |
-
----
-
-## Transform Patterns
-
-### Pattern 1: The Non-Invasive Note
-
-**Add immediately after any beads section header:**
+### 3. Quality Gates
+**CRITICAL:** List the commands that must pass for every user story.
 
 ```markdown
-**Note:** `br` is non-invasive and never executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
 ```
 
-### Pattern 2: Sync Command Transform
+This section is extracted by conversion tools (ralph-tui-create-json, ralph-tui-create-beads) and appended to each story's acceptance criteria.
 
-**Before:**
-```bash
-bd sync
-```
+### 4. User Stories
+Each story needs:
+- **Title:** Short descriptive name
+- **Description:** "As a [user], I want [feature] so that [benefit]"
+- **Acceptance Criteria:** Verifiable checklist of what "done" means
 
-**After:**
-```bash
-br sync --flush-only
-git add .beads/
-git commit -m "sync beads"
-```
+Each story should be small enough to implement in one focused AI agent session.
 
-### Pattern 3: Session End Transform
-
-**Before:**
-```bash
-git add <files>
-bd sync
-git push
-```
-
-**After:**
-```bash
-git add <files>
-br sync --flush-only
-git add .beads/
-git commit -m "..."
-git push
-```
-
-### Pattern 4: Issue ID Transform
-
-**Before:**
+**Format:**
 ```markdown
-thread_id: bd-123
-subject: [bd-123] Feature implementation
-reason: bd-123
+### US-001: [Title]
+**Description:** As a [user], I want [feature] so that [benefit].
+
+**Acceptance Criteria:**
+- [ ] Specific verifiable criterion
+- [ ] Another criterion
 ```
 
-**After:**
-```markdown
-thread_id: br-123
-subject: [br-123] Feature implementation
-reason: br-123
-```
+**Note:** Do NOT include quality gate commands in individual story criteria - they are defined once in the Quality Gates section and applied automatically during conversion.
+
+**Important:**
+- Acceptance criteria must be verifiable, not vague
+- "Works correctly" is bad
+- "Button shows confirmation dialog before deleting" is good
+- Each story should be independently completable
+
+### 5. Functional Requirements
+Numbered list of specific functionalities:
+- "FR-1: The system must allow users to..."
+- "FR-2: When a user clicks X, the system must..."
+
+Be explicit and unambiguous.
+
+### 6. Non-Goals (Out of Scope)
+What this feature will NOT include. Critical for managing scope.
+
+### 7. Technical Considerations (Optional)
+- Known constraints or dependencies
+- Integration points with existing systems
+- Performance requirements
+
+### 8. Success Metrics
+How will success be measured?
+
+### 9. Open Questions
+Remaining questions or areas needing clarification.
 
 ---
 
-## Validation Loop
+## Writing for AI Agents
+
+The PRD will be executed by AI coding agents via ralph-tui. Therefore:
+
+- Be explicit and unambiguous
+- User stories should be small (completable in one session)
+- Acceptance criteria must be machine-verifiable where possible
+- Include specific file paths if you know them
+- Reference existing code patterns in the project
+
+---
+
+## Output Format
+
+**CRITICAL:** Wrap the final PRD in markers for TUI parsing:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     VALIDATION IS MANDATORY                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. Apply transforms                                            │
-│                    ↓                                            │
-│  2. Run verification:                                           │
-│     ./scripts/verify-migration.sh file.md                       │
-│                    ↓                                            │
-│  3. If FAIL → read error → fix specific issue → goto 2          │
-│                    ↓                                            │
-│  4. Only proceed when PASS                                      │
-│                                                                 │
-│  ⚠️ Never skip verification. Incomplete migrations break agents.│
-└─────────────────────────────────────────────────────────────────┘
+[PRD]
+# PRD: Feature Name
+
+## Overview
+...
+
+## Quality Gates
+...
+
+## User Stories
+...
+[/PRD]
 ```
 
-### Quick Verification Commands
-
-```bash
-# MUST return 0:
-grep -c '`bd ' file.md
-grep -c 'bd sync' file.md
-grep -c 'bd ready' file.md
-
-# MUST return > 0 (if file has sync sections):
-grep -c 'br sync --flush-only' file.md
-grep -c 'git add .beads/' file.md
-```
+**File naming:** The TUI will save to `./tasks/prd-[feature-name].md`
 
 ---
 
-## Risk Tiers
+## Example Conversation Flow
 
-| Operation | Risk | Freedom |
-|-----------|------|---------|
-| Command renames (`bd` → `br`) | Low | Mechanical—no judgment |
-| Sync transform + git steps | Medium | MUST add git steps |
-| Removing daemon refs | Medium | Verify not removing valid content |
-| Bulk migration (10+ files) | High | Use subagents with verification |
+**User:** Create a PRD for adding dark mode to the TUI
 
-### Degrees of Freedom: LOW
+**Assistant:** I'll help you create a PRD for dark mode. Let me ask a few questions:
 
-This is a **deterministic transformation**. There is ONE correct output for each input.
+1. What is the primary goal?
+   A. Reduce eye strain for long sessions
+   B. Match system theme preference
+   C. Provide visual customization
+   D. Other
 
-- No creative interpretation
-- No optional improvements
-- No stylistic choices
-- Apply transforms EXACTLY as specified
+2. Should the setting persist?
+   A. Yes, save to config file
+   B. No, session only
+   C. Follow system preference
+
+**User:** 1A, 2A
+
+**Assistant:** Great! A couple more questions:
+
+3. Which components need dark mode support?
+   A. All TUI components
+   B. Only the main execution view
+   C. Main view + settings
+   D. Other
+
+4. What quality commands must pass for each story?
+   A. pnpm typecheck && pnpm lint
+   B. npm run typecheck && npm run lint
+   C. bun run typecheck
+   D. Other: [specify]
+
+5. For UI stories, include browser verification?
+   A. Yes, use dev-browser skill
+   B. No, automated tests sufficient
+
+**User:** 3A, 4A, 5A
+
+**Assistant:** Perfect, I have enough to generate the PRD.
+
+[PRD]
+# PRD: Dark Mode for Ralph TUI
+
+## Overview
+Add dark mode support to ralph-tui to reduce eye strain during long orchestration sessions. The feature will apply to all TUI components and persist the user's preference in the config file.
+
+## Goals
+- Provide a comfortable viewing experience in low-light environments
+- Persist theme preference across sessions
+- Apply consistent styling to all TUI components
+
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+
+## User Stories
+
+### US-001: Add theme configuration
+**Description:** As a user, I want to set my preferred theme (light/dark) so that it persists across sessions.
+
+**Acceptance Criteria:**
+- [ ] Add `theme` field to `.ralph-tui.yaml` schema
+- [ ] Support values: "light", "dark", "system"
+- [ ] Default to "light" for backwards compatibility
+
+### US-002: Create dark theme color palette
+**Description:** As a user, I want a soft-contrast dark theme that's easy on the eyes.
+
+**Acceptance Criteria:**
+- [ ] Define dark palette with gray tones (not pure black)
+- [ ] Ensure sufficient contrast ratios (WCAG AA)
+- [ ] Colors work well for all UI states (selected, hover, disabled)
+
+### US-003: Apply theme to TUI components
+**Description:** As a user, I want all TUI components to respect my theme preference.
+
+**Acceptance Criteria:**
+- [ ] Header component uses theme colors
+- [ ] Task list uses theme colors
+- [ ] Detail panels use theme colors
+- [ ] Progress bar uses theme colors
+- [ ] Dialogs use theme colors
+
+### US-004: Add theme toggle in settings
+**Description:** As a user, I want to toggle themes from within the TUI settings.
+
+**Acceptance Criteria:**
+- [ ] Theme option visible in settings view
+- [ ] Changes apply immediately without restart
+- [ ] Changes persist to config file
+
+## Functional Requirements
+- FR-1: Theme setting must be readable from `.ralph-tui.yaml`
+- FR-2: Theme must apply on TUI startup
+- FR-3: Theme changes in settings must apply immediately
+- FR-4: All text must maintain readability in both themes
+
+## Non-Goals
+- System theme auto-detection (future enhancement)
+- Custom color schemes beyond light/dark
+- Per-component theme overrides
+
+## Technical Considerations
+- Use existing OpenTUI theming capabilities if available
+- Consider creating a ThemeContext for React components
+- Minimize re-renders when theme changes
+
+## Success Metrics
+- All components render correctly in dark mode
+- No accessibility contrast issues
+- Theme persists across sessions
+
+## Open Questions
+- Should we detect system theme preference automatically in v2?
+[/PRD]
 
 ---
 
-## What Gets Removed
+## Checklist
 
-| Pattern | Why Remove | Verify Absent |
-|---------|------------|---------------|
-| "bd daemon" | br has no daemon | `grep -i daemon` |
-| "auto-commits" | br never commits | `grep -i "auto.*commit"` |
-| "git hooks" | br installs none | `grep -i "hook"` |
-| "RPC mode" | br has no RPC | `grep -i "rpc"` |
+Before outputting the PRD:
 
----
-
-## What Stays Unchanged
-
-| Pattern | Why Keep |
-|---------|----------|
-| SQLite/WAL cautions | br still uses WAL |
-| bv integration | Works with both |
-| Priority P0-P4 | Same system |
-| Issue types | Same system |
-| Dependency tracking | Same system |
-| `.beads/` as source of truth | Same system |
-
----
-
-## Before/After Example
-
-### Before (bd)
-```markdown
-## Issue Tracking with bd (beads)
-
-Key invariants:
-- `.beads/` is authoritative
-
-### Agent workflow:
-1. `bd ready` to find work
-2. `bd update <id> --status in_progress`
-3. Implement
-4. `bd close <id>`
-5. `bd sync` commits changes
-```
-
-### After (br)
-```markdown
-## Issue Tracking with br (beads_rust)
-
-**Note:** `br` is non-invasive and never executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
-
-Key invariants:
-- `.beads/` is authoritative
-
-### Agent workflow:
-1. `br ready` to find work
-2. `br update <id> --status in_progress`
-3. Implement
-4. `br close <id>`
-5. Sync and commit:
-   ```bash
-   br sync --flush-only
-   git add .beads/
-   git commit -m "sync beads"
-   ```
-```
-
----
-
-## References
-
-| Need | Reference |
-|------|-----------|
-| Complete before/after examples | [TRANSFORMS.md](references/TRANSFORMS.md) |
-| Bulk migration strategy | [BULK.md](references/BULK.md) |
-| Common mistakes & fixes | [PITFALLS.md](references/PITFALLS.md) |
-
----
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `./scripts/find-bd-refs.sh /path` | Find files needing migration |
-| `./scripts/verify-migration.sh file.md` | Verify migration complete |
-
----
-
-## Validation
-
-```bash
-# Full verification
-./scripts/verify-migration.sh /path/to/AGENTS.md
-
-# Quick check (should return nothing)
-grep '`bd ' /path/to/AGENTS.md
-```
-
-If any bd references remain → migration incomplete → re-apply transforms.
+- [ ] Asked clarifying questions with lettered options
+- [ ] Asked about quality gates (REQUIRED)
+- [ ] Asked follow-up questions when needed
+- [ ] Quality Gates section included with project-specific commands
+- [ ] User stories are small and independently completable
+- [ ] User stories do NOT include quality gate commands (they're in the Quality Gates section)
+- [ ] Functional requirements are numbered and unambiguous
+- [ ] Non-goals section defines clear boundaries
+- [ ] PRD is wrapped in `[PRD]...[/PRD]` markers
