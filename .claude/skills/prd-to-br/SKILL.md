@@ -159,16 +159,92 @@ For PRDs with multiple phases:
 
 ---
 
+## Step 6: Beads QA Review Passes
+
+**"Check your beads N times, implement once."** After creating all issues, run iterative QA passes to catch missing context, unclear criteria, and dependency errors. This saves implementation tokens by front-loading planning quality.
+
+### How It Works
+
+Run review passes until changes flatline (typically 2-4 passes):
+
+```
+Pass 1 → significant changes (missing stories, wrong deps, unclear criteria)
+Pass 2 → moderate changes (edge cases, missing test criteria, context gaps)
+Pass 3 → minor changes (wording, small clarifications)
+Pass 4 → no meaningful changes → STOP
+```
+
+### What to Check Each Pass
+
+For EACH bead, review:
+
+1. **Self-containment**: Can an agent implement this bead WITHOUT re-reading the PRD or other beads? If not, add the missing context directly into the bead's description.
+2. **Acceptance criteria quality**: Are criteria machine-verifiable? "Works correctly" → BAD. "Returns 401 for non-initialforce.com emails" → GOOD.
+3. **Dependencies**: Are all upstream beads listed? Are there false dependencies that could be removed to parallelize work?
+4. **Missing stories**: Are there implicit tasks (test setup, config, migrations, observability) not covered by any bead?
+5. **Sizing**: Can each bead be completed in ONE agent session? If not, split it.
+6. **Architecture context**: Does the bead include enough context about the tech stack, file paths, and patterns for the implementing agent?
+
+### Pass Format
+
+For each proposed change, output:
+```
+BEAD: bd-s4s.3
+CHANGE: Add missing context about OAuth redirect URI for dev mode
+DIFF: + "Local dev: redirect to http://localhost:3000/auth/callback"
+RATIONALE: Implementing agent won't know the callback URL pattern
+```
+
+After each pass, apply changes via `br update`, then re-review.
+
+### Stop Condition
+
+Stop when a pass produces only trivial wording changes or no changes at all. Never run more than 5 passes.
+
+---
+
+## Making Beads Self-Contained
+
+**Critical principle:** Each bead must be independently implementable. An agent picking up a bead should NOT need to:
+- Re-read the full PRD
+- Look at sibling beads for context
+- Guess at tech stack decisions
+
+### What to Include in Each Bead
+
+- **Tech stack context**: What framework, libraries, and patterns to use
+- **File paths**: Where to create/modify files (if known from scaffolding decisions)
+- **Integration points**: How this bead connects to upstream dependencies
+- **Specific API/CLI commands**: Exact commands or API signatures, not vague references
+- **Error cases**: What should happen when things go wrong
+
+### Example: BAD vs GOOD
+
+**BAD bead:**
+> "Implement Google SSO authentication"
+> - [ ] OAuth flow works
+> - [ ] Only company emails accepted
+
+**GOOD bead:**
+> "Implement Google SSO using @fastify/oauth2 plugin on the Fastify backend (packages/backend).
+> Uses JWT stored in httpOnly/secure/sameSite=strict cookie. Check `hd` claim equals 'initialforce.com'.
+> Session timeout: 8h max, 30min inactivity. Local dev mode: skip OAuth, use DEV_USER_EMAIL env var."
+> - [ ] @fastify/oauth2 configured with Google provider
+> - [ ] hd claim checked, non-initialforce.com returns 403 with error message
+> - [ ] JWT issued with {email, name, role} claims, 8h expiry
+> - [ ] Cookie: httpOnly, secure, sameSite=strict
+> - [ ] GET /auth/me returns current user or 401
+> - [ ] DEV_USER_EMAIL env var bypasses OAuth in development
+
+---
+
 ## Verification
 
-After creating all issues, verify:
+After creating all issues and completing QA passes, verify:
 
 ```bash
-# List all issues in the epic
-br list --parent=[EPIC_ID]
-
-# Check dependency graph
-br graph [EPIC_ID]
+# List all issues
+br list
 
 # Verify no orphaned dependencies
 br doctor
@@ -188,5 +264,7 @@ Before finishing:
 - [ ] Dependencies match PRD's dependency graph
 - [ ] No circular dependencies
 - [ ] Priorities set by phase (P0-P3)
+- [ ] Beads are self-contained (implementable without re-reading PRD)
+- [ ] QA review passes completed (changes flatlined)
 - [ ] `br sync --flush-only` executed
 - [ ] `.beads/` committed to git
