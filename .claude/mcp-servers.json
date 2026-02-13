@@ -5,8 +5,8 @@
       "url": "http://127.0.0.1:4801/sse"
     },
     "atlassian": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4808/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4808/mcp"
     },
     "google-workspace": {
       "type": "http",
@@ -46,24 +46,24 @@
       }
     },
     "slack": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4803/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4803/mcp"
     },
     "sentry": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4804/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4804/mcp"
     },
     "hubspot": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4805/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4805/mcp"
     },
     "zendesk": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4806/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4806/mcp"
     },
     "apify": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4807/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:4807/mcp"
     }
   }
 }
