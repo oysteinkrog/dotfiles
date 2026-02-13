@@ -54,7 +54,7 @@ module.exports = {
     {
       name: "slack-mcp",
       script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/slack-mcp --port 4803",
+      args: "--stdio /c/users/oystein/bin/slack-mcp --outputTransport streamableHttp --port 4803",
       interpreter: "none",
       env: {},
       autorestart: true,
@@ -69,7 +69,7 @@ module.exports = {
     {
       name: "sentry-mcp",
       script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/sentry-mcp --port 4804",
+      args: "--stdio /c/users/oystein/bin/sentry-mcp --outputTransport streamableHttp --port 4804",
       interpreter: "none",
       env: {},
       autorestart: true,
@@ -84,7 +84,7 @@ module.exports = {
     {
       name: "hubspot-mcp",
       script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/hubspot-mcp --port 4805",
+      args: "--stdio /c/users/oystein/bin/hubspot-mcp --outputTransport streamableHttp --port 4805",
       interpreter: "none",
       env: {},
       autorestart: true,
@@ -99,7 +99,7 @@ module.exports = {
     {
       name: "zendesk-mcp",
       script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/zendesk-mcp --port 4806",
+      args: "--stdio /c/users/oystein/bin/zendesk-mcp --outputTransport streamableHttp --port 4806",
       interpreter: "none",
       env: {},
       autorestart: true,
@@ -114,7 +114,7 @@ module.exports = {
     {
       name: "apify-mcp",
       script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/apify-mcp --port 4807",
+      args: "--stdio /c/users/oystein/bin/apify-mcp --outputTransport streamableHttp --port 4807",
       interpreter: "none",
       env: {},
       autorestart: true,
@@ -129,7 +129,7 @@ module.exports = {
     {
       name: "atlassian-mcp",
       script: "supergateway",
-      args: "--stdio 'npx -y mcp-remote https://mcp.atlassian.com/v1/mcp' --port 4808",
+      args: "--stdio 'npx -y mcp-remote https://mcp.atlassian.com/v1/mcp' --outputTransport streamableHttp --port 4808",
       interpreter: "none",
       env: {},
       autorestart: true,
