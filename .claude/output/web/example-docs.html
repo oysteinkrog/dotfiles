@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meridian Weather API — Documentation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #fafbfc;
+            --bg-secondary: #f1f5f9;
+            --bg-code: #f8fafc;
+            --text-primary: #2c3e50;
+            --text-secondary: #475569;
+            --accent: #2563eb;
+            --border: #e2e8f0;
+            --shadow: rgba(15, 23, 42, 0.08);
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-code: #1e293b;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --accent: #60a5fa;
+            --border: #334155;
+            --shadow: rgba(0, 0, 0, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            font-kerning: normal;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            font-size: clamp(0.95rem, 0.9rem + 0.3vw, 1.1rem);
+            line-height: 1.5;
+            color: var(--text-primary);
+            background: var(--bg-primary);
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 260px;
+            background: var(--bg-primary);
+            border-right: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+            padding: 2rem 0;
+        }
+
+        .sidebar-header {
+            padding: 0 1.5rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+
+        .sidebar-header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .sidebar-header p {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .nav-menu {
+            list-style: none;
+        }
+
+        .nav-item {
+            margin-bottom: 0.25rem;
+        }
+
+        .nav-link {
+            display: block;
+            padding: 0.5rem 1.5rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9375rem;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            color: var(--accent);
+            background: var(--bg-secondary);
+        }
+
+        .nav-link.active {
+            color: var(--accent);
+            border-left-color: var(--accent);
+            background: var(--bg-secondary);
+            font-weight: 500;
+        }
+
+        .nav-subitem {
+            margin-left: 1rem;
+            font-size: 0.875rem;
+        }
+
+        /* Mobile Menu Toggle */
+        .menu-toggle {
+            display: none;
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 1000;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            font-size: 1.25rem;
+            color: var(--text-primary);
+        }
+
+        /* Theme Toggle */
+        .theme-toggle {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 1000;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            font-size: 1.25rem;
+            transition: all 0.2s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-code);
+        }
+
+        /* Main Content */
+        .content {
+            flex: 1;
+            padding: 3rem;
+            max-width: calc(72ch + 6rem);
+        }
+
+        .content > section {
+            margin-bottom: 4rem;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+            line-height: 1.3;
+        }
+
+        h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 2rem 0 1rem;
+            line-height: 1.3;
+        }
+
+        h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 1.5rem 0 0.75rem;
+            line-height: 1.3;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: underline;
+        }
+
+        a:hover {
+            color: var(--accent);
+        }
+
+        /* Code */
+        code {
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 0.875em;
+            background: var(--bg-code);
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            color: var(--text-primary);
+        }
+
+        pre {
+            background: var(--bg-code);
+            border-left: 3px solid var(--accent);
+            border-radius: 6px;
+            padding: 1.25rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            line-height: 1.6;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            font-size: 0.875rem;
+        }
+
+        /* HTTP Method Badge */
+        .http-method {
+            display: inline-block;
+            background: var(--accent);
+            color: white;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            margin-right: 0.5rem;
+            letter-spacing: 0.5px;
+        }
+
+        .endpoint-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+        }
+
+        .endpoint-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        /* Tables */
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9375rem;
+        }
+
+        thead {
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            z-index: 10;
+        }
+
+        th {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border);
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+
+        tbody tr:nth-child(even) {
+            background: var(--bg-secondary);
+        }
+
+        tbody tr:hover {
+            background: var(--bg-code);
+        }
+
+        .numeric-col {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .required-badge {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            background: #dc2626;
+            color: white;
+        }
+
+        .optional-badge {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            background: var(--bg-code);
+            color: var(--text-secondary);
+        }
+
+        /* Mermaid diagram wrapper */
+        .mermaid-wrap {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.25rem 0;
+            overflow-x: auto;
+        }
+
+        .mermaid-wrap .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+
+        /* KPI Dashboard */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem;
+            margin: 1.25rem 0;
+        }
+
+        .kpi-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem 1rem;
+            text-align: center;
+        }
+
+        .kpi-card__value {
+            font-size: 2rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--accent);
+            line-height: 1.1;
+            margin-bottom: 0.4rem;
+        }
+
+        .kpi-card__label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+        }
+
+        /* Chart container */
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-height: 300px;
+            margin: 1.25rem 0;
+            position: relative;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: -260px;
+                top: 0;
+                height: 100vh;
+                z-index: 999;
+                transition: left 0.3s;
+                box-shadow: 2px 0 8px var(--shadow);
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .menu-toggle {
+                display: block;
+            }
+
+            .content {
+                padding: 4rem 1.5rem 2rem;
+            }
+
+            .container {
+                flex-direction: column;
+            }
+        }
+
+        /* Utility */
+        .mb-1 { margin-bottom: 0.5rem; }
+        .mb-2 { margin-bottom: 1rem; }
+        .mb-3 { margin-bottom: 1.5rem; }
+    </style>
+</head>
+<body>
+    <button class="menu-toggle" id="menuToggle" aria-label="Toggle menu">☰</button>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">🌙</button>
+
+    <div class="container">
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1>Meridian API</h1>
+                <p>Weather Data Platform</p>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item"><a href="#introduction" class="nav-link">Introduction</a></li>
+                <li class="nav-item"><a href="#architecture" class="nav-link">Architecture</a></li>
+                <li class="nav-item"><a href="#authentication" class="nav-link">Authentication</a></li>
+                <li class="nav-item">
+                    <a href="#endpoints" class="nav-link">Endpoints</a>
+                    <ul class="nav-menu">
+                        <li class="nav-item nav-subitem"><a href="#current-weather" class="nav-link">Current Weather</a></li>
+                        <li class="nav-item nav-subitem"><a href="#forecast" class="nav-link">Forecast</a></li>
+                        <li class="nav-item nav-subitem"><a href="#historical" class="nav-link">Historical</a></li>
+                    </ul>
+                </li>
+                <li class="nav-item"><a href="#response-format" class="nav-link">Response Format</a></li>
+                <li class="nav-item"><a href="#error-codes" class="nav-link">Error Codes</a></li>
+                <li class="nav-item"><a href="#rate-limits" class="nav-link">Rate Limits</a></li>
+                <li class="nav-item"><a href="#usage-dashboard" class="nav-link">Usage Dashboard</a></li>
+            </ul>
+        </nav>
+
+        <main class="content">
+            <section id="introduction">
+                <h1>Introduction</h1>
+                <p>Meridian provides a comprehensive REST API for accessing real-time and historical weather data across global locations. Our platform delivers highly accurate forecasts, current conditions, and extensive historical records — all through a simple, developer-friendly interface.</p>
+                <p>Built for reliability and performance, Meridian powers weather integrations for thousands of applications worldwide. Whether you're building a mobile app, dashboard, or enterprise system, our API provides the data you need with exceptional uptime and low latency.</p>
+            </section>
+
+            <section id="architecture">
+                <h2>Architecture</h2>
+                <p>Every API request is routed through our global gateway layer, which handles authentication, rate limiting, and load balancing before forwarding to the appropriate backend service. The sequence below illustrates the full request lifecycle for a current-weather lookup.</p>
+                <div class="mermaid-wrap">
+                    <div class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant G as API Gateway
+    participant A as Auth Service
+    participant W as Weather Service
+    participant D as Database
+    C->>G: GET /v2/weather/current
+    G->>A: Validate API key
+    A-->>G: Token valid
+    G->>W: Forward request
+    W->>D: Query weather data
+    D-->>W: Current conditions
+    W-->>G: JSON response
+    G-->>C: 200 OK + weather data
+                    </div>
+                </div>
+                <p>The Auth Service validates tokens using an in-memory cache with a 5-minute TTL, keeping authentication overhead under 1 ms for warm requests. The Weather Service queries the nearest regional Database replica to minimise read latency.</p>
+            </section>
+
+            <section id="authentication">
+                <h2>Authentication</h2>
+                <p>All API requests require authentication using an API key. Include your key in the <code>Authorization</code> header using the Bearer token scheme. You can generate API keys from your account dashboard.</p>
+                <pre><code>curl -H "Authorization: Bearer mk_live_abc123" \
+  https://api.meridian.dev/v2/weather/current</code></pre>
+                <p>Keep your API keys secure — they provide full access to your account. Rotate keys regularly and never commit them to version control.</p>
+                <div class="mermaid-wrap">
+                    <div class="mermaid">
+flowchart LR
+    A[API Request] --> B{Has API Key?}
+    B -->|Yes| C{Key Valid?}
+    B -->|No| D[401 Unauthorized]
+    C -->|Yes| E[Process Request]
+    C -->|No| F[403 Forbidden]
+                    </div>
+                </div>
+            </section>
+
+            <section id="endpoints">
+                <h2>Endpoints</h2>
+
+                <article id="current-weather">
+                    <h3>Current Weather</h3>
+                    <div class="endpoint-header">
+                        <span class="http-method">GET</span>
+                        <span class="endpoint-path">/v2/weather/current</span>
+                    </div>
+                    <p>Retrieve current weather conditions for a specified location. Data is updated every 10 minutes from our global network of weather stations and satellites.</p>
+
+                    <h4 class="mb-2">Parameters</h4>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Required</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>location</code></td>
+                                    <td>string</td>
+                                    <td><span class="required-badge">Required</span></td>
+                                    <td>City name or coordinates (e.g., "Seattle" or "47.6062,-122.3321")</td>
+                                </tr>
+                                <tr>
+                                    <td><code>units</code></td>
+                                    <td>string</td>
+                                    <td><span class="optional-badge">Optional</span></td>
+                                    <td>Unit system: "metric" or "imperial" (default: metric)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 class="mb-2">Example Response</h4>
+                    <pre><code>{
+  "location": {
+    "name": "Seattle",
+    "coordinates": {
+      "latitude": 47.6062,
+      "longitude": -122.3321
+    }
+  },
+  "current": {
+    "temperature": 12.5,
+    "feels_like": 10.8,
+    "humidity": 76,
+    "pressure": 1013,
+    "wind_speed": 5.2,
+    "wind_direction": 245,
+    "conditions": "Partly cloudy",
+    "visibility": 16.1,
+    "uv_index": 3
+  },
+  "timestamp": "2026-02-17T14:30:00Z"
+}</code></pre>
+                </article>
+
+                <article id="forecast">
+                    <h3>Forecast</h3>
+                    <div class="endpoint-header">
+                        <span class="http-method">GET</span>
+                        <span class="endpoint-path">/v2/weather/forecast</span>
+                    </div>
+                    <p>Get daily weather forecasts up to 14 days ahead. Forecasts include high/low temperatures, precipitation probability, and detailed conditions for each day.</p>
+
+                    <h4 class="mb-2">Parameters</h4>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Required</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>location</code></td>
+                                    <td>string</td>
+                                    <td><span class="required-badge">Required</span></td>
+                                    <td>City name or coordinates</td>
+                                </tr>
+                                <tr>
+                                    <td><code>days</code></td>
+                                    <td>integer</td>
+                                    <td><span class="optional-badge">Optional</span></td>
+                                    <td>Number of forecast days (1—14, default: 7)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>units</code></td>
+                                    <td>string</td>
+                                    <td><span class="optional-badge">Optional</span></td>
+                                    <td>Unit system: "metric" or "imperial" (default: metric)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 class="mb-2">Example Response</h4>
+                    <pre><code>{
+  "location": {
+    "name": "Seattle",
+    "coordinates": {
+      "latitude": 47.6062,
+      "longitude": -122.3321
+    }
+  },
+  "forecast": [
+    {
+      "date": "2026-02-18",
+      "temperature": {
+        "high": 15.2,
+        "low": 8.1
+      },
+      "precipitation_probability": 65,
+      "precipitation_amount": 4.2,
+      "conditions": "Light rain",
+      "wind_speed": 12.5,
+      "humidity": 82
+    }
+  ],
+  "timestamp": "2026-02-17T14:30:00Z"
+}</code></pre>
+                </article>
+
+                <article id="historical">
+                    <h3>Historical Weather</h3>
+                    <div class="endpoint-header">
+                        <span class="http-method">GET</span>
+                        <span class="endpoint-path">/v2/weather/historical</span>
+                    </div>
+                    <p>Access historical weather data for any date. Our archives include detailed records from thousands of weather stations dating back several decades.</p>
+
+                    <h4 class="mb-2">Parameters</h4>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Required</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>location</code></td>
+                                    <td>string</td>
+                                    <td><span class="required-badge">Required</span></td>
+                                    <td>City name or coordinates</td>
+                                </tr>
+                                <tr>
+                                    <td><code>date</code></td>
+                                    <td>string</td>
+                                    <td><span class="required-badge">Required</span></td>
+                                    <td>Date in YYYY-MM-DD format</td>
+                                </tr>
+                                <tr>
+                                    <td><code>units</code></td>
+                                    <td>string</td>
+                                    <td><span class="optional-badge">Optional</span></td>
+                                    <td>Unit system: "metric" or "imperial" (default: metric)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 class="mb-2">Example Response</h4>
+                    <pre><code>{
+  "location": {
+    "name": "Seattle",
+    "coordinates": {
+      "latitude": 47.6062,
+      "longitude": -122.3321
+    }
+  },
+  "date": "2025-12-25",
+  "conditions": {
+    "temperature": {
+      "high": 6.5,
+      "low": 2.1,
+      "average": 4.3
+    },
+    "precipitation": 12.7,
+    "conditions": "Rain",
+    "wind_speed": 8.4,
+    "humidity": 88
+  }
+}</code></pre>
+                </article>
+            </section>
+
+            <section id="response-format">
+                <h2>Response Format</h2>
+                <p>All API responses are returned in JSON format with consistent structure. Successful requests return HTTP status 200 with the requested data. Error responses include a descriptive error code and message to help diagnose issues.</p>
+                <p>Temperature values are returned in Celsius by default (or Fahrenheit with <code>units=imperial</code>). Wind speeds use meters per second (metric) or miles per hour (imperial). Precipitation is measured in millimeters or inches respectively.</p>
+                <p>Timestamps follow ISO 8601 format in UTC timezone. All coordinate values use decimal degrees with negative values representing south latitude and west longitude.</p>
+            </section>
+
+            <section id="error-codes">
+                <h2>Error Codes</h2>
+                <p>When an error occurs, the API returns a standard error response with an HTTP status code and detailed error information.</p>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="numeric-col">Code</th>
+                                <th>Status</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="numeric-col">400</td>
+                                <td>Bad Request</td>
+                                <td>Invalid or missing parameters in the request</td>
+                            </tr>
+                            <tr>
+                                <td class="numeric-col">401</td>
+                                <td>Unauthorized</td>
+                                <td>Invalid or missing API key</td>
+                            </tr>
+                            <tr>
+                                <td class="numeric-col">404</td>
+                                <td>Not Found</td>
+                                <td>Location not found or endpoint does not exist</td>
+                            </tr>
+                            <tr>
+                                <td class="numeric-col">429</td>
+                                <td>Rate Limit Exceeded</td>
+                                <td>Too many requests — see Rate Limits section</td>
+                            </tr>
+                            <tr>
+                                <td class="numeric-col">500</td>
+                                <td>Internal Server Error</td>
+                                <td>Unexpected server error — contact support if persistent</td>
+                            </tr>
+                            <tr>
+                                <td class="numeric-col">503</td>
+                                <td>Service Unavailable</td>
+                                <td>Temporary service disruption — retry with exponential backoff</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="rate-limits">
+                <h2>Rate Limits</h2>
+                <p>API requests are rate-limited to ensure fair usage and platform stability. The default limit is 1,000 requests per hour per API key. Rate limit information is included in response headers:</p>
+                <ul style="margin: 1rem 0 1rem 2rem; color: var(--text-primary);">
+                    <li><code>X-RateLimit-Limit</code> — Maximum requests per hour</li>
+                    <li><code>X-RateLimit-Remaining</code> — Requests remaining in current window</li>
+                    <li><code>X-RateLimit-Reset</code> — Unix timestamp when the limit resets</li>
+                </ul>
+                <p>When you exceed the rate limit, the API returns a 429 status code. Implement exponential backoff in your client to handle rate limiting gracefully. Enterprise plans offer higher rate limits — contact our sales team for custom quotas.</p>
+            </section>
+
+            <section id="usage-dashboard">
+                <h2>Usage Dashboard</h2>
+                <p>Monitor your API consumption in real time. The figures below reflect rolling 24-hour totals for your account and are refreshed every minute.</p>
+
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-card__value">42,891</div>
+                        <div class="kpi-card__label">Requests Today</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-card__value">45ms</div>
+                        <div class="kpi-card__label">Avg Response</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-card__value">99.97%</div>
+                        <div class="kpi-card__label">Uptime</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-card__value">1,247</div>
+                        <div class="kpi-card__label">Active Keys</div>
+                    </div>
+                </div>
+
+                <h3>Requests by Endpoint</h3>
+                <div class="chart-container">
+                    <canvas id="endpointChart"></canvas>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // Theme Toggle
+        const themeToggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+
+        // Initialize theme from localStorage or system preference
+        const savedTheme = localStorage.getItem('theme');
+        const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const initialTheme = savedTheme || (systemPrefersDark ? 'dark' : 'light');
+
+        if (initialTheme === 'dark') {
+            html.setAttribute('data-theme', 'dark');
+            themeToggle.textContent = '☀️';
+        }
+
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            themeToggle.textContent = newTheme === 'dark' ? '☀️' : '🌙';
+        });
+
+        // Mobile Menu Toggle
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebar = document.getElementById('sidebar');
+
+        menuToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('open');
+        });
+
+        // Close sidebar when clicking outside on mobile
+        document.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768 &&
+                !sidebar.contains(e.target) &&
+                !menuToggle.contains(e.target) &&
+                sidebar.classList.contains('open')) {
+                sidebar.classList.remove('open');
+            }
+        });
+
+        // Active Navigation with IntersectionObserver
+        const sections = document.querySelectorAll('section, article');
+        const navLinks = document.querySelectorAll('.nav-link');
+
+        const observerOptions = {
+            root: null,
+            rootMargin: '-20% 0px -70% 0px',
+            threshold: 0
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const id = entry.target.getAttribute('id');
+                    navLinks.forEach(link => {
+                        link.classList.remove('active');
+                        if (link.getAttribute('href') === `#${id}`) {
+                            link.classList.add('active');
+                        }
+                    });
+                }
+            });
+        }, observerOptions);
+
+        sections.forEach(section => observer.observe(section));
+
+        // Smooth scroll and close mobile menu on link click
+        navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                if (window.innerWidth <= 768) {
+                    sidebar.classList.remove('open');
+                }
+            });
+        });
+
+        // Chart.js — Requests by Endpoint
+        (function initChart() {
+            const getCssVar = (name) =>
+                getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+            function buildChart() {
+                const isDark = html.getAttribute('data-theme') === 'dark';
+                const accent      = getCssVar('--accent');
+                const textSecondary = getCssVar('--text-secondary');
+                const border      = getCssVar('--border');
+
+                const ctx = document.getElementById('endpointChart').getContext('2d');
+
+                if (window._endpointChart) {
+                    window._endpointChart.destroy();
+                }
+
+                window._endpointChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Current', 'Forecast', 'Historical'],
+                        datasets: [{
+                            label: 'Requests (thousands)',
+                            data: [18, 15, 9],
+                            backgroundColor: [
+                                accent + 'cc',
+                                accent + '88',
+                                accent + '44',
+                            ],
+                            borderColor: accent,
+                            borderWidth: 1,
+                            borderRadius: 4,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` ${ctx.parsed.y}k requests`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: border },
+                                ticks: { color: textSecondary }
+                            },
+                            y: {
+                                grid: { color: border },
+                                ticks: {
+                                    color: textSecondary,
+                                    callback: (v) => v + 'k'
+                                },
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            }
+
+            buildChart();
+
+            // Rebuild chart on theme change so colours update
+            themeToggle.addEventListener('click', () => {
+                // Wait one frame for CSS vars to update
+                requestAnimationFrame(buildChart);
+            });
+        })();
+    </script>
+
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+            window.matchMedia('(prefers-color-scheme: dark)').matches;
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: isDark ? '#1e293b' : '#f1f5f9',
+                primaryBorderColor: isDark ? '#60a5fa' : '#2563eb',
+                primaryTextColor: isDark ? '#e2e8f0' : '#2c3e50',
+                lineColor: isDark ? '#475569' : '#94a3b8',
+                fontSize: '14px',
+            }
+        });
+    </script>
+</body>
+</html>
