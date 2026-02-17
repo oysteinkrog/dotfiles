@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elara Voss — Visual Designer & Typographer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Montserrat:wght@600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root[data-theme="light"] {
+            --bg: #faf8f4;
+            --text: #3a3530;
+            --accent: #c05030;
+            --secondary-bg: #f0ede6;
+            --card-bg: #ffffff;
+            --card-border: #e5e1d8;
+        }
+
+        :root[data-theme="dark"] {
+            --bg: #1c1a17;
+            --text: #ddd8d0;
+            --accent: #e07050;
+            --secondary-bg: #252220;
+            --card-bg: #252220;
+            --card-border: #3a3530;
+        }
+
+        html {
+            background: var(--bg);
+            color: var(--text);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        body {
+            font-family: 'Libre Baskerville', serif;
+            font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.2rem);
+            line-height: 1.42;
+            font-kerning: normal;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .prose {
+            max-width: 65ch;
+        }
+
+        h1, h2, h3 {
+            font-family: 'Montserrat', sans-serif;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            margin-bottom: 0.5rem;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            margin-top: 2.5em;
+            margin-bottom: 1em;
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        p {
+            margin-bottom: 1em;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: underline;
+            transition: opacity 0.2s ease;
+        }
+
+        a:hover {
+            opacity: 0.7;
+        }
+
+        em {
+            font-style: italic;
+        }
+
+        strong {
+            font-weight: 700;
+        }
+
+        /* Theme Toggle */
+        .theme-toggle {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            background: var(--secondary-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.25rem;
+            transition: transform 0.2s ease, background 0.2s ease;
+            z-index: 100;
+        }
+
+        .theme-toggle:hover {
+            transform: scale(1.1);
+        }
+
+        /* Header */
+        header {
+            padding: 6rem 0 4rem;
+        }
+
+        .subtitle {
+            color: var(--accent);
+            font-size: 1rem;
+        }
+
+        /* Sections */
+        section {
+            margin-bottom: 4rem;
+        }
+
+        /* Project Grid */
+        .project-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .project-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 1.5rem;
+            transition: box-shadow 0.3s ease, transform 0.3s ease;
+            opacity: 0;
+            animation: fadeUp 0.6s ease forwards;
+        }
+
+        .project-card:nth-child(1) { animation-delay: 0.1s; }
+        .project-card:nth-child(2) { animation-delay: 0.2s; }
+        .project-card:nth-child(3) { animation-delay: 0.3s; }
+        .project-card:nth-child(4) { animation-delay: 0.4s; }
+        .project-card:nth-child(5) { animation-delay: 0.5s; }
+        .project-card:nth-child(6) { animation-delay: 0.6s; }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .project-card {
+                animation: none;
+                opacity: 1;
+            }
+            .theme-toggle:hover {
+                transform: none;
+            }
+        }
+
+        .project-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transform: translateY(-2px);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .project-card:hover {
+                transform: none;
+            }
+        }
+
+        .project-year {
+            color: var(--accent);
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+
+        .project-description {
+            font-size: 0.95rem;
+            line-height: 1.4;
+        }
+
+        /* Contact */
+        .contact-info {
+            font-size: 1rem;
+        }
+
+        .contact-info p {
+            margin-bottom: 0.5rem;
+        }
+
+        /* Footer spacing */
+        footer {
+            padding-bottom: 4rem;
+        }
+
+        /* Mermaid diagram wrapper */
+        .mermaid-wrap {
+            background: var(--secondary-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            overflow-x: auto;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: flex;
+            justify-content: center;
+            gap: 3rem;
+            margin: 2.5rem 0;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat__value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            font-variant-numeric: tabular-nums;
+            font-family: 'Montserrat', sans-serif;
+            line-height: 1;
+        }
+
+        .stat__label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text);
+            opacity: 0.6;
+            margin-top: 0.25rem;
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid {
+                gap: 2rem;
+            }
+
+            .stat__value {
+                font-size: 2rem;
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 640px) {
+            .container {
+                padding: 0 1.5rem;
+            }
+
+            header {
+                padding: 4rem 0 3rem;
+            }
+
+            .theme-toggle {
+                top: 1.5rem;
+                right: 1.5rem;
+                width: 44px;
+                height: 44px;
+            }
+
+            .project-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+
+            h1 {
+                font-size: 1.4rem;
+            }
+
+            h2 {
+                margin-top: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" aria-label="Toggle dark mode">
+        <span class="theme-icon">◐</span>
+    </button>
+
+    <div class="container">
+        <header>
+            <h1>Elara Voss</h1>
+            <p class="subtitle">Visual Designer & Typographer</p>
+            <div class="stats-grid" aria-label="Career highlights">
+                <div class="stat">
+                    <div class="stat__value">47</div>
+                    <div class="stat__label">Projects Completed</div>
+                </div>
+                <div class="stat">
+                    <div class="stat__value">12</div>
+                    <div class="stat__label">Years of Practice</div>
+                </div>
+                <div class="stat">
+                    <div class="stat__value">3</div>
+                    <div class="stat__label">Typefaces Designed</div>
+                </div>
+            </div>
+        </header>
+
+        <section id="about">
+            <div class="prose">
+                <p>I've spent the last twelve years learning how to get out of the way. Good design, I think, is mostly about knowing what to leave out—which typeface to choose, which details matter, and which clever ideas to quietly discard. Typography taught me that. It demands restraint. You can't trick your way to a comfortable reading experience.</p>
+
+                <p>Most of my work is for publications, cultural institutions, and small studios that care about how things feel. I've set books, designed identities, and built websites where the typography does most of the talking. I prefer projects that value clarity over novelty, though I'll admit I'm drawn to a well-placed flourish when the moment's right.</p>
+
+                <p>I believe that a well-set page is generous to its reader. It doesn't demand attention—it invites it. That's what I'm after, whether I'm working on a poster or a hundred-page report.</p>
+            </div>
+        </section>
+
+        <section id="work">
+            <h2>Selected Work</h2>
+            <div class="project-grid">
+                <div class="project-card">
+                    <h3>Lumina Quarterly</h3>
+                    <p class="project-description">A literary magazine redesign focused on generous margins and a comfortable reading rhythm. Set in Freight Text with a modular scale for hierarchy.</p>
+                    <p class="project-year">2024</p>
+                </div>
+
+                <div class="project-card">
+                    <h3>Westwood Archive</h3>
+                    <p class="project-description">Brand identity for a public history project. The type system balances archival authenticity with contemporary accessibility.</p>
+                    <p class="project-year">2023</p>
+                </div>
+
+                <div class="project-card">
+                    <h3>Fieldwork Editions</h3>
+                    <p class="project-description">Book series design for a small press. Each volume shares a typographic structure while allowing for subtle variation in ornament and color.</p>
+                    <p class="project-year">2023</p>
+                </div>
+
+                <div class="project-card">
+                    <h3>Studio Kite Website</h3>
+                    <p class="project-description">A portfolio site for an architecture firm. Large-scale type, restrained color, and careful attention to load times and reading comfort.</p>
+                    <p class="project-year">2022</p>
+                </div>
+
+                <div class="project-card">
+                    <h3>The Long Form</h3>
+                    <p class="project-description">A personal experiment in digital reading—an essay site with adjustable type size, line length, and spacing. Built to be a calm corner of the web.</p>
+                    <p class="project-year">2022</p>
+                </div>
+
+                <div class="project-card">
+                    <h3>Harbor Arts Collective</h3>
+                    <p class="project-description">Posters and exhibition materials for a community art space. Hand-lettered titles paired with structured typographic layouts.</p>
+                    <p class="project-year">2021</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="approach">
+            <h2>Approach</h2>
+            <div class="mermaid-wrap">
+                <div class="mermaid">
+flowchart LR
+    A[Research] --> B[Typography]
+    B --> C[Layout]
+    C --> D[Refinement]
+    D --> E[Delivery]
+    style A fill:#c0503022,stroke:#c05030
+    style B fill:#c0503033,stroke:#c05030
+    style C fill:#c0503044,stroke:#c05030
+    style D fill:#c0503033,stroke:#c05030
+    style E fill:#c0503022,stroke:#c05030
+                </div>
+            </div>
+            <div class="prose">
+                <p>I work best with clients who trust the process and understand that good design takes time. I start most projects by reading—not just the content I'll be designing with, but around it. What's the context? Who's the audience? What are they used to, and what might surprise them in a good way?</p>
+
+                <p>From there, I make options. Not fifty of them, but three or four real directions. We talk through the choices together, and I refine from there. I don't believe in "revisions" as a separate phase—design is iterative by nature, and the best work emerges from ongoing conversation.</p>
+            </div>
+        </section>
+
+        <section id="contact">
+            <h2>Contact</h2>
+            <div class="contact-info prose">
+                <p><a href="mailto:elara@elaravoss.com">elara@elaravoss.com</a></p>
+                <p>Portland, Oregon</p>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // Theme toggle functionality
+        const themeToggle = document.querySelector('.theme-toggle');
+        const html = document.documentElement;
+
+        // Check for saved theme preference or default to system preference
+        const getInitialTheme = () => {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                return savedTheme;
+            }
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        };
+
+        // Set initial theme
+        const currentTheme = getInitialTheme();
+        html.setAttribute('data-theme', currentTheme);
+
+        // Toggle theme
+        themeToggle.addEventListener('click', () => {
+            const current = html.getAttribute('data-theme');
+            const next = current === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        });
+
+        // Listen for system theme changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            if (!localStorage.getItem('theme')) {
+                html.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+            }
+        });
+    </script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: isDark ? '#252220' : '#f0ede6',
+                primaryBorderColor: isDark ? '#e07050' : '#c05030',
+                primaryTextColor: isDark ? '#ddd8d0' : '#3a3530',
+                lineColor: isDark ? '#5a5550' : '#b0a89e',
+                fontSize: '14px',
+            }
+        });
+    </script>
+</body>
+</html>
