@@ -1,11 +1,11 @@
 ---
 name: prd-start
-description: "Generate a Product Requirements Document (PRD) for task orchestration. Creates PRDs with user stories that can be converted to beads issues or prd.json for automated execution. Triggers on: create a prd, write prd for, plan this feature, requirements for, spec out."
+description: "Generate a comprehensive plan/PRD for AI agent execution. Creates agent-operable plans with architecture, security, testing, and user stories that convert to beads. Triggers on: create a prd, write prd for, plan this feature, requirements for, spec out."
 ---
 
-# Ralph TUI PRD Generator
+# Plan/PRD Generator
 
-Create detailed Product Requirements Documents optimized for AI agent execution via ralph-tui.
+Create detailed, agent-operable plans optimized for AI agent execution. The goal is to "spend planning tokens to save implementation tokens."
 
 ---
 
@@ -15,10 +15,11 @@ Create detailed Product Requirements Documents optimized for AI agent execution 
 2. Ask 3-5 essential clarifying questions (with lettered options) - one set at a time
 3. **Always ask about quality gates** (what commands must pass)
 4. After each answer, ask follow-up questions if needed (adaptive exploration)
-5. Generate a structured PRD when you have enough context
-6. Output the PRD wrapped in `[PRD]...[/PRD]` markers for TUI parsing
+5. Generate a comprehensive plan when you have enough context
+6. Output the plan wrapped in `[PRD]...[/PRD]` markers
+7. **Offer critique cycles** — ask if user wants refinement passes before finalizing
 
-**Important:** Do NOT start implementing. Just create the PRD.
+**Important:** Do NOT start implementing. Just create the plan.
 
 ---
 
@@ -32,6 +33,8 @@ Ask questions one set at a time. Each answer should inform your next questions. 
 - **Success Criteria:** How do we know it's done?
 - **Integration:** How does it fit with existing features?
 - **Quality Gates:** What commands must pass for each story? (REQUIRED)
+- **Security/Privacy:** What's the threat model?
+- **Performance:** Any latency/throughput/cost targets?
 
 ### Format Questions Like This:
 
@@ -41,76 +44,56 @@ Ask questions one set at a time. Each answer should inform your next questions. 
    B. Increase user retention
    C. Reduce support burden
    D. Other: [please specify]
-
-2. Who is the target user?
-   A. New users only
-   B. Existing users only
-   C. All users
-   D. Admin users only
 ```
 
-This lets users respond with "1A, 2C" for quick iteration.
-
-### Quality Gates Question (REQUIRED)
-
-Always ask about quality gates - these are project-specific:
-
-```
-What quality commands must pass for each user story?
-   A. pnpm typecheck && pnpm lint
-   B. npm run typecheck && npm run lint
-   C. bun run typecheck && bun run lint
-   D. Other: [specify your commands]
-
-For UI stories, should we include browser verification?
-   A. Yes, use dev-browser skill to verify visually
-   B. No, automated tests are sufficient
-```
-
-### Adaptive Questioning
-
-After each response, decide whether to:
-- Ask follow-up questions (if answers reveal complexity)
-- Ask about a new aspect (if current area is clear)
-- Generate the PRD (if you have enough context)
-
-Typically 2-4 rounds of questions are needed.
+This lets users respond with "1A, 2C" for quick iteration. Typically 2-4 rounds.
 
 ---
 
-## Step 2: PRD Structure
+## Step 2: Plan Structure
 
-Generate the PRD with these sections:
+Generate the plan with ALL of these sections. Great plans include all of them; good plans skip some.
 
-### 1. Introduction/Overview
+### 1. Overview
 Brief description of the feature and the problem it solves.
 
 ### 2. Goals
-Specific, measurable objectives (bullet list).
+Specific, measurable, user-facing outcomes (bullet list).
 
-### 3. Quality Gates
-**CRITICAL:** List the commands that must pass for every user story.
+### 3. Non-Goals (Out of Scope)
+What this feature will NOT include. Critical for preventing scope creep and bikeshedding.
+
+### 4. Quality Gates
+**CRITICAL:** Commands that must pass for every user story.
 
 ```markdown
 ## Quality Gates
-
 These commands must pass for every user story:
-- `pnpm typecheck` - Type checking
-- `pnpm lint` - Linting
-
-For UI stories, also include:
-- Verify in browser using dev-browser skill
+- `npm run build` - Build succeeds
+- `npm test` - All tests pass
+- `npm run lint` - Linting passes
 ```
 
-This section is extracted by conversion tools (ralph-tui-create-json, ralph-tui-create-beads) and appended to each story's acceptance criteria.
+### 5. Architecture
+- Components, boundaries, invariants, data flow
+- Data model / schemas (if applicable)
+- Key technical decisions with rationale
+- Failure modes and how they're handled
 
-### 4. User Stories
+### 6. Security & Privacy Model
+- Threat model (realistic attacker model + mitigations)
+- Secrets handling (where they live, how injected, what never enters logs)
+- Authentication/authorization approach
+
+### 7. Performance Targets
+- Concrete numbers (latency, throughput, memory, cost budgets)
+- Instrumentation/measurement plan
+
+### 8. User Stories
 Each story needs:
 - **Title:** Short descriptive name
 - **Description:** "As a [user], I want [feature] so that [benefit]"
 - **Acceptance Criteria:** Verifiable checklist of what "done" means
-
-Each story should be small enough to implement in one focused AI agent session.
 
 **Format:**
 ```markdown
@@ -122,52 +105,56 @@ Each story should be small enough to implement in one focused AI agent session.
 - [ ] Another criterion
 ```
 
-**Note:** Do NOT include quality gate commands in individual story criteria - they are defined once in the Quality Gates section and applied automatically during conversion.
+**Sizing rule:** Each story must be completable in ONE agent session (~one context window). If you can't describe the change in 2-3 sentences, it's too big — split it.
 
-**Important:**
-- Acceptance criteria must be verifiable, not vague
-- "Works correctly" is bad
-- "Button shows confirmation dialog before deleting" is good
-- Each story should be independently completable
+**Ordering:** Schema/data first, then backend, then frontend, then integration/polish.
 
-### 5. Functional Requirements
-Numbered list of specific functionalities:
-- "FR-1: The system must allow users to..."
-- "FR-2: When a user clicks X, the system must..."
+**Criteria quality:**
+- "Works correctly" is BAD
+- "Button shows confirmation dialog before deleting" is GOOD
+- Do NOT include quality gate commands in individual stories
 
-Be explicit and unambiguous.
+### 9. Story Dependencies
+Explicit dependency graph showing which stories block which.
 
-### 6. Non-Goals (Out of Scope)
-What this feature will NOT include. Critical for managing scope.
+### 10. Testing Plan
+- Unit tests: what to test, fixtures, mocking strategy
+- Integration tests: component interactions
+- E2E tests: critical user flows
+- Logging requirements for failure reproduction
 
-### 7. Technical Considerations (Optional)
-- Known constraints or dependencies
-- Integration points with existing systems
-- Performance requirements
+### 11. Operational Plan
+- Deployment strategy (feature flags, migrations, rollback)
+- Observability (structured logs, metrics, alerts)
+- Error handling philosophy ("no silent failures")
 
-### 8. Success Metrics
-How will success be measured?
+### 12. Risk Register
+Top risks + mitigations. What must be validated early (spikes/PoCs).
 
-### 9. Open Questions
+### 13. Success Metrics
+How will success be measured? Concrete numbers.
+
+### 14. Open Questions
 Remaining questions or areas needing clarification.
 
 ---
 
 ## Writing for AI Agents
 
-The PRD will be executed by AI coding agents via ralph-tui. Therefore:
+The plan will be executed by AI coding agents. Therefore:
 
-- Be explicit and unambiguous
+- Be explicit and unambiguous — no vague advice
 - User stories should be small (completable in one session)
 - Acceptance criteria must be machine-verifiable where possible
 - Include specific file paths if you know them
 - Reference existing code patterns in the project
+- Beads created from this plan should be **self-contained** — agents should not need to re-read the plan constantly
 
 ---
 
 ## Output Format
 
-**CRITICAL:** Wrap the final PRD in markers for TUI parsing:
+**CRITICAL:** Wrap the final plan in markers:
 
 ```
 [PRD]
@@ -175,153 +162,45 @@ The PRD will be executed by AI coding agents via ralph-tui. Therefore:
 
 ## Overview
 ...
-
-## Quality Gates
-...
-
-## User Stories
-...
 [/PRD]
 ```
 
-**File naming:** The TUI will save to `./tasks/prd-[feature-name].md`
-
 ---
 
-## Example Conversation Flow
+## Post-Generation: Critique Cycles
 
-**User:** Create a PRD for adding dark mode to the TUI
+After generating the plan, offer the user refinement:
 
-**Assistant:** I'll help you create a PRD for dark mode. Let me ask a few questions:
+> "Plan generated. Want me to run critique passes to improve it? Options:
+> A. Single critique pass (I review and propose diff-based improvements)
+> B. Oracle review (spawn 3 expert agents: PM, engineer, security)
+> C. Skip — plan is good enough, proceed to beads conversion
+> D. Other"
 
-1. What is the primary goal?
-   A. Reduce eye strain for long sessions
-   B. Match system theme preference
-   C. Provide visual customization
-   D. Other
+### Critique Pass Format
+For each proposed change:
+1. Detailed analysis and rationale
+2. Git-diff style changes relative to the current plan
 
-2. Should the setting persist?
-   A. Yes, save to config file
-   B. No, session only
-   C. Follow system preference
-
-**User:** 1A, 2A
-
-**Assistant:** Great! A couple more questions:
-
-3. Which components need dark mode support?
-   A. All TUI components
-   B. Only the main execution view
-   C. Main view + settings
-   D. Other
-
-4. What quality commands must pass for each story?
-   A. pnpm typecheck && pnpm lint
-   B. npm run typecheck && npm run lint
-   C. bun run typecheck
-   D. Other: [specify]
-
-5. For UI stories, include browser verification?
-   A. Yes, use dev-browser skill
-   B. No, automated tests sufficient
-
-**User:** 3A, 4A, 5A
-
-**Assistant:** Perfect, I have enough to generate the PRD.
-
-[PRD]
-# PRD: Dark Mode for Ralph TUI
-
-## Overview
-Add dark mode support to ralph-tui to reduce eye strain during long orchestration sessions. The feature will apply to all TUI components and persist the user's preference in the config file.
-
-## Goals
-- Provide a comfortable viewing experience in low-light environments
-- Persist theme preference across sessions
-- Apply consistent styling to all TUI components
-
-## Quality Gates
-
-These commands must pass for every user story:
-- `pnpm typecheck` - Type checking
-- `pnpm lint` - Linting
-
-For UI stories, also include:
-- Verify in browser using dev-browser skill
-
-## User Stories
-
-### US-001: Add theme configuration
-**Description:** As a user, I want to set my preferred theme (light/dark) so that it persists across sessions.
-
-**Acceptance Criteria:**
-- [ ] Add `theme` field to `.ralph-tui.yaml` schema
-- [ ] Support values: "light", "dark", "system"
-- [ ] Default to "light" for backwards compatibility
-
-### US-002: Create dark theme color palette
-**Description:** As a user, I want a soft-contrast dark theme that's easy on the eyes.
-
-**Acceptance Criteria:**
-- [ ] Define dark palette with gray tones (not pure black)
-- [ ] Ensure sufficient contrast ratios (WCAG AA)
-- [ ] Colors work well for all UI states (selected, hover, disabled)
-
-### US-003: Apply theme to TUI components
-**Description:** As a user, I want all TUI components to respect my theme preference.
-
-**Acceptance Criteria:**
-- [ ] Header component uses theme colors
-- [ ] Task list uses theme colors
-- [ ] Detail panels use theme colors
-- [ ] Progress bar uses theme colors
-- [ ] Dialogs use theme colors
-
-### US-004: Add theme toggle in settings
-**Description:** As a user, I want to toggle themes from within the TUI settings.
-
-**Acceptance Criteria:**
-- [ ] Theme option visible in settings view
-- [ ] Changes apply immediately without restart
-- [ ] Changes persist to config file
-
-## Functional Requirements
-- FR-1: Theme setting must be readable from `.ralph-tui.yaml`
-- FR-2: Theme must apply on TUI startup
-- FR-3: Theme changes in settings must apply immediately
-- FR-4: All text must maintain readability in both themes
-
-## Non-Goals
-- System theme auto-detection (future enhancement)
-- Custom color schemes beyond light/dark
-- Per-component theme overrides
-
-## Technical Considerations
-- Use existing OpenTUI theming capabilities if available
-- Consider creating a ThemeContext for React components
-- Minimize re-renders when theme changes
-
-## Success Metrics
-- All components render correctly in dark mode
-- No accessibility contrast issues
-- Theme persists across sessions
-
-## Open Questions
-- Should we detect system theme preference automatically in v2?
-[/PRD]
+### Stop Condition
+Stop critique cycles when improvements become incremental (only minor wording tweaks, no meaningful architectural/test/ops changes).
 
 ---
 
 ## Checklist
 
-Before outputting the PRD:
+Before outputting the plan:
 
 - [ ] Asked clarifying questions with lettered options
 - [ ] Asked about quality gates (REQUIRED)
-- [ ] Asked follow-up questions when needed
-- [ ] Quality Gates section included with project-specific commands
+- [ ] Goals AND non-goals defined
+- [ ] Architecture section with components, boundaries, data flow
+- [ ] Security & privacy model included
+- [ ] Performance targets with concrete numbers
 - [ ] User stories are small and independently completable
-- [ ] User stories do NOT include quality gate commands (they're in the Quality Gates section)
-- [ ] Functional requirements are numbered and unambiguous
-- [ ] Non-goals section defines clear boundaries
-- [ ] PRD is wrapped in `[PRD]...[/PRD]` markers
+- [ ] Story dependencies explicit
+- [ ] Testing plan (unit + integration + e2e)
+- [ ] Operational plan (deploy, observability, rollback)
+- [ ] Risk register with mitigations
+- [ ] Plan is wrapped in `[PRD]...[/PRD]` markers
+- [ ] Offered critique cycles
