@@ -1,7 +1,7 @@
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:4800",
-    "CLAUDE_ENABLE_TEAM_MODE": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ANTHROPIC_BASE_URL": "http://localhost:4810"
   },
   "permissions": {
     "defaultMode": "default"
@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state Y29tcGxldGU= && echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\' && ~/.dotfiles/bin/claude-sound complete",
+            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state Y29tcGxldGU= && echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\'",
             "async": true
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state aW5wdXQ= && ~/.dotfiles/bin/claude-sound input",
+            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state aW5wdXQ=",
             "async": true
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state ZXJyb3I= && ~/.dotfiles/bin/claude-sound error",
+            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state ZXJyb3I=",
             "async": true
           }
         ]
@@ -69,12 +69,22 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "input=$(cat); user=$(python3 ~/.dotfiles/bin/claude-user-status.py 2>/dev/null); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s %s' \"$user\" \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
+    "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": false
   },
   "syntaxHighlightingDisabled": false,
   "autoUpdatesChannel": "latest",
-  "effortLevel": "low"
+  "skipDangerousModePermissionPrompt": true,
+  "effortLevel": "medium",
+  "mcpServers": {
+    "mcp-agent-mail": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/api/",
+      "headers": {
+        "Authorization": "Bearer 459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc"
+      }
+    }
+  }
 }
