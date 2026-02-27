@@ -4,10 +4,6 @@
       "type": "sse",
       "url": "http://127.0.0.1:4801/sse"
     },
-    "atlassian": {
-      "type": "http",
-      "url": "http://127.0.0.1:4808/mcp"
-    },
     "google-workspace": {
       "type": "http",
       "url": "http://127.0.0.1:4802/mcp"
@@ -18,7 +14,7 @@
       "args": [
         "/c",
         "C:\\Python313\\python.exe",
-        "C:\\WORK\\desktop\\mocapzero\\Tools\\mcp-cdb-interactive\\server.py",
+        "C:\\WORK\\mcp-cdb-interactive\\server.py",
         "--cdb-path",
         "C:\\Users\\oystein\\AppData\\Local\\Microsoft\\WindowsApps\\cdbX64.exe",
         "--timeout", "120",
@@ -31,7 +27,7 @@
     "motioncatalyst-ui": {
       "type": "stdio",
       "command": "node",
-      "args": ["/c/work/desktop/yadif/Tools/mcp-flaui-wrapper/index.js"],
+      "args": ["/c/work/desktop/mocapzero/Tools/mcp-flaui-wrapper/index.js"],
       "env": {}
     },
     "context7": {
