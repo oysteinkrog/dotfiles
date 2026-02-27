@@ -50,7 +50,9 @@ Additionally activate for visualization requests:
 
    Pick based on the content type: portfolios suit Paper & Ink or Dusk; docs suit Editorial or Modernist; blogs suit Paper & Ink or Forest.
 
-3. **Choose fonts** — pick a Google Fonts pairing. Examples:
+3. **Use OKLCH for all colors** — all color values must use `oklch(lightness chroma hue)` syntax. Never use hex codes, rgb(), or hsl() in generated pages. Use OKLCH palettes from `references/css-patterns.md` as your starting point, and derive variations by adjusting the three axes predictably (e.g., lighter: +0.1 L, darker: -0.1 L, muted: ×0.5 C).
+
+4. **Choose fonts** — pick a Google Fonts pairing. Examples:
    - Playfair Display + Source Serif 4 (editorial/magazine)
    - Inter + Inter (clean/technical, vary by weight)
    - Libre Baskerville + Montserrat (warm/professional)

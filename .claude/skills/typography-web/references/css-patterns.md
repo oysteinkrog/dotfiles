@@ -4,23 +4,34 @@ A comprehensive reference of reusable CSS patterns for creating beautiful, typog
 
 ## Theme System
 
+### OKLCH Color Space
+
+All palettes use [OKLCH](https://oklch.fyi/) — a perceptually uniform color model with the syntax `oklch(lightness chroma hue)`:
+
+- **Lightness**: 0–1 (0 = black, 1 = white)
+- **Chroma**: 0–0.4+ (0 = gray, higher = more saturated)
+- **Hue**: 0–360° (same as HSL hue angle)
+- **Alpha**: `/0.5` suffix for transparency
+
+Key advantages over hex/HSL: identical lightness values look visually equal across hues, gradients don't muddy through gray, and chroma can access P3 display gamut on modern screens.
+
 ### Complete Custom Property Theme
 
 ```css
 :root {
-  /* Light theme colors */
-  --bg-primary: #fafaf7;
-  --bg-secondary: #f0efe9;
-  --bg-tertiary: #e8e6df;
-  --text-primary: #2d2d2d;
-  --text-secondary: #5a5a5a;
-  --text-tertiary: #8a8a8a;
-  --accent: #c05030;
-  --accent-hover: #a04020;
-  --border: #ddd;
-  --border-subtle: #eee;
-  --shadow: rgba(0, 0, 0, 0.08);
-  --code-bg: #f5f2eb;
+  /* Light theme colors — OKLCH */
+  --bg-primary: oklch(0.98 0.008 85);
+  --bg-secondary: oklch(0.95 0.010 80);
+  --bg-tertiary: oklch(0.91 0.013 78);
+  --text-primary: oklch(0.22 0.032 55);
+  --text-secondary: oklch(0.41 0.025 55);
+  --text-tertiary: oklch(0.60 0.018 58);
+  --accent: oklch(0.54 0.155 32);
+  --accent-hover: oklch(0.46 0.145 32);
+  --border: oklch(0.88 0.012 78);
+  --border-subtle: oklch(0.93 0.010 80);
+  --shadow: oklch(0.22 0.03 55 / 0.08);
+  --code-bg: oklch(0.96 0.010 82);
 
   /* Spacing */
   --space-xs: 0.5rem;
@@ -43,18 +54,18 @@ A comprehensive reference of reusable CSS patterns for creating beautiful, typog
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-primary: #1a1a1a;
-    --bg-secondary: #242424;
-    --bg-tertiary: #2d2d2d;
-    --text-primary: #e8e6df;
-    --text-secondary: #b4b2ab;
-    --text-tertiary: #8a8a8a;
-    --accent: #e07856;
-    --accent-hover: #f08866;
-    --border: #3a3a3a;
-    --border-subtle: #2d2d2d;
-    --shadow: rgba(0, 0, 0, 0.3);
-    --code-bg: #242424;
+    --bg-primary: oklch(0.15 0.012 50);
+    --bg-secondary: oklch(0.19 0.012 50);
+    --bg-tertiary: oklch(0.23 0.013 50);
+    --text-primary: oklch(0.91 0.012 80);
+    --text-secondary: oklch(0.74 0.016 68);
+    --text-tertiary: oklch(0.58 0.018 58);
+    --accent: oklch(0.67 0.130 36);
+    --accent-hover: oklch(0.73 0.120 36);
+    --border: oklch(0.28 0.012 50);
+    --border-subtle: oklch(0.23 0.012 50);
+    --shadow: oklch(0 0 0 / 0.30);
+    --code-bg: oklch(0.19 0.012 50);
   }
 }
 ```
@@ -63,18 +74,18 @@ A comprehensive reference of reusable CSS patterns for creating beautiful, typog
 
 ```css
 [data-theme="dark"] {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #242424;
-  --bg-tertiary: #2d2d2d;
-  --text-primary: #e8e6df;
-  --text-secondary: #b4b2ab;
-  --text-tertiary: #8a8a8a;
-  --accent: #e07856;
-  --accent-hover: #f08866;
-  --border: #3a3a3a;
-  --border-subtle: #2d2d2d;
-  --shadow: rgba(0, 0, 0, 0.3);
-  --code-bg: #242424;
+  --bg-primary: oklch(0.15 0.012 50);
+  --bg-secondary: oklch(0.19 0.012 50);
+  --bg-tertiary: oklch(0.23 0.013 50);
+  --text-primary: oklch(0.91 0.012 80);
+  --text-secondary: oklch(0.74 0.016 68);
+  --text-tertiary: oklch(0.58 0.018 58);
+  --accent: oklch(0.67 0.130 36);
+  --accent-hover: oklch(0.73 0.120 36);
+  --border: oklch(0.28 0.012 50);
+  --border-subtle: oklch(0.23 0.012 50);
+  --shadow: oklch(0 0 0 / 0.30);
+  --code-bg: oklch(0.19 0.012 50);
 }
 ```
 
@@ -542,7 +553,7 @@ tbody tr:hover {
 
 tbody tr:nth-child(even) {
   background: var(--bg-secondary);
-  background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+  background: color-mix(in oklch, var(--bg-secondary) 50%, transparent);
 }
 
 tbody tr:nth-child(even):hover {
@@ -767,33 +778,33 @@ themeToggle?.addEventListener('click', () => {
 
 ```css
 :root {
-  --bg-primary: #faf8f3;
-  --bg-secondary: #f0ede5;
-  --bg-tertiary: #e8e3d8;
-  --text-primary: #3a2817;
-  --text-secondary: #5c4a38;
-  --text-tertiary: #8a7d70;
-  --accent: #c05030;
-  --accent-hover: #a04020;
-  --border: #d8cfc0;
-  --border-subtle: #e8e3d8;
-  --shadow: rgba(58, 40, 23, 0.08);
-  --code-bg: #f5f0e8;
+  --bg-primary: oklch(0.98 0.008 87);
+  --bg-secondary: oklch(0.94 0.013 85);
+  --bg-tertiary: oklch(0.90 0.017 82);
+  --text-primary: oklch(0.22 0.044 46);
+  --text-secondary: oklch(0.37 0.038 48);
+  --text-tertiary: oklch(0.55 0.024 56);
+  --accent: oklch(0.52 0.155 32);
+  --accent-hover: oklch(0.44 0.143 32);
+  --border: oklch(0.85 0.016 74);
+  --border-subtle: oklch(0.90 0.013 80);
+  --shadow: oklch(0.22 0.044 46 / 0.08);
+  --code-bg: oklch(0.96 0.012 82);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #1a1510;
-  --bg-secondary: #241f18;
-  --bg-tertiary: #2d2720;
-  --text-primary: #e8e3d8;
-  --text-secondary: #c4b8a8;
-  --text-tertiary: #8a7d70;
-  --accent: #e07856;
-  --accent-hover: #f08866;
-  --border: #3a332a;
-  --border-subtle: #2d2720;
-  --shadow: rgba(0, 0, 0, 0.3);
-  --code-bg: #241f18;
+  --bg-primary: oklch(0.14 0.018 46);
+  --bg-secondary: oklch(0.18 0.018 46);
+  --bg-tertiary: oklch(0.22 0.018 46);
+  --text-primary: oklch(0.90 0.013 80);
+  --text-secondary: oklch(0.75 0.018 68);
+  --text-tertiary: oklch(0.56 0.022 56);
+  --accent: oklch(0.65 0.130 36);
+  --accent-hover: oklch(0.71 0.118 36);
+  --border: oklch(0.27 0.016 46);
+  --border-subtle: oklch(0.22 0.016 46);
+  --shadow: oklch(0 0 0 / 0.30);
+  --code-bg: oklch(0.18 0.018 46);
 }
 ```
 
@@ -801,33 +812,33 @@ themeToggle?.addEventListener('click', () => {
 
 ```css
 :root {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f5f7fa;
-  --bg-tertiary: #e8ecf1;
-  --text-primary: #0a0a0a;
-  --text-secondary: #4a4a4a;
-  --text-tertiary: #8a8a8a;
-  --accent: #2c5aa0;
-  --accent-hover: #1e4278;
-  --border: #d0d7e0;
-  --border-subtle: #e8ecf1;
-  --shadow: rgba(44, 90, 160, 0.08);
-  --code-bg: #f0f3f8;
+  --bg-primary: oklch(1.00 0 0);
+  --bg-secondary: oklch(0.97 0.006 248);
+  --bg-tertiary: oklch(0.93 0.010 245);
+  --text-primary: oklch(0.09 0 0);
+  --text-secondary: oklch(0.35 0 0);
+  --text-tertiary: oklch(0.60 0 0);
+  --accent: oklch(0.42 0.138 258);
+  --accent-hover: oklch(0.32 0.126 258);
+  --border: oklch(0.87 0.012 242);
+  --border-subtle: oklch(0.93 0.008 245);
+  --shadow: oklch(0.42 0.138 258 / 0.08);
+  --code-bg: oklch(0.95 0.010 248);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #0f1419;
-  --bg-secondary: #1a1f26;
-  --bg-tertiary: #242a33;
-  --text-primary: #e8ecf1;
-  --text-secondary: #b8c0cc;
-  --text-tertiary: #8a92a0;
-  --accent: #4a8bf5;
-  --accent-hover: #6ba0f7;
-  --border: #2d3540;
-  --border-subtle: #242a33;
-  --shadow: rgba(0, 0, 0, 0.4);
-  --code-bg: #1a1f26;
+  --bg-primary: oklch(0.14 0.018 252);
+  --bg-secondary: oklch(0.19 0.016 250);
+  --bg-tertiary: oklch(0.24 0.016 248);
+  --text-primary: oklch(0.93 0.010 245);
+  --text-secondary: oklch(0.77 0.016 242);
+  --text-tertiary: oklch(0.60 0.014 244);
+  --accent: oklch(0.64 0.160 258);
+  --accent-hover: oklch(0.72 0.140 258);
+  --border: oklch(0.27 0.016 250);
+  --border-subtle: oklch(0.24 0.016 248);
+  --shadow: oklch(0 0 0 / 0.40);
+  --code-bg: oklch(0.19 0.016 250);
 }
 ```
 
@@ -835,33 +846,33 @@ themeToggle?.addEventListener('click', () => {
 
 ```css
 :root {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8f8f8;
-  --bg-tertiary: #eeeeee;
-  --text-primary: #000000;
-  --text-secondary: #444444;
-  --text-tertiary: #888888;
-  --accent: #ff3b30;
-  --accent-hover: #d92d23;
-  --border: #dddddd;
-  --border-subtle: #eeeeee;
-  --shadow: rgba(0, 0, 0, 0.08);
-  --code-bg: #f5f5f5;
+  --bg-primary: oklch(1.00 0 0);
+  --bg-secondary: oklch(0.97 0 0);
+  --bg-tertiary: oklch(0.94 0 0);
+  --text-primary: oklch(0.00 0 0);
+  --text-secondary: oklch(0.33 0 0);
+  --text-tertiary: oklch(0.60 0 0);
+  --accent: oklch(0.58 0.220 27);
+  --accent-hover: oklch(0.50 0.210 27);
+  --border: oklch(0.90 0 0);
+  --border-subtle: oklch(0.94 0 0);
+  --shadow: oklch(0 0 0 / 0.08);
+  --code-bg: oklch(0.96 0 0);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #000000;
-  --bg-secondary: #1a1a1a;
-  --bg-tertiary: #2a2a2a;
-  --text-primary: #ffffff;
-  --text-secondary: #bbbbbb;
-  --text-tertiary: #888888;
-  --accent: #ff453a;
-  --accent-hover: #ff6259;
-  --border: #333333;
-  --border-subtle: #2a2a2a;
-  --shadow: rgba(255, 255, 255, 0.08);
-  --code-bg: #1a1a1a;
+  --bg-primary: oklch(0.00 0 0);
+  --bg-secondary: oklch(0.14 0 0);
+  --bg-tertiary: oklch(0.22 0 0);
+  --text-primary: oklch(1.00 0 0);
+  --text-secondary: oklch(0.77 0 0);
+  --text-tertiary: oklch(0.60 0 0);
+  --accent: oklch(0.62 0.220 27);
+  --accent-hover: oklch(0.68 0.210 27);
+  --border: oklch(0.26 0 0);
+  --border-subtle: oklch(0.22 0 0);
+  --shadow: oklch(1.00 0 0 / 0.08);
+  --code-bg: oklch(0.14 0 0);
 }
 ```
 
@@ -869,33 +880,33 @@ themeToggle?.addEventListener('click', () => {
 
 ```css
 :root {
-  --bg-primary: #faf9f5;
-  --bg-secondary: #f0ede5;
-  --bg-tertiary: #e5e1d5;
-  --text-primary: #1f3a2f;
-  --text-secondary: #3a5248;
-  --text-tertiary: #6b7f75;
-  --accent: #5a7d5f;
-  --accent-hover: #466348;
-  --border: #c8d4cd;
-  --border-subtle: #e5e1d5;
-  --shadow: rgba(31, 58, 47, 0.08);
-  --code-bg: #eef2ee;
+  --bg-primary: oklch(0.98 0.008 100);
+  --bg-secondary: oklch(0.94 0.012 92);
+  --bg-tertiary: oklch(0.90 0.016 92);
+  --text-primary: oklch(0.24 0.062 152);
+  --text-secondary: oklch(0.38 0.058 152);
+  --text-tertiary: oklch(0.56 0.032 152);
+  --accent: oklch(0.50 0.085 152);
+  --accent-hover: oklch(0.41 0.080 152);
+  --border: oklch(0.83 0.024 148);
+  --border-subtle: oklch(0.90 0.016 100);
+  --shadow: oklch(0.24 0.062 152 / 0.08);
+  --code-bg: oklch(0.94 0.020 148);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #141a15;
-  --bg-secondary: #1c241d;
-  --bg-tertiary: #242d25;
-  --text-primary: #e5f0e7;
-  --text-secondary: #b8c8bb;
-  --text-tertiary: #7a8a7d;
-  --accent: #7aa37f;
-  --accent-hover: #92b897;
-  --border: #2d3a2e;
-  --border-subtle: #242d25;
-  --shadow: rgba(0, 0, 0, 0.3);
-  --code-bg: #1c241d;
+  --bg-primary: oklch(0.15 0.022 152);
+  --bg-secondary: oklch(0.19 0.022 152);
+  --bg-tertiary: oklch(0.23 0.022 152);
+  --text-primary: oklch(0.92 0.018 140);
+  --text-secondary: oklch(0.77 0.022 145);
+  --text-tertiary: oklch(0.56 0.022 150);
+  --accent: oklch(0.62 0.095 152);
+  --accent-hover: oklch(0.69 0.088 148);
+  --border: oklch(0.27 0.022 150);
+  --border-subtle: oklch(0.23 0.022 152);
+  --shadow: oklch(0 0 0 / 0.30);
+  --code-bg: oklch(0.19 0.022 152);
 }
 ```
 
@@ -903,33 +914,33 @@ themeToggle?.addEventListener('click', () => {
 
 ```css
 :root {
-  --bg-primary: #f5f3ef;
-  --bg-secondary: #e8e3dc;
-  --bg-tertiary: #d8d0c5;
-  --text-primary: #2d2520;
-  --text-secondary: #4a3f38;
-  --text-tertiary: #756b60;
-  --accent: #d4834f;
-  --accent-hover: #b86d3a;
-  --border: #c8bcaf;
-  --border-subtle: #d8d0c5;
-  --shadow: rgba(45, 37, 32, 0.08);
-  --code-bg: #ede8e0;
+  --bg-primary: oklch(0.97 0.009 78);
+  --bg-secondary: oklch(0.92 0.015 72);
+  --bg-tertiary: oklch(0.87 0.020 70);
+  --text-primary: oklch(0.22 0.032 46);
+  --text-secondary: oklch(0.35 0.028 46);
+  --text-tertiary: oklch(0.52 0.020 53);
+  --accent: oklch(0.63 0.128 48);
+  --accent-hover: oklch(0.54 0.122 46);
+  --border: oklch(0.81 0.020 68);
+  --border-subtle: oklch(0.87 0.017 70);
+  --shadow: oklch(0.22 0.032 46 / 0.08);
+  --code-bg: oklch(0.93 0.013 72);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #1a1715;
-  --bg-secondary: #24201d;
-  --bg-tertiary: #2d2825;
-  --text-primary: #f0ebe3;
-  --text-secondary: #c4b8a8;
-  --text-tertiary: #8a7d70;
-  --accent: #e69760;
-  --accent-hover: #f0ab78;
-  --border: #3a352f;
-  --border-subtle: #2d2825;
-  --shadow: rgba(0, 0, 0, 0.4);
-  --code-bg: #24201d;
+  --bg-primary: oklch(0.14 0.015 46);
+  --bg-secondary: oklch(0.18 0.015 46);
+  --bg-tertiary: oklch(0.22 0.015 46);
+  --text-primary: oklch(0.94 0.010 74);
+  --text-secondary: oklch(0.77 0.018 66);
+  --text-tertiary: oklch(0.57 0.018 56);
+  --accent: oklch(0.72 0.118 52);
+  --accent-hover: oklch(0.78 0.108 52);
+  --border: oklch(0.28 0.015 46);
+  --border-subtle: oklch(0.22 0.015 46);
+  --shadow: oklch(0 0 0 / 0.40);
+  --code-bg: oklch(0.18 0.015 46);
 }
 ```
 
