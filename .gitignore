@@ -35,3 +35,19 @@ bin/pandoc
 .claude/teams/
 .claude/plugins/
 bin/__pycache__/
+
+# Large binaries (install via package manager)
+bin/hugo
+bin/dcg
+
+# Claude Code temp/scratch files
+.claude/analyze_frame.py
+.claude/plan.md
+.claude/backups/
+.claude/output/
+.claude/mcp-needs-auth-cache.json
+.claude/*.bak
+.config/fish/functions/*.bak
+
+# Misc
+list-worktrees.sh
