@@ -97,3 +97,66 @@ Find files by name pattern (glob wrapper around `rg --files`).
 ```bash
 rgg VideoDevice                   # find files with VideoDevice in name
 ```
+
+## NTM - Named Tmux Manager (Multi-Agent Orchestration)
+
+NTM manages multiple AI coding agents across tmux panes with work distribution, inter-agent mail, file reservations, and bead integration.
+
+### Session Lifecycle
+```bash
+ntm spawn PROJECT --cc=3          # spawn 3 Claude agents
+ntm spawn PROJECT --cc=3 --assign # spawn + auto-assign beads
+ntm controller PROJECT             # launch coordinator in pane 1
+ntm attach PROJECT                 # attach to session
+ntm interrupt PROJECT              # Ctrl+C all agents
+```
+
+### Work Distribution (bead integration)
+```bash
+ntm work triage                    # full triage: recommendations, bottlenecks
+ntm work next                      # single best next action
+ntm work alerts                    # stale items, blocking cascades
+ntm assign PROJECT                 # auto-assign beads to idle agents
+ntm assign PROJECT --watch         # continuous: auto-reassign on completion
+ntm assign PROJECT --pane=3 --beads=bd-XXX  # direct assignment
+ntm assign PROJECT --clear bd-XXX  # clear assignment
+ntm coordinator assign PROJECT     # trigger coordinator work assignment
+```
+
+### Agent Mail (inter-agent messaging)
+```bash
+ntm mail send PROJECT --to AGENT 'msg'   # direct message
+ntm mail send PROJECT --all 'msg'        # broadcast
+ntm mail inbox PROJECT                   # view inboxes
+ntm mail read PROJECT --agent AGENT      # agent-specific mail
+ntm mail ack PROJECT MSGID               # acknowledge message
+```
+
+### File Reservations (conflict prevention)
+```bash
+ntm mail reserve PROJECT --agent AGENT --paths 'glob'
+ntm locks PROJECT --all-agents           # show active reservations
+ntm conflicts PROJECT                    # show file conflicts
+```
+
+### Monitoring
+```bash
+ntm health PROJECT                 # agent health check
+ntm activity PROJECT --watch       # real-time activity
+ntm coordinator status PROJECT     # coordinator status
+ntm coordinator digest PROJECT     # session digest
+ntm --robot-snapshot               # unified state: sessions+beads+mail
+ntm --robot-terse                  # minimal state one-liner
+```
+
+### Tips
+- Use `--no-cass-check` with `ntm send` if CASS isn't installed to avoid errors
+- Agents don't auto-commit — worker instructions must explicitly require `git commit`
+- `ntm assign` may not detect idle agents after `spawn --assign`; use `ntm send --panes=N` as fallback
+
+### Strategies for `ntm assign`
+- `balanced` — even workload distribution (default)
+- `speed` — prioritize quick completion
+- `quality` — best agent-task match
+- `dependency` — prioritize unblocking downstream
+- `round-robin` — deterministic even distribution
