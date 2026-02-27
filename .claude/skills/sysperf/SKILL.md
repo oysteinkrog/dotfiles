@@ -1,5 +1,5 @@
 ---
-name: system-performance-remediation
+name: sysperf
 version: 1.0.0
 description: |
   Diagnose and fix system sluggishness caused by zombie processes, stuck commands,
