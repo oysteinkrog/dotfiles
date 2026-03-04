@@ -3,7 +3,8 @@
 Start and manage a swarm of coding agents that implement beads from the issue tracker.
 
 Each agent is autonomous and fungible: it picks a bead, implements it, commits, and exits.
-ntm auto-restarts the agent with fresh context. No coordinator needed.
+A shell loop restarts it with fresh context (new Claude Code process + prompt re-injection).
+No coordinator needed.
 
 ## When to activate
 
@@ -52,9 +53,10 @@ Derive from the current directory name or let the user override:
 SESSION_NAME="swarm-$(basename $(pwd))"
 ```
 
-#### 3. Write the initial prompt
+#### 3. Write the agent prompt
 
-Write to `/tmp/swarm-prompt.md`. This is sent once to each fresh agent. The agent self-assigns, does one bead, then exits. ntm `--auto-restart` gives the next agent fresh context.
+Write to `/tmp/swarm-prompt.md`. Each agent gets this on every fresh start. The agent
+self-assigns via bv, does one bead, commits, and exits. The wrapper loop restarts it.
 
 ```
 Read CLAUDE.md in the repo root. Follow ALL instructions there.
@@ -96,7 +98,7 @@ The bead's description and the project's CLAUDE.md tell you everything you need.
 Check for conflicts:
   bv -robot-impact <files-you-plan-to-edit> 2>/dev/null
 
-If risk_level is "high" or "critical", check agent-mail for active reservations before proceeding.
+If risk_level is "high" or "critical", check agent-mail for active reservations.
 
 ## Implement
 
@@ -112,24 +114,99 @@ If risk_level is "high" or "critical", check agent-mail for active reservations 
    /exit
 ```
 
-#### 4. Spawn session with auto-restart
+#### 4. Write the agent wrapper script
+
+Write to `/tmp/swarm-agent.sh`. This loop gives each bead a fresh Claude Code process
+with the prompt re-injected every time.
 
 ```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --auto-restart --no-cass-check
+#!/usr/bin/env bash
+set -euo pipefail
+PROMPT_FILE="/tmp/swarm-prompt.md"
+PROJECT_DIR="$(pwd)"
+MAX_BEADS=50  # safety limit
+
+for i in $(seq 1 $MAX_BEADS); do
+  # Check if any beads are ready before starting Claude
+  NEXT=$(bv -robot-next 2>/dev/null | jq -r '.id // empty')
+  if [ -z "$NEXT" ]; then
+    echo "No more ready beads. Agent done after $((i-1)) beads."
+    break
+  fi
+  echo "=== Starting bead $i (next: $NEXT) ==="
+  # Run Claude Code with the prompt, non-interactive
+  # Claude reads the prompt, does the work, exits when done
+  cat "$PROMPT_FILE" | claude --print --dangerously-skip-permissions
+  echo "=== Bead $i complete, restarting with fresh context ==="
+  sleep 5  # brief pause between beads
+done
 ```
 
-Then send the initial prompt to all agents:
+NOTE: The exact Claude Code CLI flags for non-interactive prompt execution may vary.
+Check `claude --help` for the right flags. Key requirement: Claude must read the prompt
+from stdin or a file, do the work, and exit when done (not stay in interactive mode).
 
+If `--print` / `--dangerously-skip-permissions` aren't right, alternatives:
+- `claude -p "$(cat /tmp/swarm-prompt.md)"` (pass prompt as argument)
+- `claude --prompt-file /tmp/swarm-prompt.md`
+
+#### 5. Spawn session
+
+Instead of using ntm's agent spawner (which doesn't re-inject prompts on restart),
+spawn ntm with the wrapper script. Two approaches:
+
+**Option A: Use ntm normally + send prompt manually after each restart**
 ```bash
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --no-cass-check
+
+# Send initial prompt to all agents
 ntm send $SESSION_NAME --all --file=/tmp/swarm-prompt.md --no-cass-check
 ```
+Downside: after the agent exits and auto-restarts, you'd need to re-send the prompt manually.
 
-#### 5. Report
+**Option B: Run the wrapper script in tmux panes directly**
+```bash
+# Create a tmux session and run the loop in each pane
+tmux new-session -d -s $SESSION_NAME
+for i in $(seq 1 $((AGENT_COUNT - 1))); do
+  tmux split-window -t $SESSION_NAME
+done
+tmux select-layout -t $SESSION_NAME tiled
+
+# Send the wrapper script to each pane
+for i in $(seq 0 $((AGENT_COUNT - 1))); do
+  tmux send-keys -t "$SESSION_NAME:0.$i" "cd $PROJECT_DIR && bash /tmp/swarm-agent.sh" Enter
+  sleep 10  # stagger to avoid rate limits
+done
+```
+Downside: loses ntm's activity monitoring, file conflict detection, etc.
+
+**Option C (recommended): Use ntm spawn + a watcher loop to re-inject prompts**
+```bash
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart --no-cass-check
+ntm send $SESSION_NAME --all --file=/tmp/swarm-prompt.md --no-cass-check
+
+# In a separate terminal, run the re-injection loop:
+while true; do
+  sleep 30
+  # Find panes that are WAITING (just restarted, no prompt yet)
+  WAITING=$(ntm activity $SESSION_NAME --json 2>/dev/null | jq -r '.panes[]? | select(.state == "WAITING") | .index')
+  for pane in $WAITING; do
+    echo "Re-injecting prompt to pane $pane"
+    ntm send $SESSION_NAME --pane=$pane --file=/tmp/swarm-prompt.md --no-cass-check
+  done
+done
+```
+This keeps ntm's monitoring while ensuring every restarted agent gets the prompt.
+
+Recommend Option C to the user and offer to write it as a script.
+
+#### 6. Report
 
 Tell the user:
 - Session name and agent count
 - Each agent picks its own bead via `bv -robot-next`, implements it, commits, exits
-- `--auto-restart` respawns each agent with fresh context — no coordinator needed
+- Auto-restart + prompt re-injection gives fresh context per bead
 - Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
@@ -158,7 +235,9 @@ Pick the first idle (WAITING) pane. If no session is running, offer to spawn one
 
 #### 3. Build a self-contained prompt
 
-Write `/tmp/bead-$BEAD_ID.md` — same structure as the prompt in A.3, but skip the `bv -robot-next` step and inline the bead details directly (description, acceptance criteria, notes, labels, dependencies, related beads).
+Write `/tmp/bead-$BEAD_ID.md` — same structure as the prompt in A.3, but skip the
+`bv -robot-next` step and inline the bead details directly (description, acceptance
+criteria, notes, labels, dependencies, related beads).
 
 #### 4. Reset context and assign
 
