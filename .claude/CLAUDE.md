@@ -63,6 +63,46 @@ ntm spawn <session> -r balanced                # Balanced mix
 ntm recipes list                               # Show all recipes
 ```
 
+### Swarm orchestration
+
+**Spawning with isolation:**
+```bash
+ntm spawn <session> --cc=4 --no-user --worktrees --stagger-mode=smart --no-cass-check
+```
+- `--worktrees` gives each agent its own git branch (prevents file conflicts)
+- `--stagger-mode=smart` avoids API rate limit thundering herd
+- `--no-user` makes all panes agent panes (no user pane)
+- `--no-cass-check` always required to avoid CASS parse errors
+
+**Dependency-aware continuous assignment (watch mode):**
+```bash
+ntm assign <session> --watch --strategy=dependency --stop-when-done \
+  --template-file=prompts/implement.md --no-cass-check
+```
+- Queries `bv -robot-triage` for prioritized ready beads
+- Assigns to idle agents, waits for completion, assigns next
+- `--strategy=dependency` prioritizes beads that unblock the most downstream work
+- `--stop-when-done` exits when no beads remain
+
+**Direct bead assignment:**
+```bash
+ntm assign <session> --pane=3 --beads=bd-123 --no-cass-check
+```
+
+**Fresh context between beads:**
+```bash
+ntm interrupt <session>           # Ctrl+C to all agent panes (resets Claude Code context)
+ntm interrupt <session> --pane=3  # Reset specific pane only (not yet supported — interrupt is session-wide)
+```
+
+**Monitoring:**
+```bash
+ntm activity <session> --watch    # Real-time agent states
+ntm changes <session>             # File changes per agent
+ntm conflicts <session>           # File reservation conflicts
+ntm worktrees merge <agent>       # Merge agent's worktree branch to main
+```
+
 ### With agent-mail + bv coordination
 Use ntm to spawn agents, bv for triage/work assignment, and agent-mail for message routing.
 Agents register with `macro_start_session`, coordinate via `send_message`/`fetch_inbox`,
@@ -79,6 +119,10 @@ bv                                    # Launch TUI viewer
 bv -robot-triage                      # Unified triage as JSON (for AI agents)
 bv -robot-triage-by-label             # Triage grouped by label
 bv -robot-triage-by-track             # Triage grouped by execution track
+bv -robot-plan                        # Execution plan with parallel tracks
+bv -robot-next                        # Single top recommendation with claim command
+bv -robot-related <bead-id>           # Related beads (file overlap, deps, commit overlap)
+bv -robot-blocker-chain <bead-id>     # Full blocker chain to root blockers
 bv -agent-brief <dir>                 # Export agent brief bundle (triage.json, brief.md, etc.)
 bv -robot-suggest                     # Smart suggestions (duplicates, deps, labels, cycles)
 bv -search "query"                    # Semantic search across beads
@@ -88,11 +132,28 @@ bv -check-drift                       # Check drift from baseline
 bv -save-baseline "description"       # Save current metrics as baseline
 ```
 
+### br (beads_rust) key commands
+```bash
+br ready                              # List unblocked beads
+br ready --json                       # Same, machine-readable (filter stderr: 2>/dev/null)
+br blocked                            # List blocked beads with their blockers
+br show <bead-id>                     # Full bead detail (text)
+br show <bead-id> --json              # Full bead detail (JSON: description, acceptance_criteria, notes, deps)
+br dep list <bead-id>                 # List dependencies for a bead
+br update <bead-id> --status in_progress  # Claim a bead
+br close <bead-id>                    # Close a bead when done
+br update <bead-id> --notes "..."     # Add notes to a bead
+```
+
 ### Agent workflow
 1. `bv -robot-triage` to get prioritized work items
 2. `ntm spawn` to create agent session
 3. `ntm assign` or `ntm send` to distribute work from triage
 4. Agents use agent-mail for coordination, br for bead updates
+
+## Google Workspace MCP
+
+`user_google_email` is `oystein@initialforce.com` (not `@swingcatalyst.com`).
 
 ## Agent Swarm Rules
 
