@@ -24,12 +24,19 @@ ntm changes <session> 2>/dev/null
 ntm conflicts <session> 2>/dev/null
 ```
 
-### 2. Bead progress
+### 2. Bead progress (via bv)
 
 ```bash
-echo "=== Open ===" && br list --status open 2>/dev/null | tail -1
-echo "=== Closed ===" && br list --status closed 2>/dev/null | tail -1
-echo "=== Ready ===" && br ready 2>/dev/null
+# Quick health overview
+bv -robot-triage 2>/dev/null | jq '{
+  actionable: .triage.quick_ref.actionable_count,
+  blocked: .triage.quick_ref.blocked_count,
+  top_picks: [.triage.quick_ref.top_picks[]? | {id, title, unblocks}],
+  health: .triage.project_health.status
+}'
+
+# Any alerts?
+bv -robot-alerts --severity=critical 2>/dev/null | jq '.alerts[:5]'
 ```
 
 ### 3. Recent commits
@@ -40,10 +47,17 @@ git log --oneline -15
 
 Verify each commit references a bead ID. Flag any commits that don't.
 
-### 4. Summary
+### 4. Drift check (if baseline exists)
+
+```bash
+bv -check-drift 2>/dev/null
+```
+
+### 5. Summary
 
 Present:
 - Agent states (GENERATING / WAITING / ERROR / STALLED)
-- Beads closed since swarm started vs total open
-- Any issues: conflicts, stalled agents, missing bead IDs in commits
-- What's ready next
+- Actionable vs blocked beads, project health status
+- Any critical alerts
+- Recent commits with bead ID verification
+- Next highest-impact bead to work on
