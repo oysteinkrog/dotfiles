@@ -2,6 +2,9 @@
 
 Start and manage a swarm of coding agents that implement beads from the issue tracker.
 
+Each agent is autonomous and fungible: it picks a bead, implements it, commits, and exits.
+ntm auto-restarts the agent with fresh context. No coordinator needed.
+
 ## When to activate
 
 Activate when the user says:
@@ -49,74 +52,84 @@ Derive from the current directory name or let the user override:
 SESSION_NAME="swarm-$(basename $(pwd))"
 ```
 
-#### 3. Spawn session
+#### 3. Write the initial prompt
 
-Agent count from `$ARGUMENTS` or default 4:
-
-```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --no-cass-check
-```
-
-#### 4. Build the prompt template
-
-Write to `/tmp/swarm-template.md`. This template is **project-agnostic** — agents use bv and br to understand their work, and read the project's CLAUDE.md for conventions.
+Write to `/tmp/swarm-prompt.md`. This is sent once to each fresh agent. The agent self-assigns, does one bead, then exits. ntm `--auto-restart` gives the next agent fresh context.
 
 ```
-## Setup
+Read CLAUDE.md in the repo root. Follow ALL instructions there.
 
-1. Read CLAUDE.md in the repo root. Follow ALL instructions there.
-2. Get your full assignment:
-   br show {BEAD_ID} --json 2>/dev/null
-3. Read the description, acceptance_criteria, notes, and labels carefully.
-4. Check what this bead relates to:
-   bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
+## Pick your bead
 
-## Understand the bead
+Use bv to find the highest-priority ready bead:
+  bv -robot-next 2>/dev/null
 
-- Check the bead's labels, type, and description to understand what kind of work this is
-- Check dependencies: br dep list {BEAD_ID} 2>/dev/null
-- Check for file conflicts before editing:
-  bv -robot-impact <files-you-plan-to-edit> 2>/dev/null
-- For implementation beads, find and read existing code that this bead relates to
+If it returns a bead, claim it:
+  br update <BEAD_ID> --status in_progress
 
-## Adapt your approach to what the bead asks for
+If no beads are ready (all blocked or closed), exit immediately with /exit.
+
+## Read the bead
+
+  br show <BEAD_ID> --json 2>/dev/null
+
+Read description, acceptance_criteria, notes, and labels. Then:
+  bv -robot-related <BEAD_ID> 2>/dev/null | jq '.categories'
+
+## Adapt to the bead
+
+Check labels and description to understand what kind of work this is:
 
 - **Spikes/research** (labels include "spike", or title starts with "Spike:"):
-  Research and document findings, don't build production code.
-  Record findings: br update {BEAD_ID} --notes "## Findings\n..."
+  Research and document findings, not production code.
+  Record findings: br update <BEAD_ID> --notes "## Findings\n..."
 
-- **Implementation**: Read existing code for reference behavior before writing new code.
-  Follow the language, framework, and architectural conventions already in the project.
+- **Implementation**: Read existing code for reference behavior first.
+  Follow the language, framework, and architectural conventions in the project.
 
 - **Docs/CI/infra**: Follow existing repo conventions. Don't over-engineer.
 
-The bead's description and the project's CLAUDE.md together tell you everything you need.
+The bead's description and the project's CLAUDE.md tell you everything you need.
 
-## Workflow
+## Before editing files
 
-1. Read the bead fully (br show {BEAD_ID})
-2. Read related existing code to understand context and conventions
-3. Implement according to acceptance criteria
-4. Run the project's standard checks (tests, linting, type-checking — whatever CLAUDE.md specifies)
-5. Commit ONLY files you changed:
+Check for conflicts:
+  bv -robot-impact <files-you-plan-to-edit> 2>/dev/null
+
+If risk_level is "high" or "critical", check agent-mail for active reservations before proceeding.
+
+## Implement
+
+1. Read and understand related existing code
+2. Implement according to acceptance criteria
+3. Run the project's standard checks (tests, linting — whatever CLAUDE.md specifies)
+4. Commit ONLY files you changed:
    git add <specific files>
-   git commit -m "feat({BEAD_ID}): short description"
-6. Close the bead: br close {BEAD_ID}
-7. STOP. Do not start another bead. Wait for the next assignment.
+   git commit -m "feat(<BEAD_ID>): short description"
+5. Close the bead:
+   br close <BEAD_ID>
+6. Exit to get fresh context for the next bead:
+   /exit
 ```
 
-#### 5. Start watch mode
+#### 4. Spawn session with auto-restart
 
 ```bash
-ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --no-cass-check
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --auto-restart --no-cass-check
 ```
 
-#### 6. Report
+Then send the initial prompt to all agents:
+
+```bash
+ntm send $SESSION_NAME --all --file=/tmp/swarm-prompt.md --no-cass-check
+```
+
+#### 5. Report
 
 Tell the user:
-- Session name and agent count (agents share the working tree; agent-mail file reservations prevent conflicts)
-- Watch mode active with dependency-first strategy
+- Session name and agent count
+- Each agent picks its own bead via `bv -robot-next`, implements it, commits, exits
+- `--auto-restart` respawns each agent with fresh context — no coordinator needed
 - Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
@@ -145,12 +158,7 @@ Pick the first idle (WAITING) pane. If no session is running, offer to spawn one
 
 #### 3. Build a self-contained prompt
 
-Write `/tmp/bead-$BEAD_ID.md` using the same template from section A.4, but with the bead's details inlined (description, acceptance criteria, notes, labels, dependencies, related beads) so the agent doesn't need to look them up.
-
-Also include file impact info if the bead description mentions specific files:
-```bash
-bv -robot-impact <files> 2>/dev/null
-```
+Write `/tmp/bead-$BEAD_ID.md` — same structure as the prompt in A.3, but skip the `bv -robot-next` step and inline the bead details directly (description, acceptance criteria, notes, labels, dependencies, related beads).
 
 #### 4. Reset context and assign
 
@@ -169,12 +177,9 @@ Tell the user which pane got the bead and how to monitor it.
 ### C. Stop the swarm
 
 ```bash
-# Find active session
 ntm list 2>/dev/null
 ntm kill <session> 2>/dev/null || true
 echo "Swarm stopped."
-
-# Show remaining work
 bv -robot-next 2>/dev/null | jq '{id, title, unblocks}'
 ```
 
