@@ -2,9 +2,25 @@
 
 Start and manage a swarm of coding agents that implement beads from the issue tracker.
 
-Each agent is autonomous and fungible: it picks a bead, implements it, commits, and exits.
+Each agent is autonomous and fungible: it gets assigned a bead, implements it, commits, and exits.
 `ntm --auto-restart` respawns bare Claude Code, then `ntm assign --watch` detects the
 idle agent and sends the next bead assignment with the prompt template. Fresh context per bead.
+
+## ntm config requirements
+
+The `[agents]` section in `~/.config/ntm/config.toml` must include `--strict-mcp-config`
+to disable all MCP servers (UI automation, Slack, GitHub, etc.) that waste resources
+and slow down swarm agents:
+
+```toml
+[agents]
+claude = "env ... claude --dangerously-skip-permissions --strict-mcp-config ..."
+```
+
+Verify before spawning:
+```bash
+grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && echo "MCP disabled: OK" || echo "WARNING: add --strict-mcp-config to [agents].claude in ntm config"
+```
 
 ## When to activate
 
@@ -33,6 +49,9 @@ Activate when the user says:
 #### 1. Pre-flight
 
 ```bash
+# Check ntm config has --strict-mcp-config (prevents loading heavy MCP servers in agents)
+grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && echo "MCP disabled: OK" || echo "WARNING: add --strict-mcp-config to [agents].claude in ~/.config/ntm/config.toml"
+
 # Check agent-mail
 curl -sf http://127.0.0.1:8765/api/ > /dev/null 2>&1 && echo "agent-mail: OK" || echo "agent-mail: NOT RUNNING — start with 'am'"
 
@@ -43,12 +62,16 @@ bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
 bv -robot-plan 2>/dev/null | jq '{total_actionable: .plan.total_actionable, total_blocked: .plan.total_blocked, tracks: (.plan.tracks | length), highest_impact: .plan.summary}'
 ```
 
+If `--strict-mcp-config` is missing, add it before spawning — agents don't need MCP servers.
 If agent-mail is not running, warn and suggest `am`.
 
 #### 2. Choose a session name
 
+Session name must match the directory name under `projects_base` in ntm config.
+ntm resolves sessions via `projects_base/<session>`. Use the basename of the current directory:
+
 ```bash
-SESSION_NAME="swarm-$(basename $(pwd))"
+SESSION_NAME="$(basename $(pwd))"
 ```
 
 #### 3. Write the prompt template
@@ -116,14 +139,13 @@ Two commands, run in separate terminals (or the second in background):
 
 **Terminal 1: Spawn agents**
 ```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart --no-cass-check
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart
 ```
 
 **Terminal 2: Watch mode (assigns beads to idle agents)**
 ```bash
 ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --no-cass-check
-```
+  --template-file=/tmp/swarm-template.md --no-cass-check```
 
 The flow per agent:
 1. `--auto-restart` spawns bare Claude Code (fresh context)
@@ -171,8 +193,7 @@ inlined (description, acceptance criteria, notes, labels, related beads).
 #### 4. Assign
 
 ```bash
-ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --no-cass-check
-```
+ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --no-cass-check```
 
 ---
 
