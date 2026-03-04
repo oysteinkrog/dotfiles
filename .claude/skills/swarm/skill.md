@@ -11,7 +11,7 @@ Activate when the user says:
 
 ## Arguments
 
-- `$ARGUMENTS` — optional flags/overrides, e.g. `4` (agent count), `bd-xxx` (single bead), `kill` (stop swarm)
+- `$ARGUMENTS` — optional: agent count (e.g. `4`), bead ID (e.g. `bd-xxx`), or `kill`/`stop`/`status`
 
 ## Instructions
 
@@ -43,94 +43,79 @@ bv -robot-plan 2>/dev/null | jq '.plan.summary'
 
 If agent-mail is not running, warn and suggest `am`.
 
-#### 2. Spawn session
+#### 2. Choose a session name
+
+Derive from the current directory name or let the user override:
+
+```bash
+SESSION_NAME="swarm-$(basename $(pwd))"
+```
+
+#### 3. Spawn session
 
 Agent count from `$ARGUMENTS` or default 4:
 
 ```bash
-ntm spawn atlas-swarm --cc=$AGENT_COUNT --no-user --worktrees --stagger-mode=smart --no-cass-check
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --no-cass-check
 ```
 
-#### 3. Write the prompt template
+#### 4. Build the prompt template
 
-Write to `/tmp/swarm-template.md`. This is the universal template — it reads the bead at runtime to determine behavior:
+Write to `/tmp/swarm-template.md`. This template is **project-agnostic** — it tells agents to read the bead and the project's own CLAUDE.md for context.
 
 ```
-Read CLAUDE.md first — especially the "Rust Rewrite — Code Guidelines" section.
+## Setup
 
-## Your Task
+1. Read CLAUDE.md in the repo root. Follow ALL instructions there.
+2. Get your assignment: br show {BEAD_ID} --json 2>/dev/null
+3. Read the description, acceptance_criteria, notes, and labels carefully.
 
-Run this to get your full assignment:
-  br show {BEAD_ID} --json 2>/dev/null
+## Understand the bead
 
-Read the description, acceptance_criteria, notes, and labels carefully.
+- Check the bead's labels, type, and description to understand what kind of work this is
+  (spike/research, implementation, docs, CI, frontend, backend, etc.)
+- Check dependencies: br dep list {BEAD_ID} 2>/dev/null
+- For implementation beads, find and read existing code that this bead relates to
 
-## Adapt to bead type
+## Adapt your approach to what the bead asks for
 
-Check the bead's labels and adjust your approach:
+- **Spikes/research** (labels include "spike", or title starts with "Spike:"):
+  Research and document findings, don't build production code.
+  Record findings: br update {BEAD_ID} --notes "## Findings\n..."
 
-**If labels include "spike" or title starts with "Spike:"**
-- This is research/validation, not production code
-- Create test code in rust/spikes/{BEAD_ID}/
-- Document findings in bead notes: br update {BEAD_ID} --notes "## Findings\n..."
-- If the spike FAILS, document what went wrong and suggest alternatives
+- **Implementation**: Read existing code for reference behavior before writing new code.
+  Follow the language, framework, and architectural conventions already in the project.
 
-**If labels include "frontend", "ws5", or "ws6" (and no "rust")**
-- Work in packages/frontend/src/
-- No Rust rules apply — use TypeScript/React conventions from the existing code
-- Read the existing TS code to understand patterns before changing anything
+- **Docs/CI/infra**: Follow existing repo conventions. Don't over-engineer.
 
-**If labels include "docs", "ci", or "infra"**
-- Follow the conventions already in the repo
-- Don't add unnecessary complexity
-
-**Otherwise (default: Rust implementation)**
-- Read the existing TypeScript implementation in packages/backend/src/ for reference
-- Runtime: asupersync (NOT tokio). Every async fn takes &Cx as first param.
-- Return type: Outcome<T, E> for async, Result<T, E> for sync helpers
-- Web framework: fastapi_rust (NOT axum)
-- Database: frankensqlite (synchronous, wrap in spawn_blocking)
-- NEVER import from tokio, reqwest, or hyper
-- JSON API contract — match TS server response shapes EXACTLY:
-  - enabled/auto_approve are integers (0/1), not booleans
-  - tool_calls are JSON-as-string, not nested objects
-  - Request bodies: camelCase. Responses: snake_case.
-  - Some arrays wrapped: { items: [...] } not bare [...]
-  - Dates: ISO 8601 strings
-  - Errors: { error: "message" }
-  - If golden file exists at rust/tests/golden/, match it exactly
+The bead's description and the project's CLAUDE.md together tell you everything you need.
 
 ## Workflow
 
 1. Read the bead fully (br show {BEAD_ID})
-2. Understand what the bead builds on (check its dependencies)
-3. For Rust beads: read the corresponding TS files for reference behavior
-4. Implement according to acceptance criteria
-5. Run appropriate checks:
-   - Rust: cargo check -p <crate> && cargo test -p <crate> && cargo clippy -p <crate> -- -D warnings
-   - Frontend: npm test (from packages/frontend/)
-   - Docs/CI: validate manually
-6. Commit ONLY files you changed:
+2. Read related existing code to understand context and conventions
+3. Implement according to acceptance criteria
+4. Run the project's standard checks (tests, linting, type-checking — whatever CLAUDE.md specifies)
+5. Commit ONLY files you changed:
    git add <specific files>
    git commit -m "feat({BEAD_ID}): short description"
-7. Close the bead:
-   br close {BEAD_ID}
-8. STOP. Do not start another bead. Wait for the next assignment.
+6. Close the bead: br close {BEAD_ID}
+7. STOP. Do not start another bead. Wait for the next assignment.
 ```
 
-#### 4. Start watch mode
+#### 5. Start watch mode
 
 ```bash
-ntm assign atlas-swarm --watch --strategy=dependency --stop-when-done \
+ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
   --template-file=/tmp/swarm-template.md --no-cass-check
 ```
 
-#### 5. Report
+#### 6. Report
 
 Tell the user:
-- Session `atlas-swarm` launched with N agents in worktree-isolated branches
-- Watch mode active — beads assigned automatically by dependency priority
-- Monitor: `ntm activity atlas-swarm --watch`
+- Session name and agent count (agents share the working tree; agent-mail file reservations prevent conflicts)
+- Watch mode active with dependency-first strategy
+- Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
 
@@ -153,11 +138,11 @@ ntm list 2>/dev/null
 ntm activity <session> 2>/dev/null
 ```
 
-Pick the first idle (WAITING) pane.
+Pick the first idle (WAITING) pane. If no session is running, offer to spawn one.
 
 #### 3. Build a self-contained prompt
 
-Get bead details with `br show $BEAD_ID` and write `/tmp/bead-$BEAD_ID.md` using the same universal template from section A.3, but with the bead details inlined (description, acceptance criteria, notes, labels, dependencies) so the agent doesn't need to look them up.
+Write `/tmp/bead-$BEAD_ID.md` using the same template from section A.4, but with the bead's details inlined (description, acceptance criteria, notes, labels, dependencies) so the agent doesn't need to look them up.
 
 #### 4. Reset context and assign
 
@@ -176,7 +161,9 @@ Tell the user which pane got the bead and how to monitor it.
 ### C. Stop the swarm
 
 ```bash
-ntm kill atlas-swarm 2>/dev/null || true
+# Find active session
+ntm list 2>/dev/null
+ntm kill <session> 2>/dev/null || true
 echo "Swarm stopped."
 br ready 2>/dev/null | head -5
 ```
