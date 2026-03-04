@@ -3,8 +3,8 @@
 Start and manage a swarm of coding agents that implement beads from the issue tracker.
 
 Each agent is autonomous and fungible: it picks a bead, implements it, commits, and exits.
-A shell loop restarts it with fresh context (new Claude Code process + prompt re-injection).
-No coordinator needed.
+`ntm --auto-restart` respawns bare Claude Code, then `ntm assign --watch` detects the
+idle agent and sends the next bead assignment with the prompt template. Fresh context per bead.
 
 ## When to activate
 
@@ -47,166 +47,96 @@ If agent-mail is not running, warn and suggest `am`.
 
 #### 2. Choose a session name
 
-Derive from the current directory name or let the user override:
-
 ```bash
 SESSION_NAME="swarm-$(basename $(pwd))"
 ```
 
-#### 3. Write the agent prompt
+#### 3. Write the prompt template
 
-Write to `/tmp/swarm-prompt.md`. Each agent gets this on every fresh start. The agent
-self-assigns via bv, does one bead, commits, and exits. The wrapper loop restarts it.
+Write to `/tmp/swarm-template.md`. This is sent by `ntm assign --watch` each time
+an agent goes idle. The agent implements one bead, commits, and exits.
 
 ```
 Read CLAUDE.md in the repo root. Follow ALL instructions there.
 
-## Pick your bead
+## Your bead: {BEAD_ID} — {TITLE}
 
-Use bv to find the highest-priority ready bead:
-  bv -robot-next 2>/dev/null
+Get full details:
+  br show {BEAD_ID} --json 2>/dev/null
 
-If it returns a bead, claim it:
-  br update <BEAD_ID> --status in_progress
+Read description, acceptance_criteria, notes, and labels.
 
-If no beads are ready (all blocked or closed), exit immediately with /exit.
-
-## Read the bead
-
-  br show <BEAD_ID> --json 2>/dev/null
-
-Read description, acceptance_criteria, notes, and labels. Then:
-  bv -robot-related <BEAD_ID> 2>/dev/null | jq '.categories'
+Check related work:
+  bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
 
 ## Adapt to the bead
 
-Check labels and description to understand what kind of work this is:
+Check labels and description to determine approach:
 
-- **Spikes/research** (labels include "spike", or title starts with "Spike:"):
-  Research and document findings, not production code.
-  Record findings: br update <BEAD_ID> --notes "## Findings\n..."
+- **Spikes/research** (labels include "spike"): Research and document findings.
+  Record: br update {BEAD_ID} --notes "## Findings\n..."
 
 - **Implementation**: Read existing code for reference behavior first.
-  Follow the language, framework, and architectural conventions in the project.
+  Follow the language, framework, and conventions in the project.
 
-- **Docs/CI/infra**: Follow existing repo conventions. Don't over-engineer.
-
-The bead's description and the project's CLAUDE.md tell you everything you need.
+- **Docs/CI/infra**: Follow existing repo conventions.
 
 ## Before editing files
 
 Check for conflicts:
   bv -robot-impact <files-you-plan-to-edit> 2>/dev/null
 
-If risk_level is "high" or "critical", check agent-mail for active reservations.
-
 ## Implement
 
 1. Read and understand related existing code
 2. Implement according to acceptance criteria
-3. Run the project's standard checks (tests, linting — whatever CLAUDE.md specifies)
+3. Run the project's standard checks (tests, linting — see CLAUDE.md)
 4. Commit ONLY files you changed:
    git add <specific files>
-   git commit -m "feat(<BEAD_ID>): short description"
-5. Close the bead:
-   br close <BEAD_ID>
-6. Exit to get fresh context for the next bead:
-   /exit
+   git commit -m "feat({BEAD_ID}): short description"
+5. Close the bead: br close {BEAD_ID}
+6. Exit for fresh context: /exit
 ```
 
-#### 4. Write the agent wrapper script
+#### 4. Bump max_restarts
 
-Write to `/tmp/swarm-agent.sh`. This loop gives each bead a fresh Claude Code process
-with the prompt re-injected every time.
+Default is 3 — not enough for a full swarm. Set in ntm config:
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-PROMPT_FILE="/tmp/swarm-prompt.md"
-PROJECT_DIR="$(pwd)"
-MAX_BEADS=50  # safety limit
-
-for i in $(seq 1 $MAX_BEADS); do
-  # Check if any beads are ready before starting Claude
-  NEXT=$(bv -robot-next 2>/dev/null | jq -r '.id // empty')
-  if [ -z "$NEXT" ]; then
-    echo "No more ready beads. Agent done after $((i-1)) beads."
-    break
-  fi
-  echo "=== Starting bead $i (next: $NEXT) ==="
-  # Run Claude Code with the prompt, non-interactive
-  # Claude reads the prompt, does the work, exits when done
-  cat "$PROMPT_FILE" | claude --print --dangerously-skip-permissions
-  echo "=== Bead $i complete, restarting with fresh context ==="
-  sleep 5  # brief pause between beads
-done
+mkdir -p ~/.config/ntm
+# Add or update [resilience] section
+grep -q '^\[resilience\]' ~/.config/ntm/config.toml 2>/dev/null || echo -e '\n[resilience]\nmax_restarts = 100' >> ~/.config/ntm/config.toml
 ```
 
-NOTE: The exact Claude Code CLI flags for non-interactive prompt execution may vary.
-Check `claude --help` for the right flags. Key requirement: Claude must read the prompt
-from stdin or a file, do the work, and exit when done (not stay in interactive mode).
+Or tell the user to set `max_restarts = 100` in `~/.config/ntm/config.toml`.
 
-If `--print` / `--dangerously-skip-permissions` aren't right, alternatives:
-- `claude -p "$(cat /tmp/swarm-prompt.md)"` (pass prompt as argument)
-- `claude --prompt-file /tmp/swarm-prompt.md`
+#### 5. Spawn and start watch mode
 
-#### 5. Spawn session
+Two commands, run in separate terminals (or the second in background):
 
-Instead of using ntm's agent spawner (which doesn't re-inject prompts on restart),
-spawn ntm with the wrapper script. Two approaches:
-
-**Option A: Use ntm normally + send prompt manually after each restart**
-```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --stagger-mode=smart --no-cass-check
-
-# Send initial prompt to all agents
-ntm send $SESSION_NAME --all --file=/tmp/swarm-prompt.md --no-cass-check
-```
-Downside: after the agent exits and auto-restarts, you'd need to re-send the prompt manually.
-
-**Option B: Run the wrapper script in tmux panes directly**
-```bash
-# Create a tmux session and run the loop in each pane
-tmux new-session -d -s $SESSION_NAME
-for i in $(seq 1 $((AGENT_COUNT - 1))); do
-  tmux split-window -t $SESSION_NAME
-done
-tmux select-layout -t $SESSION_NAME tiled
-
-# Send the wrapper script to each pane
-for i in $(seq 0 $((AGENT_COUNT - 1))); do
-  tmux send-keys -t "$SESSION_NAME:0.$i" "cd $PROJECT_DIR && bash /tmp/swarm-agent.sh" Enter
-  sleep 10  # stagger to avoid rate limits
-done
-```
-Downside: loses ntm's activity monitoring, file conflict detection, etc.
-
-**Option C (recommended): Use ntm spawn + a watcher loop to re-inject prompts**
+**Terminal 1: Spawn agents**
 ```bash
 ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart --no-cass-check
-ntm send $SESSION_NAME --all --file=/tmp/swarm-prompt.md --no-cass-check
-
-# In a separate terminal, run the re-injection loop:
-while true; do
-  sleep 30
-  # Find panes that are WAITING (just restarted, no prompt yet)
-  WAITING=$(ntm activity $SESSION_NAME --json 2>/dev/null | jq -r '.panes[]? | select(.state == "WAITING") | .index')
-  for pane in $WAITING; do
-    echo "Re-injecting prompt to pane $pane"
-    ntm send $SESSION_NAME --pane=$pane --file=/tmp/swarm-prompt.md --no-cass-check
-  done
-done
 ```
-This keeps ntm's monitoring while ensuring every restarted agent gets the prompt.
 
-Recommend Option C to the user and offer to write it as a script.
+**Terminal 2: Watch mode (assigns beads to idle agents)**
+```bash
+ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
+  --template-file=/tmp/swarm-template.md --no-cass-check
+```
+
+The flow per agent:
+1. `--auto-restart` spawns bare Claude Code (fresh context)
+2. `--watch` detects idle agent, sends template with next bead
+3. Agent implements bead, commits, closes, exits via `/exit`
+4. Go to step 1
 
 #### 6. Report
 
 Tell the user:
 - Session name and agent count
-- Each agent picks its own bead via `bv -robot-next`, implements it, commits, exits
-- Auto-restart + prompt re-injection gives fresh context per bead
+- Two processes needed: `ntm spawn` (manages agents) + `ntm assign --watch` (assigns work)
+- Each agent gets fresh context per bead (exit + auto-restart)
 - Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
@@ -222,7 +152,7 @@ br show $BEAD_ID --json 2>/dev/null
 bv -robot-related $BEAD_ID 2>/dev/null | jq '.categories'
 ```
 
-If not found or already closed, tell the user. Check dependencies — warn if any blocker is still open.
+If not found or already closed, tell the user. Warn if blockers are still open.
 
 #### 2. Find target session and idle pane
 
@@ -231,25 +161,18 @@ ntm list 2>/dev/null
 ntm activity <session> 2>/dev/null
 ```
 
-Pick the first idle (WAITING) pane. If no session is running, offer to spawn one.
+Pick first idle (WAITING) pane. If no session running, offer to spawn one.
 
 #### 3. Build a self-contained prompt
 
-Write `/tmp/bead-$BEAD_ID.md` — same structure as the prompt in A.3, but skip the
-`bv -robot-next` step and inline the bead details directly (description, acceptance
-criteria, notes, labels, dependencies, related beads).
+Write `/tmp/bead-$BEAD_ID.md` — same structure as template in A.3, but with bead details
+inlined (description, acceptance criteria, notes, labels, related beads).
 
-#### 4. Reset context and assign
+#### 4. Assign
 
 ```bash
-ntm interrupt <session> 2>/dev/null
-sleep 3
-ntm send <session> --pane=<N> --file=/tmp/bead-$BEAD_ID.md --no-cass-check
+ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --no-cass-check
 ```
-
-#### 5. Report
-
-Tell the user which pane got the bead and how to monitor it.
 
 ---
 
@@ -258,7 +181,6 @@ Tell the user which pane got the bead and how to monitor it.
 ```bash
 ntm list 2>/dev/null
 ntm kill <session> 2>/dev/null || true
-echo "Swarm stopped."
 bv -robot-next 2>/dev/null | jq '{id, title, unblocks}'
 ```
 
