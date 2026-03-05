@@ -5,8 +5,9 @@
       "url": "http://127.0.0.1:4801/sse"
     },
     "google-workspace": {
-      "type": "http",
-      "url": "http://127.0.0.1:4802/mcp"
+      "type": "stdio",
+      "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
+      "args": ["mcp", "-s", "all", "-w", "-e"]
     },
     "cdb-interactive": {
       "type": "stdio",
@@ -30,11 +31,7 @@
       "args": ["/c/work/desktop/mocapzero/Tools/mcp-flaui-wrapper/index.js"],
       "env": {}
     },
-    "context7": {
-      "type": "http",
-      "url": "https://mcp.context7.com/mcp"
-    },
-    "github": {
+"github": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": {
@@ -49,17 +46,9 @@
       "type": "http",
       "url": "http://127.0.0.1:4804/mcp"
     },
-    "hubspot": {
-      "type": "http",
-      "url": "http://127.0.0.1:4805/mcp"
-    },
     "zendesk": {
       "type": "http",
       "url": "http://127.0.0.1:4806/mcp"
-    },
-    "apify": {
-      "type": "http",
-      "url": "http://127.0.0.1:4807/mcp"
     }
   }
 }

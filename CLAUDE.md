@@ -1,5 +1,10 @@
 # User CLAUDE.md
 
+## Dotfiles
+
+Repo at `~/.dotfiles` (regular git repo, not bare), remote `origin` = `https://github.com/oysteinkrog/dotfiles`.
+Tracked files live throughout `~` (CLAUDE.md, .claude/, .config/fish/, bin/, etc.).
+
 ## Grove - Git Worktree Manager
 
 The `grove` command manages git worktrees for a mono-repo workflow. Each worktree is a "project" identified by a short tag. Config is at `~/.config/grove/config.json`, registry at `~/.config/grove/registry.json`.
@@ -97,6 +102,32 @@ Find files by name pattern (glob wrapper around `rg --files`).
 ```bash
 rgg VideoDevice                   # find files with VideoDevice in name
 ```
+
+## Google Workspace CLI (gws)
+
+`npm install -g @googleworkspace/cli` — one CLI for all Google Workspace APIs (Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, etc.).
+**Note:** `gws` conflicts with the fish alias `gws` (`git status --short`). Use full path in MCP config.
+
+### Auth
+```bash
+gws auth setup    # one-time: provide OAuth client_secret.json from Google Cloud Console
+gws auth login    # subsequent logins
+gws auth status   # check current auth state
+```
+Credentials at `~/.config/gws/`. Client secret: `~/.config/gws/client_secret.json`.
+
+### As MCP server (for AI agents / Claude Code)
+Add to `~/.claude/mcp-servers.json` or project `.mcp.json` (full path to avoid fish alias conflict):
+```json
+"google-workspace": {
+  "type": "stdio",
+  "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
+  "args": ["mcp", "-s", "all", "-w", "-e"]
+}
+```
+- `-s all` = all services (or `-s drive,gmail,calendar` to limit)
+- `-w` = expose workflow tools, `-e` = expose helper tools
+- CLI: `gws drive files list --params '{"pageSize": 5}'`, `gws schema drive.files.list`
 
 ## NTM - Named Tmux Manager (Multi-Agent Orchestration)
 

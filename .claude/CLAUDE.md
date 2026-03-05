@@ -151,9 +151,36 @@ br update <bead-id> --notes "..."     # Add notes to a bead
 3. `ntm assign` or `ntm send` to distribute work from triage
 4. Agents use agent-mail for coordination, br for bead updates
 
-## Google Workspace MCP
+## Google Workspace CLI (gws)
 
-`user_google_email` is `oystein@initialforce.com` (not `@swingcatalyst.com`).
+Installed globally via `npm install -g @googleworkspace/cli`. One CLI for all Google Workspace APIs.
+**Note:** `gws` conflicts with the fish alias `gws` (`git status --short`). Use full path in MCP config. On the CLI, the fish function takes priority.
+
+### Auth
+```bash
+gws auth setup    # one-time: provide OAuth client_secret.json from Google Cloud Console
+gws auth login    # subsequent logins
+gws auth status   # check current auth state
+```
+Credentials stored at `~/.config/gws/`. Client secret goes at `~/.config/gws/client_secret.json`.
+
+### MCP server (for AI agents)
+Configured in `~/.claude/mcp-servers.json` as stdio (uses full path to avoid fish alias conflict):
+```json
+"google-workspace": {
+  "type": "stdio",
+  "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
+  "args": ["mcp", "-s", "all", "-w", "-e"]
+}
+```
+Flags: `-s all` exposes all services, `-w` enables workflows, `-e` enables helpers.
+To limit services: `-s drive,gmail,calendar`.
+
+### Key info
+- `user_google_email` is `oystein@initialforce.com` (not `@swingcatalyst.com`)
+- CLI: `gws drive files list --params '{"pageSize": 5}'`, `gws schema drive.files.list`
+- Outputs structured JSON, supports `--format table|yaml|csv`
+- Auto-pagination with `--page-all` (NDJSON output)
 
 ## Agent Swarm Rules
 
