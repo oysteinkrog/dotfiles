@@ -186,23 +186,20 @@ To limit services: `-s drive,gmail,calendar`.
 
 Repo: `oysteinkrog/sites` — `gh-pages` branch. Live at `https://oysteinkrog.github.io/sites/`.
 
-### Publishing a bv export
+### Publishing static content
 ```bash
-bv -export-pages ./bv-pages -pages-title "Title"
 git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /tmp/sites-repo
-mkdir -p /tmp/sites-repo/bv/<slug>
-cp -r ./bv-pages/* /tmp/sites-repo/bv/<slug>/
-# Add <li><a href="bv/<slug>/">Title</a></li> to /tmp/sites-repo/index.html
-cd /tmp/sites-repo && git add -A && git commit -m "add bv site for <slug>" && git push origin gh-pages
+mkdir -p /tmp/sites-repo/<category>/<slug>
+cp -r ./your-content/* /tmp/sites-repo/<category>/<slug>/
+# Add <li><a href="<category>/<slug>/">Title</a></li> to /tmp/sites-repo/index.html
+cd /tmp/sites-repo && git add -A && git commit -m "add <slug> to <category>" && git push origin gh-pages
 ```
-Result: `https://oysteinkrog.github.io/sites/bv/<slug>/`
+Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
 
-### Structure
-```
-sites/
-  index.html          # Landing page with links
-  bv/<slug>/          # One dir per bv export
-```
+### Conventions
+- Organize by category: `bv/` (beads viewer), `docs/`, `reports/`, etc.
+- Each site is a self-contained directory with its own `index.html`
+- Update the root `index.html` landing page with a link to the new content
 
 ## Agent Swarm Rules
 
