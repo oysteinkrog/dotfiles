@@ -25,12 +25,6 @@
         "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
       }
     },
-    "motioncatalyst-ui": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/c/work/desktop/mocapzero/Tools/mcp-flaui-wrapper/index.js"],
-      "env": {}
-    },
 "github": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/",
