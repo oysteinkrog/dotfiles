@@ -3,23 +3,22 @@
 Start and manage a swarm of coding agents that implement beads from the issue tracker.
 
 Each agent is autonomous and fungible: it gets assigned a bead, implements it, commits, and exits.
-`ntm --auto-restart` respawns bare Claude Code, then `ntm assign --watch` detects the
-idle agent and sends the next bead assignment with the prompt template. Fresh context per bead.
+`ntm --auto-restart` respawns bare Claude Code with fresh context for the next assignment.
 
 ## ntm config requirements
 
-The `[agents]` section in `~/.config/ntm/config.toml` must include `--strict-mcp-config`
-to disable all MCP servers (UI automation, Slack, GitHub, etc.) that waste resources
-and slow down swarm agents:
+The `[agents]` section in `~/.config/ntm/config.toml` must include:
+- `--strict-mcp-config` — disables MCP servers (agents don't need them)
+- `DISABLE_AUTOUPDATER=1` — prevents auto-update banner that breaks idle detection
 
 ```toml
 [agents]
-claude = "env ... claude --dangerously-skip-permissions --strict-mcp-config ..."
+claude = "env ... DISABLE_AUTOUPDATER=1 claude --dangerously-skip-permissions --strict-mcp-config ..."
 ```
 
 Verify before spawning:
 ```bash
-grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && echo "MCP disabled: OK" || echo "WARNING: add --strict-mcp-config to [agents].claude in ntm config"
+grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
 ```
 
 ## When to activate
@@ -49,26 +48,19 @@ Activate when the user says:
 #### 1. Pre-flight
 
 ```bash
-# Check ntm config has --strict-mcp-config (prevents loading heavy MCP servers in agents)
-grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && echo "MCP disabled: OK" || echo "WARNING: add --strict-mcp-config to [agents].claude in ~/.config/ntm/config.toml"
+# Verify ntm config
+grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check ntm config"
 
-# Check agent-mail
-curl -sf http://127.0.0.1:8765/api/ > /dev/null 2>&1 && echo "agent-mail: OK" || echo "agent-mail: NOT RUNNING — start with 'am'"
-
-# Show what's ready and the top pick
+# Show what's ready
 bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
 
 # Show parallel execution tracks
 bv -robot-plan 2>/dev/null | jq '{total_actionable: .plan.total_actionable, total_blocked: .plan.total_blocked, tracks: (.plan.tracks | length), highest_impact: .plan.summary}'
 ```
 
-If `--strict-mcp-config` is missing, add it before spawning — agents don't need MCP servers.
-If agent-mail is not running, warn and suggest `am`.
-
 #### 2. Choose a session name
 
-Session name must match the directory name under `projects_base` in ntm config.
-ntm resolves sessions via `projects_base/<session>`. Use the basename of the current directory:
+Session name must match the directory name under `projects_base` in ntm config:
 
 ```bash
 SESSION_NAME="$(basename $(pwd))"
@@ -76,89 +68,89 @@ SESSION_NAME="$(basename $(pwd))"
 
 #### 3. Write the prompt template
 
-Write to `/tmp/swarm-template.md`. This is sent by `ntm assign --watch` each time
-an agent goes idle. The agent implements one bead, commits, and exits.
+Write to `/tmp/swarm-template.md`. Kept compact to preserve agent context budget.
 
 ```
 Read CLAUDE.md in the repo root. Follow ALL instructions there.
 
 ## Your bead: {BEAD_ID} — {TITLE}
 
-Get full details:
-  br show {BEAD_ID} --json 2>/dev/null
+Claim it: br update {BEAD_ID} --status in_progress
+Get details: br show {BEAD_ID} --json 2>/dev/null
+Check related: bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
 
-Read description, acceptance_criteria, notes, and labels.
+## Rules
 
-Check related work:
-  bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
+1. **Read production code first.** Understand actual behavior before writing anything.
+2. Match existing project conventions (see CLAUDE.md).
+3. Test/file folders must mirror source structure.
+4. Follow .editorconfig and analyzer rules.
 
-## Adapt to the bead
+## Steps
 
-Check labels and description to determine approach:
-
-- **Spikes/research** (labels include "spike"): Research and document findings.
-  Record: br update {BEAD_ID} --notes "## Findings\n..."
-
-- **Implementation**: Read existing code for reference behavior first.
-  Follow the language, framework, and conventions in the project.
-
-- **Docs/CI/infra**: Follow existing repo conventions.
-
-## Before editing files
-
-Check for conflicts:
-  bv -robot-impact <files-you-plan-to-edit> 2>/dev/null
-
-## Implement
-
-1. Read and understand related existing code
+1. Read and understand related existing code thoroughly
 2. Implement according to acceptance criteria
-3. Run the project's standard checks (tests, linting — see CLAUDE.md)
-4. Commit ONLY files you changed:
+3. Commit IMMEDIATELY after writing files (before full test suite):
    git add <specific files>
-   git commit -m "feat({BEAD_ID}): short description"
-5. Close the bead: br close {BEAD_ID}
-6. Exit for fresh context: /exit
+   git commit -m "<area>({BEAD_ID}): short description"
+4. Run project checks (tests, linting — see CLAUDE.md)
+5. If checks fail, fix and amend: git add <files> && git commit --amend --no-edit
+6. Close: br close {BEAD_ID}
+7. Exit: /exit
 ```
+
+Note: `<area>` follows project git conventions (e.g., `test/`, `model/`, `vm/`).
+The `{BEAD_ID}` and `{TITLE}` placeholders are substituted by `ntm assign`.
 
 #### 4. Bump max_restarts
 
-Default is 3 — not enough for a full swarm. Set in ntm config:
+Default is 3 — not enough for a full swarm:
 
 ```bash
-mkdir -p ~/.config/ntm
-# Add or update [resilience] section
 grep -q '^\[resilience\]' ~/.config/ntm/config.toml 2>/dev/null || echo -e '\n[resilience]\nmax_restarts = 100' >> ~/.config/ntm/config.toml
 ```
 
-Or tell the user to set `max_restarts = 100` in `~/.config/ntm/config.toml`.
+#### 5. Spawn agents
 
-#### 5. Spawn and start watch mode
-
-Two commands, run in separate terminals (or the second in background):
-
-**Terminal 1: Spawn agents**
 ```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart --no-cass-check
 ```
 
-**Terminal 2: Watch mode (assigns beads to idle agents)**
+#### 6. Assign work
+
+**Primary method: manual batch assignment.** Select beads from `bv -robot-plan` tracks
+and assign to specific panes:
+
+```bash
+ntm assign $SESSION_NAME --pane=1 --beads=bd-XXX --force --no-cass-check \
+  --template-file=/tmp/swarm-template.md --template=custom --auto
+ntm assign $SESSION_NAME --pane=2 --beads=bd-YYY --force --no-cass-check \
+  --template-file=/tmp/swarm-template.md --template=custom --auto
+# ... repeat for each pane
+```
+
+After each batch completes, check for orphaned files (`git status --short`),
+rescue any uncommitted work, then assign the next batch.
+
+**Alternative: watch mode** (may require manual first-batch kickstart):
+
 ```bash
 ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --no-cass-check```
+  --template-file=/tmp/swarm-template.md --template=custom --auto --no-cass-check
+```
 
-The flow per agent:
-1. `--auto-restart` spawns bare Claude Code (fresh context)
-2. `--watch` detects idle agent, sends template with next bead
-3. Agent implements bead, commits, closes, exits via `/exit`
-4. Go to step 1
+#### Known issues
 
-#### 6. Report
+- **First-batch detection**: Watch mode may not detect freshly spawned agents. Use manual assignment for the first batch.
+- **Orphaned files**: Agents may hit context limits before committing. Monitor `git status --short` after each batch.
+- **Concurrent build locks**: Multiple agents building simultaneously → MSB3021. Use `--worktrees` or `--no-dependencies`.
+- **Bead race condition**: `bv -robot-next` has no locking. Pre-assign specific beads per pane.
+- **Context not clearing**: `--auto-restart` may not fully clear context. Kill and respawn if agents seem confused.
+
+#### 7. Report
 
 Tell the user:
 - Session name and agent count
-- Two processes needed: `ntm spawn` (manages agents) + `ntm assign --watch` (assigns work)
-- Each agent gets fresh context per bead (exit + auto-restart)
 - Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
@@ -193,7 +185,8 @@ inlined (description, acceptance criteria, notes, labels, related beads).
 #### 4. Assign
 
 ```bash
-ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --no-cass-check```
+ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --template=custom --auto --no-cass-check
+```
 
 ---
 

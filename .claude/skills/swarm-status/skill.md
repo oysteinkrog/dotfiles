@@ -53,11 +53,21 @@ Verify each commit references a bead ID. Flag any commits that don't.
 bv -check-drift 2>/dev/null
 ```
 
-### 5. Summary
+### 5. Orphaned files check
+
+```bash
+git status --short | grep '^??' | head -20
+```
+
+Flag any untracked test files — agents often write files but crash before committing.
+These need manual build/test/commit rescue.
+
+### 6. Summary
 
 Present:
 - Agent states (GENERATING / WAITING / ERROR / STALLED)
 - Actionable vs blocked beads, project health status
 - Any critical alerts
 - Recent commits with bead ID verification
+- Orphaned untracked files (if any)
 - Next highest-impact bead to work on
