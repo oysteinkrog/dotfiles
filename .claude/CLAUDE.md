@@ -187,11 +187,12 @@ To limit services: `-s drive,gmail,calendar`.
 Repo: `oysteinkrog/sites` — `gh-pages` branch. Live at `https://oysteinkrog.github.io/sites/`.
 
 ### Publishing static content
+Fixed local checkout at `/c/work/sites-repo`. Use `/publish-site` skill or manually:
 ```bash
-git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /tmp/sites-repo
-mkdir -p /tmp/sites-repo/<category>/<slug>
-cp -r ./your-content/* /tmp/sites-repo/<category>/<slug>/
-cd /tmp/sites-repo && git add -A && git commit -m "add <slug> to <category>" && git push origin gh-pages
+# First time: git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /c/work/sites-repo
+cd /c/work/sites-repo && git pull origin gh-pages
+mkdir -p <category>/<slug> && cp -r /path/to/content/* <category>/<slug>/
+git add -A && git commit -m "add <category>/<slug>" && git push origin gh-pages
 ```
 Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
 
