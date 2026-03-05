@@ -191,7 +191,6 @@ Repo: `oysteinkrog/sites` — `gh-pages` branch. Live at `https://oysteinkrog.gi
 git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /tmp/sites-repo
 mkdir -p /tmp/sites-repo/<category>/<slug>
 cp -r ./your-content/* /tmp/sites-repo/<category>/<slug>/
-# Add <li><a href="<category>/<slug>/">Title</a></li> to /tmp/sites-repo/index.html
 cd /tmp/sites-repo && git add -A && git commit -m "add <slug> to <category>" && git push origin gh-pages
 ```
 Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
@@ -199,7 +198,6 @@ Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
 ### Conventions
 - Organize by category: `bv/` (beads viewer), `docs/`, `reports/`, etc.
 - Each site is a self-contained directory with its own `index.html`
-- Update the root `index.html` landing page with a link to the new content
 
 ## Agent Swarm Rules
 
