@@ -182,6 +182,28 @@ To limit services: `-s drive,gmail,calendar`.
 - Outputs structured JSON, supports `--format table|yaml|csv`
 - Auto-pagination with `--page-all` (NDJSON output)
 
+## Static Sites (GitHub Pages)
+
+Repo: `oysteinkrog/sites` — `gh-pages` branch. Live at `https://oysteinkrog.github.io/sites/`.
+
+### Publishing a bv export
+```bash
+bv -export-pages ./bv-pages -pages-title "Title"
+git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /tmp/sites-repo
+mkdir -p /tmp/sites-repo/bv/<slug>
+cp -r ./bv-pages/* /tmp/sites-repo/bv/<slug>/
+# Add <li><a href="bv/<slug>/">Title</a></li> to /tmp/sites-repo/index.html
+cd /tmp/sites-repo && git add -A && git commit -m "add bv site for <slug>" && git push origin gh-pages
+```
+Result: `https://oysteinkrog.github.io/sites/bv/<slug>/`
+
+### Structure
+```
+sites/
+  index.html          # Landing page with links
+  bv/<slug>/          # One dir per bv export
+```
+
 ## Agent Swarm Rules
 
 ### Atomic commits per work unit
