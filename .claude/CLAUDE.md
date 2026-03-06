@@ -1,5 +1,10 @@
 # User-Level Claude Code Instructions
 
+## Dotfiles
+
+User dotfiles repo is at `~/.dotfiles`. `~/.claude` is a symlink to `~/.dotfiles/.claude`.
+Skills, settings, and other Claude config live in the dotfiles repo and are version-controlled there.
+
 ## MCP Agent Mail (mcp-agent-mail)
 
 Agent-mail is installed at `~/mcp_agent_mail`. Start the server with `am` (shell alias).
@@ -199,6 +204,45 @@ Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
 ### Conventions
 - Organize by category: `bv/` (beads viewer), `docs/`, `reports/`, etc.
 - Each site is a self-contained directory with its own `index.html`
+
+## CASS Memory System (`cm`)
+
+Installed at `~/.local/bin/cm`. Cross-agent memory system that learns from session history.
+Data stored in `~/.cass-memory/`. Same author as mcp-agent-mail and bv (Dicklesworthstone).
+
+### Key commands
+```bash
+cm context "task description" --json    # Get relevant rules/history before starting work
+cm doctor --json                        # Health check
+cm quickstart --json                    # Getting started info
+cm init                                 # Initialize (already done)
+```
+
+### Onboarding (build playbook from session history)
+```bash
+cm onboard status --json                # Check onboarding progress
+cm onboard sample --fill-gaps --json    # Sample sessions to process
+cm onboard read /path/to/session.jsonl --template --json  # Process a session
+cm onboard mark-done /path/to/session.jsonl               # Mark session processed
+```
+
+### Managing rules
+```bash
+cm playbook add "rule content" --category "debugging"  # Add a rule
+cm playbook add --file rules.json                      # Batch add rules
+```
+
+### Agent protocol
+1. **Start:** `cm context "<task>" --json` before significant work
+2. **Work:** Reference rule IDs when following guidance
+3. **Feedback:** Inline comments `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`
+4. Learning happens automatically from session logs
+
+### Output control
+All commands support `--json`. Use `--limit N`, `--min-score N`, `--no-history` to control output size.
+
+### Session logs
+Claude Code session logs at `~/.claude/projects/*/` are automatically ingested.
 
 ## Agent Swarm Rules
 
