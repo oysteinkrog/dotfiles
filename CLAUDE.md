@@ -103,31 +103,25 @@ Find files by name pattern (glob wrapper around `rg --files`).
 rgg VideoDevice                   # find files with VideoDevice in name
 ```
 
-## Google Workspace CLI (gws)
+## Google Workspace CLI — gogcli (gog)
 
-`npm install -g @googleworkspace/cli` — one CLI for all Google Workspace APIs (Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, etc.).
-**Note:** `gws` conflicts with the fish alias `gws` (`git status --short`). Use full path in MCP config.
+Go binary by Peter Steinberger (steipete). Single CLI for Gmail, Calendar, Drive, Contacts,
+Tasks, Sheets, Docs, Slides, People, Forms, Apps Script, Chat, Classroom.
+Called via Bash (not an MCP server — avoids context bloat).
 
-### Auth
+- **Binary:** `~/bin/gog`
+- **Repo:** https://github.com/steipete/gogcli
+- **Config:** `~/.config/gogcli/`
+- **Account:** `oystein@initialforce.com`
+
+### Usage
 ```bash
-gws auth setup    # one-time: provide OAuth client_secret.json from Google Cloud Console
-gws auth login    # subsequent logins
-gws auth status   # check current auth state
+gog -a oystein@initialforce.com gmail labels list
+gog -a oystein@initialforce.com calendar events list --days 7
+gog -a oystein@initialforce.com drive files list --limit 10
 ```
-Credentials at `~/.config/gws/`. Client secret: `~/.config/gws/client_secret.json`.
-
-### As MCP server (for AI agents / Claude Code)
-Add to `~/.claude/mcp-servers.json` or project `.mcp.json` (full path to avoid fish alias conflict):
-```json
-"google-workspace": {
-  "type": "stdio",
-  "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
-  "args": ["mcp", "-s", "all", "-w", "-e"]
-}
-```
-- `-s all` = all services (or `-s drive,gmail,calendar` to limit)
-- `-w` = expose workflow tools, `-e` = expose helper tools
-- CLI: `gws drive files list --params '{"pageSize": 5}'`, `gws schema drive.files.list`
+Flags: `-j` for JSON, `-p` for plain TSV, `--results-only` to drop pagination envelope.
+Agent sandboxing: `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
 
 ## NTM - Named Tmux Manager (Multi-Agent Orchestration)
 

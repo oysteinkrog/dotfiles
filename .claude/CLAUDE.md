@@ -156,36 +156,60 @@ br update <bead-id> --notes "..."     # Add notes to a bead
 3. `ntm assign` or `ntm send` to distribute work from triage
 4. Agents use agent-mail for coordination, br for bead updates
 
-## Google Workspace CLI (gws)
+## Google Workspace CLI — gogcli (gog)
 
-Installed globally via `npm install -g @googleworkspace/cli`. One CLI for all Google Workspace APIs.
-**Note:** `gws` conflicts with the fish alias `gws` (`git status --short`). Use full path in MCP config. On the CLI, the fish function takes priority.
+Go binary by Peter Steinberger (steipete). Single CLI for Gmail, Calendar, Drive, Contacts,
+Tasks, Sheets, Docs, Slides, People, Forms, Apps Script, Chat, Classroom.
+**Not an MCP server** — Claude Code calls `gog` via Bash. Zero context overhead.
+
+- **Binary:** `~/bin/gog` (built from source)
+- **Repo:** https://github.com/steipete/gogcli
+- **Config:** `~/.config/gogcli/config.json`
+- **Credentials:** `~/.config/gogcli/credentials.json` (OAuth client secret)
+- **Tokens:** system keyring (or file-based encryption for headless)
 
 ### Auth
 ```bash
-gws auth setup    # one-time: provide OAuth client_secret.json from Google Cloud Console
-gws auth login    # subsequent logins
-gws auth status   # check current auth state
+gog auth credentials ~/Downloads/client_secret_....json   # import OAuth client secret
+gog auth add oystein@initialforce.com                      # authorize account (opens browser)
+gog auth list                                              # show stored tokens
 ```
-Credentials stored at `~/.config/gws/`. Client secret goes at `~/.config/gws/client_secret.json`.
 
-### MCP server (for AI agents)
-Configured in `~/.claude/mcp-servers.json` as stdio (uses full path to avoid fish alias conflict):
-```json
-"google-workspace": {
-  "type": "stdio",
-  "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
-  "args": ["mcp", "-s", "all", "-w", "-e"]
-}
+### Usage
+Always pass `-a oystein@initialforce.com` (or set `GOG_ACCOUNT`):
+```bash
+gog -a oystein@initialforce.com gmail labels list
+gog -a oystein@initialforce.com calendar events list --days 7
+gog -a oystein@initialforce.com drive files list --limit 10
+gog -a oystein@initialforce.com contacts list --limit 5
+gog -a oystein@initialforce.com tasks list
+gog -a oystein@initialforce.com sheets get <spreadsheet-id>
 ```
-Flags: `-s all` exposes all services, `-w` enables workflows, `-e` enables helpers.
-To limit services: `-s drive,gmail,calendar`.
+
+### Output control
+- `-j` / `--json` — JSON output (best for scripting/parsing)
+- `-p` / `--plain` — TSV output, no colors
+- `--results-only` — drop envelope fields (nextPageToken, etc.)
+- `--select=field1,field2` — select specific JSON fields
+
+### Agent sandboxing
+Restrict available commands for agent runs:
+```bash
+GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...
+```
 
 ### Key info
-- `user_google_email` is `oystein@initialforce.com` (not `@swingcatalyst.com`)
-- CLI: `gws drive files list --params '{"pageSize": 5}'`, `gws schema drive.files.list`
-- Outputs structured JSON, supports `--format table|yaml|csv`
-- Auto-pagination with `--page-all` (NDJSON output)
+- `user_google_email` is `oystein@initialforce.com`
+- Gmail and Google Calendar are also available via Claude.ai remote MCPs
+  (use those for quick reads; use `gog` for Drive, Docs, Sheets, Contacts, etc.)
+- `gog` replaced the `gws` MCP server which was eating context by loading all
+  Google Workspace API schemas into every conversation
+
+### Updating
+```bash
+cd /tmp && git clone --depth 1 https://github.com/steipete/gogcli.git && cd gogcli \
+  && go build -o ~/bin/gog ./cmd/gog && rm -rf /tmp/gogcli
+```
 
 ## Static Sites (GitHub Pages)
 
