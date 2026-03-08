@@ -77,7 +77,6 @@
   "syntaxHighlightingDisabled": false,
   "autoUpdatesChannel": "latest",
   "skipDangerousModePermissionPrompt": true,
-  "effortLevel": "medium",
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
@@ -86,5 +85,6 @@
         "Authorization": "Bearer 459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc"
       }
     }
-  }
+  },
+  "effortLevel": "high"
 }
