@@ -207,44 +207,109 @@ Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
 
 ## CASS Memory System (`cm`)
 
-Installed at `~/.local/bin/cm`. Cross-agent memory system that learns from session history.
-Data stored in `~/.cass-memory/`. Same author as mcp-agent-mail and bv (Dicklesworthstone).
+Cross-agent memory system that learns from session history. Three-layer architecture:
+episodic memory (raw session logs), working memory (diary entries), procedural memory
+(confidence-tracked rules with maturity progression).
 
-### Key commands
+- **Binary:** `~/.local/bin/cm` (v0.2.3, native ELF, installed via install.sh)
+- **Data:** `~/.cass-memory/` (config, playbook, diary, embeddings, reflections)
+- **Repo:** https://github.com/Dicklesworthstone/cass_memory_system
+- **Author:** Same as mcp-agent-mail and bv (Dicklesworthstone)
+
+### Updating
 ```bash
-cm context "task description" --json    # Get relevant rules/history before starting work
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/cass_memory_system/main/install.sh?$(date +%s)" | bash -s -- --easy-mode --verify
+```
+
+### Core agent workflow
+```bash
+cm context "<task>" --json              # Get relevant rules/history before starting work
+cm outcome success                      # Record session outcome (success/failure)
 cm doctor --json                        # Health check
-cm quickstart --json                    # Getting started info
-cm init                                 # Initialize (already done)
+cm quickstart --json                    # Self-documentation
+```
+
+### Playbook management
+```bash
+cm playbook list                        # Show all rules
+cm playbook get <id>                    # Rule details
+cm playbook add "<content>"             # Add new rule
+cm playbook add --category "debugging" "<content>"  # Add with category
+cm playbook add --file rules.json       # Batch add rules
+cm playbook remove <id>                 # Deprecate rule
+cm playbook export                      # Backup playbook
+cm top N                                # Show top N rules by score
+cm similar "<query>"                    # Find similar rules (dedup check)
+cm init --starter general               # Seed with starter template
+```
+
+### Learning & feedback
+```bash
+cm reflect --days N                     # Process sessions into rules (needs LLM key)
+cm mark <id> --helpful                  # Mark rule as helpful
+cm mark <id> --harmful                  # Mark rule as harmful
+cm validate "<rule>"                    # Check evidence in cass
+cm forget <id>                          # Permanently remove rule
+cm audit --days N                       # Check rule violations in recent sessions
 ```
 
 ### Onboarding (build playbook from session history)
 ```bash
 cm onboard status --json                # Check onboarding progress
+cm onboard guided                       # Interactive onboarding wizard
 cm onboard sample --fill-gaps --json    # Sample sessions to process
 cm onboard read /path/to/session.jsonl --template --json  # Process a session
 cm onboard mark-done /path/to/session.jsonl               # Mark session processed
 ```
 
-### Managing rules
+### Trauma guard (safety system)
 ```bash
-cm playbook add "rule content" --category "debugging"  # Add a rule
-cm playbook add --file rules.json                      # Batch add rules
+cm trauma list                          # Show dangerous patterns
+cm trauma add "<pattern>" ...           # Register dangerous pattern
+cm trauma heal t-id --reason "x"        # Temporarily bypass
+cm trauma scan --days 30                # Scan for risks
+cm guard --install                      # Install safety hooks for Claude Code
+cm guard --git                          # Install git pre-commit hook
+```
+
+### MCP server mode
+```bash
+cm serve                                # Start MCP HTTP server (port 8765)
+cm serve --port 9000                    # Custom port
+MCP_HTTP_TOKEN="x" cm serve --host 0.0.0.0  # Remote access with auth
 ```
 
 ### Agent protocol
 1. **Start:** `cm context "<task>" --json` before significant work
 2. **Work:** Reference rule IDs when following guidance
 3. **Feedback:** Inline comments `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`
-4. Learning happens automatically from session logs
+4. **Finish:** `cm outcome success` or `cm outcome failure`
+5. Learning happens automatically from session logs
 
 ### Output control
 All commands support `--json`. Use `--limit N`, `--min-score N`, `--no-history` to control output size.
 
-### Session logs
-Claude Code session logs at `~/.claude/projects/*/` are automatically ingested.
+### Configuration (`~/.cass-memory/config.json`)
+- Provider: `anthropic` (needs `ANTHROPIC_API_KEY` for LLM reflection; works without it)
+- Scoring: helpful feedback decays with 90-day half-life; harmful weighted 4x
+- Maturity: candidate -> established -> proven -> (deprecated)
+- Semantic search: disabled by default (`semanticSearchEnabled: true` to enable)
+- Budget: $0.10/day, $2/month default LLM budget
+- Session logs at `~/.claude/projects/*/` are automatically ingested
+
+### Starter templates
+Available: `general`, `node`, `python`, `react`, `rust`. Seed with `cm init --starter=<name>`.
 
 ## Agent Swarm Rules
+
+### NO WORKTREES — agents commit to the same branch
+**NEVER use `--worktrees` with `ntm spawn`.** Worktree isolation causes silent merge
+regressions — later merges overwrite earlier security fixes (16% reversion rate observed
+2026-03-07). Instead:
+- All agents work on the same branch (typically `main`)
+- Each bead is small enough for a single atomic commit
+- Agents commit directly after completing each bead
+- If a bead would touch 5+ files, split it into smaller beads first
 
 ### Atomic commits per work unit
 When writing prompts for swarm agents (ntm, teammates, or any autonomous agent), **always
@@ -262,8 +327,19 @@ Do NOT batch multiple beads into one commit. Each bead = one atomic commit.
 You end up with thousands of lines across dozens of files as one uncommitted blob,
 with no way to separate changes per task after the fact.
 
+### Bead sizing for swarms
+- Each bead should touch 1-3 files max
+- Security fixes MUST include a regression test
+- Refactoring beads must NOT overlap with security fix beads (separate files)
+- If file overlap is unavoidable, serialize those beads (use `blockedBy` dependencies)
+
+### Post-swarm verification
+After all agents finish, verify each bead's expected changes exist on `main`:
+- Grep for known-bad patterns that should have been removed
+- Diff each bead's expected file changes against current HEAD
+- Run the full test suite
+
 ### Other swarm prompt essentials
-- Always use `--no-cass-check` with `ntm send` to avoid CASS parse errors
-- Include the cmd.exe test command for WSL GPU projects
 - Tell agents to read CLAUDE.md first
 - Specify file paths agents will touch so file reservations can prevent conflicts
+- Use `ntm assign --strategy=dependency` for ordered assignment
