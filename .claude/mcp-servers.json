@@ -4,12 +4,7 @@
       "type": "sse",
       "url": "http://127.0.0.1:4801/sse"
     },
-    "google-workspace": {
-      "type": "stdio",
-      "command": "/c/users/oystein/.nvm/versions/node/v22.14.0/bin/gws",
-      "args": ["mcp", "-s", "all", "-w", "-e"]
-    },
-    "cdb-interactive": {
+"cdb-interactive": {
       "type": "stdio",
       "command": "cmd.exe",
       "args": [
