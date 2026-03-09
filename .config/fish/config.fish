@@ -31,6 +31,9 @@ alias dotnet="dotnet.exe"
 # ripgrep config
 set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
 
+# WSL: use Windows browser for links (gh auth, xdg-open, etc.)
+set -x BROWSER explorer.exe
+
 # Auto-start shared MCP services via PM2
 if type -q pm2
     if not pm2 pid pal-mcp >/dev/null 2>&1; or test (pm2 pid pal-mcp 2>/dev/null) = "0"
