@@ -1,11 +1,11 @@
 {
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "ANTHROPIC_BASE_URL": "http://localhost:4810"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "permissions": {
     "defaultMode": "default"
   },
+  "model": "opus",
   "hooks": {
     "Stop": [
       {
@@ -72,6 +72,7 @@
     "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
   "enabledPlugins": {
+    "obsidian@obsidian-skills": true,
     "rust-analyzer-lsp@claude-plugins-official": false
   },
   "syntaxHighlightingDisabled": false,
