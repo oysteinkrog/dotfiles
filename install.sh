@@ -1,43 +1,107 @@
-#/bin/sh
+#!/bin/bash
 
-# This script creates symlinks from the home directory to any desired dotfiles in ~/dotfiles
-############################
+# Symlink dotfiles from ~/.dotfiles into $HOME
+# Backs up existing files to ~/.dotfiles_old
 
-########## Variables
+set -e
 
-# fix zsh iteration over space-separated words
-setopt shwordsplit      # this can be unset by saying: unsetopt shwordsplit
+HOME="${HOME:-/mnt/c/Users/Oystein}"
+dir="$HOME/.dotfiles"
+olddir="$HOME/.dotfiles_old"
 
-HOME="/c/users/oystein"
-dir=$HOME/.dotfiles
-olddir=$HOME/.dotfiles_old
-files=".gitconfig .vimrc .vimrc.remaps .vimrc.bundles .vsvimrc .ideavimrc .zprezto .vimperator .vimperatorrc .cvimrc .dir_colors .tmux.conf .minttyrc .githelpers .lesskey .ackrc .git_template .vim .config"
+# Files/dirs to symlink directly into $HOME
+files=(
+  .ackrc
+  .cvimrc
+  .dir_colors
+  .git_template
+  .gitconfig
+  .githelpers
+  .ideavimrc
+  .inputrc
+  .lesskey
+  .minttyrc
+  .ripgreprc
+  .tmux.conf
+  .vim
+  .vimperator
+  .vimperatorrc
+  .vimrc
+  .vimrc.bundles
+  .vimrc.remaps
+  .vsvimrc
+  .wezterm.lua
+  .zprezto
+  .aider.conf.yml
+)
 
+# Subdirectories inside .config to symlink individually
+config_dirs=(
+  ConEmu
+  fish
+  fisher
+  nvim
+  omf
+  pm2
+  rclone
+  tridactyl
+  wezterm
+)
 
-##########
-export MSYS=winsymlinks:nativestrict
+# Files inside .claude to symlink individually (not the whole dir — it has runtime state)
+claude_items=(
+  CLAUDE.md
+  settings.json
+  agents
+  mcp-servers.json
+  output
+  skills
+)
 
-# create .dotfiles_old in homedir
-echo "Creating $olddir for backup of any existing dotfiles in ~"
-mkdir -p $olddir
-echo "...done"
+mkdir -p "$olddir"
 
-# change to the .dotfiles directory
-echo "Changing to the $dir directory"
-cd $dir
-echo "...done"
-
-# move any existing .dotfiles in homedir to dotfiles_old directory, then create symlinks 
-echo "Moving any existing dotfiles from ~ to $olddir"
-for file in $files; do
-    mv $HOME/$file $olddir/
-    echo "$dir/$file => $HOME/$file"
-    ln -sf $dir/$file $HOME/$file
+echo "=== Linking dotfiles ==="
+for file in "${files[@]}"; do
+  if [ -e "$HOME/$file" ] && [ ! -L "$HOME/$file" ]; then
+    mv "$HOME/$file" "$olddir/"
+    echo "  backed up $file"
+  fi
+  ln -sf "$dir/$file" "$HOME/$file"
+  echo "  $file -> $dir/$file"
 done
 
-# setup prezto
-setopt EXTENDED_GLOB
-for file in $dir/.zprezto/runcoms/^README.md(.N); do
-    echo "$dir/$file => $HOME/$file"
-  ln -sf "$file" "$HOME/.${file:t}"
+echo ""
+echo "=== Linking bin ==="
+if [ -e "$HOME/bin" ] && [ ! -L "$HOME/bin" ]; then
+  mv "$HOME/bin" "$olddir/bin-backup"
+  echo "  backed up ~/bin"
+fi
+ln -sf "$dir/bin" "$HOME/bin"
+echo "  bin -> $dir/bin"
+
+echo ""
+echo "=== Linking .config subdirectories ==="
+mkdir -p "$HOME/.config"
+for sub in "${config_dirs[@]}"; do
+  if [ -e "$HOME/.config/$sub" ] && [ ! -L "$HOME/.config/$sub" ]; then
+    mv "$HOME/.config/$sub" "$olddir/config-$sub"
+    echo "  backed up .config/$sub"
+  fi
+  ln -sf "$dir/.config/$sub" "$HOME/.config/$sub"
+  echo "  .config/$sub -> $dir/.config/$sub"
 done
+
+echo ""
+echo "=== Linking .claude config ==="
+mkdir -p "$HOME/.claude"
+for item in "${claude_items[@]}"; do
+  if [ -e "$HOME/.claude/$item" ] && [ ! -L "$HOME/.claude/$item" ]; then
+    mv "$HOME/.claude/$item" "$olddir/claude-$item"
+    echo "  backed up .claude/$item"
+  fi
+  ln -sf "$dir/.claude/$item" "$HOME/.claude/$item"
+  echo "  .claude/$item -> $dir/.claude/$item"
+done
+
+echo ""
+echo "=== Done ==="

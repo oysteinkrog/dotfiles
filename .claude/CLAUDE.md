@@ -367,3 +367,15 @@ After all agents finish, verify each bead's expected changes exist on `main`:
 - Tell agents to read CLAUDE.md first
 - Specify file paths agents will touch so file reservations can prevent conflicts
 - Use `ntm assign --strategy=dependency` for ordered assignment
+
+## Obsidian CLI
+
+The official Obsidian CLI is built into Obsidian v1.12+ (not an npm package). Obsidian must be running for CLI commands to work.
+
+On WSL1/Windows, the CLI binary is located at:
+
+```
+/mnt/c/Users/Oystein/AppData/Local/Programs/Obsidian/Obsidian.com
+```
+
+It is not in PATH by default. Use the full path when invoking from WSL.
