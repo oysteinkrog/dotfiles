@@ -351,6 +351,24 @@ Do NOT batch multiple beads into one commit. Each bead = one atomic commit.
 You end up with thousands of lines across dozens of files as one uncommitted blob,
 with no way to separate changes per task after the fact.
 
+### Commit before building (for large-file beads)
+For beads that produce large files (>500 LOC), agents often hit context limits between
+writing the file and the commit step — leaving orphaned untracked files. Use this order:
+
+```
+1. Write the implementation file
+2. COMMIT IMMEDIATELY (before running build or tests):
+   git add <file> && git commit -m "feat(bead-id): description"
+3. cargo build --release  (or equivalent)
+4. cargo test
+5. If checks fail: fix, then git add <file> && git commit --amend --no-edit
+6. Close bead and exit
+```
+
+**Why:** The file is the hard part. If the agent runs out of context after step 2,
+the work is preserved and the swarm operator can rescue it with a single build fix.
+If the commit comes last, all work is lost on context exhaustion.
+
 ### Bead sizing for swarms
 - Each bead should touch 1-3 files max
 - Security fixes MUST include a regression test
