@@ -1,32 +1,28 @@
 ---
 name: consult-oracles
 model: opus
-description: Consult GPT-5.4 (max thinking) and GPT-5.4-Pro as expert oracles. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult GPT-5.4-Pro (smartest) and GPT-5.4 as expert oracles. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 context: fork
 ---
 
 # Consult Oracles Skill
 
-Get expert analysis by consulting AI models, with GPT-5.4 (max thinking) as the fast primary and GPT-5.4-Pro for the hardest problems.
+Get expert analysis by consulting AI models. `gpt-5.4-pro` is the smartest oracle and the default choice.
 
-## Model Hierarchy
+## Available Models
 
-| Model | Role | Trust Level |
-|-------|------|-------------|
-| `gpt-5.4` | **Primary Oracle** - Fast, token-efficient, max thinking | High |
-| `gpt-5.4-pro` | **Premium Oracle** - Smarter, more precise, for hardest problems | Highest |
-| `gemini-3.1-pro-preview` | Secondary - For second opinions only | Medium |
+| Model | Description | When to Use |
+|-------|-------------|-------------|
+| `gpt-5.4-pro` | **Smartest oracle** — smarter, more precise responses with advanced reasoning (1M ctx, 128K output) | **Default** — most questions |
+| `gpt-5.4` | Most capable model for professional work with reasoning and computer use (1M ctx, 128K output) | When speed matters more than maximum precision |
+| `gemini-3.1-pro-preview` | Best at finding bugs and deep analysis, advanced reasoning + thinking mode (1M ctx) | Second opinions, bug hunting, deep code analysis |
 
-**Important:** GPT-5.4 with max thinking is the default. Escalate to GPT-5.4-Pro when:
-- The problem is exceptionally complex (architecture, security, subtle bugs)
-- GPT-5.4's answer seems uncertain or incomplete
-- The user explicitly requests the best/pro model
-- You need the most precise reasoning possible
+**Default:** Use `gpt-5.4-pro`. Fall back to `gpt-5.4` only when the user explicitly prefers speed over quality.
 
-Only consult Gemini when:
-- You explicitly need a second opinion from a different provider
+Consult Gemini when:
+- You need a second opinion from a different provider
 - The user requests multiple perspectives
-- The topic benefits from Gemini's strengths (very large context, multimodal)
+- The problem involves finding bugs or requires deep code analysis
 
 ## When to Use
 
@@ -168,9 +164,9 @@ mcp__pal__consensus with models for both perspectives when:
 
 | Model | Strengths | When to Use |
 |-------|-----------|-------------|
-| `gpt-5.4` | Fast, token-efficient, 1M context, max thinking | **Default - most questions** |
-| `gpt-5.4-pro` | Most precise reasoning, smarter responses | Hardest problems, escalation |
-| `gemini-3.1-pro-preview` | Large context, multimodal, alternative perspective | Second opinion only |
+| `gpt-5.4-pro` | Smartest — most precise reasoning, 1M ctx | **Default - most questions** |
+| `gpt-5.4` | Most capable, professional work, reasoning + computer use, 1M ctx | When speed matters more |
+| `gemini-3.1-pro-preview` | Best at finding bugs and deep analysis, 1M ctx | Bug hunting, deep analysis, second opinion |
 
 ## Safety Notes
 
