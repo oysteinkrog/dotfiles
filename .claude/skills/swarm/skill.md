@@ -110,47 +110,71 @@ Default is 3 — not enough for a full swarm:
 grep -q '^\[resilience\]' ~/.config/ntm/config.toml 2>/dev/null || echo -e '\n[resilience]\nmax_restarts = 100' >> ~/.config/ntm/config.toml
 ```
 
-#### 5. Spawn agents
+#### 5. Spawn agents and start auto-assignment
+
+Spawn with `--assign` to automatically start watch-mode assignment after agents are ready.
+This is the **primary method** — no manual batch assignment needed.
 
 ```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart --no-cass-check
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart \
+  --assign --strategy=dependency --stop-when-done \
+  --template-file=/tmp/swarm-template.md --template=custom
 ```
 
-#### 6. Assign work
-
-**Primary method: manual batch assignment.** Select beads from `bv -robot-plan` tracks
-and assign to specific panes:
+If `--assign` is not supported or fails, fall back to spawning then starting watch mode separately:
 
 ```bash
-ntm assign $SESSION_NAME --pane=1 --beads=bd-XXX --force --no-cass-check \
-  --template-file=/tmp/swarm-template.md --template=custom --auto
-ntm assign $SESSION_NAME --pane=2 --beads=bd-YYY --force --no-cass-check \
-  --template-file=/tmp/swarm-template.md --template=custom --auto
-# ... repeat for each pane
-```
+# Step 1: Spawn
+ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart
 
-After each batch completes, check for orphaned files (`git status --short`),
-rescue any uncommitted work, then assign the next batch.
+# Step 2: Wait for agents to reach WAITING state
+sleep 15
 
-**Alternative: watch mode** (may require manual first-batch kickstart):
-
-```bash
+# Step 3: Start watch-mode assignment in background
 ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --template=custom --auto --no-cass-check
+  --template-file=/tmp/swarm-template.md --template=custom --auto &
+WATCH_PID=$!
+echo "Watch-mode assignment running (pid: $WATCH_PID)"
 ```
+
+Watch mode polls for idle agents and ready beads, matching them automatically.
+Dependency strategy ensures beads are assigned in correct order (unblocked first).
+
+**Manual override** — if watch mode misses an agent, force-assign directly:
+
+```bash
+ntm assign $SESSION_NAME --pane=N --beads=bd-XXX --force \
+  --template-file=/tmp/swarm-template.md --template=custom --auto
+```
+
+#### 6. Monitor loop (if watch mode unavailable)
+
+If `ntm assign --watch` is not available or not working, the skill operator (you) MUST
+actively monitor and assign. Set up a cron job to check every 2 minutes:
+
+```
+Check agent states: ntm activity $SESSION_NAME
+Check ready beads: br ready
+For each idle agent + ready bead pair: ntm assign $SESSION_NAME --pane=N --beads=bd-XXX ...
+Check for orphaned files: git status --short | grep '^??'
+Close beads that have commits but weren't closed: br close bd-XXX
+```
+
+Do NOT leave agents sitting idle while beads are ready. The whole point of a swarm is
+continuous work assignment.
 
 #### Known issues
 
-- **First-batch detection**: Watch mode may not detect freshly spawned agents. Use manual assignment for the first batch.
 - **Orphaned files**: Agents may hit context limits before committing. Monitor `git status --short` after each batch.
-- **Concurrent build locks**: Multiple agents building simultaneously → MSB3021. Use `--worktrees` or `--no-dependencies`.
-- **Bead race condition**: `bv -robot-next` has no locking. Pre-assign specific beads per pane.
+- **Concurrent build locks**: Multiple agents building simultaneously → MSB3021. Use `--no-dependencies` in agent template.
+- **Beads committed but not closed**: Agents sometimes commit then exit before running `br close`. Check `git log` for bead IDs and close manually.
 - **Context not clearing**: `--auto-restart` may not fully clear context. Kill and respawn if agents seem confused.
 
 #### 7. Report
 
 Tell the user:
 - Session name and agent count
+- Whether watch-mode auto-assignment is active (pid if backgrounded)
 - Monitor: `ntm activity $SESSION_NAME --watch`
 - Progress: `/swarm-status`
 - Stop: `/swarm kill`
