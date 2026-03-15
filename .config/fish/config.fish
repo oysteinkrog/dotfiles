@@ -38,3 +38,6 @@ if type -q pm2
         pm2 start ~/.config/pm2/ecosystem.config.js 2>/dev/null
     end
 end
+
+# opencode
+fish_add_path /c/users/oystein/.opencode/bin
