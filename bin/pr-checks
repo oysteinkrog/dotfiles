@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Beautiful PR check status display.
+
+Usage: pr-checks [PR_NUMBER] [--repo OWNER/REPO] [--watch] [--json]
+"""
+
+import subprocess
+import sys
+import argparse
+import time
+
+# ANSI
+R = "\033[0m"
+B = "\033[1m"
+D = "\033[2m"
+I = "\033[3m"
+UL = "\033[4m"
+GRN = "\033[32m"
+RED = "\033[31m"
+YEL = "\033[33m"
+CYN = "\033[36m"
+WHT = "\033[97m"
+
+# Status config: (icon, label_color, label)
+STATUS = {
+    "pass":     ("\033[32m\u2713\033[0m", GRN, "pass"),
+    "fail":     ("\033[31m\u2717\033[0m", RED, "FAIL"),
+    "pending":  ("\033[33m\u25cc\033[0m", YEL, "wait"),
+    "skipping": ("\033[2m\u2013\033[0m",  D,   "skip"),
+}
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Beautiful PR check status")
+    p.add_argument("pr", nargs="?", help="PR number (auto-detect if omitted)")
+    p.add_argument("--repo", default=None, help="owner/repo")
+    p.add_argument("--watch", "-w", action="store_true", help="Poll every 60s until done")
+    p.add_argument("--json", action="store_true", help="Output JSON instead")
+    return p.parse_args()
+
+
+def detect_pr(repo_flag):
+    cmd = ["gh", "pr", "view", "--json", "number,url,headRefName"]
+    if repo_flag:
+        cmd.extend(["--repo", repo_flag])
+    try:
+        import json
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            return str(data["number"]), data.get("url", "")
+    except Exception:
+        pass
+    return None, ""
+
+
+def get_checks(pr_number, repo_flag):
+    cmd = ["gh", "pr", "checks", pr_number]
+    if repo_flag:
+        cmd.extend(["--repo", repo_flag])
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+
+    checks = []
+    seen = set()
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        name = parts[0].strip()
+        status = parts[1].strip().lower()
+        duration = parts[2].strip() if len(parts) > 2 else ""
+        url = parts[3].strip() if len(parts) > 3 else ""
+
+        if name in seen:
+            continue
+        seen.add(name)
+
+        checks.append({"name": name, "status": status, "duration": duration, "url": url})
+    return checks
+
+
+def fmt_duration(d):
+    """Right-align duration string, or empty space."""
+    if not d or d == "0":
+        return " " * 7
+    return f"{d:>7}"
+
+
+def render(checks, pr_number, pr_url=""):
+    if not checks:
+        print(f"\n  {RED}No checks found for PR #{pr_number}{R}\n")
+        return
+
+    counts = {"pass": 0, "fail": 0, "pending": 0, "skipping": 0}
+    for c in checks:
+        s = c["status"]
+        if s in counts:
+            counts[s] += 1
+        else:
+            counts["pending"] += 1
+
+    total = len(checks)
+    passed = counts["pass"]
+    failed = counts["fail"]
+    pending = counts["pending"]
+    skipped = counts["skipping"]
+
+    # Header line
+    if failed > 0:
+        tag = f"{RED}{B}\u2717 FAILING{R}"
+    elif pending > 0:
+        tag = f"{YEL}{B}\u25cc PENDING{R}"
+    else:
+        tag = f"{GRN}{B}\u2713 ALL PASSING{R}"
+
+    print()
+    print(f"  {tag}  {D}PR #{pr_number}{R}")
+    if pr_url:
+        print(f"  {D}{pr_url}{R}")
+
+    # Summary counts
+    parts = []
+    if passed:
+        parts.append(f"{GRN}{passed} passed{R}")
+    if failed:
+        parts.append(f"{RED}{B}{failed} failed{R}")
+    if pending:
+        parts.append(f"{YEL}{pending} pending{R}")
+    if skipped:
+        parts.append(f"{D}{skipped} skipped{R}")
+    print(f"  {D}{total} checks:{R} {f'{D},{R} '.join(parts)}")
+
+    # Thin bar
+    bar_w = 44
+    p_w = round(bar_w * passed / total) if total else 0
+    f_w = round(bar_w * failed / total) if total else 0
+    n_w = round(bar_w * pending / total) if total else 0
+    s_w = bar_w - p_w - f_w - n_w
+    bar = f"{GRN}{'━' * p_w}{R}{RED}{'━' * f_w}{R}{YEL}{'━' * n_w}{R}{D}{'╌' * s_w}{R}"
+    print(f"  {bar}")
+    print()
+
+    # Sort: failures, pending, pass, skip
+    order = {"fail": 0, "pending": 1, "pass": 2, "skipping": 3}
+    checks_sorted = sorted(checks, key=lambda c: (order.get(c["status"], 1), c["name"]))
+    max_name = max(len(c["name"]) for c in checks_sorted)
+
+    # Group and render
+    prev_group = None
+    for c in checks_sorted:
+        s = c["status"]
+        group = order.get(s, 1)
+
+        # Separator between groups
+        if prev_group is not None and group != prev_group:
+            print()
+        prev_group = group
+
+        icon, color, label = STATUS.get(s, STATUS["pending"])
+        name = c["name"]
+        dur = fmt_duration(c["duration"])
+        pad = " " * (max_name - len(name))
+
+        # Name styling
+        if s == "fail":
+            name_s = f"{RED}{B}{name}{R}"
+        elif s == "pass":
+            name_s = f"{name}"
+        elif s == "pending":
+            name_s = f"{YEL}{name}{R}"
+        else:
+            name_s = f"{D}{name}{R}"
+
+        dur_s = f"{D}{dur}{R}" if dur.strip() else f"{dur}"
+
+        print(f"  {icon} {name_s}{pad}  {dur_s}")
+
+    print()
+
+
+def main():
+    args = parse_args()
+
+    pr_number = args.pr
+    pr_url = ""
+    if not pr_number:
+        pr_number, pr_url = detect_pr(args.repo)
+        if not pr_number:
+            print(f"{RED}Could not detect PR. Provide PR number as argument.{R}", file=sys.stderr)
+            sys.exit(1)
+
+    if args.watch:
+        while True:
+            print("\033[2J\033[H", end="")
+            checks = get_checks(pr_number, args.repo)
+            render(checks, pr_number, pr_url)
+            statuses = {c["status"] for c in checks}
+            if not (statuses & {"pending", "queued", "in_progress", "waiting"}):
+                sys.exit(1 if "fail" in statuses else 0)
+            print(f"  {D}Refreshing in 60s... (Ctrl+C to stop){R}")
+            try:
+                time.sleep(60)
+            except KeyboardInterrupt:
+                print()
+                sys.exit(0)
+    else:
+        checks = get_checks(pr_number, args.repo)
+        if args.json:
+            import json
+            print(json.dumps(checks, indent=2))
+        else:
+            render(checks, pr_number, pr_url)
+        statuses = {c["status"] for c in checks}
+        if "fail" in statuses:
+            sys.exit(1)
+        elif statuses & {"pending", "queued", "in_progress", "waiting"}:
+            sys.exit(2)
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
