@@ -331,13 +331,43 @@ class Git:
         return r.stdout.strip() if r.returncode == 0 else None
 
     def is_merged(self, path, branch, upstream_remote, base="master"):
-        """Check if branch is fully merged into upstream base."""
+        """Check if branch is fully merged into upstream base.
+
+        Handles regular merges, rebase merges, and squash merges.
+        """
+        # Fast path: rev-list check (works for regular and rebase merges)
         for ref in [f"{upstream_remote}/{base}", f"{upstream_remote}/master"]:
             cmd = ["git", "-C", str(path), "rev-list", "--count", f"{ref}..{branch}"]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode == 0 and int(r.stdout.strip()) == 0:
                 return True
+
+        # Squash merge detection: for each file the branch changed (vs merge-base),
+        # check if upstream has the same content.  If so, the squash merge
+        # incorporated all changes regardless of commit topology.
+        for ref in [f"{upstream_remote}/{base}", f"{upstream_remote}/master"]:
+            mb_cmd = ["git", "-C", str(path), "merge-base", ref, branch]
+            mb = subprocess.run(mb_cmd, capture_output=True, text=True)
+            if mb.returncode != 0:
+                continue
+            merge_base = mb.stdout.strip()
+            # Files the branch changed since the merge-base
+            files_cmd = ["git", "-C", str(path), "diff", "--name-only", merge_base, branch]
+            files_r = subprocess.run(files_cmd, capture_output=True, text=True)
+            if files_r.returncode != 0 or not files_r.stdout.strip():
+                continue
+            changed_files = files_r.stdout.strip().splitlines()
+            # Check if upstream has identical content for those files
+            diff_cmd = ["git", "-C", str(path), "diff", ref, branch, "--"] + changed_files
+            diff_r = subprocess.run(diff_cmd, capture_output=True, text=True)
+            if diff_r.returncode == 0 and not diff_r.stdout.strip():
+                return True
+
         return False
+
+    def remote_branch_exists(self, remote, branch):
+        """Check if a branch exists on the remote (uses local tracking refs after fetch)."""
+        return self.run_ok("rev-parse", "--verify", f"refs/remotes/{remote}/{branch}")
 
     def ahead_behind(self, path, branch, upstream_remote):
         """Return (ahead, behind) counts relative to upstream."""
@@ -1113,11 +1143,15 @@ def cmd_done(args):
     wt_path = Path(project["path"])
     branch = project["branch"]
 
-    # ── Fetch upstream so merge/push checks use current state ───────────
+    # ── Fetch upstream + fork so merge/push checks use current state ────
     git.fetch(cfg.upstream_remote)
+    git.fetch(cfg.fork_remote)
 
     # ── Safety checks ────────────────────────────────────────────────────
     problems = []
+    base = project.get("base", cfg.default_base).split("/")[-1]
+    merged = False
+    fork_branch_gone = False
 
     if wt_path.exists():
         # Check for untracked files
@@ -1130,9 +1164,17 @@ def cmd_done(args):
         if uncommitted:
             problems.append(("Uncommitted changes", uncommitted))
 
-        # Check if branch is pushed to fork remote (skip if already merged upstream)
-        base = project.get("base", cfg.default_base).split("/")[-1]
+        # Check if branch is merged upstream (handles regular, rebase, and squash merges)
         merged = git.is_merged(wt_path, branch, cfg.upstream_remote, base)
+
+        if not merged:
+            # Check if fork branch was deleted (strong signal PR was merged via GitHub)
+            fork_branch_gone = not git.remote_branch_exists(cfg.fork_remote, branch)
+            if fork_branch_gone:
+                # Branch was pushed before but now deleted from fork — likely merged
+                merged = True
+                info(f"Remote branch {cfg.fork_remote}/{branch} was deleted (PR likely merged)")
+
         if not merged:
             unpushed = git.unpushed_commits(wt_path, branch, cfg.fork_remote)
             if unpushed == -1:
@@ -1141,28 +1183,36 @@ def cmd_done(args):
                 problems.append(("Unpushed commits", [f"{unpushed} commit(s) not pushed to {cfg.fork_remote}/{branch}"]))
 
     if problems and not args.force:
-        print(f"\n{red('Cannot remove')} project {bold(tag)}:\n")
+        print(f"\n{red('Cannot remove')} project {bold(tag)}:\n", file=sys.stderr)
         for label, items in problems:
-            print(f"  {yellow(label)}:")
+            print(f"  {yellow(label)}:", file=sys.stderr)
             shown = items[:10]
             for item in shown:
-                print(f"    - {item}")
+                print(f"    - {item}", file=sys.stderr)
             if len(items) > 10:
-                print(f"    ... and {len(items) - 10} more")
-            print()
+                print(f"    ... and {len(items) - 10} more", file=sys.stderr)
+            print(file=sys.stderr)
         die("Resolve issues above or use --force to override.")
 
     # ── Confirmation ─────────────────────────────────────────────────────
+    # Skip remote branch deletion if it's already gone (PR merged, GitHub auto-deleted)
+    skip_remote_delete = fork_branch_gone or not git.remote_branch_exists(cfg.fork_remote, branch)
+
     if not args.force:
-        print(f"\nWill remove project {bold(tag)}:")
-        print(f"  Path:   {wt_path}")
-        print(f"  Branch: {branch}")
+        # Print details to stderr so they appear in order with the prompt
+        # (stdout is piped through the fish wrapper, stderr goes direct to terminal)
+        print(f"\nWill remove project {bold(tag)}:", file=sys.stderr)
+        print(f"  Path:   {wt_path}", file=sys.stderr)
+        print(f"  Branch: {branch}", file=sys.stderr)
+        if merged:
+            print(f"  Merged:  {green('yes')}", file=sys.stderr)
         if not args.keep_local:
-            print(f"  Delete local branch: yes")
-        if not args.keep_remote:
-            print(f"  Delete remote branch: {cfg.fork_remote}/{branch}")
-        sys.stdout.flush()
-        print("\nProceed? [y/N] ", end="", file=sys.stderr, flush=True)
+            print(f"  Delete local branch: yes", file=sys.stderr)
+        if not args.keep_remote and not skip_remote_delete:
+            print(f"  Delete remote branch: {cfg.fork_remote}/{branch}", file=sys.stderr)
+        elif skip_remote_delete:
+            print(f"  Remote branch: {gray('already gone')}", file=sys.stderr)
+        print(f"\nProceed? [y/N] ", end="", file=sys.stderr, flush=True)
         resp = sys.stdin.readline().strip()
         if resp.lower() != "y":
             print("Cancelled.")
@@ -1212,8 +1262,8 @@ def cmd_done(args):
         info(f"Deleting local branch {branch}...")
         git.branch_delete(branch)
 
-    # Delete remote branch
-    if not args.keep_remote:
+    # Delete remote branch (skip if already gone)
+    if not args.keep_remote and not skip_remote_delete:
         info(f"Deleting remote branch {cfg.fork_remote}/{branch}...")
         if not git.push_delete(cfg.fork_remote, branch):
             warn(f"Could not delete remote branch (may already be gone)")
