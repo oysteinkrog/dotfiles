@@ -20,7 +20,7 @@ Add to `.mcp.json` in the project root:
       "type": "http",
       "url": "http://127.0.0.1:8765/api/",
       "headers": {
-        "Authorization": "Bearer 459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc"
+        "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
       }
     }
   }
