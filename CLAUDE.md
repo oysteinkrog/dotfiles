@@ -103,6 +103,12 @@ Find files by name pattern (glob wrapper around `rg --files`).
 rgg VideoDevice                   # find files with VideoDevice in name
 ```
 
+## Python Toolchain (Astral)
+
+All Python projects use **uv** (packages), **ruff** (lint/format), **ty** (type check).
+After editing .py files: `ruff check --fix && ruff format && ty check`.
+See `/py-uv`, `/py-ruff`, `/py-ty` skills for details.
+
 ## Google Workspace CLI — gogcli (gog)
 
 Go binary by Peter Steinberger (steipete). Single CLI for Gmail, Calendar, Drive, Contacts,
