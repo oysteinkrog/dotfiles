@@ -1,12 +1,13 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "ANTHROPIC_BASE_URL": "https://***REMOVED-PROXY-DOMAIN***"
+    "ANTHROPIC_BASE_URL": "https://***REMOVED-PROXY-DOMAIN***",
+    "ANTHROPIC_API_KEY": "***REMOVED-PROXY-KEY-V1***"
   },
   "permissions": {
     "defaultMode": "default"
   },
-  "model": "opus",
+  "model": "opus[1m]",
   "hooks": {
     "Stop": [
       {
