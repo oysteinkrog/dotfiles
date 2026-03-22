@@ -1,13 +1,11 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "ANTHROPIC_BASE_URL": "https://ccf.krog.zone",
-    "ANTHROPIC_API_KEY": "bccf_a9682a261bcb43a2b9692b919fc24078"
+    "ANTHROPIC_BASE_URL": "http://localhost:4810"
   },
   "permissions": {
     "defaultMode": "default"
   },
-  "model": "opus[1m]",
   "hooks": {
     "Stop": [
       {
@@ -74,19 +72,18 @@
     "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
   "enabledPlugins": {
-    "obsidian@obsidian-skills": true,
     "rust-analyzer-lsp@claude-plugins-official": false
   },
   "syntaxHighlightingDisabled": false,
-  "effortLevel": "high",
   "autoUpdatesChannel": "latest",
   "skipDangerousModePermissionPrompt": true,
+  "effortLevel": "medium",
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
       "url": "http://127.0.0.1:8765/api/",
       "headers": {
-        "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
+        "Authorization": "Bearer 459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc"
       }
     }
   }
