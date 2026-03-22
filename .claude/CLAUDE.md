@@ -7,20 +7,12 @@ Skills, settings, and other Claude config live in the dotfiles repo and are vers
 
 ## Repo Index — Initial Force
 
-| Repo | Local path | GitHub | Access | Contents |
-|------|-----------|--------|--------|----------|
-| **ifkb** | `/c/work/ifkb` | `InitialForce/ifkb` | All employees | Company KB — org structure, products, systems, strategy, financials (board-approved/public) |
-| **ifboard** | `/c/work/ifboard` | `InitialForce/ifboard` | CEO + CTO only | Board-level confidential — investor dossiers, fundraising strategy, cap table, convertible terms, M&A, P&L actuals |
+| Repo | Local path | GitHub | Access |
+|------|-----------|--------|--------|
+| **ifkb** | `/c/work/ifkb` | `InitialForce/ifkb` | All employees |
+| **ifboard** | `/c/work/ifboard` | `InitialForce/ifboard` | CEO + CTO only |
 
-### Cross-repo rules
-
-- **ifboard → ifkb: READ freely.** Agents in ifboard often need company context (products, people, strategy). Read from ifkb or use `qmd` to search it. See ifkb's AGENTS.md for qmd usage.
-- **ifkb → ifboard: NEVER.** ifkb agents must not read, reference, or link to ifboard. ifkb is employee-visible; any ifboard reference leaks the existence of confidential material.
-- **Write destination:** Use each project's CLAUDE.md decision guide to determine where new content belongs. The test: "Would it be a problem if a developer read this?" If yes → ifboard. If no → ifkb.
-
-### Financial data split
-
-General financials (budget scenarios, P&L from board deck, balance sheet, revenue breakdown) live in **ifkb** at `knowledge-base/company/financials.md` — these are board-approved figures shared with employees. Confidential specifics (convertible loan terms, cap table, cash position, fundraising intel, investor feedback) live in **ifboard** under `investor-research/`.
+When working across repos, read the target repo's `CLAUDE.md` and `AGENTS.md` for content rules, search tools, and cross-repo access policy. **ifboard can read ifkb; ifkb must never reference ifboard.**
 
 ## MCP Agent Mail (mcp-agent-mail)
 
