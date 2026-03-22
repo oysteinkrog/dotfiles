@@ -1,20 +1,57 @@
+// PM2 Ecosystem - MCP Servers & Infrastructure
+// Restart all: pm2 start ecosystem.config.js
+// Port map:
+//   18082  better-ccflare-rs  (Anthropic API proxy)
+//    4801  pal-mcp            (PAL oracle, SSE)
+//    4802  google-workspace   (streamable-http)
+//    4803  slack-mcp          (supergateway-rs)
+//    4804  sentry-mcp         (supergateway-rs)
+//    4805  hubspot-mcp        (supergateway-rs)
+//    4806  zendesk-mcp        (supergateway-rs)
+//    4807  apify-mcp          (supergateway-rs)
+//    4808  atlassian-mcp      (supergateway-rs)
+//    8765  mcp-agent-mail     (agent coordination)
+
+const SUPERGATEWAY = "/c/work/supergateway-rs/target/release/supergateway-rs";
+const LOG_DIR = "/c/users/oystein/.config/pm2/logs";
+
+function supergatewayApp(name, stdioBin, port) {
+  return {
+    name,
+    script: SUPERGATEWAY,
+    args: `--stdio ${stdioBin} --outputTransport streamableHttp --stateful --sessionTimeout 300000 --port ${port}`,
+    interpreter: "none",
+    autorestart: true,
+    max_restarts: 10,
+    min_uptime: "10s",
+    restart_delay: 5000,
+    max_memory_restart: "32M",
+    error_file: `${LOG_DIR}/${name}-error.log`,
+    out_file: `${LOG_DIR}/${name}-out.log`,
+    merge_logs: true,
+  };
+}
+
 module.exports = {
   apps: [
+    // ── Anthropic API Proxy ─────────────────────────────────────
     {
-      name: "better-ccflare",
-      script: "cmd.exe",
-      args: "/c cd /d C:\\WORK\\better-ccflare && apps\\cli\\dist\\better-ccflare-windows-x64.exe --serve --port 4800",
+      name: "better-ccflare-rs",
+      cwd: "/c/WORK/better-ccflare/better-ccflare-rs",
+      script: "target/release/better-ccflare",
+      args: "--serve --port 4810",
       interpreter: "none",
-      env: {},
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
-      restart_delay: 3000,
+      restart_delay: 5000,
       max_memory_restart: "512M",
-      error_file: "/c/users/oystein/.config/pm2/logs/better-ccflare-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/better-ccflare-out.log",
+      error_file: `${LOG_DIR}/better-ccflare-rs-error.log`,
+      out_file: `${LOG_DIR}/better-ccflare-rs-out.log`,
       merge_logs: true,
     },
+
+    // ── PAL MCP (SSE transport) ─────────────────────────────────
     {
       name: "pal-mcp",
       cwd: "/c/WORK/pal-mcp-server",
@@ -24,12 +61,14 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
-      restart_delay: 3000,
+      restart_delay: 5000,
       max_memory_restart: "1G",
-      error_file: "/c/users/oystein/.config/pm2/logs/pal-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/pal-mcp-out.log",
+      error_file: `${LOG_DIR}/pal-mcp-error.log`,
+      out_file: `${LOG_DIR}/pal-mcp-out.log`,
       merge_logs: true,
     },
+
+    // ── Google Workspace MCP (native streamable-http) ───────────
     {
       name: "google-workspace-mcp",
       script: "/c/users/oystein/.local/bin/uvx",
@@ -45,100 +84,38 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
-      restart_delay: 3000,
+      restart_delay: 5000,
       max_memory_restart: "512M",
-      error_file: "/c/users/oystein/.config/pm2/logs/google-workspace-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/google-workspace-out.log",
+      error_file: `${LOG_DIR}/google-workspace-error.log`,
+      out_file: `${LOG_DIR}/google-workspace-out.log`,
       merge_logs: true,
     },
+
+    // ── supergateway-rs MCP servers ─────────────────────────────
+    supergatewayApp("slack-mcp",     "/c/users/oystein/bin/slack-mcp",   4803),
+    supergatewayApp("sentry-mcp",    "/c/users/oystein/bin/sentry-mcp",  4804),
+    supergatewayApp("hubspot-mcp",   "/c/users/oystein/bin/hubspot-mcp", 4805),
+    supergatewayApp("zendesk-mcp",   "/c/users/oystein/bin/zendesk-mcp", 4806),
+    supergatewayApp("apify-mcp",     "/c/users/oystein/bin/apify-mcp",   4807),
+    supergatewayApp("atlassian-mcp", "npx -y mcp-remote https://mcp.atlassian.com/v1/mcp", 4808),
+
+    // ── MCP Agent Mail (agent coordination) ─────────────────────
     {
-      name: "slack-mcp",
-      script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/slack-mcp --outputTransport streamableHttp --port 4803",
-      interpreter: "none",
-      env: {},
+      name: "mcp-agent-mail",
+      cwd: "/c/users/oystein/mcp_agent_mail",
+      script: "scripts/run_server_with_token.sh",
+      args: "--port 8765",
+      interpreter: "bash",
+      env: {
+        HTTP_BEARER_TOKEN: "459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc",
+      },
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/slack-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/slack-mcp-out.log",
-      merge_logs: true,
-    },
-    {
-      name: "sentry-mcp",
-      script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/sentry-mcp --outputTransport streamableHttp --port 4804",
-      interpreter: "none",
-      env: {},
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/sentry-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/sentry-mcp-out.log",
-      merge_logs: true,
-    },
-    {
-      name: "hubspot-mcp",
-      script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/hubspot-mcp --outputTransport streamableHttp --port 4805",
-      interpreter: "none",
-      env: {},
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/hubspot-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/hubspot-mcp-out.log",
-      merge_logs: true,
-    },
-    {
-      name: "zendesk-mcp",
-      script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/zendesk-mcp --outputTransport streamableHttp --port 4806",
-      interpreter: "none",
-      env: {},
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/zendesk-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/zendesk-mcp-out.log",
-      merge_logs: true,
-    },
-    {
-      name: "apify-mcp",
-      script: "supergateway",
-      args: "--stdio /c/users/oystein/bin/apify-mcp --outputTransport streamableHttp --port 4807",
-      interpreter: "none",
-      env: {},
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/apify-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/apify-mcp-out.log",
-      merge_logs: true,
-    },
-    {
-      name: "atlassian-mcp",
-      script: "supergateway",
-      args: "--stdio 'npx -y mcp-remote https://mcp.atlassian.com/v1/mcp' --outputTransport streamableHttp --port 4808",
-      interpreter: "none",
-      env: {},
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 3000,
-      max_memory_restart: "256M",
-      error_file: "/c/users/oystein/.config/pm2/logs/atlassian-mcp-error.log",
-      out_file: "/c/users/oystein/.config/pm2/logs/atlassian-mcp-out.log",
+      restart_delay: 5000,
+      max_memory_restart: "512M",
+      error_file: `${LOG_DIR}/mcp-agent-mail-error.log`,
+      out_file: `${LOG_DIR}/mcp-agent-mail-out.log`,
       merge_logs: true,
     },
   ],
