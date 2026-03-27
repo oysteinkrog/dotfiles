@@ -174,3 +174,9 @@ mcp__pal__consensus with models for both perspectives when:
 - Verify recommendations against project constraints
 - Default to GPT-5.4 with max thinking for speed; escalate to GPT-5.4-Pro for precision
 - Document which recommendation was chosen and why
+
+## Related Skills
+- `/swarm-oracle` — FOR/AGAINST oracle consensus via PAL MCP (pipeline-integrated version)
+- `/swarm-oracle-review` — Iterative oracle + agent hardening loop
+- `/swarm-review` — Multi-lens review with 10 parallel agents (different from oracle consultation)
+

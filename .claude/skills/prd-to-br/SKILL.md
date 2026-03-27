@@ -268,3 +268,9 @@ Before finishing:
 - [ ] QA review passes completed (changes flatlined)
 - [ ] `br sync --flush-only` executed
 - [ ] `.beads/` committed to git
+
+## Related Skills
+- `/swarm-beads-create` — Multi-agent version: uses 3-6 parallel agents for complex plans with many beads
+- `/swarm-beads-quality` — Run quality pipeline on created beads (review, oracle, harden)
+- `/beads-polish` — Single-agent bead review and polish (lighter than swarm-beads-quality)
+

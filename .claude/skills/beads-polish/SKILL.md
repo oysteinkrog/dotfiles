@@ -155,3 +155,9 @@ Before finishing:
 - [ ] Dependency graph is acyclic (`bv --robot-insights` shows zero cycles)
 - [ ] Beads are self-contained (implementable without reading other beads)
 - [ ] Changes committed to `.beads/`
+
+## Related Skills
+- `/swarm-beads-quality` — Multi-agent bead quality pipeline (10-agent review + oracle + hardening). Use for thorough quality assurance on large bead sets.
+- `/swarm-beads-rewrite` — Rewrite beads after architecture audit findings
+- `/swarm-hardening` — Full hardening loop (review → oracle → fresh-eyes → verify)
+
