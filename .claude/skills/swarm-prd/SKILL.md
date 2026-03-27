@@ -208,5 +208,5 @@ Before outputting the plan:
 ## Related Skills
 - `/swarm-pipeline` — Full feature pipeline that uses PRDs as input to research→design→beads cycle
 - `/swarm-beads-create` — Convert the PRD output into implementation beads
-- `/prd-to-br` — Quick single-agent PRD→beads conversion (simpler than swarm-beads-create)
+- `/swarm-beads-quick` — Quick single-agent PRD→beads conversion (simpler than swarm-beads-create)
 
