@@ -2,7 +2,7 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "ANTHROPIC_BASE_URL": "https://***REMOVED-PROXY-DOMAIN***",
-    "ANTHROPIC_API_KEY": "***REMOVED-PROXY-KEY-V1***"
+    "ANTHROPIC_API_KEY": "***REMOVED-PROXY-KEY-V2***"
   },
   "permissions": {
     "defaultMode": "default"
@@ -75,7 +75,17 @@
   },
   "enabledPlugins": {
     "obsidian@obsidian-skills": true,
-    "rust-analyzer-lsp@claude-plugins-official": false
+    "rust-analyzer-lsp@claude-plugins-official": false,
+    "frontend-design@claude-plugins-official": true,
+    "ui-ux-pro-max@ui-ux-pro-max-skill": true
+  },
+  "extraKnownMarketplaces": {
+    "ui-ux-pro-max-skill": {
+      "source": {
+        "source": "github",
+        "repo": "nextlevelbuilder/ui-ux-pro-max-skill"
+      }
+    }
   },
   "syntaxHighlightingDisabled": false,
   "effortLevel": "high",
