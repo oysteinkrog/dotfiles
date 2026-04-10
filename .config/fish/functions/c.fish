@@ -1,3 +1,3 @@
 function c --description 'Claude Code with dangerously-skip-permissions'
-    command claude --dangerously-skip-permissions $argv
+    claude $argv
 end
