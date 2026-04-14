@@ -109,6 +109,32 @@ All Python projects use **uv** (packages), **ruff** (lint/format), **ty** (type 
 After editing .py files: `ruff check --fix && ruff format && ty check`.
 See `/py-uv`, `/py-ruff`, `/py-ty` skills for details.
 
+## X/Twitter Bookmarks — fieldtheory-cli (ft)
+
+Local archive of X/Twitter bookmarks, searchable via `ft` CLI (`npm i -g fieldtheory`).
+Skill `/fieldtheory` is installed for Claude Code.
+
+- **Data:** `~/.ft-bookmarks/` (SQLite + FTS index)
+- **Cookies:** `/c/work/life/data/x-cookies.env` (contains `FT_CT0` and `FT_AUTH_TOKEN`)
+
+### Search & browse
+```bash
+ft search "<query>"                # full-text BM25 search
+ft list --category tool --domain ai --limit 10
+ft list --author @handle
+ft stats                           # collection overview
+ft show <id>                       # full detail for one bookmark
+```
+
+### Sync new bookmarks
+```bash
+# Read cookies from the env file, then sync:
+source /c/work/life/data/x-cookies.env 2>/dev/null
+ft sync --cookies $FT_CT0 $FT_AUTH_TOKEN --yes
+```
+If sync fails with auth errors, cookies have expired — ask the user to re-extract
+`ct0` and `auth_token` from Chrome DevTools (Application > Cookies > x.com).
+
 ## Google Workspace CLI — gogcli (gog)
 
 Go binary by Peter Steinberger (steipete). Single CLI for Gmail, Calendar, Drive, Contacts,
