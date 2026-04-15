@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""xt — fetch and display X/Twitter tweets by URL or ID.
+"""xt — fetch and display X/Twitter tweets and articles by URL or ID.
 
 Uses the public syndication API (no auth required for public tweets).
 Falls back to authenticated API using cookies from ft's env file.
+For X Articles, uses the authenticated GraphQL API to fetch full content.
 
 Usage:
     xt <tweet-url-or-id>           # human-readable output
     xt -j <tweet-url-or-id>        # JSON output
     xt -d <tweet-url-or-id>        # download images to /tmp/xt/
     xt -r <tweet-url-or-id>        # raw API JSON (unprocessed)
+    xt <article-url>               # fetch article body (x.com/i/article/...)
 """
 
 import argparse
@@ -19,10 +21,13 @@ import sys
 import textwrap
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 
 SYNDICATION_URL = "https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&lang=en&token=x"
+GRAPHQL_TWEET_URL = "https://x.com/i/api/graphql/tmhPpO5sDermwYmq3h034A/TweetResultByRestId"
+BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 COOKIES_ENV = Path.home() / ".." / ".." / "c" / "work" / "life" / "data" / "x-cookies.env"
 # Also try direct path
 COOKIES_ENV_ALT = Path("/c/work/life/data/x-cookies.env")
@@ -38,6 +43,230 @@ def extract_tweet_id(arg: str) -> str | None:
     if m:
         return m.group(1)
     return None
+
+
+def extract_article_id(arg: str) -> str | None:
+    """Extract article ID from an X article URL."""
+    m = re.search(r"(?:twitter\.com|x\.com)/i/article/(\d+)", arg)
+    if m:
+        return m.group(1)
+    return None
+
+
+def load_cookies() -> tuple[str, str] | None:
+    """Load ct0 and auth_token from cookies env file."""
+    for path in [COOKIES_ENV, COOKIES_ENV_ALT]:
+        if path.exists():
+            ct0 = auth = None
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == "FT_CT0":
+                    ct0 = v.strip()
+                elif k.strip() == "FT_AUTH_TOKEN":
+                    auth = v.strip()
+            if ct0 and auth:
+                return ct0, auth
+    return None
+
+
+def fetch_article_content(tweet_id: str) -> dict | None:
+    """Fetch article body via authenticated GraphQL API.
+
+    Returns dict with 'title', 'plain_text', 'preview_text' or None if
+    the tweet has no article or auth is unavailable.
+    """
+    creds = load_cookies()
+    if not creds:
+        return None
+    ct0, auth_token = creds
+
+    variables = json.dumps({
+        "tweetId": tweet_id,
+        "withCommunity": False,
+        "includePromotedContent": False,
+        "withVoice": False,
+    })
+    features = json.dumps({
+        "rweb_video_screen_enabled": True,
+        "articles_preview_enabled": True,
+        "responsive_web_twitter_article_tweet_consumption_enabled": True,
+        "longform_notetweets_rich_text_read_enabled": True,
+        "longform_notetweets_inline_media_enabled": True,
+        "responsive_web_enhance_cards_enabled": True,
+        "responsive_web_graphql_timeline_navigation_enabled": True,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+        "creator_subscriptions_tweet_preview_api_enabled": True,
+        "communities_web_enable_tweet_community_results_fetch": True,
+        "c9s_tweet_anatomy_moderator_badge_enabled": True,
+        "content_disclosure_indicator_enabled": True,
+        "content_disclosure_ai_generated_indicator_enabled": True,
+        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+        "view_counts_everywhere_api_enabled": True,
+        "longform_notetweets_consumption_enabled": True,
+        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+        "freedom_of_speech_not_reach_fetch_enabled": True,
+        "standardized_nudges_misinfo": True,
+        "responsive_web_edit_tweet_api_enabled": True,
+        "verified_phone_label_enabled": False,
+    })
+    field_toggles = json.dumps({
+        "withArticleRichContentState": True,
+        "withArticlePlainText": True,
+    })
+
+    params = urllib.parse.urlencode({
+        "variables": variables,
+        "features": features,
+        "fieldToggles": field_toggles,
+    })
+    url = f"{GRAPHQL_TWEET_URL}?{params}"
+
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {urllib.parse.unquote(BEARER_TOKEN)}",
+        "X-Csrf-Token": ct0,
+        "Cookie": f"ct0={ct0}; auth_token={auth_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        result = data.get("data", {}).get("tweetResult", {}).get("result", {})
+        article = result.get("article", {}).get("article_results", {}).get("result")
+        if article and article.get("plain_text"):
+            return {
+                "title": article.get("title", ""),
+                "plain_text": article.get("plain_text", ""),
+                "preview_text": article.get("preview_text", ""),
+            }
+    except Exception as e:
+        print(f"Warning: failed to fetch article content: {e}", file=sys.stderr)
+    return None
+
+
+GRAPHQL_USER_ARTICLES_URL = "https://x.com/i/api/graphql/XznGU9VNo0ji6vdFWmUhlQ/UserArticlesTweets"
+GRAPHQL_USER_BY_SCREEN_NAME_URL = "https://x.com/i/api/graphql/IGgvgiOx4QZndDHuD3x9TQ/UserByScreenName"
+
+
+def lookup_user_id(screen_name: str) -> str | None:
+    """Look up a user's rest_id by screen name via GraphQL."""
+    creds = load_cookies()
+    if not creds:
+        return None
+    ct0, auth_token = creds
+
+    variables = json.dumps({"screen_name": screen_name, "withSafetyModeUserFields": True})
+    features = json.dumps({
+        "hidden_profile_subscriptions_enabled": True,
+        "rweb_tipjar_consumption_enabled": True,
+        "responsive_web_graphql_exclude_directive_enabled": True,
+        "verified_phone_label_enabled": False,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+        "responsive_web_graphql_timeline_navigation_enabled": True,
+    })
+    params = urllib.parse.urlencode({"variables": variables, "features": features})
+    req = urllib.request.Request(f"{GRAPHQL_USER_BY_SCREEN_NAME_URL}?{params}", headers={
+        "Authorization": f"Bearer {urllib.parse.unquote(BEARER_TOKEN)}",
+        "X-Csrf-Token": ct0,
+        "Cookie": f"ct0={ct0}; auth_token={auth_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("data", {}).get("user", {}).get("result", {}).get("rest_id")
+    except Exception:
+        return None
+
+
+def find_article_in_user_tweets(user_id: str, article_id: str) -> tuple[str, dict] | None:
+    """Search a user's article tweets for a specific article ID.
+
+    Returns (tweet_id, article_dict) or None.
+    """
+    creds = load_cookies()
+    if not creds:
+        return None
+    ct0, auth_token = creds
+
+    variables = json.dumps({
+        "userId": user_id,
+        "count": 20,
+        "includePromotedContent": False,
+        "withVoice": False,
+    })
+    features = json.dumps({
+        "rweb_video_screen_enabled": True,
+        "articles_preview_enabled": True,
+        "responsive_web_twitter_article_tweet_consumption_enabled": True,
+        "longform_notetweets_rich_text_read_enabled": True,
+        "longform_notetweets_inline_media_enabled": True,
+        "responsive_web_enhance_cards_enabled": True,
+        "responsive_web_graphql_timeline_navigation_enabled": True,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+        "creator_subscriptions_tweet_preview_api_enabled": True,
+        "communities_web_enable_tweet_community_results_fetch": True,
+        "c9s_tweet_anatomy_moderator_badge_enabled": True,
+        "content_disclosure_indicator_enabled": True,
+        "content_disclosure_ai_generated_indicator_enabled": True,
+        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+        "view_counts_everywhere_api_enabled": True,
+        "longform_notetweets_consumption_enabled": True,
+        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+        "freedom_of_speech_not_reach_fetch_enabled": True,
+        "standardized_nudges_misinfo": True,
+        "responsive_web_edit_tweet_api_enabled": True,
+        "verified_phone_label_enabled": False,
+        "profile_label_improvements_pcf_label_in_post_enabled": True,
+        "rweb_tipjar_consumption_enabled": True,
+    })
+    field_toggles = json.dumps({
+        "withArticleRichContentState": True,
+        "withArticlePlainText": True,
+    })
+
+    params = urllib.parse.urlencode({
+        "variables": variables,
+        "features": features,
+        "fieldToggles": field_toggles,
+    })
+    req = urllib.request.Request(f"{GRAPHQL_USER_ARTICLES_URL}?{params}", headers={
+        "Authorization": f"Bearer {urllib.parse.unquote(BEARER_TOKEN)}",
+        "X-Csrf-Token": ct0,
+        "Cookie": f"ct0={ct0}; auth_token={auth_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"Warning: failed to fetch user articles: {e}", file=sys.stderr)
+        return None
+
+    # Walk the response tree to find tweet+article pairs
+    def find_tweets(obj, results=None):
+        if results is None:
+            results = []
+        if isinstance(obj, dict):
+            if "rest_id" in obj and "article" in obj:
+                art = obj["article"].get("article_results", {}).get("result", {})
+                if art.get("rest_id") == article_id:
+                    results.append((obj["rest_id"], {
+                        "title": art.get("title", ""),
+                        "plain_text": art.get("plain_text", ""),
+                        "preview_text": art.get("preview_text", ""),
+                    }))
+            for v in obj.values():
+                find_tweets(v, results)
+        elif isinstance(obj, list):
+            for v in obj:
+                find_tweets(v, results)
+        return results
+
+    matches = find_tweets(data)
+    return matches[0] if matches else None
 
 
 def fetch_tweet(tweet_id: str) -> dict:
@@ -132,7 +361,8 @@ def download_images(data: dict, tweet_id: str) -> list[str]:
     return paths
 
 
-def format_human(data: dict, downloaded: list[str] | None = None) -> str:
+def format_human(data: dict, downloaded: list[str] | None = None,
+                  article: dict | None = None) -> str:
     """Format tweet for human reading."""
     user = data.get("user", {})
     author = user.get("name", "Unknown")
@@ -148,13 +378,27 @@ def format_human(data: dict, downloaded: list[str] | None = None) -> str:
     lines.append(f"\033[1m{author}\033[0m \033[2m@{handle}\033[0m")
     lines.append(f"\033[2m{created}\033[0m")
     lines.append("")
-    # Wrap text at 80 chars
-    for paragraph in text.split("\n"):
-        if paragraph.strip():
-            lines.extend(textwrap.wrap(paragraph, width=80))
-        else:
+
+    # If article content is available, show it instead of the bare link
+    if article:
+        title = article.get("title", "")
+        if title:
+            lines.append(f"\033[1m{title}\033[0m")
             lines.append("")
-    lines.append("")
+        for paragraph in article["plain_text"].split("\n"):
+            if paragraph.strip():
+                lines.extend(textwrap.wrap(paragraph, width=80))
+            else:
+                lines.append("")
+        lines.append("")
+    else:
+        # Wrap text at 80 chars
+        for paragraph in text.split("\n"):
+            if paragraph.strip():
+                lines.extend(textwrap.wrap(paragraph, width=80))
+            else:
+                lines.append("")
+        lines.append("")
 
     if quoted:
         lines.append(f"  \033[2m┃ \033[1m{quoted['author']}\033[0m \033[2m@{quoted['handle']}\033[0m")
@@ -180,12 +424,12 @@ def format_human(data: dict, downloaded: list[str] | None = None) -> str:
     return "\n".join(lines)
 
 
-def format_json(data: dict) -> dict:
+def format_json(data: dict, article: dict | None = None) -> dict:
     """Structured JSON output."""
     user = data.get("user", {})
     media = get_media(data)
     quoted = get_quoted_tweet(data)
-    return {
+    out = {
         "id": data.get("id_str", ""),
         "author": user.get("name", ""),
         "handle": user.get("screen_name", ""),
@@ -198,22 +442,49 @@ def format_json(data: dict) -> dict:
         "quoted_tweet": quoted,
         "links": [u["expanded_url"] for u in data.get("entities", {}).get("urls", [])],
     }
+    if article:
+        out["article"] = article
+    return out
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fetch and display X/Twitter tweets",
-        usage="xt [-j|-r|-d] <tweet-url-or-id>",
+        description="Fetch and display X/Twitter tweets and articles",
+        usage="xt [-j|-r|-d] <tweet-url-or-id-or-article-url>",
     )
-    parser.add_argument("tweet", help="Tweet URL or numeric ID")
+    parser.add_argument("tweet", help="Tweet URL, numeric ID, or article URL")
     parser.add_argument("-j", "--json", action="store_true", help="JSON output")
     parser.add_argument("-r", "--raw", action="store_true", help="Raw API JSON")
     parser.add_argument("-d", "--download", action="store_true", help="Download images to /tmp/xt/")
+    parser.add_argument("-a", "--author", help="Author handle for article URL lookup (e.g. intuitiveml)")
     args = parser.parse_args()
 
-    tweet_id = extract_tweet_id(args.tweet)
+    # Check if this is an article URL (x.com/i/article/<id>)
+    article_id = extract_article_id(args.tweet)
+    article = None
+
+    if article_id:
+        # For article URLs, we need the author to look up their article tweets
+        author = args.author
+        if not author:
+            print("Error: article URLs require --author <handle> to look up the tweet.", file=sys.stderr)
+            print(f"  Example: xt -a intuitiveml '{args.tweet}'", file=sys.stderr)
+            print(f"  Tip: use the tweet URL instead (x.com/<user>/status/<id>)", file=sys.stderr)
+            sys.exit(1)
+        user_id = lookup_user_id(author)
+        if not user_id:
+            print(f"Error: couldn't find user @{author}", file=sys.stderr)
+            sys.exit(1)
+        result = find_article_in_user_tweets(user_id, article_id)
+        if not result:
+            print(f"Error: couldn't find article {article_id} in @{author}'s articles", file=sys.stderr)
+            sys.exit(1)
+        tweet_id, article = result
+    else:
+        tweet_id = extract_tweet_id(args.tweet)
+
     if not tweet_id:
-        print(f"Error: couldn't extract tweet ID from: {args.tweet}", file=sys.stderr)
+        print(f"Error: couldn't extract tweet or article ID from: {args.tweet}", file=sys.stderr)
         sys.exit(1)
 
     data = fetch_tweet(tweet_id)
@@ -222,17 +493,21 @@ def main():
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return
 
+    # Auto-fetch article content if the tweet contains an article
+    if not article and (data.get("article") or article_id):
+        article = fetch_article_content(tweet_id)
+
     downloaded = None
     if args.download:
         downloaded = download_images(data, tweet_id)
 
     if args.json:
-        out = format_json(data)
+        out = format_json(data, article)
         if downloaded:
             out["downloaded_files"] = downloaded
         print(json.dumps(out, indent=2, ensure_ascii=False))
     else:
-        print(format_human(data, downloaded))
+        print(format_human(data, downloaded, article))
 
 
 if __name__ == "__main__":
