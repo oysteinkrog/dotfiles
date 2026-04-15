@@ -1,10 +1,10 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
   },
   "permissions": {
     "defaultMode": "default"
@@ -18,6 +18,11 @@
           {
             "type": "command",
             "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state Y29tcGxldGU= && echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\'",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "cm outcome success 2>/dev/null || true",
             "async": true
           }
         ]
@@ -43,6 +48,11 @@
             "type": "command",
             "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state ZXJyb3I=",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "cm outcome failure 2>/dev/null || true",
+            "async": true
           }
         ]
       }
@@ -66,6 +76,10 @@
           {
             "type": "command",
             "command": "dcg"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/trauma_guard.py"
           }
         ]
       }
@@ -99,6 +113,13 @@
       "url": "http://127.0.0.1:8765/api/",
       "headers": {
         "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
+      }
+    },
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/sse",
+      "headers": {
+        "Authorization": "Bearer ${SENTRY_AUTH_TOKEN}"
       }
     }
   }
