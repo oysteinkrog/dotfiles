@@ -54,4 +54,32 @@ This symlinks all config files (`.gitconfig`, `.vimrc`, `.config/`, etc.) into `
 | `.tmux.conf` | tmux config |
 | `.ripgreprc` | ripgrep defaults |
 | `bin/` | Personal scripts and tools (includes `git-hunks` for non-interactive selective hunk staging) |
+| `bin/codedb` | Patched codedb binary with WSL1 compat (see below) |
 | `SERVICES.md` | Shared MCP services managed by PM2 |
+
+## Patched binaries
+
+### codedb (WSL1 compatibility)
+
+The upstream [codedb](https://github.com/justrach/codedb) binary doesn't work on WSL1
+because Zig 0.15's stdlib uses the `statx` syscall (requires kernel 4.11+) with no
+fallback. WSL1 runs kernel 4.4, so every stat call returns `ENOSYS` / `error.Unexpected`,
+causing 0 files indexed.
+
+The patched binary in `bin/codedb` adds a runtime statx probe — if the kernel doesn't
+support statx, all stat calls fall back to `fstat`/`fstatat64`. Zero overhead on normal
+Linux kernels that support statx.
+
+**Patch source**: `/c/work/codedb/src/compat.zig` (fork of `justrach/codedb`)
+
+**To rebuild** after upstream updates:
+
+```bash
+cd /c/work/codedb
+git pull                          # get upstream changes
+# verify src/compat.zig is present and imported in store/watcher/snapshot/index/telemetry/main
+bin/codedb-build.sh --install     # cross-compile via Windows Zig, install to dotfiles
+```
+
+Cross-compilation from Windows Zig is required because Zig 0.15 itself uses statx
+internally, so it can't run on WSL1 either.
