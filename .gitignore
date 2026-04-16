@@ -48,8 +48,19 @@ bin/dcg
 .claude/backups/
 .claude/output/
 .claude/mcp-needs-auth-cache.json
+.claude/sessions/
 .claude/*.bak
 .config/fish/functions/*.bak
+
+# Large binaries (>10MB; install/build locally instead of tracking)
+bin/cass.exe
+bin/cass-old.exe
+bin/cm.exe
+bin/ms.exe
+bin/claude-rs
+bin/claurst
+bin/claw
+bin/codedb
 
 # Misc
 list-worktrees.sh
