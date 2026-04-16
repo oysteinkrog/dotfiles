@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /c/users/oystein/bin/claude-rs --bridge-script /c/work/claude-code-rust/agent-sdk/dist/bridge.js "$@"
