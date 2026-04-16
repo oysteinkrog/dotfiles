@@ -8,17 +8,17 @@ Each agent is autonomous and fungible: it gets assigned a bead, implements it, c
 ## ntm config requirements
 
 The `[agents]` section in `~/.config/ntm/config.toml` must include:
-- `--strict-mcp-config` — disables MCP servers (agents don't need them)
 - `DISABLE_AUTOUPDATER=1` — prevents auto-update banner that breaks idle detection
+- Do NOT use `--strict-mcp-config` — agents need access to agent-mail MCP for file reservations
 
 ```toml
 [agents]
-claude = "env ... DISABLE_AUTOUPDATER=1 claude --dangerously-skip-permissions --strict-mcp-config ..."
+claude = "env ... DISABLE_AUTOUPDATER=1 claude --dangerously-skip-permissions ..."
 ```
 
 Verify before spawning:
 ```bash
-grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
+grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
 ```
 
 ## When to activate
@@ -49,7 +49,26 @@ Activate when the user says:
 
 ```bash
 # Verify ntm config
-grep -q 'strict-mcp-config' ~/.config/ntm/config.toml && grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check ntm config"
+grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
+
+# Start agent-mail if not running (required for file reservations)
+curl -sf http://127.0.0.1:8765/api/health > /dev/null 2>&1 && echo "Agent-mail: running" || { echo "Starting agent-mail..."; cd ~/mcp_agent_mail && nohup python3 -m uvicorn main:app --host 127.0.0.1 --port 8765 > /dev/null 2>&1 & sleep 2; }
+
+# Ensure project .mcp.json has agent-mail configured
+python3 -c "
+import json, os
+p = '.mcp.json'
+cfg = json.load(open(p)) if os.path.exists(p) else {'mcpServers': {}}
+if 'mcp-agent-mail' not in cfg.get('mcpServers', {}):
+    cfg.setdefault('mcpServers', {})['mcp-agent-mail'] = {
+        'type': 'http', 'url': 'http://127.0.0.1:8765/api/',
+        'headers': {'Authorization': 'Bearer \${MCP_AGENT_MAIL_TOKEN}'}
+    }
+    json.dump(cfg, open(p, 'w'), indent=2)
+    print('Added agent-mail to .mcp.json')
+else:
+    print('Agent-mail already in .mcp.json')
+"
 
 # Show what's ready
 bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
@@ -79,24 +98,34 @@ Claim it: br update {BEAD_ID} --status in_progress
 Get details: br show {BEAD_ID} --json 2>/dev/null
 Check related: bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
 
+## File Coordination (MANDATORY)
+
+Before editing ANY file, reserve it via agent-mail MCP to prevent conflicts with other agents:
+1. Call `file_reservation_paths` with the list of files you plan to edit
+2. If a file is already reserved by another agent, STOP — do not edit it. Exit and let the operator reassign.
+3. After committing, call `release_file_reservations` for your files
+
 ## Rules
 
 1. **Read production code first.** Understand actual behavior before writing anything.
 2. Match existing project conventions (see CLAUDE.md).
 3. Test/file folders must mirror source structure.
 4. Follow .editorconfig and analyzer rules.
+5. **Reserve files before editing.** Use agent-mail file_reservation_paths. Never edit unreserved files.
 
 ## Steps
 
 1. Read and understand related existing code thoroughly
-2. Implement according to acceptance criteria
-3. Commit IMMEDIATELY after writing files (before full test suite):
+2. Reserve all files you plan to edit via agent-mail file_reservation_paths
+3. Implement according to acceptance criteria
+4. Commit IMMEDIATELY after writing files (before full test suite):
    git add <specific files>
    git commit -m "<area>({BEAD_ID}): short description"
-4. Run project checks (tests, linting — see CLAUDE.md)
-5. If checks fail, fix and amend: git add <files> && git commit --amend --no-edit
-6. Close: br close {BEAD_ID}
-7. Exit: /exit
+5. Run project checks (tests, linting — see CLAUDE.md)
+6. If checks fail, fix and amend: git add <files> && git commit --amend --no-edit
+7. Release file reservations via agent-mail release_file_reservations
+8. Close: br close {BEAD_ID}
+9. Exit: /exit
 ```
 
 Note: `<area>` follows project git conventions (e.g., `test/`, `model/`, `vm/`).
