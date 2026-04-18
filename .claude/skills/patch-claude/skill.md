@@ -1,10 +1,10 @@
 ---
 name: patch-claude
 description: |
-  Patch Claude Code's cli.js to suppress two nag warnings:
+  Patch Claude Code's native binary to suppress two nag warnings:
   (1) "Auth conflict: Both a token and an API key are set" — for intentional dual-auth/proxy setups.
   (2) "Claude Code has switched from npm to native installer" — when keeping the npm install on purpose.
-  Re-run after every Claude Code update.
+  Re-run after every Claude Code update (npm install or native).
   Use when user says "patch claude", "patch auth warning", "fix auth conflict",
   "remove native install warning", "suppress npm deprecation", or after updating claude.
 allowed-tools:
@@ -13,74 +13,99 @@ allowed-tools:
 
 # Patch Claude Code Nag Warnings
 
-Suppresses two startup nags in the Claude Code cli.js:
+Suppresses two startup nags by binary-patching the Claude Code executable:
 
-1. **`both-auth-methods`** — auth conflict warning when both OAuth and `ANTHROPIC_API_KEY` are set (e.g., proxy setups).
-2. **`npm-deprecation-warning`** — "Claude Code has switched from npm to native installer" notice shown on each launch for npm installs.
+1. **`both-auth-methods`** — auth conflict warning when both OAuth and `ANTHROPIC_API_KEY` are set.
+2. **`npm-deprecation-warning`** — "Claude Code has switched from npm to native installer" notice.
 
-Each patch is idempotent (skipped if already applied) and verified after application. Must be re-run after every Claude Code update since it overwrites cli.js.
+Both patches are same-length binary replacements (preserves file size/integrity). Idempotent — safe to re-run.
+Must be re-run after every Claude Code update.
 
 ## Instructions
 
-1. Find the Claude Code cli.js by resolving `which claude`
-2. Apply each patch only if not already present; verify after each
-3. Report per-patch status (applied / already-patched / skipped-missing / failed)
-
-Run these commands:
+Run this Python script via Bash:
 
 ```bash
-# Resolve cli.js path from the claude binary location
-CLAUDE_BIN=$(readlink -f "$(which claude)" 2>/dev/null || realpath "$(which claude)")
-CLI=$(dirname "$CLAUDE_BIN")/../lib/node_modules/@anthropic-ai/claude-code/cli.js
+python3 << 'PYEOF'
+import sys
 
-# Fallback: search common nvm location if the above doesn't work
-if [ ! -f "$CLI" ]; then
-  CLI=$(find ~/.nvm/versions/node -path "*/node_modules/@anthropic-ai/claude-code/cli.js" 2>/dev/null | sort -V | tail -1)
-fi
+# Resolve the binary path from `which claude`
+import subprocess, os
+result = subprocess.run(['which', 'claude'], capture_output=True, text=True)
+claude_bin = result.stdout.strip()
+if not claude_bin:
+    print("ERROR: 'claude' not in PATH")
+    sys.exit(1)
 
-if [ ! -f "$CLI" ]; then
-  echo "ERROR: Could not find Claude Code cli.js"
-  exit 1
-fi
+# Follow symlinks
+cli = os.path.realpath(claude_bin)
+print(f"Found binary at: {cli}")
 
-echo "Found cli.js at: $CLI"
+with open(cli, 'rb') as f:
+    data = bytearray(f.read())
 
-# ---- Patch 1: both-auth-methods ----
-if grep -q 'isActive:()=>{return false;/\*patched\*/' "$CLI" 2>/dev/null; then
-  echo "[auth-conflict] Already patched."
-elif ! grep -q '"both-auth-methods"' "$CLI"; then
-  echo "[auth-conflict] WARNING: 'both-auth-methods' string not found — Claude Code may have changed its warning structure. Skipping."
-else
-  sed -i 's/id:"both-auth-methods",type:"warning",isActive:()=>{/id:"both-auth-methods",type:"warning",isActive:()=>{return false;\/*patched*\//' "$CLI"
-  if grep -q 'isActive:()=>{return false;/\*patched\*/' "$CLI"; then
-    echo "[auth-conflict] Patched successfully."
-  else
-    echo "[auth-conflict] ERROR: Patch verification failed."
-  fi
-fi
+changed = False
 
-# ---- Patch 2: npm-deprecation-warning ----
-if grep -q 'return null;/\*patched\*/return{timeoutMs:15000,key:"npm-deprecation-warning"' "$CLI" 2>/dev/null; then
-  echo "[npm-deprecation] Already patched."
-elif ! grep -q 'return{timeoutMs:15000,key:"npm-deprecation-warning"' "$CLI"; then
-  echo "[npm-deprecation] WARNING: target pattern not found — Claude Code may have changed its notification structure. Skipping."
-else
-  sed -i 's|return{timeoutMs:15000,key:"npm-deprecation-warning"|return null;/*patched*/return{timeoutMs:15000,key:"npm-deprecation-warning"|' "$CLI"
-  if grep -q 'return null;/\*patched\*/return{timeoutMs:15000,key:"npm-deprecation-warning"' "$CLI"; then
-    echo "[npm-deprecation] Patched successfully."
-  else
-    echo "[npm-deprecation] ERROR: Patch verification failed."
-  fi
-fi
+# === Patch 1: both-auth-methods isActive — make it always return false ===
+old1 = b'isActive:()=>{let{source:H}=rz({skipRetrievingKeyFromApiKeyHelper:!0}),$=sh();return H!=="none"&&$.source!=="none"&&!(H==="apiKeyHelper"&&$.source==="apiKeyHelper")}'
+new1_core = b'isActive:()=>{return!1'
+new1 = new1_core + b' ' * (len(old1) - len(new1_core) - 1) + b'}'
+assert len(new1) == len(old1)
 
-# Final syntax check
-if command -v node >/dev/null 2>&1; then
-  if node --check "$CLI" 2>/dev/null; then
-    echo "Syntax check: OK"
-  else
-    echo "Syntax check: FAILED — cli.js may be broken, please restore from a fresh install."
-  fi
-fi
+# Check if already patched
+if data.count(b'isActive:()=>{return!1') >= 1 and data.count(old1) == 0:
+    print("[auth-conflict] Already patched.")
+elif data.count(old1) == 0:
+    print("[auth-conflict] WARNING: pattern not found — binary may have changed. Skipping.")
+else:
+    n = 0
+    idx = 0
+    while True:
+        pos = data.find(old1, idx)
+        if pos == -1:
+            break
+        data[pos:pos+len(old1)] = new1
+        idx = pos + len(new1)
+        n += 1
+    print(f"[auth-conflict] Patched {n} occurrence(s).")
+    changed = True
+
+# === Patch 2: npm-deprecation-warning — return null instead of the notification ===
+old2 = b'return{timeoutMs:15000,key:"npm-deprecation-warning"'
+new2 = b'return null;//                                      '
+assert len(new2) == len(old2)
+
+if data.count(b'return null;//') >= 1 and data.count(old2) == 0:
+    print("[npm-deprecation] Already patched.")
+elif data.count(old2) == 0:
+    print("[npm-deprecation] WARNING: pattern not found — binary may have changed. Skipping.")
+else:
+    n = 0
+    idx = 0
+    while True:
+        pos = data.find(old2, idx)
+        if pos == -1:
+            break
+        data[pos:pos+len(old2)] = new2
+        idx = pos + len(new2)
+        n += 1
+    print(f"[npm-deprecation] Patched {n} occurrence(s).")
+    changed = True
+
+if changed:
+    with open(cli, 'wb') as f:
+        f.write(data)
+    print("Binary written.")
+
+# Verify
+with open(cli, 'rb') as f:
+    verify = f.read()
+
+auth_ok = verify.count(b'isActive:()=>{return!1') >= 1 and verify.count(old1) == 0
+npm_ok = verify.count(b'return null;//') >= 1 and verify.count(old2) == 0
+print(f"[auth-conflict] verified: {auth_ok}")
+print(f"[npm-deprecation] verified: {npm_ok}")
+PYEOF
 ```
 
-Report the per-patch result to the user.
+Report per-patch status to the user.
