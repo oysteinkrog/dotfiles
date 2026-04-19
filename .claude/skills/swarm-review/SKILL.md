@@ -107,7 +107,9 @@ Return a JSON array:
 ]
 ```
 
-Use `ntm spawn --cc=N` or Claude Code subagents depending on orchestration context.
+Spawn the N reviewers with one leader message containing N `Agent` tool calls
+(`subagent_type: "general-purpose"`, `run_in_background: true`, distinct `name`,
+shared `team_name`) so they run concurrently.
 
 ### Step 4: Compile Findings
 

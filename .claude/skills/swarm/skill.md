@@ -1,25 +1,16 @@
-# Swarm
+# Swarm (Execution)
 
-Start and manage a swarm of coding agents that implement beads from the issue tracker.
+Start and manage an **execution swarm** — Claude Code teammates implementing beads from
+`br` (beads_rust). See `~/.claude/CLAUDE.md` "Two swarm shapes" for why execution
+teammates are terminal/fungible (NOT continued with `SendMessage`).
 
-Each agent is autonomous and fungible: it gets assigned a bead, implements it, commits, and exits.
-`ntm --auto-restart` respawns bare Claude Code with fresh context for the next assignment.
+Each teammate: claims one task → implements one bead → commits to the shared branch →
+closes the bead → marks the task completed → exits. The leader spawns replacements as
+new tasks become unblocked. The one-bead-then-exit pattern keeps each teammate's
+context window clean.
 
-## ntm config requirements
-
-The `[agents]` section in `~/.config/ntm/config.toml` must include:
-- `DISABLE_AUTOUPDATER=1` — prevents auto-update banner that breaks idle detection
-- Do NOT use `--strict-mcp-config` — agents need access to agent-mail MCP for file reservations
-
-```toml
-[agents]
-claude = "env ... DISABLE_AUTOUPDATER=1 claude --dangerously-skip-permissions ..."
-```
-
-Verify before spawning:
-```bash
-grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
-```
+All orchestration uses Claude Code built-ins: `Agent`, `TaskCreate`, `TaskUpdate`,
+`TaskList`, `TaskGet`, `TeamCreate`. `SendMessage` is NOT used for execution teammates.
 
 ## When to activate
 
@@ -36,21 +27,18 @@ Activate when the user says:
 
 ### Determine intent from arguments
 
-- No arguments or a number → **start/spawn** a swarm session
-- A bead ID (starts with `bd-`) → **assign that single bead** to an idle agent
-- `kill` or `stop` → **stop** the active swarm session
+- No arguments or a number → **start/spawn** a swarm (section A)
+- A bead ID (starts with `bd-`) → **assign that single bead** (section B)
+- `kill` or `stop` → **stop** the swarm (section C)
 - `status` → delegate to `/swarm-status`
 
 ---
 
-### A. Start a swarm session
+### A. Start a swarm
 
 #### 1. Pre-flight
 
 ```bash
-# Verify ntm config
-grep -q 'DISABLE_AUTOUPDATER' ~/.config/ntm/config.toml && echo "Config: OK" || echo "WARNING: check [agents].claude in ~/.config/ntm/config.toml"
-
 # Start agent-mail if not running (required for file reservations)
 curl -sf http://127.0.0.1:8765/api/health > /dev/null 2>&1 && echo "Agent-mail: running" || { echo "Starting agent-mail..."; cd ~/mcp_agent_mail && nohup python3 -m uvicorn main:app --host 127.0.0.1 --port 8765 > /dev/null 2>&1 & sleep 2; }
 
@@ -77,135 +65,200 @@ bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
 bv -robot-plan 2>/dev/null | jq '{total_actionable: .plan.total_actionable, total_blocked: .plan.total_blocked, tracks: (.plan.tracks | length), highest_impact: .plan.summary}'
 ```
 
-#### 2. Choose a session name
+#### 2. Choose a team name
 
-Session name must match the directory name under `projects_base` in ntm config:
+Use a fresh, collision-resistant name so stale state from prior runs can't leak in.
+Recommended: `<dir>-<branch>-<epoch>`:
 
 ```bash
-SESSION_NAME="$(basename $(pwd))"
+TEAM_NAME="$(basename $(pwd))-$(git branch --show-current | tr / -)-$(date +%s)"
 ```
 
-#### 3. Write the prompt template
+Create the team:
 
-Write to `/tmp/swarm-template.md`. Kept compact to preserve agent context budget.
+```
+TeamCreate({ name: TEAM_NAME })
+```
+
+If the user wants to **resume** an existing run, first clean stale state (see section D).
+
+#### 3. Seed the bead backlog as tasks
+
+Seed **all open beads in the intended scope** (not just `br ready`) — otherwise the
+`blockedBy` graph you wire in step 3c has no downstream tasks to unblock.
+
+```bash
+# a) Dump all open beads in scope (adjust --epic / --status as needed)
+br list --status open --json 2>/dev/null > /tmp/swarm-beads.json
+
+# b) Dump the dependency graph (bead → bead)
+br dep tree --json 2>/dev/null > /tmp/swarm-deps.json
+```
+
+Then, for each bead, the leader calls `TaskCreate` and keeps the `bead_id → taskId`
+mapping so blockedBy can be translated from bead-space to task-space:
+
+```
+# Pseudocode the leader executes:
+bead_to_task = {}
+for bead in beads:
+    t = TaskCreate({
+      subject: f"bd-{bead.id}: {bead.title}",
+      description: "<teammate prompt from section 4, with {BEAD_ID} bound to this bead>",
+      activeForm: f"Implementing bd-{bead.id}",
+    })
+    bead_to_task[bead.id] = t.id
+
+# c) Wire dependencies — TaskUpdate.addBlockedBy takes TASK IDs, not bead IDs
+for bead in beads:
+    blockers = [bead_to_task[dep] for dep in bead.blocked_by if dep in bead_to_task]
+    if blockers:
+        TaskUpdate({ taskId: bead_to_task[bead.id], addBlockedBy: blockers })
+```
+
+Now `TaskList` returns the correct ready-set (tasks with no unresolved blockers),
+and downstream tasks become claimable automatically as their predecessors complete.
+
+#### 4. Teammate prompt template
+
+Every teammate gets this prompt shape. Keep compact to preserve teammate context budget.
 
 ```
 Read CLAUDE.md in the repo root. Follow ALL instructions there.
 
-## Your bead: {BEAD_ID} — {TITLE}
+You are a swarm teammate in team "{TEAM_NAME}". You will implement ONE bead, commit,
+close it, mark your task completed, and exit. Do not pick up additional beads — the
+leader spawns a fresh replacement teammate for the next one. This keeps your context
+window clean (fresh-context property).
 
-Claim it: br update {BEAD_ID} --status in_progress
-Get details: br show {BEAD_ID} --json 2>/dev/null
-Check related: bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
+## Claim work (atomic)
+
+1. TaskList — find the lowest-ID task with: status=pending, owner=null, blockedBy=[].
+2. Claim: TaskUpdate({ taskId, owner: "<your-name>", status: "in_progress" }).
+3. Verify you won the claim (race guard):
+   t = TaskGet({ taskId })
+   if t.owner != "<your-name>":
+     # Another teammate claimed it first. Start over at step 1.
+4. Extract {BEAD_ID} from the task subject ("bd-XXX: <title>").
+
+## Implement the bead
+
+Claim in beads:   br update {BEAD_ID} --status in_progress
+Get details:      br show {BEAD_ID} --json 2>/dev/null
+Check related:    bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
 
 ## File Coordination (MANDATORY)
 
-Before editing ANY file, reserve it via agent-mail MCP to prevent conflicts with other agents:
-1. Call `file_reservation_paths` with the list of files you plan to edit
-2. If a file is already reserved by another agent, STOP — do not edit it. Exit and let the operator reassign.
-3. After committing, call `release_file_reservations` for your files
+Before editing ANY file, reserve it via the mcp-agent-mail MCP:
+1. Call `file_reservation_paths` with the list of files you plan to edit.
+2. If any file is already reserved by another teammate, STOP — release any
+   reservations you did obtain, set your task back to pending + owner=null via
+   TaskUpdate, then exit. The leader will reassign it later when the other
+   teammate finishes and releases its files.
+3. After committing, call `release_file_reservations` for your files.
 
 ## Rules
 
-1. **Read production code first.** Understand actual behavior before writing anything.
+1. Read production code first. Understand actual behavior before writing anything.
 2. Match existing project conventions (see CLAUDE.md).
 3. Test/file folders must mirror source structure.
 4. Follow .editorconfig and analyzer rules.
-5. **Reserve files before editing.** Use agent-mail file_reservation_paths. Never edit unreserved files.
+5. Reserve files before editing. Never edit unreserved files.
 
 ## Steps
 
-1. Read and understand related existing code thoroughly
-2. Reserve all files you plan to edit via agent-mail file_reservation_paths
-3. Implement according to acceptance criteria
+1. Read and understand related existing code thoroughly.
+2. Reserve all files you plan to edit via agent-mail file_reservation_paths.
+3. Implement according to acceptance criteria.
 4. Commit IMMEDIATELY after writing files (before full test suite):
-   git add <specific files>
-   git commit -m "<area>({BEAD_ID}): short description"
-5. Run project checks (tests, linting — see CLAUDE.md)
+     git add <specific files>
+     git commit -m "<area>({BEAD_ID}): short description"
+5. Run project checks (tests, linting — see CLAUDE.md).
+   - For .NET/MSBuild projects: pass `--no-dependencies` (or equivalent) when
+     multiple teammates may be building simultaneously, to avoid MSB3021 lock
+     conflicts.
 6. If checks fail, fix and amend: git add <files> && git commit --amend --no-edit
-7. Release file reservations via agent-mail release_file_reservations
+7. Release file reservations via agent-mail release_file_reservations.
 8. Close: br close {BEAD_ID}
-9. Exit: /exit
+9. Mark your task completed: TaskUpdate({ taskId, status: "completed" })
+10. Exit.
+
+## On abort / shutdown (leader sent a stop signal)
+
+Do NOT mark your task completed unless step 8 (br close) succeeded. Instead:
+1. If mid-edit: decide whether the partial work is worth keeping.
+   - Keep: finish the write, commit, then follow the completion path above.
+   - Discard: `git restore` the files; proceed to release step.
+2. Release all file reservations via release_file_reservations.
+3. TaskUpdate({ taskId, owner: null, status: "pending" }) — the leader will
+   reclaim or reassign.
+4. Exit.
 ```
 
 Note: `<area>` follows project git conventions (e.g., `test/`, `model/`, `vm/`).
-The `{BEAD_ID}` and `{TITLE}` placeholders are substituted by `ntm assign`.
 
-#### 4. Bump max_restarts
+#### 5. Spawn teammates
 
-Default is 3 — not enough for a full swarm:
-
-```bash
-grep -q '^\[resilience\]' ~/.config/ntm/config.toml 2>/dev/null || echo -e '\n[resilience]\nmax_restarts = 100' >> ~/.config/ntm/config.toml
-```
-
-#### 5. Spawn agents and start auto-assignment
-
-Spawn with `--assign` to automatically start watch-mode assignment after agents are ready.
-This is the **primary method** — no manual batch assignment needed.
-
-```bash
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart \
-  --assign --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --template=custom
-```
-
-If `--assign` is not supported or fails, fall back to spawning then starting watch mode separately:
-
-```bash
-# Step 1: Spawn
-ntm spawn $SESSION_NAME --cc=$AGENT_COUNT --no-user --auto-restart --stagger-mode=smart
-
-# Step 2: Wait for agents to reach WAITING state
-sleep 15
-
-# Step 3: Start watch-mode assignment in background
-ntm assign $SESSION_NAME --watch --strategy=dependency --stop-when-done \
-  --template-file=/tmp/swarm-template.md --template=custom --auto &
-WATCH_PID=$!
-echo "Watch-mode assignment running (pid: $WATCH_PID)"
-```
-
-Watch mode polls for idle agents and ready beads, matching them automatically.
-Dependency strategy ensures beads are assigned in correct order (unblocked first).
-
-**Manual override** — if watch mode misses an agent, force-assign directly:
-
-```bash
-ntm assign $SESSION_NAME --pane=N --beads=bd-XXX --force \
-  --template-file=/tmp/swarm-template.md --template=custom --auto
-```
-
-#### 6. Monitor loop (if watch mode unavailable)
-
-If `ntm assign --watch` is not available or not working, the skill operator (you) MUST
-actively monitor and assign. Set up a cron job to check every 2 minutes:
+Send one `Agent` tool call per teammate in a SINGLE leader message so they run
+concurrently. **Never** pass `isolation: "worktree"` for execution-swarm teammates
+(see global CLAUDE.md "Agent Swarm Rules").
 
 ```
-Check agent states: ntm activity $SESSION_NAME
-Check ready beads: br ready
-For each idle agent + ready bead pair: ntm assign $SESSION_NAME --pane=N --beads=bd-XXX ...
-Check for orphaned files: git status --short | grep '^??'
-Close beads that have commits but weren't closed: br close bd-XXX
+Agent({
+  subagent_type: "general-purpose",
+  name: "swarm-1",
+  team_name: TEAM_NAME,
+  run_in_background: true,
+  prompt: "<the template from section 4>"
+})
+Agent({ ..., name: "swarm-2", ... })
+# ... up to $AGENT_COUNT
 ```
 
-Do NOT leave agents sitting idle while beads are ready. The whole point of a swarm is
-continuous work assignment.
+Each teammate self-claims the next available task. The leader does not need to
+pre-assign specific beads to specific teammates.
+
+**Targeted assignment** (if you want a specific bead to go to a specific teammate):
+pre-set `owner` on the task before spawning:
+`TaskUpdate({ taskId, owner: "swarm-1" })`. Execution teammates are still
+fungible — do not use `SendMessage` to redirect them mid-task.
+
+#### 6. Monitor loop
+
+```
+TaskList                       # progress + owners + blocked-by
+TaskGet({ taskId })            # full detail + teammate comments
+```
+
+When a teammate completes and exits, the harness notifies the leader. On each
+notification the leader should:
+1. Look for newly-unblocked tasks (predecessor just completed → successors now
+   claimable).
+2. If unclaimed claimable tasks exist AND running teammates < target, spawn
+   replacement teammates using the same template.
+3. Check for orphaned files: `git status --short | grep '^??'`. Rescue manually.
+4. Look for stuck in-progress tasks whose owner is no longer running (see
+   `/swarm-status` stuck-task rescue).
+
+If the leader hasn't received notifications for a while and the pool isn't at
+capacity, `ScheduleWakeup` with a sensible delay to re-check `TaskList`. Don't
+busy-poll; the notifications are the primary signal.
 
 #### Known issues
 
-- **Orphaned files**: Agents may hit context limits before committing. Monitor `git status --short` after each batch.
-- **Concurrent build locks**: Multiple agents building simultaneously → MSB3021. Use `--no-dependencies` in agent template.
-- **Beads committed but not closed**: Agents sometimes commit then exit before running `br close`. Check `git log` for bead IDs and close manually.
-- **Context not clearing**: `--auto-restart` may not fully clear context. Kill and respawn if agents seem confused.
+- **Orphaned files**: Teammates may hit context limits before committing. Monitor
+  `git status --short` after each batch.
+- **Concurrent build locks (MSBuild)**: Tell teammates to build with
+  `--no-dependencies` in the prompt template (already embedded in section 4, step 5).
+- **Beads committed but not closed**: Check `git log` for bead IDs and close manually.
+- **Task claimed but teammate crashed**: see stuck-task rescue in `/swarm-status`.
 
 #### 7. Report
 
 Tell the user:
-- Session name and agent count
-- Whether watch-mode auto-assignment is active (pid if backgrounded)
-- Monitor: `ntm activity $SESSION_NAME --watch`
-- Progress: `/swarm-status`
+- Team name and teammate count
+- How many tasks seeded / unblocked / blocked
+- Monitor progress: `/swarm-status`
 - Stop: `/swarm kill`
 
 ---
@@ -221,34 +274,57 @@ bv -robot-related $BEAD_ID 2>/dev/null | jq '.categories'
 
 If not found or already closed, tell the user. Warn if blockers are still open.
 
-#### 2. Find target session and idle pane
+#### 2. Ensure team + task exist
 
-```bash
-ntm list 2>/dev/null
-ntm activity <session> 2>/dev/null
+```
+# Ensure the team exists (idempotent; create if missing)
+TeamCreate({ name: TEAM_NAME })
+
+# Look for an existing task for this bead
+TaskList
 ```
 
-Pick first idle (WAITING) pane. If no session running, offer to spawn one.
+If no matching `bd-$BEAD_ID:` task exists, `TaskCreate({ subject: "bd-$BEAD_ID: <title>", description: "<full teammate prompt from A.4 with {BEAD_ID} inlined>" })`.
 
-#### 3. Build a self-contained prompt
+#### 3. Spawn one teammate
 
-Write `/tmp/bead-$BEAD_ID.md` — same structure as template in A.3, but with bead details
-inlined (description, acceptance criteria, notes, labels, related beads).
-
-#### 4. Assign
-
-```bash
-ntm assign <session> --pane=<N> --beads=$BEAD_ID --template-file=/tmp/bead-$BEAD_ID.md --template=custom --auto --no-cass-check
+```
+Agent({
+  subagent_type: "general-purpose",
+  name: "swarm-$BEAD_ID",
+  team_name: TEAM_NAME,
+  run_in_background: true,
+  prompt: "<teammate template from A.4 with {BEAD_ID} already bound>"
+})
 ```
 
 ---
 
 ### C. Stop the swarm
 
+1. For each running backgrounded teammate, signal a stop via a fresh `Agent`
+   instruction OR `TaskStop` if the harness supports interrupting by ID. Give
+   them the "On abort / shutdown" script from A.4 so they release reservations
+   and return their task to `pending` (NOT completed — completed implies the
+   bead was actually closed in `br`).
+2. Wait for notifications. If a teammate is truly stuck, `TaskStop({ taskId })`.
+3. Run the stuck-task rescue from `/swarm-status` to release orphaned file
+   reservations and reset any in-progress tasks whose owner is gone.
+4. Report open beads:
+
 ```bash
-ntm list 2>/dev/null
-ntm kill <session> 2>/dev/null || true
 bv -robot-next 2>/dev/null | jq '{id, title, unblocks}'
 ```
 
-Report how many beads are still open/ready.
+---
+
+### D. Resume / clean stale state
+
+If the user wants to reuse an existing team name:
+
+1. `TaskList` — find tasks whose `owner` points to a teammate that is no longer
+   running. For each, run the stuck-task rescue from `/swarm-status` (release
+   file reservations held by that owner + reset task to `pending`, `owner=null`).
+2. Drop completed tasks (`TaskUpdate({ status: "deleted" })`) if they'd pollute
+   the next run's `TaskList` output.
+3. Optionally re-seed new beads that became ready since the last run.

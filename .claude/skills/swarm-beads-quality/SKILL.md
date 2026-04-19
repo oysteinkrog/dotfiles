@@ -317,4 +317,6 @@ For large bead sets (>20), parallelize the review:
 | 3. Harden | 6-8 | One agent per epic |
 | 4. Verify | 10 | One agent per epic + 2 cross-epic |
 
-Use `ntm spawn` to orchestrate. Each agent commits fixes atomically after each bead.
+Orchestrate with parallel `Agent` tool calls from a single leader message (distinct
+`name`, shared `team_name`, `run_in_background: true`). Each teammate commits fixes
+atomically after each bead.

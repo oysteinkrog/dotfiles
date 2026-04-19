@@ -126,8 +126,14 @@ Review rounds use 10 (one per lens). Creation/application uses 6-8.
 
 ### Spawning
 
-```bash
-ntm spawn --cc=N --no-cass-check
+Use the built-in `Agent` tool. Send ONE leader message with N `Agent` tool calls so
+they run concurrently. Use `run_in_background: true` for long-running teammates and
+give each a distinct `name` + shared `team_name`.
+
+```
+Agent({ subagent_type: "general-purpose", name: "<facet-slug>",
+        team_name: "<feature>", run_in_background: true,
+        prompt: "<self-contained prompt>" })
 ```
 
 Each agent prompt MUST include:
@@ -513,6 +519,6 @@ foundation/product/features/
 | `/swarm-beads-rewrite` | Bead maintenance | Apply audit findings to beads |
 | `/swarm-beads-polish` | Bead QA (light) | Single-agent bead review |
 | `/swarm-beads-quick` | Bead creation (light) | Single-agent PRD→beads |
-| `/swarm-exec` | Implementation | ntm-based agent swarm executing beads |
+| `/swarm-exec` | Implementation | Agent-tool swarm of teammates executing beads |
 | `/swarm-exec-status` | Monitoring | Check implementation swarm progress |
 | `/swarm-oracle-standalone` | Any time | Standalone oracle consultation |
