@@ -83,7 +83,6 @@ Organize every notable process into one of these categories:
 | **Hung language servers** | vercel, typescript-language-server, eslint_d with high CPU for hours | SAFE - can be restarted |
 | **Stuck package managers** | npm install, yarn, pnpm hanging for 1h+ | SAFE to kill |
 | **Hung dev servers** | next dev, vite, webpack-dev-server with no parent agent | Probably safe |
-| **Orphaned ntm processes** | `ntm assign`, `ntm internal-monitor` for killed/nonexistent sessions | SAFE to kill |
 | **Stuck bash shells** | `/bin/bash -c source .claude/shell-snapshots/...` with long etime (curl, tail -f, etc.) | SAFE - leftover from agent commands |
 | **Orphaned MCP servers** | `npm exec @sentry/...`, supergateway, etc. whose parent agent is dead | SAFE to kill |
 | **Active coding agents** | claude, codex, aider, cursor processes actively working | PROTECTED - never kill |

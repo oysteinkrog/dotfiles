@@ -155,65 +155,84 @@ gog -a oystein@initialforce.com drive files list --limit 10
 Flags: `-j` for JSON, `-p` for plain TSV, `--results-only` to drop pagination envelope.
 Agent sandboxing: `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
 
-## NTM - Named Tmux Manager (Multi-Agent Orchestration)
+## Multi-Agent Orchestration (Claude Code Teams & Agents)
 
-NTM manages multiple AI coding agents across tmux panes with work distribution, inter-agent mail, file reservations, and bead integration.
+Multi-agent work runs inside Claude Code via the built-in `Agent`, `SendMessage`,
+`TaskCreate`, and `TeamCreate` tools — no external tmux manager.
 
-### Session Lifecycle
-```bash
-ntm spawn PROJECT --cc=3          # spawn 3 Claude agents
-ntm spawn PROJECT --cc=3 --assign # spawn + auto-assign beads
-ntm controller PROJECT             # launch coordinator in pane 1
-ntm attach PROJECT                 # attach to session
-ntm interrupt PROJECT              # Ctrl+C all agents
+### Spawning teammates
+Send multiple `Agent` tool calls in a single message to run them concurrently:
+
+```
+Agent({ subagent_type: "general-purpose", name: "researcher-1",
+        team_name: "feature-x", run_in_background: true,
+        prompt: "<self-contained task> ..." })
 ```
 
-### Work Distribution (bead integration)
+- `name` makes the teammate addressable via `SendMessage({ to: "<name>" })`.
+- `team_name` groups teammates, shared tasks, and inboxes under
+  `~/.claude/teams/<team-name>/`.
+- `run_in_background: true` keeps the leader responsive while the teammate works.
+- `isolation: "worktree"` spawns the teammate on a temporary worktree (use for
+  research/design only — never for parallel bead implementation; see swarm rules).
+
+### Work distribution (bead integration)
+Use the beads CLI to compute what to do, then hand work out via `TaskCreate`:
+
 ```bash
-ntm work triage                    # full triage: recommendations, bottlenecks
-ntm work next                      # single best next action
-ntm work alerts                    # stale items, blocking cascades
-ntm assign PROJECT                 # auto-assign beads to idle agents
-ntm assign PROJECT --watch         # continuous: auto-reassign on completion
-ntm assign PROJECT --pane=3 --beads=bd-XXX  # direct assignment
-ntm assign PROJECT --clear bd-XXX  # clear assignment
-ntm coordinator assign PROJECT     # trigger coordinator work assignment
+bv -robot-triage                   # recommendations, bottlenecks
+bv -robot-next                     # single best next action
+bv -robot-plan                     # parallel execution tracks
+bv -robot-alerts --severity=critical
 ```
 
-### Agent Mail (inter-agent messaging)
-```bash
-ntm mail send PROJECT --to AGENT 'msg'   # direct message
-ntm mail send PROJECT --all 'msg'        # broadcast
-ntm mail inbox PROJECT                   # view inboxes
-ntm mail read PROJECT --agent AGENT      # agent-specific mail
-ntm mail ack PROJECT MSGID               # acknowledge message
-```
+Leader workflow:
+1. `br list --status open --json` — seed **all open beads in scope**, not just
+   `br ready`. If only ready beads are seeded, there are no downstream tasks
+   for `addBlockedBy` to unblock later.
+2. For each bead, `TaskCreate({ subject: "bd-XXX: ...", ... })`. Keep the
+   `bead_id → taskId` mapping in memory — you need it for the next step.
+3. Translate bead-space dependencies (from `br dep tree --json`) into task-space
+   with the mapping, then `TaskUpdate({ taskId, addBlockedBy: [<upstream-task-ids>] })`.
+   `addBlockedBy` takes task IDs, not bead IDs.
+4. Spawn teammates (`Agent({ name, team_name, ... })`) telling them to
+   `TaskList`, claim an unowned unblocked task (set `owner`), verify the claim
+   with `TaskGet` (race guard), implement, commit, `br close`, then
+   `TaskUpdate({ status: "completed" })`, then exit. Execution teammates are
+   **terminal** — the leader spawns a fresh one for the next bead. See the
+   `/swarm` skill for the full template.
 
-### File Reservations (conflict prevention)
-```bash
-ntm mail reserve PROJECT --agent AGENT --paths 'glob'
-ntm locks PROJECT --all-agents           # show active reservations
-ntm conflicts PROJECT                    # show file conflicts
+### Inter-agent messaging
 ```
+SendMessage({ to: "<teammate-name>", content: "..." })   # direct
+```
+`SendMessage` continues the named teammate with full prior context. Use it for
+**artifact-swarm** teammates (researchers, designers, reviewers) whose work is
+multi-turn. Do NOT use it on **execution-swarm** teammates — those are
+one-bead-then-exit by design, which keeps each teammate's context window clean.
+Spawn a new `Agent` for the next bead instead.
+
+### File reservations (conflict prevention)
+Every teammate editing files MUST reserve them first via the `mcp-agent-mail` MCP
+(`file_reservation_paths`) and release after committing (`release_file_reservations`).
+See the global CLAUDE.md "Agent Swarm Rules" for details and the `/swarm` skill for
+pre-flight that starts agent-mail and wires it into `.mcp.json` automatically.
 
 ### Monitoring
-```bash
-ntm health PROJECT                 # agent health check
-ntm activity PROJECT --watch       # real-time activity
-ntm coordinator status PROJECT     # coordinator status
-ntm coordinator digest PROJECT     # session digest
-ntm --robot-snapshot               # unified state: sessions+beads+mail
-ntm --robot-terse                  # minimal state one-liner
+```
+TaskList                           # overall progress + owners + blocked-by
+TaskGet({ taskId })                # full detail + comments
 ```
 
-### Tips
-- Use `--no-cass-check` with `ntm send` if CASS isn't installed to avoid errors
-- Agents don't auto-commit — worker instructions must explicitly require `git commit`
-- `ntm assign` may not detect idle agents after `spawn --assign`; use `ntm send --panes=N` as fallback
+Claude Code's sidebar shows live status for every named teammate.
+`br ready` / `bv -robot-triage` stays the source of truth for bead backlog health.
 
-### Strategies for `ntm assign`
-- `balanced` — even workload distribution (default)
-- `speed` — prioritize quick completion
-- `quality` — best agent-task match
-- `dependency` — prioritize unblocking downstream
-- `round-robin` — deterministic even distribution
+### Tips
+- Each teammate prompt MUST require an explicit `git commit` after each work unit —
+  teammates do not auto-commit (see "Agent Swarm Rules" in the global CLAUDE.md).
+- Prefer `SendMessage` to continue a named teammate; spawning a new `Agent` starts
+  fresh and loses the prior context.
+- For dependency-ordered assignment, encode the DAG via `TaskUpdate` `addBlockedBy`
+  rather than trying to orchestrate it from the leader step-by-step.
+- Heavy parallel work: spawn several `Agent` calls in a single leader message so
+  they actually run concurrently instead of serially.

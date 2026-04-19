@@ -172,30 +172,51 @@ Write shared context to a temp file agents can read.
 
 ### Step 3: Spawn Agents
 
-Use `ntm` to spawn parallel agents:
-```bash
-ntm spawn --cc=N --no-cass-check
+Use the built-in `Agent` tool. Send ONE message with N `Agent` tool calls so they run
+concurrently. Each call has its own self-contained prompt (teammates don't share the
+leader's context).
+
+```
+Agent({
+  subagent_type: "general-purpose",
+  name: "facet-<slug>",
+  team_name: "<feature-or-task>",
+  run_in_background: true,
+  prompt: "You are researching [FACET] for [FEATURE].\n\nRead CLAUDE.md first, then:\n1. Read actual source code at [FILE_PATHS]\n2. Document findings per the template\n3. Write report to [OUTPUT_PATH]\n4. Commit: git add [OUTPUT_PATH] && git commit -m 'research: [FACET]'"
+})
 ```
 
-Assign each agent its facet via `ntm send` or `ntm assign`:
-```bash
-ntm send <agent-id> "You are researching [FACET] for [FEATURE].
-Read CLAUDE.md first, then:
-1. Read actual source code at [FILE_PATHS]
-2. Document findings per the template
-3. Write report to [OUTPUT_PATH]
-4. Commit: git add [OUTPUT_PATH] && git commit -m 'research: [FACET]'
-"
-```
+**Worktree isolation — pick ONE output channel, not both.**
+
+- **File output (committed report on the main branch)** — default. Do NOT pass
+  `isolation: "worktree"`. A committed report written inside a temporary worktree
+  disappears when the worktree is reaped, so the leader cannot read it from the
+  main checkout. File output requires shared-branch teammates (and file
+  reservations via agent-mail if they touch anything else).
+- **Message-only output** — pass `isolation: "worktree"` AND change the prompt's
+  step 3 to "Put your findings in your final assistant message (no files)." The
+  leader synthesizes from the agent's returned message (tool result), not from a
+  file path. Use this when the only deliverable is the synthesized summary.
+
+The execution swarm (`/swarm`) is a different shape entirely — it MUST use shared
+branch (same-branch, no worktrees) per "Agent Swarm Rules" in CLAUDE.md.
 
 ### Step 4: Monitor and Collect
 
-```bash
-ntm activity          # Check agent progress
-ntm send <id> "status?"  # Ping specific agent
+Backgrounded teammates notify the leader when they finish. You can also:
+
+```
+TaskList                  # task progress
+SendMessage({ to: "facet-<slug>", content: "status?" })   # ping a specific teammate
 ```
 
-Wait for all agents to complete. Collect reports.
+`SendMessage` is fine for artifact-swarm teammates (they survive between turns and
+can answer follow-ups). Do NOT use it on execution-swarm teammates — those are
+terminal by design.
+
+Wait for all teammates to complete. For file-output teammates, collect reports
+from the committed output paths. For message-only teammates, use the content of
+the teammate's final message (returned as the `Agent` tool result).
 
 ### Step 5: Synthesize
 
@@ -263,10 +284,11 @@ Your assigned facet: [FACET]
 3. **Commit immediately** — each agent commits its output before moving on
 4. **Synthesis is mandatory** — raw reports are not the deliverable
 5. **User approves facets** before spawning agents
-6. **No agent spawns without `--no-cass-check`** on ntm
+6. **Spawn all teammates in a single leader message** (one `Agent` call each, in the
+   same response) so they run concurrently, not serially
 
 ## Related Skills
-- `/swarm-exec` — Launch ntm-based implementation swarm that executes beads autonomously (post-planning)
+- `/swarm-exec` — Launch an implementation swarm (teammates execute beads autonomously, post-planning)
 - `/swarm-exec-status` — Monitor running implementation swarm progress
 - `/swarm-pipeline` — Full pipeline that orchestrates research→design→beads→implementation
 

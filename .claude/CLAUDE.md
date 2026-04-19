@@ -58,19 +58,53 @@ Add to `.mcp.json` in the project root:
 - `release_file_reservations` — Unlock reserved paths
 - `macro_start_session` — Initialize agent workflow (convenience)
 
-## NTM (Named Tmux Manager)
+## Claude Code Teams & Agents (Multi-Agent Orchestration)
 
-Installed at `~/.bun/bin/ntm`. Manages tmux sessions with multiple AI coding agents.
-Agent types: `--cc=N` (Claude Code), `--cod=N` (Codex), `--gmi=N` (Gemini).
-Key: `ntm spawn`, `ntm send`, `ntm assign`, `ntm activity`, `ntm kill`.
-Always pass `--no-cass-check`. Use `/swarm` skill for full orchestration reference.
+Multi-agent work runs **inside Claude Code** via the built-in `Agent`, `SendMessage`,
+`TaskCreate`, and `TeamCreate` tools. No external tmux manager.
+
+### Two swarm shapes
+
+1. **Artifact swarm** (research / design / review) — a fixed roster of teammates, one
+   per facet, each producing a single report. Teammates may use `isolation: "worktree"`
+   because their output is returned in the agent's final message (leader writes the
+   synthesis). `SendMessage` is appropriate here for follow-up questions.
+2. **Execution swarm** (implement beads from `br`) — a pool of **fungible, terminal**
+   teammates. Each picks one bead, implements it, commits to the shared branch, closes
+   the bead, marks its task completed, and **exits**. The leader spawns replacement
+   teammates as new beads become ready. `isolation: "worktree"` is FORBIDDEN here
+   (see "Agent Swarm Rules" below). `SendMessage` is NOT used for implementation
+   teammates — they are one-shot by design, which keeps each teammate's context
+   window clean.
+
+### Primitives
+
+- Spawn a teammate: `Agent({ subagent_type, prompt, name?, team_name?, isolation?, run_in_background? })`.
+- Assign ongoing work via shared tasks: `TaskCreate` / `TaskUpdate` / `TaskList` with
+  per-task `owner` so each teammate claims its next unit of work.
+- Inter-agent messaging: `SendMessage({ to: <name>, ... })` — continues a named agent
+  with full prior context. Use for **artifact swarms** (follow-ups on a reviewer/
+  designer). Do NOT use for execution-swarm teammates; spawn a fresh `Agent` for the
+  next bead instead so the teammate starts with a clean context budget.
+- Teams: `TeamCreate` groups agents + shared task list + shared inboxes. Team state lives
+  under `~/.claude/teams/<team-name>/` (inboxes only; harness handles lifecycle).
+- Parallel exploration: send multiple `Agent` tool calls in a single message — they run
+  concurrently. Use `run_in_background: true` for long-running teammates while the leader
+  keeps working.
+- Isolation: pass `isolation: "worktree"` only for artifact-swarm teammates whose
+  output is a single final message. NEVER for execution swarm or for any teammate
+  whose output is a file the leader needs to read directly from the main checkout.
+
+Use `/swarm`, `/swarm-agents`, `/swarm-exec`, `/swarm-review`, etc. skills for the
+established orchestration patterns (research / design / review / bead implementation).
 
 ## BV (Beads Viewer) + br (beads_rust)
 
 `bv` (`~/go/bin/bv`): TUI + robot API for beads issue tracker.
 `br`: CLI for bead management (`br ready`, `br show`, `br close`, `br update`).
 Key robot commands: `bv -robot-triage`, `bv -robot-next`, `bv -robot-plan`.
-Agent workflow: triage → spawn → assign → coordinate via agent-mail → br close.
+Agent workflow: triage → leader spawns teammates via `Agent` → coordinate via TaskCreate
++ SendMessage + agent-mail file reservations → teammates run `br close` and commit.
 
 ## Google Workspace CLI (gog)
 
@@ -122,19 +156,22 @@ cass index --full                # Re-index after new sessions
 
 ## Agent Swarm Rules
 
-### NO WORKTREES — agents commit to the same branch
-**NEVER use `--worktrees` with `ntm spawn`.** Worktree isolation causes silent merge
-regressions — later merges overwrite earlier security fixes (16% reversion rate observed
-2026-03-07). Instead:
-- All agents work on the same branch (typically `main`)
+### NO WORKTREES for bead implementation — teammates commit to the same branch
+**NEVER pass `isolation: "worktree"` to `Agent` for bead-implementation teammates.**
+Worktree isolation causes silent merge regressions — later merges overwrite earlier
+security fixes (16% reversion rate observed 2026-03-07). Instead:
+- All teammates work on the same branch (typically `main`)
 - Each bead is small enough for a single atomic commit
-- Agents commit directly after completing each bead
+- Teammates commit directly after completing each bead
 - If a bead would touch 5+ files, split it into smaller beads first
 
+(Worktree isolation is still fine for read-only research/design teammates that produce
+a single report file and no code changes.)
+
 ### Atomic commits per work unit
-When writing prompts for swarm agents (ntm, teammates, or any autonomous agent), **always
-include explicit git commit instructions**. Each bead/task/work-unit MUST be committed
-atomically before moving to the next. Example instruction to include in agent prompts:
+When writing prompts for any autonomous teammate, **always include explicit git commit
+instructions**. Each bead/task/work-unit MUST be committed atomically before moving to
+the next. Example instruction to include in agent prompts:
 
 ```
 After closing each bead, IMMEDIATELY commit your changes:
@@ -184,9 +221,11 @@ committing. Without this, parallel agents editing the same file create merge con
 See `/swarm` skill pre-flight for setup automation.
 
 ### Other swarm prompt essentials
-- Tell agents to read CLAUDE.md first
-- Specify file paths agents will touch so file reservations can prevent conflicts
-- Use `ntm assign --strategy=dependency` for ordered assignment
+- Tell teammates to read CLAUDE.md first
+- Specify file paths teammates will touch so file reservations can prevent conflicts
+- For ordered assignment, have the leader release tasks in dependency order (use
+  `br dep tree` / `bv -robot-plan` to compute the order) and use `TaskUpdate` with
+  `addBlockedBy` to encode the dependency graph so teammates only claim unblocked tasks
 
 ## Obsidian CLI
 

@@ -1,6 +1,6 @@
 # Swarm Status
 
-Show current swarm progress: agent activity, bead completion, and issues.
+Show current swarm progress: teammate activity, task + bead state, and stuck work.
 
 ## When to activate
 
@@ -10,19 +10,21 @@ Activate when the user says:
 
 ## Instructions
 
-### 1. Sessions and agents
+### 1. Teammates and tasks
 
-```bash
-ntm list 2>/dev/null
+```
+TaskList
 ```
 
-For each active session:
+Report:
+- How many tasks are `pending` (ready, awaiting a teammate) vs `in_progress` (claimed)
+  vs `completed` vs `deleted`.
+- For each `in_progress` task: its `owner`.
+- For each `pending` task: whether `blockedBy` is non-empty (blocked) or empty
+  (claimable by the next idle teammate).
 
-```bash
-ntm activity <session> 2>/dev/null
-ntm changes <session> 2>/dev/null
-ntm conflicts <session> 2>/dev/null
-```
+For any `in_progress` task that looks stuck, `TaskGet({ taskId })` for full
+context + teammate comments; `TaskOutput({ taskId })` to see live output if helpful.
 
 ### 2. Bead progress (via bv)
 
@@ -59,15 +61,47 @@ bv -check-drift 2>/dev/null
 git status --short | grep '^??' | head -20
 ```
 
-Flag any untracked test files — agents often write files but crash before committing.
+Flag any untracked test files — teammates often write files but crash before committing.
 These need manual build/test/commit rescue.
 
-### 6. Summary
+### 6. Stuck-task rescue (releases reservations too)
+
+A task is stuck when its `owner` points to a teammate that is no longer running.
+Rescue sequence:
+
+1. Identify stuck tasks: `in_progress` with owner = `<name>` where `<name>` is not
+   in the set of running backgrounded Agents.
+2. **Release file reservations first**, then reset the task. A crashed teammate
+   leaves its `file_reservation_paths` entries locked, which blocks every other
+   teammate that needs those paths. Via the agent-mail MCP:
+
+   ```
+   # List reservations held by the crashed owner, then release:
+   mcp-agent-mail.release_file_reservations({
+     agent: "<crashed-owner>",
+     paths: [<their held paths>]
+   })
+   ```
+
+3. Reset the task so a fresh teammate can claim it:
+
+   ```
+   TaskUpdate({ taskId, owner: null, status: "pending" })
+   ```
+
+4. If the bead was marked `in_progress` in `br`, reset it:
+   `br update <bead-id> --status open`.
+5. If the crashed teammate had committed but not closed the bead (check `git log`
+   for the bead ID), close it manually: `br close <bead-id>`.
+
+### 7. Summary
 
 Present:
-- Agent states (GENERATING / WAITING / ERROR / STALLED)
-- Actionable vs blocked beads, project health status
-- Any critical alerts
+- Teammate count: running / crashed / idle
+- Tasks: pending (claimable / blocked) / in_progress / completed
+- Stuck tasks rescued (if any)
+- Bead backlog: actionable / blocked / project health
+- Critical alerts
 - Recent commits with bead ID verification
-- Orphaned untracked files (if any)
-- Next highest-impact bead to work on
+- Orphaned untracked files
+- Next highest-impact bead
