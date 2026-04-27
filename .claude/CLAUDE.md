@@ -77,6 +77,34 @@ Multi-agent work runs **inside Claude Code** via the built-in `Agent`, `SendMess
    teammates — they are one-shot by design, which keeps each teammate's context
    window clean.
 
+### NxM swarm notation
+
+When Oystein writes **"NxM <model> agents"** it means **N agents per round × M rounds**,
+NOT N×M total agents in one shot. Example phrasings and what they mean:
+
+| User says | Shape |
+|-----------|-------|
+| "5x5 sonnet agents to search" | 5 parallel Sonnet agents per round, run 5 rounds sequentially (25 agent-runs total) |
+| "2x6 opus research session" | 2 parallel Opus agents per round, run 6 rounds sequentially (12 agent-runs total) |
+| "3x1" or just "3 agents" | 3 parallel agents, one round (one-shot artifact swarm) |
+
+**How to run rounds:**
+- Each round, spawn N agents in a SINGLE message (parallel tool calls) — they run concurrently.
+- Wait for all N to return, then read/synthesize their outputs.
+- Round K+1 should be **informed by** rounds 1..K — pass forward accumulated findings, de-dupe
+  already-covered ground, direct the next round at gaps or deeper follow-ups.
+- If the work is inherently breadth-first (e.g. "scan for news"), each round can take a new
+  angle/lane. If depth-first (e.g. "dig into these findings"), each round escalates from the
+  prior round's output.
+- Always write findings to a shared directory (e.g. `data/<project>-<date>/findings-round-<K>-agent-<N>.md`)
+  so the leader has durable artifacts across rounds — agent final messages alone are not enough
+  when rounds compound.
+
+**Why N agents in parallel, not one big agent:** parallel agents cover more ground faster and
+each keeps a clean context budget for its lane. Why M rounds instead of one bigger round:
+later rounds can react to what earlier rounds found (fill gaps, dig deeper, challenge claims)
+without polluting earlier agents' context.
+
 ### Primitives
 
 - Spawn a teammate: `Agent({ subagent_type, prompt, name?, team_name?, isolation?, run_in_background? })`.
@@ -115,20 +143,39 @@ Add `-j` for JSON, `-p` for TSV. Gmail/Calendar also available via Claude.ai rem
 
 ## Static Sites (GitHub Pages)
 
-Repo: `oysteinkrog/sites` — `gh-pages` branch. Live at `https://oysteinkrog.github.io/sites/`.
+Two destinations — pick by **content ownership**, not by who's typing.
 
-### Publishing static content
-Fixed local checkout at `/c/work/sites-repo`. Use `/publish-site` skill or manually:
+| Destination | Use for | Visibility | Local checkout |
+|---|---|---|---|
+| **`oysteinkrog/sites`** | Personal stuff + work output that is *mine* (personal tools, dashboards, research notes I author, experiments under my own identity). The account is GitHub Pro, so private repos can serve public Pages if needed. | Public Pages (free GH Pages) | `/c/work/sites-repo-personal` (clone on demand) |
+| **`InitialForce/sites`** | **Company** content — anything that represents Initial Force AS as an entity (OKRs, board-facing reports, shared dashboards, official docs, anything an employee would treat as authoritative). | Private Pages, org members only | `/c/work/sites-repo` |
+
+**Decision rule:** if the content speaks *for the company* or would be referenced by anyone other than me, it goes in `InitialForce/sites`. If it's mine — personal site, my own dotfiles renders, my own benchmarks — it goes in `oysteinkrog/sites`.
+
+The full policy for IFKB agents (and any agent operating inside `/c/work/ifkb`) is in
+`ifkb/knowledge-base/technical/website-publishing.md`. That policy is binding for company content; nothing in it restricts what goes on personal accounts.
+
+### Publishing — company content (`InitialForce/sites`)
+Fixed checkout at `/c/work/sites-repo`. Use `/publish-site` skill or manually:
 ```bash
-# First time: git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /c/work/sites-repo
+# First time: git clone --branch gh-pages --single-branch https://github.com/InitialForce/sites.git /c/work/sites-repo
 cd /c/work/sites-repo && git pull origin gh-pages
 mkdir -p <category>/<slug> && cp -r /path/to/content/* <category>/<slug>/
 git add -A && git commit -m "add <category>/<slug>" && git push origin gh-pages
 ```
-Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/`
+Result: `https://initialforce.github.io/sites/<category>/<slug>/` (org-member login required).
 
-### Conventions
-- Organize by category: `bv/` (beads viewer), `docs/`, `reports/`, etc.
+### Publishing — personal content (`oysteinkrog/sites`)
+```bash
+# git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /c/work/sites-repo-personal
+cd /c/work/sites-repo-personal && git pull origin gh-pages
+mkdir -p <category>/<slug> && cp -r /path/to/content/* <category>/<slug>/
+git add -A && git commit -m "add <category>/<slug>" && git push origin gh-pages
+```
+Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/` (public).
+
+### Conventions (both repos)
+- Organize by category: `okrs/`, `bv/`, `docs/`, `reports/`, etc.
 - Each site is a self-contained directory with its own `index.html`
 
 ## CASS Memory System (`cm` + `cass`)
