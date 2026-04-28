@@ -16,6 +16,30 @@
 User dotfiles repo is at `~/.dotfiles`. `~/.claude` is a symlink to `~/.dotfiles/.claude`.
 Skills, settings, and other Claude config live in the dotfiles repo and are version-controlled there.
 
+## Image Second Opinions — `codex-look` skill
+
+**Whenever you look at an image, proactively follow up with the `/codex-look` skill
+to get a second pair of eyes from Codex (GPT).** This is *augmentation*, not
+replacement — Opus produces the primary read, Codex confirms or surfaces things
+Opus missed. Cross-model verification on visual content catches mistakes that
+single-model analysis routinely misses.
+
+**Apply the skill when:**
+- The user shares a screenshot, photo, diagram, chart, UI mock, or PDF page
+- You've just described or analyzed an image and the user might act on your read
+- The image is ambiguous, contains fine print, dense layout, or non-English text
+- The user asks "what do you see" or anything that hinges on getting the visual right
+
+**Skip the skill only when:**
+- The user has explicitly opted out for this turn
+- The image is trivial (a single icon, a screenshot of plain text you've quoted verbatim)
+- You're in the middle of a tight loop where the extra ~30s would derail flow — say
+  so explicitly so the user can ask for it later if they want
+
+**How to present results:** Give your own read first, then run `/codex-look`, then
+show Codex's reply clearly labelled. Call out any disagreements explicitly — the
+disagreement *is* the value of the second opinion.
+
 ## Repo Index — Initial Force
 
 | Repo | Local path | GitHub | Access |
