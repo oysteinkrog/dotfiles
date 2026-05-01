@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# imagegen-gpt-image — Generate images via OpenAI gpt-image-2.
+#
+# Reads OPENAI_API_KEY from env or from ~/.config/imagegen-gpt-image/keys.env
+# (override path with IMAGEGEN_GPT_IMAGE_KEYS_FILE).
+
+set -euo pipefail
+
+MODEL="gpt-image-2"
+SIZE="1024x1024"
+QUALITY="high"
+N=1
+FORMAT="png"
+OUT=""
+PROMPT=""
+KEYS_FILE="${IMAGEGEN_GPT_IMAGE_KEYS_FILE:-$HOME/.config/imagegen-gpt-image/keys.env}"
+
+usage() {
+  cat <<'EOF'
+imagegen-gpt-image — Generate images via OpenAI gpt-image-2
+
+Usage:
+  imagegen-gpt-image [OPTIONS] <prompt>
+  imagegen-gpt-image [OPTIONS] -p "<prompt>"
+
+Options:
+  -p, --prompt TEXT       Prompt (or pass as the final positional arg).
+  -o, --out PATH          Output file (default: ./imagegen-gpt-image-<ts>.<format>).
+                          With -n >1, suffix _1, _2, ... is inserted.
+  -m, --model ID          Model ID (default: gpt-image-2).
+  -s, --size SIZE         1024x1024, 1536x1024, 1024x1536, 2048x2048, etc.
+                          (default: 1024x1024).
+  -q, --quality LEVEL     low | medium | high | auto (default: high).
+  -n, --count N           Number of images (default: 1).
+  -f, --format FMT        png | jpeg | webp (default: png).
+      --stdout            Write base64-decoded image to stdout (n=1 only).
+  -h, --help              Show this help.
+
+API key:
+  Looked up in this order:
+    1. $OPENAI_API_KEY env var
+    2. $IMAGEGEN_GPT_IMAGE_KEYS_FILE
+       (default ~/.config/imagegen-gpt-image/keys.env), sourced.
+  If neither yields a key, the command exits with an error.
+
+Examples:
+  imagegen-gpt-image "a cat reading a newspaper" -o cat.png
+  imagegen-gpt-image -s 2048x2048 -q high "isometric coffee shop"
+  imagegen-gpt-image -n 3 -o sketches.png "rough pencil sketch of a fox"
+EOF
+}
+
+die() { echo "imagegen-gpt-image: $*" >&2; exit 1; }
+
+# --- arg parsing ---
+STDOUT_MODE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--prompt)   PROMPT="$2"; shift 2 ;;
+    -o|--out)      OUT="$2"; shift 2 ;;
+    -m|--model)    MODEL="$2"; shift 2 ;;
+    -s|--size)     SIZE="$2"; shift 2 ;;
+    -q|--quality)  QUALITY="$2"; shift 2 ;;
+    -n|--count)    N="$2"; shift 2 ;;
+    -f|--format)   FORMAT="$2"; shift 2 ;;
+    --stdout)      STDOUT_MODE=1; shift ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; PROMPT="${PROMPT:+$PROMPT }$*"; break ;;
+    -*)            die "unknown option: $1 (try --help)" ;;
+    *)             PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
+  esac
+done
+
+[[ -z "$PROMPT" ]] && { usage >&2; die "missing prompt"; }
+command -v curl >/dev/null || die "curl is required"
+command -v jq   >/dev/null || die "jq is required"
+command -v base64 >/dev/null || die "base64 is required"
+
+# --- load API key ---
+if [[ -z "${OPENAI_API_KEY:-}" && -f "$KEYS_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$KEYS_FILE"
+  set +a
+fi
+[[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY not set (env or $KEYS_FILE)"
+
+# --- build request ---
+REQ=$(jq -n \
+  --arg model    "$MODEL" \
+  --arg prompt   "$PROMPT" \
+  --arg size     "$SIZE" \
+  --arg quality  "$QUALITY" \
+  --arg fmt      "$FORMAT" \
+  --argjson n    "$N" \
+  '{model:$model, prompt:$prompt, size:$size, quality:$quality, n:$n,
+    output_format:$fmt}')
+
+# --- call API ---
+RESP=$(curl -sS --fail-with-body \
+  -X POST "https://api.openai.com/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "$REQ") || die "API request failed: $RESP"
+
+# Surface OpenAI errors clearly.
+if jq -e '.error' >/dev/null 2>&1 <<<"$RESP"; then
+  die "API error: $(jq -r '.error.message' <<<"$RESP")"
+fi
+
+COUNT=$(jq '.data | length' <<<"$RESP")
+[[ "$COUNT" -gt 0 ]] || die "API returned no images"
+
+# --- write output ---
+TS=$(date +%Y%m%d-%H%M%S)
+DEFAULT_OUT="./imagegen-gpt-image-${TS}.${FORMAT}"
+OUT_BASE="${OUT:-$DEFAULT_OUT}"
+
+if [[ "$STDOUT_MODE" -eq 1 ]]; then
+  [[ "$COUNT" -eq 1 ]] || die "--stdout requires n=1 (got $COUNT)"
+  jq -r '.data[0].b64_json' <<<"$RESP" | base64 -d
+  exit 0
+fi
+
+if [[ "$COUNT" -eq 1 ]]; then
+  jq -r '.data[0].b64_json' <<<"$RESP" | base64 -d > "$OUT_BASE"
+  echo "$OUT_BASE"
+else
+  # Insert _1, _2, ... before the extension.
+  ext="${OUT_BASE##*.}"
+  base="${OUT_BASE%.*}"
+  [[ "$ext" == "$OUT_BASE" ]] && { base="$OUT_BASE"; ext="$FORMAT"; }
+  for i in $(seq 0 $((COUNT-1))); do
+    path="${base}_$((i+1)).${ext}"
+    jq -r ".data[$i].b64_json" <<<"$RESP" | base64 -d > "$path"
+    echo "$path"
+  done
+fi
