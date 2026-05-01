@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# imagegen-nano-banana — Generate images via Google Gemini Nano Banana Pro
+# (gemini-3-pro-image-preview) using the Generative Language REST API.
+#
+# Reads GEMINI_API_KEY from env or from ~/.config/imagegen-nano-banana/keys.env
+# (override path with IMAGEGEN_NANO_BANANA_KEYS_FILE).
+
+set -euo pipefail
+
+MODEL="gemini-3-pro-image-preview"   # Nano Banana Pro
+ASPECT="1:1"
+IMAGE_SIZE="2K"
+OUT=""
+PROMPT=""
+GROUNDING=0
+THINKING=""
+INPUT_IMAGES=()
+KEYS_FILE="${IMAGEGEN_NANO_BANANA_KEYS_FILE:-$HOME/.config/imagegen-nano-banana/keys.env}"
+
+usage() {
+  cat <<'EOF'
+imagegen-nano-banana — Gemini Nano Banana Pro (gemini-3-pro-image-preview)
+
+Usage:
+  imagegen-nano-banana [OPTIONS] <prompt>
+  imagegen-nano-banana [OPTIONS] -p "<prompt>"
+
+Options:
+  -p, --prompt TEXT       Prompt (or pass as final positional).
+  -o, --out PATH          Output file (default: ./imagegen-nano-banana-<ts>.<ext>).
+  -m, --model ID          Model ID. Common values:
+                            gemini-3-pro-image-preview     (Nano Banana Pro, default)
+                            gemini-3.1-flash-image-preview (Nano Banana 2, faster)
+                            gemini-2.5-flash-image         (Nano Banana, original)
+  -a, --aspect RATIO      "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "2:3", "3:2"
+                          (default: 1:1).
+  -s, --size SIZE         "1K" | "2K" | "4K" (Pro supports all; default: 2K).
+  -i, --image PATH        Reference image (repeatable, up to ~14). PNG/JPEG.
+      --grounding         Enable Google Search grounding (Pro only).
+      --thinking LEVEL    "low" | "medium" | "high" (Pro reasoning depth).
+  -h, --help              Show this help.
+
+API key:
+  Looked up in this order:
+    1. $GEMINI_API_KEY env var
+    2. $IMAGEGEN_NANO_BANANA_KEYS_FILE
+       (default ~/.config/imagegen-nano-banana/keys.env), sourced.
+  If neither yields a key, the command exits with an error.
+
+Examples:
+  imagegen-nano-banana "a cat reading a newspaper" -o cat.png
+  imagegen-nano-banana -a 16:9 -s 4K "panoramic alpine sunrise"
+  imagegen-nano-banana -i ref1.png -i ref2.png "blend into one scene"
+  imagegen-nano-banana --grounding "infographic of today's NASDAQ close"
+EOF
+}
+
+die() { echo "imagegen-nano-banana: $*" >&2; exit 1; }
+
+# --- arg parsing ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--prompt)    PROMPT="$2"; shift 2 ;;
+    -o|--out)       OUT="$2"; shift 2 ;;
+    -m|--model)     MODEL="$2"; shift 2 ;;
+    -a|--aspect)    ASPECT="$2"; shift 2 ;;
+    -s|--size)      IMAGE_SIZE="$2"; shift 2 ;;
+    -i|--image)     INPUT_IMAGES+=("$2"); shift 2 ;;
+    --grounding)    GROUNDING=1; shift ;;
+    --thinking)     THINKING="$2"; shift 2 ;;
+    -h|--help)      usage; exit 0 ;;
+    --)             shift; PROMPT="${PROMPT:+$PROMPT }$*"; break ;;
+    -*)             die "unknown option: $1 (try --help)" ;;
+    *)              PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
+  esac
+done
+
+[[ -z "$PROMPT" ]] && { usage >&2; die "missing prompt"; }
+command -v curl   >/dev/null || die "curl is required"
+command -v jq     >/dev/null || die "jq is required"
+command -v base64 >/dev/null || die "base64 is required"
+command -v file   >/dev/null || true   # only used for mime-detect of refs
+
+# --- load API key ---
+if [[ -z "${GEMINI_API_KEY:-}" && -f "$KEYS_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$KEYS_FILE"
+  set +a
+fi
+[[ -n "${GEMINI_API_KEY:-}" ]] || die "GEMINI_API_KEY not set (env or $KEYS_FILE)"
+
+# --- build the parts array ---
+PARTS=$(jq -n --arg t "$PROMPT" '[{text:$t}]')
+
+for img in "${INPUT_IMAGES[@]}"; do
+  [[ -f "$img" ]] || die "input image not found: $img"
+  # Detect mime; default to png.
+  mime="image/png"
+  if command -v file >/dev/null 2>&1; then
+    detected=$(file -b --mime-type "$img" 2>/dev/null || true)
+    [[ -n "$detected" ]] && mime="$detected"
+  fi
+  # Write base64 to temp file and pass via --rawfile to avoid ARG_MAX limits
+  # on large reference images (was failing for >100KB PNGs on WSL1).
+  b64_tmp=$(mktemp)
+  base64 -w0 "$img" >"$b64_tmp" 2>/dev/null || base64 "$img" | tr -d '\n' >"$b64_tmp"
+  PARTS=$(jq --arg m "$mime" --rawfile d "$b64_tmp" \
+    '. + [{inline_data:{mime_type:$m, data:$d}}]' <<<"$PARTS")
+  rm -f "$b64_tmp"
+done
+
+# --- generationConfig ---
+GEN_CFG=$(jq -n \
+  --arg ratio "$ASPECT" \
+  --arg size  "$IMAGE_SIZE" \
+  '{responseModalities:["TEXT","IMAGE"],
+    imageConfig:{aspectRatio:$ratio, imageSize:$size}}')
+
+if [[ -n "$THINKING" ]]; then
+  GEN_CFG=$(jq --arg lvl "$THINKING" \
+    '. + {thinkingConfig:{thinkingLevel:$lvl}}' <<<"$GEN_CFG")
+fi
+
+# --- assemble request ---
+# Use temp files for PARTS/GEN_CFG to avoid ARG_MAX limits with large images.
+parts_tmp=$(mktemp); gen_tmp=$(mktemp); req_tmp=$(mktemp)
+printf '%s' "$PARTS"   >"$parts_tmp"
+printf '%s' "$GEN_CFG" >"$gen_tmp"
+jq -n \
+  --slurpfile parts "$parts_tmp" \
+  --slurpfile cfg   "$gen_tmp" \
+  '{contents:[{parts:$parts[0]}], generationConfig:$cfg[0]}' >"$req_tmp"
+
+if [[ "$GROUNDING" -eq 1 ]]; then
+  jq '. + {tools:[{google_search:{}}]}' "$req_tmp" >"${req_tmp}.2" && mv "${req_tmp}.2" "$req_tmp"
+fi
+
+# --- call API ---
+URL="https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent"
+RESP=$(curl -sS --fail-with-body \
+  -X POST "$URL" \
+  -H "x-goog-api-key: $GEMINI_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data-binary "@$req_tmp") || { rm -f "$parts_tmp" "$gen_tmp" "$req_tmp"; die "API request failed: $RESP"; }
+rm -f "$parts_tmp" "$gen_tmp" "$req_tmp"
+
+if jq -e '.error' >/dev/null 2>&1 <<<"$RESP"; then
+  die "API error: $(jq -r '.error.message' <<<"$RESP")"
+fi
+
+# Pull the first inline image part. Gemini returns camelCase (inlineData/mimeType);
+# accept snake_case as a fallback in case that ever changes.
+IMG_B64=$(jq -r '
+  .candidates[0].content.parts[]
+  | (.inlineData.data // .inline_data.data // empty)
+' <<<"$RESP" | head -n1)
+
+if [[ -z "$IMG_B64" || "$IMG_B64" == "null" ]]; then
+  TEXT=$(jq -r '.candidates[0].content.parts[]?|.text//empty' <<<"$RESP" | head -c 2000)
+  die "no image in response${TEXT:+ — model said: $TEXT}"
+fi
+
+OUT_MIME=$(jq -r '
+  .candidates[0].content.parts[]
+  | (.inlineData.mimeType // .inline_data.mime_type // empty)
+' <<<"$RESP" | head -n1)
+EXT="png"
+case "$OUT_MIME" in
+  image/jpeg) EXT="jpg" ;;
+  image/webp) EXT="webp" ;;
+esac
+
+TS=$(date +%Y%m%d-%H%M%S)
+OUT_PATH="${OUT:-./imagegen-nano-banana-${TS}.${EXT}}"
+printf '%s' "$IMG_B64" | base64 -d > "$OUT_PATH"
+echo "$OUT_PATH"
