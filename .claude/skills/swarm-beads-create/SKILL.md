@@ -64,6 +64,12 @@ Split work into beads following these sizing rules:
 Each bead description MUST include these sections:
 
 ```markdown
+## Contract Reference
+<!-- Required for beads with area:vm or area:xaml labels. Omit section only for
+     infrastructure/tooling beads that touch no VM logic or XAML bindings. -->
+<relative/path/from/repo/root/to/contract-file.yaml> — <state, element, or
+action being implemented, e.g. "state: OverrideMismatch, transition: KeepOverride">
+
 ## Context
 Why this change exists. Link to plan section.
 
@@ -111,6 +117,25 @@ Before creating each bead, verify:
 - [ ] Are resx keys specified if UI text changes?
 - [ ] Is the test requirement specific (not "add tests")?
 - [ ] Are dependencies explicit and correct (no circular refs)?
+- [ ] **Contract Reference:** if bead has label `area:vm` or `area:xaml`, is `## Contract Reference` non-empty? (warn if missing — non-blocking, but agents will infer behavior and may get it wrong)
+
+#### Contract Reference Validation (non-blocking warning)
+
+For each bead with label `area:vm` or `area:xaml`:
+1. Check that `## Contract Reference` section is present and non-empty.
+2. If the referenced path looks like a file path (contains `/`), check whether it exists under `foundation/product/features/` (or anywhere in the repo):
+   ```bash
+   fd --type f "<contract-filename>" foundation/product/features/
+   ```
+3. Emit a warning if missing — **do not block bead creation**:
+   > ⚠ WARNING: bead `<id>` has area:vm/area:xaml but no contract_ref. Agents
+   > implementing this bead will infer behavior from prose and may get it wrong.
+   > Add a `## Contract Reference` pointing to the relevant state-machine state,
+   > UI-contract element, or status-action entry in `foundation/product/features/`.
+
+   If referenced file not found:
+   > ⚠ WARNING: contract_ref path `<path>` not found in repo. Contract may be
+   > in-progress; proceeding. Verify path once contract is authored.
 
 ### Step 5: Create Beads
 
@@ -222,4 +247,31 @@ After creating all beads, report:
 - [x] All ACs in Given/When/Then
 - [x] All cross-cutting embedded
 - [x] Self-containment checklist passed for all beads
+- [x] Contract references present for all area:vm / area:xaml beads (or warnings noted)
 ```
+
+## Contract Reference Field — Quick Reference
+
+| Bead type | `## Contract Reference` required? |
+|-----------|----------------------------------|
+| area:vm | Yes — state-machine state, property, or command from contract YAML |
+| area:xaml | Yes — UI-contract element or binding from contract YAML |
+| area:model | Recommended — relevant entity or schema section |
+| area:test | Recommended — test scenario from contract |
+| infra/tooling | No |
+
+**Format:**
+```
+foundation/product/features/<feature>/<file>.yaml — <specific element>
+```
+
+**Examples:**
+```
+foundation/product/features/bbox/config-source.yaml — state: OverrideMismatch, transition: KeepOverride
+foundation/product/features/bbox/ui-contract.yaml — element: DismissButton, visible-when: OverrideMismatch
+foundation/product/features/multistation/status-actions.yaml — action: SetActiveStation
+```
+
+Contract files live under `foundation/product/features/`. If the contract has not been
+authored yet, provide the expected path and note "(in-progress)" — the skill will warn
+but still create the bead.
