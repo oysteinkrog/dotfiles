@@ -1,0 +1,145 @@
+---
+name: tanstack
+description: >-
+  Strategic TanStack library adoption (Query, Table, Form, Router, Virtual).
+  Use when improving React/Next.js apps after vanilla implementation works,
+  avoiding man-with-hammer syndrome.
+---
+
+<!-- TOC: Philosophy | THE EXACT PROMPT | When to Use | Workflow | References -->
+
+# TanStack Integration — Strategic Library Adoption
+
+> **Philosophy:** Avoid "man with a hammer syndrome" (to whom everything appears as a nail). Start vanilla, then strategically adopt TanStack where it provides clear benefits.
+>
+> **Timing:** Use this AFTER your app is working in vanilla Next.js/React/Tailwind.
+
+---
+
+## The Anti-Pattern
+
+**Don't:**
+1. Start new project → immediately install all TanStack libraries
+2. Force everything through TanStack patterns
+3. End up with over-engineered code
+
+**Why it's bad:** Not every feature needs TanStack. Simple solutions often work better.
+
+---
+
+## THE EXACT PROMPT — TanStack Analysis
+
+```
+Ok, I want you to look through the ENTIRE project and look for areas where, if we leveraged one of the many TanStack libraries (e.g., query, table, forms, etc), we could make part of the code much better, simpler, more performant, more maintainable, elegant, shorter, more reliable, etc. Use ultrathink
+```
+
+### Best Models for This Task
+
+| Model | Configuration |
+|-------|---------------|
+| **Claude Code + Opus 4.5** | Use ultrathink |
+| **Codex + GPT 5.2** | High or Extra-High reasoning effort |
+
+---
+
+## TanStack Libraries
+
+| Library | Purpose | Good For |
+|---------|---------|----------|
+| **Query** | Server state, caching | API caching, optimistic updates, pagination |
+| **Table** | Headless table logic | Complex tables with sort/filter/paginate |
+| **Form** | Form state management | Multi-step forms, complex validation |
+| **Router** | Type-safe routing | Large apps needing type-safe routes |
+| **Virtual** | List virtualization | Lists with 1000+ items |
+
+---
+
+## Quick Decision Guide
+
+### Use TanStack Query When:
+- API calls need caching
+- Optimistic updates needed
+- Background refetching wanted
+- Pagination with cache
+
+### Use TanStack Table When:
+- Complex sorting/filtering
+- Column resizing/reordering
+- Row selection/expansion
+- Server-side tables
+
+### Use TanStack Form When:
+- Multi-step wizard forms
+- Complex/async validation
+- Dynamic fields
+
+### Skip TanStack When:
+- Simple one-time fetches → vanilla fetch
+- Tables with < 20 rows → HTML table
+- Forms with 3-4 fields → native forms
+- Using Next.js App Router → already good
+
+---
+
+## Integration Workflow
+
+```
+1. Build app working vanilla first
+   ↓
+2. Run TanStack analysis prompt
+   ↓
+3. Evaluate each suggestion:
+   - Does complexity justify benefit?
+   - Is current solution problematic?
+   ↓
+4. Adopt selectively (mix is fine)
+   ↓
+5. Repeat analysis after changes
+```
+
+---
+
+## Example: Query Improvement
+
+**Before (vanilla):**
+```typescript
+const [data, setData] = useState(null);
+const [loading, setLoading] = useState(true);
+
+useEffect(() => {
+  fetch('/api/users')
+    .then(res => res.json())
+    .then(setData)
+    .finally(() => setLoading(false));
+}, []);
+```
+
+**After (TanStack Query):**
+```typescript
+const { data, isLoading } = useQuery({
+  queryKey: ['users'],
+  queryFn: () => fetch('/api/users').then(res => res.json()),
+});
+```
+
+**Benefits:** Caching, refetching, deduplication, DevTools.
+
+---
+
+## Tips
+
+1. **Don't over-adopt** — Some vanilla patterns are fine
+2. **Measure the benefit** — Does it actually improve the code?
+3. **Consider team familiarity** — TanStack has a learning curve
+4. **Check bundle size** — Only import what you need
+5. **Read the docs** — TanStack documentation is excellent
+
+---
+
+## References
+
+| Topic | Reference |
+|-------|-----------|
+| Library decision guides | [LIBRARIES.md](references/LIBRARIES.md) |
+| Before/after examples | [EXAMPLES.md](references/EXAMPLES.md) |
+| Focused analysis prompts | [PROMPTS.md](references/PROMPTS.md) |

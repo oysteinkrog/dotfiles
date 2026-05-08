@@ -1,0 +1,13 @@
+[
+  {
+    "id": "C01GENERAL",
+    "name": "general",
+    "created": 1700000000,
+    "creator": "U01ADMIN",
+    "is_archived": false,
+    "is_general": true,
+    "members": ["U01ADMIN", "U01USER"],
+    "topic": {"value": "General discussion"},
+    "purpose": {"value": "Default company channel"}
+  }
+]

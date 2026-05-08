@@ -1,0 +1,11 @@
+name: pro-recovery
+plan_tier: Pro
+authoritative_source: slackdump-primary
+requires:
+  - gap ledger
+  - attachment completeness report
+  - manual rebuild backlog
+deliverables:
+  - handoff.json
+  - unresolved-gaps.md
+  - integration-inventory.json

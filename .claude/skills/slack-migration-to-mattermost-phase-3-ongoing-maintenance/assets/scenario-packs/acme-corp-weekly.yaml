@@ -1,0 +1,50 @@
+# Acme Corp — recurring Phase 3 schedule.
+#
+# Drop into your scheduler (cron, systemd timers, or a scheduled agent run).
+# Values reflect the 40-user Acme profile from references/scenario-packs/SMALL-TEAM-MAINTENANCE.md.
+
+workspace: acme-corp
+timezone: America/Los_Angeles
+operator: alex@acme.com
+rollback_owner: alex@acme.com
+
+schedule:
+  - name: nightly-backup
+    cron: "0 10 * * *"        # 10:00 UTC = 02:00-03:00 Pacific
+    command: "./maintain.sh backup"
+    log: /var/log/mm-backup.log
+
+  - name: weekly-sweep
+    cron: "0 10 * * 0"        # Sunday 10:00 UTC
+    command: "./maintain.sh weekly-sweep"
+    log: /var/log/mm-sweep.log
+
+  - name: quarterly-restore-drill
+    cron: "0 11 1-7 1,4,7,10 0"   # First Sunday of each quarter, 11:00 UTC
+    command: "./maintain.sh restore-drill"
+    log: /var/log/mm-drill.log
+
+  - name: annual-dr-drill-reminder
+    cron: "0 14 1 3 *"        # March 1st at 14:00 UTC — nudge to schedule the drill
+    command: "echo 'Annual DR drill due this month; see references/workflows/ANNUAL-DR-DRILL-WORKFLOW.md' | mail -s 'Mattermost DR drill reminder' ops@acme.com"
+
+# Opt-in alerts
+alert_webhook: https://chat.acme.com/hooks/abcdef12345
+
+# Health thresholds
+thresholds:
+  disk_pct_red: 85
+  disk_pct_yellow: 75
+  pg_conn_pct_red: 80
+  pg_conn_pct_yellow: 60
+  log_err_per_min_red: 10
+  log_err_per_min_yellow: 3
+
+# Upgrade policy
+upgrade:
+  policy: esr                # Track ESR releases only
+  max_delay_patch_security: 72h
+  max_delay_patch_regular: 7d
+  max_delay_minor: 30d
+  max_delay_major: 90d
+  rollback: auto

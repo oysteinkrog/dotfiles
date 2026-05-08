@@ -1,0 +1,22 @@
+[
+  {
+    "id": "U01ADMIN",
+    "name": "admin",
+    "deleted": false,
+    "profile": {
+      "email": "admin@example.com",
+      "display_name": "Admin"
+    },
+    "is_admin": true
+  },
+  {
+    "id": "U01USER",
+    "name": "alex",
+    "deleted": false,
+    "profile": {
+      "email": "alex@example.com",
+      "display_name": "Alex"
+    },
+    "is_admin": false
+  }
+]

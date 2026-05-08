@@ -1,0 +1,9 @@
+name: staging-rehearsal
+requires:
+  - validated handoff bundle
+  - validated config
+  - staging-only URL
+outputs:
+  - staging summary
+  - import watch log
+  - reconciliation delta

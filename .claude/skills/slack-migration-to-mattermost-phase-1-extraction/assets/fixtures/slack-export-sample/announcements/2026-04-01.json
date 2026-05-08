@@ -1,0 +1,15 @@
+[
+  {
+    "type": "message",
+    "user": "U01ADMIN",
+    "text": "Migration prep is live.",
+    "ts": "1764547200.000100",
+    "files": [
+      {
+        "id": "F01PLAN",
+        "name": "migration-plan.pdf",
+        "url_private": "https://files.slack.com/files-pri/T01/F01PLAN/migration-plan.pdf"
+      }
+    ]
+  }
+]

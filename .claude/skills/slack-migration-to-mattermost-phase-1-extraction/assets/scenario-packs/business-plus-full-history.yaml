@@ -1,0 +1,12 @@
+name: business-plus-full-history
+plan_tier: Business+
+authoritative_source: official-export
+requires:
+  - all-conversations export approval
+  - channel audit csv
+  - member directory csv
+  - semantic jsonl validation
+deliverables:
+  - handoff.json
+  - evidence-pack.json
+  - integration-inventory.json

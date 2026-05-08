@@ -1,0 +1,422 @@
+---
+name: slack-migration-to-mattermost-phase-3-ongoing-maintenance
+description: >-
+  Keep a self-hosted Mattermost server healthy after the Phase 2 cutover. Use
+  when running weekly health checks, applying OS security patches, upgrading
+  Mattermost, taking and verifying PostgreSQL backups, scheduling reboots for
+  off-hours windows, running quarterly restore drills, rotating credentials,
+  responding to incidents, or executing disaster recovery against a lost host.
+pairs_with:
+  - slack-migration-to-mattermost-phase-2-setup-and-import
+---
+
+# Phase 3: Ongoing Mattermost Maintenance
+
+> The server is live. Phase 3 keeps it that way.
+>
+> Phase 1 extracted Slack. Phase 2 imported it and cut over. Phase 3 is every
+> subsequent week, month, quarter, and year of ongoing operation — OS patches,
+> version bumps, backups you can actually restore from, drills, credential
+> rotation, and a disaster-recovery playbook that produces an answer instead
+> of a panic.
+
+## Do This First
+
+1. Open [START-HERE.md](references/START-HERE.md). It is the safe-next-action
+   guide when you don't know which stage you need.
+2. Copy `config.env.example` → `config.env`; fill in `MATTERMOST_URL`,
+   `MATTERMOST_ADMIN_TOKEN`, `TARGET_HOST`, `POSTGRES_DSN`, `BACKUP_PATH`,
+   `OFFSITE_REMOTE`, `SCRATCH_DB_URL`, `REBOOT_WINDOW_*`, `ROLLBACK_OWNER`.
+3. Run `./scripts/doctor.sh`, then `./scripts/doctor.sh --require-remote`,
+   then `./scripts/doctor.sh --require-mcp`. All three must report
+   `Health score: N/N required passing (100%) — READY` before any stage runs.
+4. Run `./maintain.sh health` to take a baseline. Archive the resulting
+   `workdir-phase3/reports/latest-health.json`; it's the "before" for every
+   change you'll make.
+5. Schedule `./maintain.sh weekly-sweep` as a recurring agent run (see
+   [WEEKLY-CADENCE.md](references/WEEKLY-CADENCE.md)).
+
+## Batteries-Included Bootstrap
+
+Phase 3 runs on the operator workstation (Mac / Windows / Linux) and talks to
+the Mattermost host via SSH plus the admin HTTP API. Bring the workstation up
+to spec:
+
+```bash
+./scripts/doctor.sh                       # baseline workstation checks
+./scripts/bootstrap-tools.sh              # mmctl + rclone + psql + jq + at deps
+./scripts/doctor.sh --require-remote      # probe SSH to TARGET_HOST
+./scripts/install-mcp-servers.sh          # register Mattermost MCP for the agent
+./scripts/doctor.sh --require-mcp         # confirm MCP registration
+./scripts/smoke-test-phase3.sh            # dry-run every stage
+```
+
+- [TOOL-BOOTSTRAP.md](references/TOOL-BOOTSTRAP.md) — per-platform install matrix.
+- [MATTERMOST-MCP-SETUP.md](references/MATTERMOST-MCP-SETUP.md) — drive the live
+  Mattermost admin API from Claude Code / Codex without memorizing `mmctl` flags.
+- Remote host-side changes are made exclusively through `./maintain.sh` stages;
+  the bootstrap script only touches the workstation.
+
+## Operator Library and Quote Bank
+
+Full operator cards (HEALTH, UPDATE-OS, UPDATE-MM, BACKUP, DB-HEALTH, RESTORE,
+REBOOT, ROTATE, INCIDENT, DR) with triggers, inputs, outputs, failure modes,
+and copy-paste prompt modules live in
+[OPERATOR-LIBRARY.md](references/OPERATOR-LIBRARY.md).
+
+Load-bearing rules trace back to anchored citations in
+[QUOTE-BANK.md](references/QUOTE-BANK.md) (Mattermost docs, PostgreSQL docs,
+prior incident notes). If a quote's anchor disappears, the rule is retired;
+agents treat the quote bank as authoritative over ad-hoc reasoning.
+
+## Stop Immediately If
+
+- `TARGET_HOST` is unreachable over SSH in `BatchMode=yes`
+- `MATTERMOST_URL` returns non-200 on `/api/v4/system/ping` for more than 60 seconds
+- `MATTERMOST_ADMIN_TOKEN` is invalid (403 on `/api/v4/users/me`)
+- `BACKUP_PATH` is not writable on target
+- `OFFSITE_REMOTE` is unreachable and the previous nightly backup failed to upload
+- `SCRATCH_DB_URL` is unset when `restore-drill` was requested
+- last `restore-drill` is older than 90 days **and** an `update-mattermost` was requested
+- `ROLLBACK_OWNER` is unset when a destructive stage (`update-mattermost`,
+  `disaster-recovery`) was requested
+
+Any of the above blocks the stage with a fail-closed error; investigate before
+re-running, do not force past.
+
+## Canonical Default Path
+
+```
+1. Baseline health                 → ./maintain.sh health
+2. Weekly sweep (automated)        → ./maintain.sh weekly-sweep
+3. Monthly sweep (sweep + trend review)
+4. Quarterly restore-drill         → ./maintain.sh restore-drill
+5. Per-release Mattermost upgrade  → ./maintain.sh update-mattermost
+6. Per-incident response           → prompts/incident-response.md
+7. Annually: full DR rehearsal     → prompts/dr-drill.md
+```
+
+See [specs/OPERATING-MODEL.md](references/specs/OPERATING-MODEL.md) for how
+the operator interacts with the agent across this cadence.
+
+## Migration Threat Model (Ongoing Ops)
+
+**Sensitive assets** in this phase:
+- Mattermost admin PAT (full-admin API access)
+- `POSTGRES_DSN` password (direct DB access)
+- SSH private key for `TARGET_SSH_USER`
+- `OFFSITE_REMOTE` credentials (rclone token/keys)
+- Postmark / SMTP token (still valid post-cutover)
+- Cloudflare API token (DNS + origin-cert rotation)
+- `pg_dump` files on disk (full conversation history)
+- `/opt/mattermost/data/` file attachments (if local-stored)
+
+**Trust boundaries**: operator workstation, live Mattermost host, off-site backup
+destination, Cloudflare edge, upstream Mattermost APT repo, scratch-DB host.
+
+**Main failure classes** during ongoing ops:
+- silent backup failure (backups running but corrupt or un-uploaded)
+- version drift (skipped security releases accumulate)
+- cert expiry (Cloudflare Origin CA has 15-year life; Let's Encrypt has 90-day)
+- PAT / SSH credential staleness (no rotation cadence)
+- reboot postponement (kernel patches without reboot → stale exploit surface)
+- upgrade regression (missed pre-upgrade backup, no rollback path)
+- restore-drill neglect (backups never actually verified)
+- unnoticed host compromise (intrusion via unpatched service)
+
+**Countermoves** enforced by this skill:
+- Every stage writes an audit-trail JSON to `workdir-phase3/reports/`.
+- `update-mattermost` refuses to run without a successful recent
+  `restore-drill` and takes a pre-upgrade dump before changing anything.
+- `doctor.sh --require-remote` refuses to run against a host whose SSH host
+  key has changed without operator re-acknowledgement.
+- `schedule-reboot` refuses to schedule outside the configured window.
+- Credential rotation has its own `rotate-credentials` stage with a named
+  approver from `ROLLBACK_OWNER`.
+
+Full detail: [MIGRATION-THREAT-MODEL.md](references/MIGRATION-THREAT-MODEL.md)
+and [SECURITY-HARDENING.md](references/SECURITY-HARDENING.md).
+
+## Secret Handling
+
+Secrets never go into git, never into `workdir-phase3/reports/` (the redactor
+runs on every write), and never into agent chat history longer than necessary.
+
+- Operator workstation keeps secrets in a password manager (1Password,
+  Bitwarden, macOS Keychain).
+- `config.env` stays local; the shipped `.gitignore` excludes it.
+- Mattermost admin PAT rotates on a 90-day cadence via the `rotate-credentials`
+  stage; old tokens are revoked in System Console.
+- SSH keys rotate annually or on operator change; the `rotate-credentials`
+  stage guides you through adding the new public key to `authorized_keys`
+  before revoking the old one.
+- Backup-destination keys (rclone / R2 / Storage Box) rotate annually.
+
+Full detail: [playbooks/TOKEN-HANDLING.md](references/playbooks/TOKEN-HANDLING.md).
+
+## Stage Map
+
+| Stage | Purpose | Typical cadence | Idempotent? | Destructive? |
+|-------|---------|-----------------|-------------|--------------|
+| `health` | Live probe: HTTP, WS, SMTP, disk, PG, logs, services | weekly + on-demand | yes | no |
+| `update-os` | `apt update` + security upgrades + `autoremove`; detects reboot-required | weekly (security) / monthly (all) | yes | no (until reboot) |
+| `schedule-reboot` | Queue reboot in next off-hours window | after `update-os` flags reboot | idempotent if same window | yes (schedules a service restart) |
+| `update-mattermost` | Pin target version; pre-dump + apt install + auto-rollback on failure | on release cadence | no (version change) | yes (service restart + schema migration) |
+| `backup` | SSH-trigger pg_dump + rotate + off-site upload + hash verify | daily | yes | no |
+| `db-health` | Postgres snapshot: sizing, connections, vacuum, locks, longest query | weekly | yes | no |
+| `restore-drill` | Download latest backup, restore into scratch DB, verify row counts | quarterly | yes | yes (wipes SCRATCH_DB_URL) |
+| `rotate-credentials` | Rotate PAT / SSH / off-site creds; operator-assisted | quarterly / annual | no | yes (revokes old creds) |
+| `incident-response` | Manual playbook for user-reported problems | on alert | n/a (interactive) | varies |
+| `disaster-recovery` | Rebuild on fresh host from off-site backup | annual drill / real DR | n/a (interactive) | yes (new host) |
+| `weekly-sweep` | Combo: health → update-os → backup → db-health | weekly | yes | no (until reboot) |
+
+## Canonical Pipeline (post-cutover flow)
+
+```
+                       ┌─────────────────┐
+                       │  Phase 2 cutover │
+                       │   (one-time)     │
+                       └────────┬────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                │                               │
+                ▼                               ▼
+          [ first health ]              [ set up cron / cadence ]
+                │                               │
+                └──────────────┬────────────────┘
+                               ▼
+                  ┌─────────── weekly-sweep ──────────┐
+                  │  health → update-os → backup →    │
+                  │  db-health (+ schedule-reboot if  │
+                  │  required)                        │
+                  └───────────────┬───────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+        ▼                         ▼                         ▼
+  [ quarterly ]          [ per-release ]            [ unscheduled ]
+  restore-drill          update-mattermost         incident-response
+  rotate-creds           (with pre-dump +             (HEALTH red,
+  (90-day PAT)            auto-rollback)               user reports,
+                                                       disk full, etc.)
+        │                         │                         │
+        └─────────────────────────┼─────────────────────────┘
+                                  ▼
+                          [ annual DR drill ]
+                          disaster-recovery
+                          (full rebuild on
+                          fresh host)
+```
+
+See [CROSS-PHASE-STATE-MACHINE.md](references/CROSS-PHASE-STATE-MACHINE.md)
+for the full state diagram including incident-driven transitions.
+
+## Script Contracts
+
+| Script | Input | Output | Exit Behavior | Run When |
+|--------|-------|--------|---------------|----------|
+| `./maintain.sh <stage>` | `config.env` + stage name | `workdir-phase3/reports/<stage>-<ts>.json` + `latest-<stage>.json` symlink | fails on missing prerequisites or failed stage | any stage |
+| `scripts/doctor.sh` | `config.env` | workstation health score | fails on missing required tools | before first run |
+| `scripts/doctor.sh --require-remote` | + SSH access | + remote reachability | fails if SSH BatchMode fails | before any stage that touches target |
+| `scripts/doctor.sh --require-mcp` | + MCP registration | + MCP connectivity | fails if MCP server can't be reached | before agent-driven operations |
+| `scripts/bootstrap-tools.sh` | platform auto-detect | system deps installed | fails on unsupported platform | one-time workstation setup |
+| `scripts/install-mcp-servers.sh` | Mattermost admin URL + PAT | MCP registered in Claude / Codex CLI + desktop | fails on missing CLI | one-time workstation setup |
+| `scripts/smoke-test-phase3.sh` | `config.env` | dry-run report of all stages | non-zero on any stage dry-run failure | weekly sanity + after upgrades |
+| `scripts/health-check.sh` | live target | `health-*.json` + markdown summary | non-zero on any red check | weekly |
+| `scripts/os-update.sh` | live target | `os-update-*.json`, optional reboot flag | non-zero on apt error | monthly |
+| `scripts/mattermost-upgrade.sh` | target, `MATTERMOST_TARGET_VERSION` | `mm-upgrade-*.json`, pre-upgrade dump | auto-rollback on failure | on release cadence |
+| `scripts/db-backup.sh` | target, off-site creds | `backup-*.json`, SHA-256, rotation | non-zero on upload-verify fail | daily/weekly |
+| `scripts/db-health.sh` | target | `db-health-*.json` + markdown | non-zero on red threshold | weekly |
+| `scripts/restore-drill.sh` | off-site, `SCRATCH_DB_URL` | `restore-drill-*.json` | non-zero on row-count mismatch | quarterly |
+| `scripts/schedule-reboot.sh` | target | `reboot-history.json` entry | non-zero if no off-hours window fits | after `update-os` flags reboot |
+| `scripts/rotate-credentials.sh` | named creds scope | `rotate-credentials-*.json` + rotation audit | non-zero if rotation incomplete | quarterly/annual |
+| `scripts/monitor-health.sh` | live target + duration | streaming JSONL of samples | never exits clean (Ctrl-C) | during an upgrade or incident |
+| `scripts/verify-backup-integrity.py` | `OFFSITE_REMOTE` | per-backup SHA verification report | non-zero on any mismatch | quarterly or on suspicion |
+| `scripts/compare-versions.py` | current + candidate | markdown diff of release notes | non-zero if no candidate available | before `update-mattermost` |
+| `scripts/inspect-mattermost-log.py` | live log tail | structured error bucket report | n/a | during `health=red`, upgrades |
+| `scripts/calls-plugin-health.sh` | Calls hostname + UDP port | Calls reachability JSON | non-zero on UDP probe fail | weekly (if Calls enabled) |
+| `scripts/run-e2e-rehearsal.sh` | scratch host, latest backup | full rebuild dry-run report | non-zero on any phase fail | annually (DR drill) |
+
+## Operator Router
+
+Different operators read different things. Pick your lane:
+
+- **Solo founder / one-person-shop**: start at [START-HERE.md](references/START-HERE.md),
+  then [scenario-packs/SMALL-TEAM-MAINTENANCE.md](references/scenario-packs/SMALL-TEAM-MAINTENANCE.md).
+- **Infra owner / sysadmin**: [MIGRATION-THREAT-MODEL.md](references/MIGRATION-THREAT-MODEL.md),
+  [SECURITY-HARDENING.md](references/SECURITY-HARDENING.md),
+  [OBSERVABILITY-LADDER.md](references/OBSERVABILITY-LADDER.md).
+- **DBA**: [POSTGRES-MAINTENANCE-DEEP-DIVE.md](references/POSTGRES-MAINTENANCE-DEEP-DIVE.md),
+  [BACKUP-STRATEGY.md](references/BACKUP-STRATEGY.md),
+  [diagnostics/BACKUP-DIAGNOSTICS.md](references/diagnostics/BACKUP-DIAGNOSTICS.md).
+- **Upgrade captain**: [UPGRADE-STRATEGY.md](references/UPGRADE-STRATEGY.md),
+  [MATTERMOST-VERSIONING-POLICY.md](references/MATTERMOST-VERSIONING-POLICY.md),
+  [playbooks/UPGRADE-GO-NO-GO.md](references/playbooks/UPGRADE-GO-NO-GO.md).
+- **Incident responder / on-call**: [playbooks/INCIDENT-RESPONSE.md](references/playbooks/INCIDENT-RESPONSE.md),
+  [comms/INCIDENT-STATUS-KIT.md](references/comms/INCIDENT-STATUS-KIT.md),
+  [comms/ESCALATION-LADDER.md](references/comms/ESCALATION-LADDER.md).
+- **Rollback / DR owner**: [DISASTER-RECOVERY.md](references/DISASTER-RECOVERY.md),
+  [playbooks/QUARANTINE-AND-EVIDENCE.md](references/playbooks/QUARANTINE-AND-EVIDENCE.md).
+- **Compliance / auditor**: [specs/MAINTENANCE-CONTRACT.md](references/specs/MAINTENANCE-CONTRACT.md),
+  [playbooks/TOKEN-HANDLING.md](references/playbooks/TOKEN-HANDLING.md).
+
+## Done Means (per stage)
+
+Phase 3 is a rolling "done." Each stage has its own pass criteria. Summary:
+
+- `health` done when: overall ∈ {ok, yellow}, report written, any red escalated.
+- `update-os` done when: `apt-get` returned 0, report written, reboot-required
+  flag persisted if raised.
+- `update-mattermost` done when: new version responds on `/api/v4/system/ping`,
+  version matches target, pre-upgrade dump exists, health is ok.
+- `backup` done when: dump written with matching SHA-256, uploaded off-site,
+  remote SHA-256 verifies, rotation completed.
+- `db-health` done when: all metrics within yellow threshold or flagged red
+  with a note.
+- `restore-drill` done when: pg_restore exits 0, row counts meet `RESTORE_MIN_*`
+  thresholds, scratch DB was recreated cleanly.
+- `rotate-credentials` done when: new creds work, old creds revoked, audit
+  trail written.
+- `disaster-recovery` done when: new host serves the same URL, backup restored,
+  DNS swapped, post-mortem skeleton written.
+
+Full matrix: [DONE-DEFINITION.md](references/DONE-DEFINITION.md).
+
+## What This Skill Is Not
+
+- **Not an observability platform.** If you need SLO dashboards, Prometheus
+  scraping, or alerting on Mattermost metrics port 8067, use Grafana or
+  Datadog; this skill runs point-in-time probes and does not replace
+  continuous monitoring. See [OBSERVABILITY-LADDER.md](references/OBSERVABILITY-LADDER.md)
+  for when to graduate.
+- **Not an intrusion-detection system.** `fail2ban` and UFW are enabled by
+  Phase 2's `provision` stage; this skill verifies they're still running but
+  does not inspect logs for attacks.
+- **Not a Mattermost feature configurator.** Use Mattermost's System Console
+  for feature flags, plugins, user management. This skill only touches
+  infrastructure.
+- **Not a substitute for Mattermost Enterprise support.** For paid support and
+  HA reference architectures, use Mattermost's commercial offering.
+
+## Integration with Phases 1 and 2
+
+This skill accepts the post-cutover state produced by Phase 2:
+
+- `MATTERMOST_URL` + `MATTERMOST_ADMIN_TOKEN` — proven live at cutover.
+- `TARGET_HOST` + `TARGET_SSH_USER=deploy` — non-root user created by Phase 2
+  `provision`.
+- `POSTGRES_DSN` — matches Phase 2's rendered config.
+- `BACKUP_PATH=/var/backups/mattermost` — convention from Phase 2 `provision`.
+
+If you are mid-migration and Phase 2 has not finished, this skill will refuse
+to run. See [CROSS-PHASE-INTAKE-CONTRACT.md](references/CROSS-PHASE-INTAKE-CONTRACT.md).
+
+## Ready-to-Paste Prompts
+
+Every stage has a paste-ready prompt in `prompts/`:
+
+- `prompts/orient.md` — where is this deployment, what's due this week
+- `prompts/health.md` — one-shot probe
+- `prompts/update-os.md` — OS patches
+- `prompts/schedule-reboot.md` — queue the reboot
+- `prompts/update-mattermost.md` — version bump
+- `prompts/backup.md` — take a dump and upload
+- `prompts/db-health.md` — Postgres snapshot
+- `prompts/restore-drill.md` — the canary
+- `prompts/rotate-tokens.md` — quarterly rotation
+- `prompts/incident-response.md` — user-reported problem
+- `prompts/major-upgrade.md` — Mattermost 10.x → 11.x
+- `prompts/plugin-upgrade.md` — Calls/Playbooks/Boards
+- `prompts/weekly-sweep.md` — the Saturday combo
+- `prompts/disaster-recovery.md` — the manual DR walkthrough
+- `prompts/all.md` — run every stage in order (not typical; audit use)
+
+See `prompts/README.md` for the full index.
+
+## References (by topic)
+
+**Orientation**
+- [START-HERE.md](references/START-HERE.md)
+- [CROSS-PHASE-INTAKE-CONTRACT.md](references/CROSS-PHASE-INTAKE-CONTRACT.md)
+- [CROSS-PHASE-STATE-MACHINE.md](references/CROSS-PHASE-STATE-MACHINE.md)
+- [specs/OPERATING-MODEL.md](references/specs/OPERATING-MODEL.md)
+- [specs/MAINTENANCE-CONTRACT.md](references/specs/MAINTENANCE-CONTRACT.md)
+
+**Operator-facing**
+- [OPERATOR-LIBRARY.md](references/OPERATOR-LIBRARY.md)
+- [QUOTE-BANK.md](references/QUOTE-BANK.md)
+- [DONE-DEFINITION.md](references/DONE-DEFINITION.md)
+- [WEEKLY-CADENCE.md](references/WEEKLY-CADENCE.md)
+- [MAINTAIN-SH-REFERENCE.md](references/MAINTAIN-SH-REFERENCE.md)
+- [CONFIG-REFERENCE.md](references/CONFIG-REFERENCE.md)
+- [TROUBLESHOOTING.md](references/TROUBLESHOOTING.md)
+
+**Security / compliance**
+- [MIGRATION-THREAT-MODEL.md](references/MIGRATION-THREAT-MODEL.md)
+- [SECURITY-HARDENING.md](references/SECURITY-HARDENING.md)
+- [playbooks/TOKEN-HANDLING.md](references/playbooks/TOKEN-HANDLING.md)
+- [playbooks/QUARANTINE-AND-EVIDENCE.md](references/playbooks/QUARANTINE-AND-EVIDENCE.md)
+
+**Backups / DR**
+- [BACKUP-STRATEGY.md](references/BACKUP-STRATEGY.md)
+- [DISASTER-RECOVERY.md](references/DISASTER-RECOVERY.md)
+- [playbooks/BACKUP-FAILURE-RESPONSE.md](references/playbooks/BACKUP-FAILURE-RESPONSE.md)
+- [diagnostics/BACKUP-DIAGNOSTICS.md](references/diagnostics/BACKUP-DIAGNOSTICS.md)
+- [workflows/QUARTERLY-RESTORE-DRILL-WORKFLOW.md](references/workflows/QUARTERLY-RESTORE-DRILL-WORKFLOW.md)
+- [workflows/ANNUAL-DR-DRILL-WORKFLOW.md](references/workflows/ANNUAL-DR-DRILL-WORKFLOW.md)
+
+**Upgrades**
+- [UPGRADE-STRATEGY.md](references/UPGRADE-STRATEGY.md)
+- [MATTERMOST-VERSIONING-POLICY.md](references/MATTERMOST-VERSIONING-POLICY.md)
+- [PLUGIN-LIFECYCLE.md](references/PLUGIN-LIFECYCLE.md)
+- [playbooks/UPGRADE-GO-NO-GO.md](references/playbooks/UPGRADE-GO-NO-GO.md)
+- [diagnostics/UPGRADE-DIAGNOSTICS.md](references/diagnostics/UPGRADE-DIAGNOSTICS.md)
+- [workflows/MAJOR-UPGRADE-WORKFLOW.md](references/workflows/MAJOR-UPGRADE-WORKFLOW.md)
+
+**Database**
+- [POSTGRES-MAINTENANCE-DEEP-DIVE.md](references/POSTGRES-MAINTENANCE-DEEP-DIVE.md)
+
+**Live stack**
+- [MATTERMOST-API-HEALTH-COOKBOOK.md](references/MATTERMOST-API-HEALTH-COOKBOOK.md)
+- [MATTERMOST-MCP-SETUP.md](references/MATTERMOST-MCP-SETUP.md)
+- [diagnostics/HEALTH-DIAGNOSTICS.md](references/diagnostics/HEALTH-DIAGNOSTICS.md)
+- [OBSERVABILITY-LADDER.md](references/OBSERVABILITY-LADDER.md)
+
+**Incident / comms**
+- [playbooks/INCIDENT-RESPONSE.md](references/playbooks/INCIDENT-RESPONSE.md)
+- [comms/USER-COMMS-KIT.md](references/comms/USER-COMMS-KIT.md)
+- [comms/ESCALATION-LADDER.md](references/comms/ESCALATION-LADDER.md)
+- [comms/INCIDENT-STATUS-KIT.md](references/comms/INCIDENT-STATUS-KIT.md)
+
+**Workflows**
+- [workflows/WEEKLY-SWEEP-WORKFLOW.md](references/workflows/WEEKLY-SWEEP-WORKFLOW.md)
+
+**Scenario packs**
+- [scenario-packs/SMALL-TEAM-MAINTENANCE.md](references/scenario-packs/SMALL-TEAM-MAINTENANCE.md)
+- [scenario-packs/GROWING-TEAM-SCALING.md](references/scenario-packs/GROWING-TEAM-SCALING.md)
+
+**Subagents**
+- [subagents/backup-integrity-auditor.md](subagents/backup-integrity-auditor.md)
+- [subagents/version-drift-auditor.md](subagents/version-drift-auditor.md)
+- [subagents/health-drift-auditor.md](subagents/health-drift-auditor.md)
+- [subagents/security-posture-auditor.md](subagents/security-posture-auditor.md)
+- [subagents/incident-coordinator.md](subagents/incident-coordinator.md)
+- [subagents/maintenance-scheduler.md](subagents/maintenance-scheduler.md)
+- [subagents/db-bloat-auditor.md](subagents/db-bloat-auditor.md)
+
+## Philosophy
+
+1. **Boring is the goal.** The skill exists to make ongoing operations as
+   uneventful as possible. Reports are short. Most weeks are green.
+2. **Every artifact carries a hash.** Backups, dumps, uploads, configs. A
+   hashless handoff is rejected.
+3. **Fail closed on gates.** `update-mattermost` refuses without a verified
+   restore-drill. `schedule-reboot` refuses outside the configured window.
+   `rotate-credentials` refuses without ROLLBACK_OWNER.
+4. **Idempotent or explicitly not.** Every stage declares whether re-running
+   is safe. When it isn't, the operator library says so in big letters.
+5. **Drills before disasters.** The quarterly restore-drill and annual DR
+   drill are the difference between "backups exist" and "backups work."
+6. **Automate reports, not decisions.** The agent runs the mechanics and
+   writes the JSON; the human reads the one-paragraph summary and decides
+   go / no-go / escalate.

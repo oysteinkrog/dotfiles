@@ -1,0 +1,5 @@
+{"type":"version","version":1}
+{"type":"team","team":{"name":"sample-team","display_name":"Sample Team","type":"O","allow_open_invite":true}}
+{"type":"channel","channel":{"team":"sample-team","name":"general","display_name":"General","type":"O"}}
+{"type":"user","user":{"username":"alex","email":"alex@example.com","teams":[{"name":"sample-team","roles":"team_user","channels":[{"name":"general","roles":"channel_user","favorite":false}]}]}}
+{"type":"post","post":{"team":"sample-team","channel":"general","user":"alex","message":"Hello from the golden fixture","create_at":1764547200000}}

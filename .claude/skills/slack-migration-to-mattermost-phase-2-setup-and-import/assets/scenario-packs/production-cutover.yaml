@@ -1,0 +1,10 @@
+name: production-cutover
+requires:
+  - staging success
+  - restore drill
+  - rollback owner
+  - user comms prepared
+outputs:
+  - readiness score
+  - cutover status
+  - import watch log
