@@ -242,7 +242,7 @@ This is a **local project directory**. Documents stay on your machine. The skill
 If you already have a will, trust, or POA, one of the highest-value first sessions is a comprehensive audit of what you have:
 
 > "Read all the documents in `current-documents/`. Compare them to the asset inventory and beneficiary forms in `financial-documents/`. Generate `analyses/prior-plan-gap-analysis.md` identifying:
-> 
+>
 > 1. Every named beneficiary in your existing documents (executor, trustee, guardian, healthcare agent, financial agent, residuary beneficiaries, specific bequests)
 > 2. Whether each named person is still in your life and capable
 > 3. Whether the documents reflect your current family structure (marriages, divorces, births, deaths)

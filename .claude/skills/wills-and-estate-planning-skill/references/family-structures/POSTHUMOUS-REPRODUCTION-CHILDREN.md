@@ -22,10 +22,10 @@ State law diverges:
 **Will language to address explicitly:**
 
 ```
-For purposes of this Will, my "issue" or "descendants" includes 
-[shall include / shall not include] any child conceived from my 
+For purposes of this Will, my "issue" or "descendants" includes
+[shall include / shall not include] any child conceived from my
 genetic material after my death, provided that:
-  (a) my [spouse / former spouse / partner] is the gestational carrier 
+  (a) my [spouse / former spouse / partner] is the gestational carrier
       or donor recipient,
   (b) the child is born within [36] months of my death, and
   (c) [other conditions].
@@ -34,7 +34,7 @@ genetic material after my death, provided that:
 OR, to exclude:
 
 ```
-For purposes of this Will, my "issue" and "descendants" shall NOT 
+For purposes of this Will, my "issue" and "descendants" shall NOT
 include any child conceived from my genetic material after my death.
 ```
 
@@ -70,9 +70,9 @@ If the user was a sperm or egg donor:
 - But explicit will language eliminates ambiguity:
 
 ```
-I have previously donated sperm/eggs to [Clinic] under contracts 
-waiving parental rights. Any biological child conceived from such 
-donations shall NOT be considered my "child" or "issue" for any 
+I have previously donated sperm/eggs to [Clinic] under contracts
+waiving parental rights. Any biological child conceived from such
+donations shall NOT be considered my "child" or "issue" for any
 purpose under this Will.
 ```
 
@@ -83,19 +83,19 @@ State pretermitted-heir statutes typically apply to children "born or adopted af
 **Usually include explicit "after-born" language unless state-specific counsel prefers a narrower formulation:**
 
 ```
-Any child born to or adopted by me after the date of this Will shall 
-share equally with my other children in any provision benefiting my 
-children, except as otherwise specifically provided. This Will 
-contemplates that I may have additional children after this date and 
-intentionally provides for them on the same terms as my currently 
+Any child born to or adopted by me after the date of this Will shall
+share equally with my other children in any provision benefiting my
+children, except as otherwise specifically provided. This Will
+contemplates that I may have additional children after this date and
+intentionally provides for them on the same terms as my currently
 named children.
 ```
 
 OR, if not desired:
 
 ```
-I have intentionally not provided for any child born to or adopted 
-by me after the date of this Will. Any such child shall take nothing 
+I have intentionally not provided for any child born to or adopted
+by me after the date of this Will. Any such child shall take nothing
 under this Will.
 ```
 
@@ -115,9 +115,9 @@ If the user is a surrogate carrying for someone else's intended parents:
 A user who donated eggs or sperm and later wants to provide for biological children they may not have known existed — possible but requires explicit naming:
 
 ```
-I leave $X to [biological child's full name], born [date], with 
-whom I established contact in [year] following DNA-testing results. 
-This bequest is voluntary and not in recognition of any legal 
+I leave $X to [biological child's full name], born [date], with
+whom I established contact in [year] following DNA-testing results.
+This bequest is voluntary and not in recognition of any legal
 parental obligation.
 ```
 

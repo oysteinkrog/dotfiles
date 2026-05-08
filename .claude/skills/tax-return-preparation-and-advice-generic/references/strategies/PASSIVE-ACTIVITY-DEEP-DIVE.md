@@ -336,7 +336,7 @@ Step 4: Excess Business Loss (Section 461(l))
   Deductible business loss: $20,000 (from Step 3)
   Threshold (single): $305,000
   $20,000 < $305,000 -- no further limitation
-  
+
 Result:
   Deductible loss: $20,000 (offsets passive income)
   Suspended at basis level: $150,000

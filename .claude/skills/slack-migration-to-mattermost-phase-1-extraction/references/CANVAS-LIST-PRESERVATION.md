@@ -198,7 +198,7 @@ if "columns" in data and "rows" in data:
     writer.writerow(headers)
     for row in data["rows"]:
         writer.writerow([row.get(h, "") for h in headers])
-    
+
     with open("list_data.csv", "w") as f:
         f.write(output.getvalue())
 ```

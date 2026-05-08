@@ -231,7 +231,7 @@ Year 1 Startup:
   Developer wages (QREs):    $600,000
   Payroll taxes owed:        $45,900 (6.2% SS) + $8,700 (1.45% Medicare) = $54,600
   R&D credit (ASC):          6% x $600,000 = $36,000 (no prior years, so 6% rate)
-  
+
   Payroll tax offset:        $36,000 applied against quarterly Form 941
   Effective cash savings:    $36,000 in the startup's first year
   Remaining payroll tax:     $54,600 - $36,000 = $18,600
@@ -412,10 +412,10 @@ R&D credits are **heavily audited**, especially:
 
 1. **"That's just normal business"** -- IRS argues activities are routine, not experimental
    - **Defense:** Detailed technical uncertainty memos showing what was unknown
-   
+
 2. **"Where's the time tracking?"** -- IRS questions wage allocation
    - **Defense:** Contemporaneous project-based time records
-   
+
 3. **"Substantially all test not met"** -- IRS argues not 80%+ of activity was qualifying
    - **Defense:** Granular activity-level analysis, not just department-level
 

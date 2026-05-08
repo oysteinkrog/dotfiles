@@ -440,7 +440,7 @@ Parent's tax situation:
   Wages: $15,000
   Standard deduction (age 65+): $16,550
   Taxable income:                              $0
-  
+
 Result: $2,800 in tax savings to you, $0 tax to parent, parent gets income
 ```
 
@@ -1005,7 +1005,7 @@ After 20 years:
   Policy cash value: ~$15.7M (growing tax-free)
   If in taxable account at same return, after-tax value: ~$10.2M
     (assuming 23.8% tax on gains annually)
-  
+
   Tax savings: ~$5.5M
 
 Access via policy loans: $500K/year, tax-free
@@ -1402,7 +1402,7 @@ INSTEAD, consider:
   - Charitable Remainder Trust (Strategy 26): sell inside CRT, no immediate tax
   - Exchange fund (IRC 721): contribute to diversified partnership, defer gain
   - Prepaid variable forward: carefully structured to avoid 1259 (consult counsel)
-  - Protective put + covered call (collar): if structured with sufficient spread, 
+  - Protective put + covered call (collar): if structured with sufficient spread,
     may avoid constructive sale
 ```
 
@@ -1449,7 +1449,7 @@ Option B -- NUA strategy:
   Current year tax:
     Ordinary income on cost basis: $100,000 x 32% = $32,000
     (10% early withdrawal penalty if under 59.5: $10,000)
-  
+
   When stock is sold (any time after):
     NUA ($700,000) taxed at 20% LTCG = $140,000
     (vs. $259,000 at 37% ordinary rate)
@@ -1504,7 +1504,7 @@ Total contributions:                       $70,000
 
 After-tax $36,500 immediately converted to Roth:
   Tax on conversion:                       ~$0 (minimal gains if converted quickly)
-  
+
 In Roth account growing at 8% for 20 years:
   $36,500/year x 20 years at 8% = $1,671,000+
   All growth: TAX-FREE
@@ -1560,7 +1560,7 @@ Year 6 (age 55): Year 1 conversion is "seasoned" -- withdraw $80,000 penalty-fre
 Year 7 (age 56): Year 2 conversion available
 ...and so on
 
-Bridge years (ages 50-54): Use taxable accounts, Roth contributions (basis only), 
+Bridge years (ages 50-54): Use taxable accounts, Roth contributions (basis only),
 or 72(t) payments to cover $80,000/year spending
 
 Result: $2,000,000 converted to Roth over ~20 years at 12% rate
@@ -2002,9 +2002,9 @@ Also has $200,000 in realized capital gains (from stock sale earlier in year)
 Harvest $150,000 in losses:
   Offset $150,000 of the $200,000 gain
   Remaining taxable gain: $50,000
-  
+
   Tax savings: $150,000 x 23.8% = $35,700
-  
+
   Reinvest proceeds in similar (not identical) funds immediately
   New cost basis = sale price (lower), setting up future gain
   But: time value of money makes current savings more valuable

@@ -2,9 +2,9 @@
 
 > STARTER TEMPLATE NOTE: Replace placeholders, sample rows, and example text with client-specific facts, then delete this note.
 
-**Primary mode:**  
-**Secondary tags:**  
-**Prepared on:**  
+**Primary mode:**
+**Secondary tags:**
+**Prepared on:**
 
 ## Coverage Table
 

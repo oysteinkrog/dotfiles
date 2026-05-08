@@ -445,12 +445,12 @@ For an EV that does NOT qualify for the section 30D consumer credit (foreign ass
 ```
 Scenario: Consumer wants a $65,000 EV assembled outside North America
   Section 30D credit: $0 (fails assembly requirement)
-  
+
   Lease instead:
     Leasing company claims section 45W (30% x $65,000 = up to $7,500)
     Dealer passes through as lower capitalized cost
     Consumer effectively receives $7,500 benefit as lower payments
-    
+
   36-month lease payment reduction: ~$208/month ($7,500 / 36)
 ```
 

@@ -285,9 +285,9 @@ Passive losses are limited BEFORE the NOL computation:
 2024: Sarah's Schedule C has a net loss of ($80,000)
   W-2 wages: $30,000
   Standard deduction: ($15,750)
-  
+
   Taxable income: $30,000 - $80,000 - $15,750 = ($65,750)
-  
+
   NOL Computation:
     Start: ($65,000)
     Add back excess nonbusiness deductions:
@@ -304,17 +304,17 @@ Passive losses are limited BEFORE the NOL computation:
    Business income/loss: ($80,000)
    Nonbusiness income: $30,000
    Nonbusiness deductions: $15,750
-   
+
    Modified taxable income for NOL:
    ($80,000) + $30,000 = ($50,000) business portion
    $30,000 - $15,750 = $14,250 nonbusiness portion
-   
+
    The standard deduction uses $15,750 of the $30,000 nonbusiness income
    Remaining nonbusiness income: $14,250
    This absorbs $14,250 of the business loss
    NOL = $80,000 - $14,250 = $65,750
 
-   Wait -- the simplest way: 
+   Wait -- the simplest way:
    NOL = the negative taxable income + any nonbusiness deductions
    that exceeded nonbusiness income
    = $65,750 + $0 = $65,750 ✓
@@ -323,7 +323,7 @@ Passive losses are limited BEFORE the NOL computation:
   W-2 wages: $40,000
   Standard deduction: ($15,750)
   NOL carryforward: $65,750
-  
+
   Taxable income before NOL: $50,000 + $40,000 - $15,750 = $74,250
   NOL deduction (80% limit): $74,250 x 80% = $59,400
   But NOL available is only $65,750, so deduction = $59,400

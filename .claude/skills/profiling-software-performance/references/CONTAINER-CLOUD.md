@@ -193,7 +193,7 @@ See `vercel:vercel-functions` skill for specifics.
 ### Decompose cold start
 
 ```
-Total cold start = 
+Total cold start =
     container pull/start time +
     runtime init (JVM, Python import, Node require) +
     handler cold path (connection pool open, cache prewarm) +

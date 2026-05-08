@@ -159,7 +159,7 @@ The opponent scores each surviving idea on the 0-1000 scale. This is where the f
 
 **Typical distribution after cross-scoring:**
 - Consensus winners (both score 650+): 3-5 ideas
-- Contested (gap > 300 points): 2-3 ideas  
+- Contested (gap > 300 points): 2-3 ideas
 - Consensus kills (both score < 500): 2-4 ideas
 
 ### Stage 4: Convergence Test (Phase 6 -- Reveal)

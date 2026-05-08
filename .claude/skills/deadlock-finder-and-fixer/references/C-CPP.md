@@ -231,7 +231,7 @@ void handler(int sig) {
 int main(void) {
     struct sigaction sa = { .sa_handler = handler };
     sigaction(SIGTERM, &sa, NULL);
-    
+
     while (!got_signal) {
         // main event loop
         do_work();

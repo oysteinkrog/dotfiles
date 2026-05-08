@@ -359,7 +359,7 @@ export async function createOrder(formData: FormData) {
         where: eq(orders.idempotencyKey, key)
     });
     if (existing) return existing;  // dedup
-    
+
     return await db.insert(orders).values({ ...data, idempotencyKey: key }).returning();
 }
 ```
@@ -396,7 +396,7 @@ Middleware chains handle async properly, but **guards/interceptors must return p
 const worker = new Worker('queue', async (job) => {
     const processed = await redis.get(`done:${job.data.idempotencyKey}`);
     if (processed) return JSON.parse(processed);
-    
+
     const result = await processJob(job.data);
     await redis.set(`done:${job.data.idempotencyKey}`, JSON.stringify(result), 'EX', 86400);
     return result;
@@ -413,11 +413,11 @@ const worker = new Worker('queue', async (job) => {
 // BUG: older request overwrites newer; stale userId captured
 function UserProfile({ userId }: { userId: string }) {
     const [user, setUser] = useState<User | null>(null);
-    
+
     useEffect(() => {
         fetch(`/api/users/${userId}`).then(r => r.json()).then(setUser);
     }, []);  // BUG: missing userId dependency
-    
+
     // FIX: add dependency + AbortController
     useEffect(() => {
         const controller = new AbortController();

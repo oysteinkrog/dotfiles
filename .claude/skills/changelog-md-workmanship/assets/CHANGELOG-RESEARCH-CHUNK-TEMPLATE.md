@@ -19,8 +19,8 @@
 
 ## Distilled summary
 
-- 
+-
 
 ## Open questions
 
-- 
+-

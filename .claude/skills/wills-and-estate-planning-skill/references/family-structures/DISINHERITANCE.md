@@ -45,17 +45,17 @@ A will that simply omits a child creates ambiguity:
 Explicit disinheritance removes the argument:
 
 ```
-"I have intentionally not made provision for my son ROBERT JOHN SMITH 
-in this Will. This omission is intentional and not the result of 
-oversight or mistake. I have considered my relationship with him 
-in making this Will and have determined that he should not benefit 
+"I have intentionally not made provision for my son ROBERT JOHN SMITH
+in this Will. This omission is intentional and not the result of
+oversight or mistake. I have considered my relationship with him
+in making this Will and have determined that he should not benefit
 from my estate."
 ```
 
 Some people fear this language is cruel. Soften only if the family will see the will:
 
 ```
-"For reasons known to my family, I have intentionally not provided 
+"For reasons known to my family, I have intentionally not provided
 for my son ROBERT JOHN SMITH in this Will. This is intentional."
 ```
 
@@ -66,8 +66,8 @@ But do not leave it ambiguous. Ambiguity is the breeding ground for litigation.
 Some attorneys recommend a small bequest plus a no-contest clause:
 
 ```
-"I leave $10,000 to my son ROBERT JOHN SMITH. If he contests any 
-provision of this Will, this gift shall be forfeited and pass under 
+"I leave $10,000 to my son ROBERT JOHN SMITH. If he contests any
+provision of this Will, this gift shall be forfeited and pass under
 the residuary clause."
 ```
 
@@ -88,10 +88,10 @@ Provides that anyone who contests the will forfeits their bequest.
 Combine with mediation clause for a softer first step:
 
 ```
-"Any dispute arising from this Will shall first be submitted to 
-mediation through [forum]. Only after mediation has been attempted 
-in good faith may a beneficiary file a contest. Any beneficiary who 
-contests this Will without first attempting mediation shall forfeit 
+"Any dispute arising from this Will shall first be submitted to
+mediation through [forum]. Only after mediation has been attempted
+in good faith may a beneficiary file a contest. Any beneficiary who
+contests this Will without first attempting mediation shall forfeit
 their interest."
 ```
 
@@ -124,18 +124,18 @@ A common question. If you disinherit your son Robert:
 State default rules vary. Be explicit:
 
 ```
-"For purposes of this Will, my son ROBERT JOHN SMITH and his 
-descendants shall be deemed to have predeceased me. The share that 
-would otherwise have passed to him shall instead pass to my other 
+"For purposes of this Will, my son ROBERT JOHN SMITH and his
+descendants shall be deemed to have predeceased me. The share that
+would otherwise have passed to him shall instead pass to my other
 children and their descendants in equal shares per stirpes."
 ```
 
 OR
 
 ```
-"While I have intentionally not provided for my son ROBERT JOHN SMITH, 
-this disinheritance does not extend to his descendants. The share 
-that would have passed to Robert had he predeceased me shall pass 
+"While I have intentionally not provided for my son ROBERT JOHN SMITH,
+this disinheritance does not extend to his descendants. The share
+that would have passed to Robert had he predeceased me shall pass
 to his descendants per stirpes."
 ```
 
@@ -146,15 +146,15 @@ Grandchildren are often innocent of the conflict. Decide deliberately.
 Most states protect children **born or adopted after the will was signed** with default share statutes. To override:
 
 ```
-"I have considered the possibility of after-born or after-adopted 
-children. Any such child shall share in my estate on the same terms 
+"I have considered the possibility of after-born or after-adopted
+children. Any such child shall share in my estate on the same terms
 as my currently named children."
 ```
 
 Or, to exclude:
 
 ```
-"I have intentionally not provided for any child born to or adopted 
+"I have intentionally not provided for any child born to or adopted
 by me after the date of this Will."
 ```
 

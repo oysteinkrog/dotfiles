@@ -2,9 +2,9 @@
 
 > STARTER TEMPLATE NOTE: Replace placeholders, sample rows, and example text with client-specific facts, then delete this note.
 
-**For:** [Client name]  
-**Date prepared:** [Date]  
-**Prepared by:** Wills & Estate Planning Skill (educational; subject to attorney review)  
+**For:** [Client name]
+**Date prepared:** [Date]
+**Prepared by:** Wills & Estate Planning Skill (educational; subject to attorney review)
 **Status:** Educational working draft for attorney review, not a signed legal instrument
 
 ---

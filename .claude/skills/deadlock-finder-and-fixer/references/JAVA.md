@@ -331,10 +331,10 @@ Java's nursery equivalent:
 try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
     Subtask<String> user  = scope.fork(() -> fetchUser(id));
     Subtask<String> order = scope.fork(() -> fetchOrder(id));
-    
+
     scope.join();              // wait for all
     scope.throwIfFailed();     // propagate first exception
-    
+
     return new Response(user.get(), order.get());
 }
 // All subtasks complete or are cancelled when scope closes

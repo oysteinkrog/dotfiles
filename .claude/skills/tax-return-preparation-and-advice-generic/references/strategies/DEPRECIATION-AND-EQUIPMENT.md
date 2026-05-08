@@ -136,7 +136,7 @@ Small business owner buys $200,000 of equipment in 2025:
 
   Section 179 election: $150,000 (limited to taxable income)
   Carryforward: $50,000 (to 2026)
-  
+
   Tax savings at 24% bracket: $150,000 x 24% = $36,000 in Year 1
 ```
 
@@ -369,7 +369,7 @@ Remaining basis: $80,000 - $20,512 = $59,488
 Partial disposition election:
   Loss on old roof: $59,488 (deductible in 2025)
   New roof: $120,000 capitalized as QIP (15-year, 100% bonus)
-  
+
 Total 2025 deductions: $59,488 + $120,000 = $179,488
 Without partial disposition: only $120,000 (new roof depreciation)
 Extra deduction: $59,488

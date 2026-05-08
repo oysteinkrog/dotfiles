@@ -200,10 +200,10 @@ cursor=""
 while true; do
   response=$(curl -s -H "Authorization: Bearer $SLACK_TOKEN" \
     "https://slack.com/api/conversations.list?limit=200&cursor=$cursor")
-  
+
   # Process response...
   echo "$response" | jq '.channels[] | .name'
-  
+
   cursor=$(echo "$response" | jq -r '.response_metadata.next_cursor // empty')
   [[ -z "$cursor" ]] && break
 done

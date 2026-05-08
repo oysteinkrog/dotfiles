@@ -156,7 +156,7 @@ impl<T: Copy> SeqLock<T> {
             // seq changed during read → retry
         }
     }
-    
+
     pub fn write(&self, value: T) {
         let old = self.seq.fetch_add(1, Ordering::Release);  // odd = writing
         unsafe { *self.data.get() = value; }
@@ -188,7 +188,7 @@ impl<Op, Res> FlatCombiner<Op, Res> {
     fn do_op(&self, thread_id: usize, op: Op) -> Res {
         // 1. Publish operation to my slot
         self.slots[thread_id].store(Some(op));
-        
+
         // 2. Try to become the combiner
         if self.combiner_lock.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
             // I'm the combiner: execute all pending operations
@@ -200,7 +200,7 @@ impl<Op, Res> FlatCombiner<Op, Res> {
             }
             self.combiner_lock.store(false, Release);
         }
-        
+
         // 3. Wait for my result
         loop {
             if let Some(result) = self.results[thread_id].take() {

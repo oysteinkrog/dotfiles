@@ -97,10 +97,10 @@ With SYEP:
   $7,500 PILs at 40.8%: $3,060
   Total tax: $4,845
   Lending income: $800 (taxed at 40.8% = $326 net = $474 after tax)
-  
+
   Extra tax on PILs: $4,845 - $3,570 = $1,275
   Net of lending income: $1,275 - $474 = $801 COST
-  
+
 Result: SYEP COSTS the investor $801/year net
 ```
 

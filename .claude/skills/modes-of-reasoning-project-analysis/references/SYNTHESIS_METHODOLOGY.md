@@ -119,7 +119,7 @@ For each mode M:
 
   // Penalty for findings that cite other modes' evidence without independent verification
   dependency_penalty = 0.15 * (findings_citing_other_modes / M.total_findings)
-  
+
   adjusted_contribution = contribution - dependency_penalty
   normalized_score = adjusted_contribution * 100  // 0-100 scale
 ```

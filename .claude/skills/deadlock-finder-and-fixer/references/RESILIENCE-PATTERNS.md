@@ -72,7 +72,7 @@ impl<K: Hash + Eq, V: Clone> CoalesceMap<K, V> {
         let slot = Slot::new();
         state.insert(key.clone(), slot.clone());
         drop(state);  // release lock before executing f
-        
+
         let result = f()?;
         slot.complete(result.clone());
         Ok(result)

@@ -53,7 +53,7 @@ Texas imposes no personal income tax. The Texas Constitution (Article VIII, Sect
 - **Exempt**: Sole proprietorships and general partnerships wholly owned by natural persons are exempt
 - **No-tax-due threshold**: Entities with total revenue at or below $2,470,000 (2025) owe no tax but may still need to file
 - **E-Z computation**: Entities with revenue up to $20M can use simplified computation
-- **Rate**: 
+- **Rate**:
   - General: 0.75% of taxable margin
   - Retail/wholesale: 0.375% of taxable margin
   - E-Z computation: 0.331% of total revenue (no deductions)

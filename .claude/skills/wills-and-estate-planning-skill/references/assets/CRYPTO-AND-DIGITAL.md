@@ -148,12 +148,12 @@ RUFADAA is a **uniform state-law framework**, not a federal statute. Many states
 **Standard authorization clause:**
 
 ```
-I authorize my Personal Representative, Trustee, and Agent under any 
-Power of Attorney to access, control, modify, transfer, and delete 
-all of my digital assets, electronic communications, and online 
-accounts, to the fullest extent permitted by law including the 
-Revised Uniform Fiduciary Access to Digital Assets Act and any 
-similar legislation, and I expressly grant them lawful consent to 
+I authorize my Personal Representative, Trustee, and Agent under any
+Power of Attorney to access, control, modify, transfer, and delete
+all of my digital assets, electronic communications, and online
+accounts, to the fullest extent permitted by law including the
+Revised Uniform Fiduciary Access to Digital Assets Act and any
+similar legislation, and I expressly grant them lawful consent to
 divulge the content of any electronic communication.
 ```
 

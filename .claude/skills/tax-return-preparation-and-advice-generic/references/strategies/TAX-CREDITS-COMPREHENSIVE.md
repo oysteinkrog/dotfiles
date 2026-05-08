@@ -629,7 +629,7 @@ Total refund:                                           $6,100
 Carryforward:
   Section 25D unused: $11,100 - ~$4,000 used = ~$7,100 carried forward
   Section 30D unused: $7,500 - ~$0 used = $7,500 (lost -- no carryforward)
-  
+
 NOTE: EV credit (section 30D) has NO carryforward. Better strategy: transfer to dealer
 at point of sale for immediate benefit.
 ```
@@ -648,7 +648,7 @@ General Business Credit total:                          $172,000
 Plus personal credits:
   Foreign Tax Credit:                                   $  3,000
   Residential Energy (section 25D):                     $ 11,100
-  
+
 Total credits against tax liability:                    $186,100
 ```
 

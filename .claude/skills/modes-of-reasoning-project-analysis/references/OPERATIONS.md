@@ -227,7 +227,7 @@ Track findings-per-minute for each agent during monitoring:
 
 ```
 Agent 1 (Systems-Thinking): 2.1 findings/min → HIGH velocity
-Agent 2 (Deductive):        0.8 findings/min → NORMAL velocity  
+Agent 2 (Deductive):        0.8 findings/min → NORMAL velocity
 Agent 3 (Adversarial):      0.3 findings/min → LOW velocity (might be stuck)
 ```
 
@@ -285,14 +285,14 @@ Assign modes by model affinity:
 For software projects, at least one agent (ideally assigned an Edge-Case, Deductive, or Formal Verification mode) MUST be instructed to **run the code**, not just read it:
 
 ```text
-DYNAMIC ANALYSIS DIRECTIVE: You MUST run the project's test suite (cargo test, npm test, go test, 
+DYNAMIC ANALYSIS DIRECTIVE: You MUST run the project's test suite (cargo test, npm test, go test,
 or equivalent) and report:
 1. Whether tests pass/fail
 2. What the test coverage tells you about code health
 3. Any runtime behaviors that contradict static analysis assumptions
 
-Claims about "dead code," "unreachable paths," or "unused modules" based purely on static analysis 
-have a documented ~40% false-positive rate in complex codebases with conditional compilation, 
+Claims about "dead code," "unreachable paths," or "unused modules" based purely on static analysis
+have a documented ~40% false-positive rate in complex codebases with conditional compilation,
 re-exports, and trait-mediated indirection.
 ```
 

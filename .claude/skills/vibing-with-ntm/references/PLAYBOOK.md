@@ -180,16 +180,16 @@ ntm checkpoint save myproject -m "swarm shutdown"
 
 ## FAQ
 
-**How do agents know what to work on?**  
+**How do agents know what to work on?**
 Use `bv --robot-triage`, `bv --robot-next`, or `ntm work triage`.
 
-**How do they avoid conflicts?**  
+**How do they avoid conflicts?**
 With file reservations by default, and optionally worktrees when repo policy allows them.
 
-**How many agents should I start with?**  
+**How many agents should I start with?**
 Usually 3-6. Scale up only when the operator loop is already healthy.
 
-**What is the operator's main monitoring loop?**  
+**What is the operator's main monitoring loop?**
 `--robot-snapshot` -> `--robot-attention` / `--robot-wait` -> act -> repeat.
 
 ## Validation

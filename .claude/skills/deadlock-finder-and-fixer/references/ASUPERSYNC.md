@@ -53,13 +53,13 @@ Every piece of concurrent work belongs to a `Scope` (region). The scope **waits 
 ```rust
 async fn parallel_fetch(cx: &Cx, urls: &[Url]) -> Outcome<Vec<Data>> {
     let mut results = Vec::new();
-    
+
     // Scope owns all child tasks; waits for all on exit
     Scope::new(cx, async |cx| {
         let handles: Vec<_> = urls.iter()
             .map(|url| cx.spawn(fetch_one(cx, url)))
             .collect();
-        
+
         for h in handles {
             results.push(h.await?);
         }
@@ -277,21 +277,21 @@ use asupersync::test_utils::{run_test, LabConfig};
 fn test_concurrent_access() {
     run_test(LabConfig::default(), |cx| async move {
         let counter = Arc::new(Mutex::new(0));
-        
+
         let c1 = counter.clone();
         cx.spawn(async move |cx| {
             let mut g = c1.lock(cx).await?;
             *g += 1;
             Outcome::ok(())
         });
-        
+
         let c2 = counter.clone();
         cx.spawn(async move |cx| {
             let mut g = c2.lock(cx).await?;
             *g += 1;
             Outcome::ok(())
         });
-        
+
         // LabRuntime explores ALL interleavings:
         // T1 first, T2 first, interleaved, etc.
         // Any deadlock, lost wakeup, or obligation leak is caught.
@@ -370,7 +370,7 @@ struct CacheServer {
 impl GenServer for CacheServer {
     type Call = CacheRequest;
     type Cast = CacheNotify;
-    
+
     async fn handle_call(&mut self, cx: &Cx, req: CacheRequest, reply: CallReply<CacheResponse>) {
         match req {
             CacheRequest::Get(key) => {
@@ -383,7 +383,7 @@ impl GenServer for CacheServer {
             }
         }
     }
-    
+
     async fn handle_cast(&mut self, cx: &Cx, msg: CacheNotify) {
         // Fire-and-forget messages (no reply obligation)
         match msg {
@@ -634,7 +634,7 @@ permit.send(message);                  // Phase 2: linear, must happen
 impl GenServer for MyService {
     type Call = MyRequest;
     type Cast = MyNotify;
-    
+
     async fn handle_call(&mut self, cx: &Cx, req: MyRequest, reply: CallReply<MyResponse>) {
         let result = self.process(cx, req).await;
         reply.send(result);  // Obligation discharged
@@ -713,17 +713,17 @@ let app = AppSpec::new()
 fn test_concurrent_cache() {
     run_test(LabConfig::default(), |cx| async move {
         let cache = Arc::new(GenServer::start(cx, CacheServer::new()).await?);
-        
+
         let c1 = cache.clone();
         cx.spawn(async move |cx| {
             c1.call(cx, CacheRequest::Set("key".into(), "val1".into())).await
         });
-        
+
         let c2 = cache.clone();
         cx.spawn(async move |cx| {
             c2.call(cx, CacheRequest::Set("key".into(), "val2".into())).await
         });
-        
+
         // DPOR explores: T1 first, T2 first, interleaved
         // Obligation leak oracle verifies all replies resolved
         // Quiescence oracle verifies no deadlock

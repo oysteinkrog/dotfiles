@@ -90,12 +90,12 @@ def poll_for_slack_export_email(creds_path, poll_interval=300):
             msg = service.users().messages().get(
                 userId='me', id=messages[0]['id']
             ).execute()
-            
+
             # Extract download link from email body
             body = base64.urlsafe_b64decode(
                 msg['payload']['body']['data']
             ).decode('utf-8')
-            
+
             # Parse and return the download URL
             # (exact parsing depends on Slack's email format)
             return body
@@ -115,10 +115,10 @@ def poll_imap(host, user, password, poll_interval=300):
         mail = imaplib.IMAP4_SSL(host)
         mail.login(user, password)
         mail.select('INBOX')
-        
-        _, messages = mail.search(None, 
+
+        _, messages = mail.search(None,
             'FROM "feedback@slack.com" SUBJECT "data is ready" UNSEEN')
-        
+
         for msg_id in messages[0].split():
             _, data = mail.fetch(msg_id, '(RFC822)')
             msg = email.message_from_bytes(data[0][1])
@@ -127,7 +127,7 @@ def poll_imap(host, user, password, poll_interval=300):
             mail.store(msg_id, '+FLAGS', '\\Seen')
             mail.logout()
             return body
-        
+
         mail.logout()
         time.sleep(poll_interval)
 ```

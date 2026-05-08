@@ -5,7 +5,7 @@ For families with genuine charitable intent. Combines philanthropic goals with t
 ## Vehicle Selection Decision Tree
 
 ```
-Charitable intent? 
+Charitable intent?
 ├─ Modest annual giving ($1K-$25K/year)
 │   └─ Direct gifts of cash or appreciated securities to public charities
 │

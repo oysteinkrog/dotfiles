@@ -503,7 +503,7 @@ Tax treatment:
   Capital gain from sale: $150,000
   Suspended passive loss release: ($85,000)
   Net taxable: $150,000 - $85,000 = $65,000 (only the gain portion)
-  
+
   But the $85,000 offsets income in this order:
   1. Gain from the activity itself ($150,000 available) -> absorbs $85,000
   2. Net result: $150,000 gain - $85,000 = $65,000 taxable gain

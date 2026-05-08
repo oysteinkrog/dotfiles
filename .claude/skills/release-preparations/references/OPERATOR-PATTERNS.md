@@ -196,7 +196,7 @@ cargo publish --dry-run -p crate-name
 **Action:**
 ```bash
 # 1. Map the dependency graph
-cargo metadata --format-version 1 | jq '.packages[] | {name, deps: [.dependencies[].name]}' 
+cargo metadata --format-version 1 | jq '.packages[] | {name, deps: [.dependencies[].name]}'
 
 # 2. Publish in dependency order (leaves first):
 #    core-lib (no deps)

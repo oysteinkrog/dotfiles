@@ -1,6 +1,6 @@
 # Prompt Archetypes — 5 Audit Modes
 
-Different audit needs require different prompt framings. This file has 5 
+Different audit needs require different prompt framings. This file has 5
 copy-paste prompts, each optimized for a specific audit mode.
 
 ---
