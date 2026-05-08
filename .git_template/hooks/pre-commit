@@ -67,6 +67,15 @@ do
 done
 unset $IFS #or IFS=$' \t\n'
 
+# Hash-based secret guard: bans known leaked values by SHA-256 so the
+# banlist itself does not leak. See check-secrets.py to add new entries.
+hook_dir="$(dirname "$0")"
+if [ -x "$hook_dir/check-secrets.py" ]; then
+    if ! python3 "$hook_dir/check-secrets.py"; then
+        exit 1
+    fi
+fi
+
 # A git hook script to find and fix trailing whitespace
 # in your commits. Bypass it with the --no-verify option
 # to git-commit

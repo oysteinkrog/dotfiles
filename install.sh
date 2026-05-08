@@ -104,4 +104,11 @@ for item in "${claude_items[@]}"; do
 done
 
 echo ""
+echo "=== Activating dotfiles repo hooks ==="
+if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+  git -C "$dir" config core.hooksPath .git_template/hooks
+  echo "  core.hooksPath -> .git_template/hooks (secret-guard active)"
+fi
+
+echo ""
 echo "=== Done ==="

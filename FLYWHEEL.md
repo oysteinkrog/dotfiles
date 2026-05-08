@@ -196,7 +196,7 @@ Register-ScheduledTask -TaskName 'CASS-Maintenance' `
 | `dedupSimilarityThreshold` | `0.7` | Tighter than default 0.85 |
 | `maxBulletsInContext` | `20` | Keep context focused (default 50 is too many) |
 | `sessionLookbackDays` | `14` | Wider than default 7 |
-| `baseUrl` | `"https://***REMOVED-PROXY-DOMAIN***/v1"` | API proxy (if using ccflare) |
+| `baseUrl` | `"https://<your-proxy>/v1"` | API proxy (if using ccflare) — point at your own proxy host |
 | `budget` | `$5/day, $50/month` | Controls LLM reflection cost |
 
 ### Hooks (in `settings.json`)
