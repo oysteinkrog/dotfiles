@@ -21,91 +21,160 @@ Suppresses two startup nags by binary-patching the Claude Code executable:
 Both patches are same-length binary replacements (preserves file size/integrity). Idempotent — safe to re-run.
 Must be re-run after every Claude Code update.
 
+The script patches **all** Claude Code binaries it finds — the native install
+(`~/.local/share/claude/versions/<v>`) and any npm install — because shell
+aliases can make `which claude` lie about which one actually runs.
+
 ## Instructions
 
 Run this Python script via Bash:
 
 ```bash
 python3 << 'PYEOF'
-import sys
+import os, glob, sys, subprocess
 
-# Resolve the binary path from `which claude`
-import subprocess, os
-result = subprocess.run(['which', 'claude'], capture_output=True, text=True)
-claude_bin = result.stdout.strip()
-if not claude_bin:
-    print("ERROR: 'claude' not in PATH")
+# === Discover all Claude Code binaries ===
+candidates = set()
+
+# Native install: ~/.local/share/claude/versions/<version>
+home = os.path.expanduser("~")
+for p in glob.glob(f"{home}/.local/share/claude/versions/*"):
+    if os.path.isfile(p):
+        candidates.add(os.path.realpath(p))
+
+# npm install(s) under nvm
+for p in glob.glob(f"{home}/.nvm/versions/node/*/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"):
+    candidates.add(os.path.realpath(p))
+for p in glob.glob(f"{home}/.nvm/versions/node/*/lib/node_modules/@anthropic-ai/claude-code/cli.js"):
+    candidates.add(os.path.realpath(p))
+
+# Whatever `which claude` and `which -a claude` resolve to
+try:
+    r = subprocess.run(['bash', '-c', 'which -a claude 2>/dev/null'], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line and os.path.isfile(line):
+            candidates.add(os.path.realpath(line))
+except Exception:
+    pass
+
+if not candidates:
+    print("ERROR: no Claude Code binaries found.")
     sys.exit(1)
 
-# Follow symlinks
-cli = os.path.realpath(claude_bin)
-print(f"Found binary at: {cli}")
+print(f"Found {len(candidates)} binary/binaries:")
+for c in sorted(candidates):
+    print(f"  {c}")
 
-with open(cli, 'rb') as f:
-    data = bytearray(f.read())
+# === Known patterns ===
+# Patch 1 has multiple known shapes (minified names rotate per release).
+# Each entry is the EXACT old pattern; replacement always becomes
+# `isActive:()=>{return!1` + spaces + `}` (same length).
+AUTH_OLD_PATTERNS = [
+    # npm install shape (older builds)
+    b'isActive:()=>{let{source:H}=rz({skipRetrievingKeyFromApiKeyHelper:!0}),$=sh();return H!=="none"&&$.source!=="none"&&!(H==="apiKeyHelper"&&$.source==="apiKeyHelper")}',
+    # native install shape (~2.1.128)
+    b'isActive:()=>{let H=pp();return Nq()&&(H.source==="ANTHROPIC_AUTH_TOKEN"||H.source==="apiKeyHelper")}',
+]
+AUTH_NEW_CORE = b'isActive:()=>{return!1'
 
-changed = False
+NPM_OLD = b'return{timeoutMs:15000,key:"npm-deprecation-warning"'
+NPM_NEW = b'return null;//                                      '
+assert len(NPM_NEW) == len(NPM_OLD)
 
-# === Patch 1: both-auth-methods isActive — make it always return false ===
-old1 = b'isActive:()=>{let{source:H}=rz({skipRetrievingKeyFromApiKeyHelper:!0}),$=sh();return H!=="none"&&$.source!=="none"&&!(H==="apiKeyHelper"&&$.source==="apiKeyHelper")}'
-new1_core = b'isActive:()=>{return!1'
-new1 = new1_core + b' ' * (len(old1) - len(new1_core) - 1) + b'}'
-assert len(new1) == len(old1)
 
-# Check if already patched
-if data.count(b'isActive:()=>{return!1') >= 1 and data.count(old1) == 0:
-    print("[auth-conflict] Already patched.")
-elif data.count(old1) == 0:
-    print("[auth-conflict] WARNING: pattern not found — binary may have changed. Skipping.")
-else:
-    n = 0
-    idx = 0
-    while True:
-        pos = data.find(old1, idx)
-        if pos == -1:
+def make_replacement(old: bytes, new_core: bytes) -> bytes:
+    pad = len(old) - len(new_core) - 1
+    return new_core + b' ' * pad + b'}'
+
+
+def patch_file(path: str) -> None:
+    print(f"\n=== {path} ===")
+    with open(path, 'rb') as f:
+        data = bytearray(f.read())
+    changed = False
+
+    # --- Patch 1: auth-conflict ---
+    matched_pattern = None
+    for old in AUTH_OLD_PATTERNS:
+        if data.count(old) > 0:
+            matched_pattern = old
             break
-        data[pos:pos+len(old1)] = new1
-        idx = pos + len(new1)
-        n += 1
-    print(f"[auth-conflict] Patched {n} occurrence(s).")
-    changed = True
 
-# === Patch 2: npm-deprecation-warning — return null instead of the notification ===
-old2 = b'return{timeoutMs:15000,key:"npm-deprecation-warning"'
-new2 = b'return null;//                                      '
-assert len(new2) == len(old2)
+    already = data.count(AUTH_NEW_CORE)
+    if matched_pattern is None and already > 0:
+        print(f"[auth-conflict] Already patched ({already} occurrence(s)).")
+    elif matched_pattern is None:
+        # Diagnostic: show any isActive arrow functions present so we can
+        # extend AUTH_OLD_PATTERNS in a future Claude Code release.
+        import re
+        seen = set()
+        for m in re.findall(rb'isActive:\(\)=>\{[^}]{20,300}\}', bytes(data)):
+            seen.add(m)
+        print("[auth-conflict] No known pattern found. isActive variants in this binary:")
+        for m in list(seen)[:10]:
+            print(f"    {m!r}")
+        print("  → Add the matching one to AUTH_OLD_PATTERNS in this skill.")
+    else:
+        new = make_replacement(matched_pattern, AUTH_NEW_CORE)
+        assert len(new) == len(matched_pattern)
+        n = 0
+        idx = 0
+        while True:
+            pos = data.find(matched_pattern, idx)
+            if pos == -1:
+                break
+            data[pos:pos+len(matched_pattern)] = new
+            idx = pos + len(new)
+            n += 1
+        print(f"[auth-conflict] Patched {n} occurrence(s).")
+        changed = True
 
-if data.count(b'return null;//') >= 1 and data.count(old2) == 0:
-    print("[npm-deprecation] Already patched.")
-elif data.count(old2) == 0:
-    print("[npm-deprecation] WARNING: pattern not found — binary may have changed. Skipping.")
-else:
-    n = 0
-    idx = 0
-    while True:
-        pos = data.find(old2, idx)
-        if pos == -1:
-            break
-        data[pos:pos+len(old2)] = new2
-        idx = pos + len(new2)
-        n += 1
-    print(f"[npm-deprecation] Patched {n} occurrence(s).")
-    changed = True
+    # --- Patch 2: npm-deprecation ---
+    if data.count(NPM_OLD) == 0 and data.count(b'return null;//') >= 1:
+        print("[npm-deprecation] Already patched (or absent).")
+    elif data.count(NPM_OLD) == 0:
+        print("[npm-deprecation] Pattern not present (likely native install — skipping).")
+    else:
+        n = 0
+        idx = 0
+        while True:
+            pos = data.find(NPM_OLD, idx)
+            if pos == -1:
+                break
+            data[pos:pos+len(NPM_OLD)] = NPM_NEW
+            idx = pos + len(NPM_NEW)
+            n += 1
+        print(f"[npm-deprecation] Patched {n} occurrence(s).")
+        changed = True
 
-if changed:
-    with open(cli, 'wb') as f:
-        f.write(data)
-    print("Binary written.")
+    if changed:
+        with open(path, 'wb') as f:
+            f.write(data)
+        print("Binary written.")
 
-# Verify
-with open(cli, 'rb') as f:
-    verify = f.read()
+    # Verify
+    with open(path, 'rb') as f:
+        verify = f.read()
+    any_old_left = any(verify.count(p) > 0 for p in AUTH_OLD_PATTERNS)
+    auth_ok = (not any_old_left) and verify.count(AUTH_NEW_CORE) >= 1
+    npm_ok = verify.count(NPM_OLD) == 0
+    print(f"[auth-conflict] verified: {auth_ok}")
+    print(f"[npm-deprecation] verified: {npm_ok}")
 
-auth_ok = verify.count(b'isActive:()=>{return!1') >= 1 and verify.count(old1) == 0
-npm_ok = verify.count(b'return null;//') >= 1 and verify.count(old2) == 0
-print(f"[auth-conflict] verified: {auth_ok}")
-print(f"[npm-deprecation] verified: {npm_ok}")
+
+for c in sorted(candidates):
+    try:
+        patch_file(c)
+    except PermissionError as e:
+        print(f"\n=== {c} ===\nPermission denied: {e}")
+    except Exception as e:
+        print(f"\n=== {c} ===\nError: {e}")
 PYEOF
 ```
 
-Report per-patch status to the user.
+Report per-binary, per-patch status to the user. If `[auth-conflict]` reports
+"No known pattern found" for the native binary, the script prints the
+`isActive:()=>{...}` variants it sees — copy the auth-related one back into
+`AUTH_OLD_PATTERNS` in this skill (the replacement is always
+`isActive:()=>{return!1}` with same length).
