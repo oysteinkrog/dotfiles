@@ -80,5 +80,10 @@ bin/codedb
 # fish 4.3 migration files (machine-local; regenerated on upgrade)
 .config/fish/conf.d/fish_frozen_*.fish
 
+# External skill clones (third-party repos cloned into .claude/skills/).
+# Promote to a submodule (.gitmodules) if you want to track the pointer.
+.claude/skills/cc-slidev/
+.claude/skills/frontend-slides/
+
 # Misc
 list-worktrees.sh

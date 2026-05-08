@@ -1,0 +1,566 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "anthropic>=0.39",
+#   "rich>=13",
+# ]
+# ///
+"""
+cc-sessions — Browse recent Claude Code sessions with Haiku-generated summaries.
+
+Built after a machine crash wiped out terminal tabs. Scans ~/.claude/projects/
+for session JSONL files, summarizes each with Haiku (cached on disk), and drops
+you into fzf with a preview pane so you can recognize and resume sessions.
+
+Usage:
+  cc-sessions                # last 1 day
+  cc-sessions --days 3       # last 3 days
+  cc-sessions --since 2026-05-01
+  cc-sessions --refresh      # re-summarize even if cached
+  cc-sessions --no-summary   # skip Haiku, just list metadata
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import json
+import os
+import shutil
+import subprocess
+import sys
+import textwrap
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CACHE_DIR = Path.home() / ".cache" / "cc-sessions"
+MODEL = "claude-haiku-4-5"
+
+SUMMARY_SYSTEM = """You summarize Claude Code session transcripts so a user who lost their terminal tabs in a crash can recognize what each session was about.
+
+Output format (exactly this, no preamble):
+TITLE: <≤8 word title capturing what the user was doing>
+GIST: <one sentence, ≤25 words, concrete details — files, tools, problem>
+TAGS: <3-5 comma-separated keywords/topics>
+
+Be concrete. "Debugging websocket reconnect in chat-app server.ts" beats "fixing a bug". Pull real file names, error messages, library names from the transcript."""
+
+
+@dataclass
+class SessionMeta:
+    path: str
+    session_id: str
+    cwd: str
+    git_branch: str
+    started_at: str  # ISO
+    last_activity: str  # ISO
+    user_msg_count: int
+    assistant_msg_count: int
+    file_size: int
+    title: str = ""
+    gist: str = ""
+    tags: str = ""
+    summary_error: str = ""
+
+    @property
+    def started_dt(self) -> datetime:
+        return datetime.fromisoformat(self.started_at.replace("Z", "+00:00"))
+
+    @property
+    def last_dt(self) -> datetime:
+        return datetime.fromisoformat(self.last_activity.replace("Z", "+00:00"))
+
+
+def decode_cwd(dir_name: str) -> str:
+    """`-c-WORK-atlas-kb` -> `/c/WORK/atlas-kb` (best-effort; encoding is lossy)."""
+    if not dir_name.startswith("-"):
+        return dir_name
+    # Claude Code replaces `/` with `-`. Reverse heuristically.
+    return "/" + dir_name[1:].replace("-", "/")
+
+
+def extract_text(content: Any) -> str:
+    """Pull plain text out of a message.content (string or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif block.get("type") == "tool_use":
+                    parts.append(f"[tool_use: {block.get('name', '?')}]")
+        return "\n".join(parts)
+    return ""
+
+
+def is_substantive_user_msg(text: str) -> bool:
+    """Filter out slash-command transcripts, system reminders, command stdout."""
+    if not text or not text.strip():
+        return False
+    stripped = text.strip()
+    # Slash-command machinery
+    skip_markers = (
+        "<local-command-caveat>",
+        "<command-name>",
+        "<command-message>",
+        "<command-args>",
+        "<local-command-stdout>",
+        "<local-command-stderr>",
+        "<system-reminder>",
+        "[Request interrupted",
+    )
+    if stripped.startswith(skip_markers):
+        return False
+    # Pure tool result
+    if stripped.startswith("<tool_use_error>") or stripped.startswith("Tool ran without"):
+        return False
+    return True
+
+
+def parse_session(path: Path) -> SessionMeta | None:
+    """Read a .jsonl session file and pull metadata + sample text."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+    if not lines:
+        return None
+
+    session_id = path.stem
+    cwd = decode_cwd(path.parent.name)
+    git_branch = ""
+    started_at = ""
+    last_activity = ""
+    user_msgs = 0
+    assistant_msgs = 0
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = ev.get("timestamp")
+        if ts:
+            if not started_at:
+                started_at = ts
+            last_activity = ts
+        if ev.get("cwd"):
+            cwd = ev["cwd"]
+        if ev.get("gitBranch"):
+            git_branch = ev["gitBranch"]
+        et = ev.get("type")
+        msg = ev.get("message") or {}
+        role = msg.get("role")
+        if et == "user" and role == "user" and not ev.get("isMeta"):
+            text = extract_text(msg.get("content"))
+            if is_substantive_user_msg(text):
+                user_msgs += 1
+        elif et == "assistant" and role == "assistant":
+            assistant_msgs += 1
+
+    if not started_at:
+        # fall back to mtime
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        started_at = mtime.isoformat()
+        last_activity = mtime.isoformat()
+
+    return SessionMeta(
+        path=str(path),
+        session_id=session_id,
+        cwd=cwd,
+        git_branch=git_branch,
+        started_at=started_at,
+        last_activity=last_activity,
+        user_msg_count=user_msgs,
+        assistant_msg_count=assistant_msgs,
+        file_size=path.stat().st_size,
+    )
+
+
+def extract_summary_input(path: Path, max_chars: int = 6000) -> str:
+    """Pull user prompts + first assistant text from a session for summarization."""
+    user_prompts: list[str] = []
+    first_assistant = ""
+
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("isMeta"):
+                continue
+            msg = ev.get("message") or {}
+            role = msg.get("role")
+            text = extract_text(msg.get("content"))
+            if not text:
+                continue
+            if ev.get("type") == "user" and role == "user":
+                if is_substantive_user_msg(text):
+                    user_prompts.append(text.strip())
+            elif ev.get("type") == "assistant" and role == "assistant" and not first_assistant:
+                # First substantive assistant text
+                clean = text.strip()
+                if clean and not clean.startswith("[tool_use:"):
+                    first_assistant = clean
+
+    # Build sampled text: first 3 prompts, last 1 prompt, first assistant reply
+    sample_prompts = user_prompts[:3]
+    if len(user_prompts) > 4:
+        sample_prompts.append("…")
+        sample_prompts.append(user_prompts[-1])
+    elif len(user_prompts) == 4:
+        sample_prompts.append(user_prompts[-1])
+
+    parts = []
+    for i, p in enumerate(sample_prompts, 1):
+        parts.append(f"--- USER MSG {i} ---\n{p[:1500]}")
+    if first_assistant:
+        parts.append(f"--- FIRST ASSISTANT REPLY ---\n{first_assistant[:1500]}")
+
+    blob = "\n\n".join(parts)
+    if len(blob) > max_chars:
+        blob = blob[:max_chars] + "\n…[truncated]"
+    return blob
+
+
+def cache_path_for(meta: SessionMeta) -> Path:
+    return CACHE_DIR / f"{meta.session_id}.json"
+
+
+def load_cached(meta: SessionMeta) -> dict | None:
+    cp = cache_path_for(meta)
+    if not cp.exists():
+        return None
+    try:
+        cached = json.loads(cp.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    # Invalidate if file size changed (session continued after cache)
+    if cached.get("file_size") != meta.file_size:
+        return None
+    return cached
+
+
+def save_cached(meta: SessionMeta, summary: dict) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "session_id": meta.session_id,
+        "file_size": meta.file_size,
+        "title": summary.get("title", ""),
+        "gist": summary.get("gist", ""),
+        "tags": summary.get("tags", ""),
+    }
+    cache_path_for(meta).write_text(json.dumps(payload, indent=2))
+
+
+def parse_haiku_response(text: str) -> dict:
+    out = {"title": "", "gist": "", "tags": ""}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("TITLE:"):
+            out["title"] = line[6:].strip()
+        elif line.startswith("GIST:"):
+            out["gist"] = line[5:].strip()
+        elif line.startswith("TAGS:"):
+            out["tags"] = line[5:].strip()
+    return out
+
+
+def summarize_one(client, meta: SessionMeta) -> SessionMeta:
+    cached = load_cached(meta)
+    if cached:
+        meta.title = cached["title"]
+        meta.gist = cached["gist"]
+        meta.tags = cached["tags"]
+        return meta
+
+    blob = extract_summary_input(Path(meta.path))
+    if not blob.strip():
+        meta.title = "(empty session)"
+        meta.gist = "No substantive user prompts found."
+        meta.tags = "empty"
+        save_cached(meta, asdict(meta))
+        return meta
+
+    user_prompt = textwrap.dedent(f"""\
+        Session metadata:
+          cwd: {meta.cwd}
+          git branch: {meta.git_branch or '(none)'}
+          started: {meta.started_at}
+          messages: {meta.user_msg_count} user / {meta.assistant_msg_count} assistant
+
+        Transcript samples:
+        {blob}
+        """)
+
+    try:
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=300,
+            system=[
+                {
+                    "type": "text",
+                    "text": SUMMARY_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+        parsed = parse_haiku_response(text)
+        meta.title = parsed["title"] or "(no title)"
+        meta.gist = parsed["gist"]
+        meta.tags = parsed["tags"]
+        save_cached(meta, asdict(meta))
+    except Exception as e:
+        meta.summary_error = f"{type(e).__name__}: {e}"
+        meta.title = "(summary failed)"
+    return meta
+
+
+def find_sessions(cutoff: datetime) -> list[Path]:
+    """All .jsonl session files modified after cutoff."""
+    if not PROJECTS_DIR.exists():
+        return []
+    cutoff_ts = cutoff.timestamp()
+    found = []
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for f in project_dir.glob("*.jsonl"):
+            try:
+                if f.stat().st_mtime >= cutoff_ts:
+                    found.append(f)
+            except OSError:
+                pass
+    return found
+
+
+def fmt_dt(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return iso[:16]
+
+
+def fmt_size(b: int) -> str:
+    if b < 1024:
+        return f"{b}B"
+    if b < 1024 * 1024:
+        return f"{b/1024:.0f}K"
+    return f"{b/(1024*1024):.1f}M"
+
+
+def short_cwd(cwd: str, width: int = 40) -> str:
+    if len(cwd) <= width:
+        return cwd
+    return "…" + cwd[-(width - 1):]
+
+
+def write_index(metas: list[SessionMeta], index_path: Path) -> None:
+    """Tab-separated index for fzf. Last column is the session id key."""
+    lines = []
+    for m in metas:
+        title = m.title or "(no summary)"
+        cwd = short_cwd(m.cwd, 38)
+        when = fmt_dt(m.last_activity)
+        msgs = f"{m.user_msg_count}u/{m.assistant_msg_count}a"
+        size = fmt_size(m.file_size)
+        # Visible columns + hidden session_id sentinel
+        lines.append(
+            f"{when}  {cwd:<38}  {msgs:>9}  {size:>5}  {title}\t{m.session_id}"
+        )
+    index_path.write_text("\n".join(lines))
+
+
+def write_previews(metas: list[SessionMeta], preview_dir: Path) -> None:
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    for m in metas:
+        p = preview_dir / f"{m.session_id}.txt"
+        first_msgs = []
+        try:
+            with Path(m.path).open("r", encoding="utf-8", errors="replace") as f:
+                count = 0
+                for line in f:
+                    if count >= 6:
+                        break
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("isMeta"):
+                        continue
+                    msg = ev.get("message") or {}
+                    if ev.get("type") == "user" and msg.get("role") == "user":
+                        text = extract_text(msg.get("content"))
+                        if is_substantive_user_msg(text):
+                            first_msgs.append(text.strip()[:400])
+                            count += 1
+        except OSError:
+            pass
+
+        body = []
+        body.append(f"\033[1;36m{m.title or '(no title)'}\033[0m")
+        body.append("")
+        body.append(f"\033[1mGist:\033[0m   {m.gist}")
+        body.append(f"\033[1mTags:\033[0m   {m.tags}")
+        body.append("")
+        body.append(f"\033[1mcwd:\033[0m    {m.cwd}")
+        body.append(f"\033[1mbranch:\033[0m {m.git_branch or '(none)'}")
+        body.append(f"\033[1mstart:\033[0m  {fmt_dt(m.started_at)}")
+        body.append(f"\033[1mlast:\033[0m   {fmt_dt(m.last_activity)}")
+        body.append(f"\033[1msize:\033[0m   {fmt_size(m.file_size)}  ({m.user_msg_count} user / {m.assistant_msg_count} assistant)")
+        body.append(f"\033[1mid:\033[0m     {m.session_id}")
+        body.append(f"\033[1mfile:\033[0m   {m.path}")
+        if m.summary_error:
+            body.append("")
+            body.append(f"\033[31msummary error:\033[0m {m.summary_error}")
+        body.append("")
+        body.append("\033[1;33m── First user prompts ──\033[0m")
+        for i, msg in enumerate(first_msgs, 1):
+            body.append(f"\033[2m[{i}]\033[0m {msg}")
+            body.append("")
+        body.append("\033[2mEnter: resume    Ctrl-O: open file    Ctrl-D: cd to cwd    Esc: quit\033[0m")
+        p.write_text("\n".join(body))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--days", type=float, default=1.0, help="Look back this many days (default 1)")
+    ap.add_argument("--since", type=str, default=None, help="ISO date/datetime cutoff, overrides --days")
+    ap.add_argument("--refresh", action="store_true", help="Re-summarize even if cached")
+    ap.add_argument("--no-summary", action="store_true", help="Skip Haiku, just list metadata")
+    ap.add_argument("--workers", type=int, default=8, help="Parallel summarization (default 8)")
+    ap.add_argument("--list", action="store_true", help="Print list and exit (no fzf)")
+    args = ap.parse_args()
+
+    if args.since:
+        cutoff = datetime.fromisoformat(args.since)
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
+
+    print(f"Scanning sessions modified since {cutoff.astimezone().strftime('%Y-%m-%d %H:%M')}…", file=sys.stderr)
+    paths = find_sessions(cutoff)
+    print(f"Found {len(paths)} session files. Parsing metadata…", file=sys.stderr)
+
+    metas: list[SessionMeta] = []
+    for p in paths:
+        m = parse_session(p)
+        if m is not None:
+            metas.append(m)
+
+    metas.sort(key=lambda m: m.last_activity, reverse=True)
+
+    if args.refresh:
+        for m in metas:
+            cp = cache_path_for(m)
+            if cp.exists():
+                cp.unlink()
+
+    if not args.no_summary:
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            print("anthropic package missing; install or pass --no-summary", file=sys.stderr)
+            sys.exit(1)
+        client = Anthropic()
+
+        # Count how many actually need API calls
+        need_api = [m for m in metas if load_cached(m) is None]
+        print(f"Summarizing {len(need_api)} new sessions ({len(metas) - len(need_api)} cached)…", file=sys.stderr)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
+            done = 0
+            for m in ex.map(lambda mm: summarize_one(client, mm), metas):
+                done += 1
+                if done % 5 == 0 or done == len(metas):
+                    print(f"  {done}/{len(metas)}", file=sys.stderr)
+
+    if args.list:
+        for m in metas:
+            print(f"{fmt_dt(m.last_activity)}  {m.cwd:<50}  {m.title}")
+            if m.gist:
+                print(f"  → {m.gist}")
+        return
+
+    if not shutil.which("fzf"):
+        print("fzf not found; falling back to --list", file=sys.stderr)
+        for m in metas:
+            print(f"{fmt_dt(m.last_activity)}  {m.cwd}  {m.title}")
+        return
+
+    # Stage fzf inputs in a tmpdir
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="cc-sessions-"))
+    try:
+        index = tmp / "index.tsv"
+        previews = tmp / "previews"
+        write_index(metas, index)
+        write_previews(metas, previews)
+
+        # fzf: hide last column (session_id), use it as preview key
+        result = subprocess.run(
+            [
+                "fzf",
+                "--ansi",
+                "--delimiter=\t",
+                "--with-nth=1",                    # display only first column
+                "--preview", f"cat {previews}/{{2}}.txt",
+                "--preview-window", "right,60%,wrap",
+                "--header", f"{len(metas)} sessions  ·  Enter=resume  Ctrl-O=less  Ctrl-D=copy cwd  Ctrl-R=refresh summary",
+                "--bind", f"ctrl-o:execute(less -R {previews}/{{2}}.txt)",
+                "--bind", "ctrl-d:execute-silent(echo -n {1} | clip.exe 2>/dev/null || true)+abort",
+                "--expect", "ctrl-d,ctrl-o",
+                "--height=100%",
+                "--layout=reverse",
+            ],
+            input=index.read_text(),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode not in (0, 130):
+            print(result.stderr, file=sys.stderr)
+            sys.exit(result.returncode)
+        out_lines = result.stdout.strip().splitlines()
+        if not out_lines:
+            return
+        # First line = expected key (or empty), second = chosen line
+        chosen = out_lines[-1]
+        if "\t" not in chosen:
+            return
+        _, sid = chosen.rsplit("\t", 1)
+        # Find the meta
+        chosen_meta = next((m for m in metas if m.session_id == sid), None)
+        if not chosen_meta:
+            return
+
+        print(f"\nSession: {chosen_meta.title}")
+        print(f"  id:   {chosen_meta.session_id}")
+        print(f"  cwd:  {chosen_meta.cwd}")
+        print(f"  file: {chosen_meta.path}")
+        print()
+        print("To resume:")
+        # Use the cwd if it exists, otherwise warn
+        cwd = chosen_meta.cwd
+        cwd_exists = Path(cwd).is_dir() if cwd and not cwd.startswith(("c", "/c")) else True
+        print(f"  cd {cwd!r} && claude --resume {chosen_meta.session_id}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
