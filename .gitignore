@@ -62,5 +62,23 @@ bin/claurst
 bin/claw
 bin/codedb
 
+# Claude Code runtime state and machine-local config
+.claude/.last-cleanup
+.claude/policy-limits.json
+.claude/remote-settings.json
+
+# Skills installed via jsm (jeffreys-skills.md) — re-install via `jsm sync`,
+# don't track. Marker file at the dir root.
+.claude/skills/.SKILLS_MANAGED_BY_JSM
+.claude/skills/cursor/
+.claude/skills/de-slopify/
+.claude/skills/dsr/
+.claude/skills/gcloud/
+.claude/skills/repeatedly-apply-skill/
+.claude/skills/rust-crates-publishing/
+
+# fish 4.3 migration files (machine-local; regenerated on upgrade)
+.config/fish/conf.d/fish_frozen_*.fish
+
 # Misc
 list-worktrees.sh
