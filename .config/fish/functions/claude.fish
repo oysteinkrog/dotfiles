@@ -3,10 +3,10 @@
 # Invoking via ld-linux bypasses the kernel's broken ELF parser.
 # See: https://github.com/microsoft/WSL/issues/8219
 #      https://github.com/microsoft/WSL/issues/12359
-function claude --description 'Claude Code (WSL1 ld-linux workaround + dangerously-skip-permissions)'
-    set -l bin (command -s claude)
-    if test -z "$bin"
-        echo "claude: not found in PATH" >&2
+function claude --description 'Claude Code (native install + WSL1 ld-linux workaround + dangerously-skip-permissions)'
+    set -l bin "$HOME/.local/bin/claude"
+    if not test -x "$bin"
+        echo "claude: native install not found at $bin" >&2
         return 127
     end
     set -l real (realpath "$bin")
