@@ -36,7 +36,7 @@ bin/pandoc
 .claude/tasks/
 .claude/teams/
 .claude/plugins/
-bin/__pycache__/
+__pycache__/
 
 # Large binaries (install via package manager)
 bin/hugo
