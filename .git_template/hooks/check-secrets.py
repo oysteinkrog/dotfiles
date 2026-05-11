@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """Pre-commit secret guard.
 
-Refuses to commit content containing any banned literal value, identified
-only by SHA-256 so the banlist itself does not leak the values.
+Two layers of protection:
 
-To add a new ban:
-    python3 -c 'import hashlib,sys; s=sys.argv[1]; \
+1. Static banlist (BANNED): SHA-256 hashes of values that should never appear
+   in any commit. The banlist itself does not leak the values. Used for
+   secrets that aren't (or aren't anymore) in ~/.config/secrets/.env.
+
+   To add a new static ban:
+       python3 -c 'import hashlib,sys; s=sys.argv[1]; \
 print(f"({len(s.encode())}, \"{hashlib.sha256(s.encode()).hexdigest()}\", \"<label>\"),")' \
-        '<the-secret-value>'
-and paste the resulting tuple into BANNED below.
+           '<the-secret-value>'
+   and paste the resulting tuple into BANNED below.
+
+2. Dynamic banlist from ~/.config/secrets/.env: every KEY=VALUE with
+   len(VALUE) >= MIN_DYNAMIC_LEN is automatically protected. No manual sync
+   needed; adding/rotating a key in .env immediately updates protection.
+   Values stay in memory only for the duration of the hook.
 
 Bypass once with `git commit --no-verify` only if you are absolutely sure
 the match is a false positive — and then rotate the colliding secret if
@@ -17,14 +25,19 @@ there is any doubt.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 BANNED: list[tuple[int, str, str]] = [
     (13, "32568ece5a3127cc89f28257bda8c3d60375f0e3fc640c75d39df895d3e00b98", "proxy-domain"),
     (37, "853b5858f506ec297bf0baa634b1c2185f5845dbbadfd8d153b3acb81e0ddc3a", "proxy-key-v1"),
     (69, "da554d4f1e141ab7c0e048caa08ecca1bea7fd620eebd3eb928c250ce03d6186", "proxy-key-v2"),
 ]
+
+ENV_FILE = Path.home() / ".config" / "secrets" / ".env"
+MIN_DYNAMIC_LEN = 16  # below this, false-positive risk on substring search
 
 
 def staged_added_blob() -> bytes:
@@ -48,6 +61,25 @@ def find_match(blob: bytes, length: int, expected_hex: str) -> int | None:
     return None
 
 
+def env_secrets(env_path: Path) -> list[tuple[bytes, str]]:
+    """Return [(value_bytes, label), ...] for KEY=VALUE entries with
+    len(VALUE) >= MIN_DYNAMIC_LEN. Returns [] if the file is missing."""
+    try:
+        data = env_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        return []
+    out: list[tuple[bytes, str]] = []
+    for raw in data.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        val_b = val.encode("utf-8")
+        if len(val_b) >= MIN_DYNAMIC_LEN:
+            out.append((val_b, f"env:{key}"))
+    return out
+
+
 def main() -> int:
     blob = staged_added_blob()
     if not blob:
@@ -56,12 +88,16 @@ def main() -> int:
     for length, digest, label in BANNED:
         if find_match(blob, length, digest) is not None:
             hits.append(label)
+    for val_b, label in env_secrets(ENV_FILE):
+        if val_b in blob:
+            hits.append(label)
     if hits:
         sys.stderr.write(
-            "pre-commit: refused — banned secret pattern(s) detected: "
+            "pre-commit: refused — banned secret value(s) detected in staged content: "
             + ", ".join(hits) + "\n"
             "Remove the secret, then retry. Use --no-verify only if you are\n"
-            "absolutely sure the match is a false positive.\n"
+            "absolutely sure the match is a false positive (and rotate the\n"
+            "secret if there is any doubt).\n"
         )
         return 1
     return 0
