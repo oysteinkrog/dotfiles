@@ -19,6 +19,13 @@ if test -d ~/.nvm
     nvm use 22 >/dev/null 2>&1
 end
 
+# Re-prepend ~/.local/bin so locally-installed Linux-native tools (e.g. the
+# ELF `claude` at ~/.local/bin/claude) win over Windows .exe symlinks that
+# nvm puts on PATH. Without this, subprocesses that resolve `claude` via
+# PATH (e.g. tools/localization/smart-translation translator) get the
+# Windows binary and fail with "Exec format error" under WSL1.
+fish_add_path -p ~/.local/bin
+
 # bun
 set --export BUN_INSTALL "$HOME/.bun"
 set --export PATH $BUN_INSTALL/bin $PATH
