@@ -19,16 +19,16 @@ curl http://127.0.0.1:8765/health
 
 ```bash
 # Basic check
-uv run python -m mcp_agent_mail.cli doctor check
+am doctor check
 
 # Verbose with details
-uv run python -m mcp_agent_mail.cli doctor check --verbose
+am doctor check --verbose
 
 # JSON output for automation
-uv run python -m mcp_agent_mail.cli doctor check --json
+am doctor check --json
 
 # Check specific project
-uv run python -m mcp_agent_mail.cli doctor check /abs/path/project
+am doctor check /abs/path/project
 ```
 
 **Checks performed:**
@@ -41,7 +41,7 @@ uv run python -m mcp_agent_mail.cli doctor check /abs/path/project
 ### Preview Repairs (Dry Run)
 
 ```bash
-uv run python -m mcp_agent_mail.cli doctor repair --dry-run
+am doctor repair --dry-run
 ```
 
 Shows what would be fixed without making changes.
@@ -50,13 +50,13 @@ Shows what would be fixed without making changes.
 
 ```bash
 # Interactive (prompts for confirmation)
-uv run python -m mcp_agent_mail.cli doctor repair
+am doctor repair
 
 # Auto-confirm (creates backup first)
-uv run python -m mcp_agent_mail.cli doctor repair --yes
+am doctor repair --yes
 
 # With custom backup directory
-uv run python -m mcp_agent_mail.cli doctor repair --yes --backup-dir /tmp/backups
+am doctor repair --yes --backup-dir /tmp/backups
 ```
 
 ---
@@ -67,29 +67,29 @@ uv run python -m mcp_agent_mail.cli doctor repair --yes --backup-dir /tmp/backup
 
 ```bash
 # With label
-uv run python -m mcp_agent_mail.cli archive save --label nightly
+am archive save --label nightly
 
 # Default label (timestamp)
-uv run python -m mcp_agent_mail.cli archive save
+am archive save
 ```
 
 ### List Backups
 
 ```bash
-uv run python -m mcp_agent_mail.cli doctor backups
+am doctor backups
 
 # JSON format
-uv run python -m mcp_agent_mail.cli doctor backups --json
+am doctor backups --json
 ```
 
 ### Restore from Backup
 
 ```bash
 # Preview what would be restored
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup.zip --dry-run
+am doctor restore /path/to/backup.zip --dry-run
 
 # Perform restore
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup.zip --yes
+am doctor restore /path/to/backup.zip --yes
 ```
 
 ---
@@ -101,7 +101,7 @@ Export mailbox for auditors, stakeholders, or archives.
 ### Interactive Wizard (Recommended)
 
 ```bash
-uv run python -m mcp_agent_mail.cli share wizard
+am share wizard
 ```
 
 Guides you through export options, signing, encryption, and deployment.
@@ -110,20 +110,20 @@ Guides you through export options, signing, encryption, and deployment.
 
 ```bash
 # Basic export
-uv run python -m mcp_agent_mail.cli share export --output ./bundle
+am share export --output ./bundle
 
 # With cryptographic signing
-uv run python -m mcp_agent_mail.cli share export \
+am share export \
   --output ./bundle \
   --signing-key ./keys/signing.key
 
 # With age encryption
-uv run python -m mcp_agent_mail.cli share export \
+am share export \
   --output ./bundle \
   --age-recipient age1abc...xyz
 
 # Scrub sensitive content
-uv run python -m mcp_agent_mail.cli share export \
+am share export \
   --output ./bundle \
   --scrub-preset strict  # or 'standard'
 ```
@@ -131,25 +131,25 @@ uv run python -m mcp_agent_mail.cli share export \
 ### Preview Exported Bundle
 
 ```bash
-uv run python -m mcp_agent_mail.cli share preview ./bundle --port 9000 --open-browser
+am share preview ./bundle --port 9000 --open-browser
 ```
 
 ### Verify Bundle Integrity
 
 ```bash
-uv run python -m mcp_agent_mail.cli share verify ./bundle
+am share verify ./bundle
 ```
 
 ### Refresh Existing Bundle
 
 ```bash
-uv run python -m mcp_agent_mail.cli share update ./bundle
+am share update ./bundle
 ```
 
 ### Decrypt Age-Encrypted Bundle
 
 ```bash
-uv run python -m mcp_agent_mail.cli share decrypt bundle.zip.age --identity ~/.age/key.txt
+am share decrypt bundle.zip.age --identity ~/.age/key.txt
 ```
 
 ---
@@ -160,10 +160,10 @@ uv run python -m mcp_agent_mail.cli share decrypt bundle.zip.age --identity ~/.a
 
 ```bash
 # Prompts for archive first
-uv run python -m mcp_agent_mail.cli clear-and-reset-everything
+am clear-and-reset-everything
 
 # Skip prompts (automation)
-uv run python -m mcp_agent_mail.cli clear-and-reset-everything --force --no-archive
+am clear-and-reset-everything --force --no-archive
 ```
 
 **WARNING:** Deletes SQLite database and all storage contents.
@@ -176,20 +176,20 @@ uv run python -m mcp_agent_mail.cli clear-and-reset-everything --force --no-arch
 
 ```bash
 # All reservations
-uv run python -m mcp_agent_mail.cli file_reservations list /abs/path/project
+am file_reservations list /abs/path/project
 
 # Active only
-uv run python -m mcp_agent_mail.cli file_reservations list /abs/path/project --active-only
+am file_reservations list /abs/path/project --active-only
 
 # Active with limit
-uv run python -m mcp_agent_mail.cli file_reservations active /abs/path/project --limit 10
+am file_reservations active /abs/path/project --limit 10
 ```
 
 ### Expiring Soon
 
 ```bash
 # Reservations expiring within 30 minutes
-uv run python -m mcp_agent_mail.cli file_reservations soon /abs/path/project --minutes 30
+am file_reservations soon /abs/path/project --minutes 30
 ```
 
 ---
@@ -199,19 +199,19 @@ uv run python -m mcp_agent_mail.cli file_reservations soon /abs/path/project --m
 ### Pending Acknowledgments
 
 ```bash
-uv run python -m mcp_agent_mail.cli acks pending /abs/path/project GreenCastle --limit 10
+am acks pending /abs/path/project GreenCastle --limit 10
 ```
 
 ### Overdue ACKs
 
 ```bash
-uv run python -m mcp_agent_mail.cli acks overdue /abs/path/project GreenCastle --ttl-minutes 60
+am acks overdue /abs/path/project GreenCastle --ttl-minutes 60
 ```
 
 ### Remind About Old ACKs
 
 ```bash
-uv run python -m mcp_agent_mail.cli acks remind /abs/path/project GreenCastle --min-age-minutes 30
+am acks remind /abs/path/project GreenCastle --min-age-minutes 30
 ```
 
 ---

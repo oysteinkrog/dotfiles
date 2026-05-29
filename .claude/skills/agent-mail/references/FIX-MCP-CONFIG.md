@@ -18,7 +18,6 @@ cat > ~/.local/bin/fix_cc_mcp << 'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 
-MCP_AGENT_MAIL_DIR="${MCP_AGENT_MAIL_DIR:-${HOME}/mcp_agent_mail}"
 MCP_URL="${MCP_URL:-http://127.0.0.1:8765/mcp/}"
 MORPH_API_KEY="${MORPH_API_KEY:-YOUR_MORPH_API_KEY_HERE}"
 SCOPE="${MCP_SCOPE:-user}"
@@ -26,21 +25,13 @@ SCOPE="${MCP_SCOPE:-user}"
 # Check for claude CLI
 command -v claude &>/dev/null || { echo "Install Claude Code first"; exit 1; }
 
-# Get bearer token
-TOKEN=""
-[[ -n "${MCP_AGENT_MAIL_TOKEN:-}" ]] && TOKEN="${MCP_AGENT_MAIL_TOKEN}"
-[[ -z "${TOKEN}" && -f "${MCP_AGENT_MAIL_DIR}/.env" ]] && \
-    TOKEN=$(grep -E '^HTTP_BEARER_TOKEN=' "${MCP_AGENT_MAIL_DIR}/.env" 2>/dev/null | sed 's/^HTTP_BEARER_TOKEN=//' | tr -d '"'"'" | tr -d '[:space:]' || true)
-[[ -z "${TOKEN}" && -f "${HOME}/.claude.json" ]] && \
-    TOKEN=$(grep -o '"Authorization": "Bearer [^"]*"' "${HOME}/.claude.json" 2>/dev/null | head -1 | sed 's/.*Bearer //' | tr -d '"' || true)
-
-[[ -z "${TOKEN}" ]] && { echo "Could not find bearer token"; exit 1; }
+# The rust server runs --no-auth on localhost — no bearer token needed.
 
 # Remove existing, add fresh
 claude mcp remove mcp-agent-mail --scope "${SCOPE}" 2>/dev/null || true
 claude mcp remove morph-mcp --scope "${SCOPE}" 2>/dev/null || true
 
-claude mcp add mcp-agent-mail "${MCP_URL}" --transport http --header "Authorization: Bearer ${TOKEN}" --scope "${SCOPE}"
+claude mcp add mcp-agent-mail "${MCP_URL}" --transport http --scope "${SCOPE}"
 claude mcp add morph-mcp -e "MORPH_API_KEY=${MORPH_API_KEY}" -e "ENABLED_TOOLS=warp_grep" --scope "${SCOPE}" -- npx -y @morphllm/morphmcp
 
 claude mcp list
@@ -57,10 +48,9 @@ chmod +x ~/.local/bin/fix_cc_mcp
 claude mcp remove mcp-agent-mail --scope user
 claude mcp remove morph-mcp --scope user
 
-# Add mcp-agent-mail (HTTP transport)
+# Add mcp-agent-mail (HTTP transport, no auth — server runs --no-auth on localhost)
 claude mcp add mcp-agent-mail "http://127.0.0.1:8765/mcp/" \
     --transport http \
-    --header "Authorization: Bearer <token>" \
     --scope user
 
 # Add morph-mcp (stdio transport via npx)
@@ -71,20 +61,16 @@ claude mcp add morph-mcp \
     -- npx -y @morphllm/morphmcp
 ```
 
-## Token Discovery
+## Auth
 
-| Priority | Source |
-|----------|--------|
-| 1 | `MCP_AGENT_MAIL_TOKEN` env var |
-| 2 | `~/mcp_agent_mail/.env` |
-| 3 | `~/.claude.json` |
+None. The rust server runs `--no-auth` on `127.0.0.1`, so no bearer token is required.
+(If you ever enable auth, add `--header "Authorization: Bearer <token>"` to the
+`claude mcp add` command.)
 
 ## Configuration Options
 
 | Variable | Default |
 |----------|---------|
-| `MCP_AGENT_MAIL_TOKEN` | (auto-detected) |
-| `MCP_AGENT_MAIL_DIR` | `~/mcp_agent_mail` |
 | `MCP_URL` | `http://127.0.0.1:8765/mcp/` |
 | `MORPH_API_KEY` | (in script) |
 | `MCP_SCOPE` | `user` |
@@ -94,13 +80,12 @@ claude mcp add morph-mcp \
 | Problem | Solution |
 |---------|----------|
 | "claude CLI not found" | Install Claude Code first |
-| "Could not find bearer token" | Run full MCP Agent Mail installer |
-| Server "not connected" | Ensure server is running: `am` |
+| Server "not connected" | Ensure the PM2 service is up: `pm2 restart mcp-agent-mail && pm2 save`, or `am doctor fix` |
 
 ## Full Installer (Alternative)
 
-If you need to update MCP Agent Mail itself:
+To (re)install or update the rust Agent Mail binaries:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh" | bash -s -- --yes
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/main/install.sh" | bash
 ```

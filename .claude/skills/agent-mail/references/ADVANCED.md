@@ -227,7 +227,7 @@ fts_messages(message_id UNINDEXED, subject, body)
 |----------|---------|-------------|
 | `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for repos + SQLite |
 | `HTTP_PORT` | `8765` | Server port |
-| `HTTP_BEARER_TOKEN` | — | Static bearer token |
+| `HTTP_BEARER_TOKEN` | — | Static bearer token (unused — the PM2 service runs `--no-auth`) |
 | `HTTP_JWT_ENABLED` | `false` | Enable JWT validation |
 | `LLM_ENABLED` | `true` | Enable LLM summaries |
 | `LLM_DEFAULT_MODEL` | `gpt-5-mini` | LLM model for summaries |

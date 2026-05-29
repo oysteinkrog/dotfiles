@@ -14,19 +14,17 @@
 ### One-Liner (Recommended)
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh?$(date +%s)" | bash -s -- --yes
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail_rust/main/install.sh?$(date +%s)" | bash
 ```
 
-### Custom Port
-
-```bash
-curl -fsSL ... | bash -s -- --port 9000 --yes
-```
+Installs two binaries to `~/.local/bin`: `mcp-agent-mail` (MCP server) and `am` (operator CLI).
+Useful flags: `--no-easy` (don't touch shell rc PATH), `--no-migrate` (skip Python import),
+`--from-source` (build with cargo instead of downloading a release).
 
 ### Change Port After Install
 
 ```bash
-uv run python -m mcp_agent_mail.cli config set-port 9000
+am config set-port 9000
 ```
 
 ---
@@ -35,42 +33,42 @@ uv run python -m mcp_agent_mail.cli config set-port 9000
 
 ### Start Server
 
-```bash
-# Quickest (alias added during install)
-am
+On this machine the server runs as a **PM2 service** (`~/.config/pm2/ecosystem.config.js`):
 
-# Or manually
-cd ~/projects/mcp_agent_mail
-./scripts/run_server_with_token.sh
+```bash
+pm2 restart mcp-agent-mail && pm2 save        # managed restart
+# manual / one-off (headless, localhost, no auth):
+am serve-http --no-tui --no-auth --port 8765
+# interactive operator console (reuses the running server):
+am
 ```
 
 ### Key Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for repos + SQLite |
+| `STORAGE_ROOT` | `~/.mcp_agent_mail_git_mailbox_repo` | Root for git archive + SQLite |
 | `HTTP_PORT` | `8765` | Server port |
-| `HTTP_BEARER_TOKEN` | — | Static bearer token |
 
-See [ADVANCED.md](ADVANCED.md#environment-variables) for full list.
+Auth: the PM2 service runs with `--no-auth` (localhost only), so no bearer token is needed.
+See [ADVANCED.md](ADVANCED.md#environment-variables) for the full list.
 
 ### Claude Code MCP Config
 
-Add to `~/.claude.json`:
+Prefer user-scope in `~/.claude.json` (projects inherit it). No auth header needed:
 
 ```json
 {
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_TOKEN"
-      }
+      "url": "http://127.0.0.1:8765/mcp/"
     }
   }
 }
 ```
+
+The server also answers the legacy `/api/` path, so older project configs keep working.
 
 ---
 
@@ -79,19 +77,19 @@ Add to `~/.claude.json`:
 ### Create Backup
 
 ```bash
-uv run python -m mcp_agent_mail.cli archive save --label nightly
+am archive save --label nightly
 ```
 
 ### List Restore Points
 
 ```bash
-uv run python -m mcp_agent_mail.cli archive list --json
+am archive list --json
 ```
 
 ### Restore After Disaster
 
 ```bash
-uv run python -m mcp_agent_mail.cli archive restore <file>.zip --force
+am archive restore <file>.zip --force
 ```
 
 ---
@@ -101,7 +99,7 @@ uv run python -m mcp_agent_mail.cli archive restore <file>.zip --force
 ### Run Diagnostics
 
 ```bash
-uv run python -m mcp_agent_mail.cli doctor check
+am doctor check
 ```
 
 **Checks:**
@@ -114,14 +112,14 @@ uv run python -m mcp_agent_mail.cli doctor check
 ### Preview Repairs
 
 ```bash
-uv run python -m mcp_agent_mail.cli doctor repair --dry-run
+am doctor repair --dry-run
 ```
 
 ### Apply Repairs
 
 ```bash
 # Creates backup first
-uv run python -m mcp_agent_mail.cli doctor repair
+am doctor repair
 ```
 
 ### Quick Health Check
@@ -159,19 +157,19 @@ Export for auditors, stakeholders, or archives:
 ### Interactive Wizard (Recommended)
 
 ```bash
-uv run python -m mcp_agent_mail.cli share wizard
+am share wizard
 ```
 
 ### Manual Export
 
 ```bash
-uv run python -m mcp_agent_mail.cli share export --output ./bundle
+am share export --output ./bundle
 ```
 
 ### With Signing
 
 ```bash
-uv run python -m mcp_agent_mail.cli share export \
+am share export \
   --output ./bundle \
   --signing-key ./keys/signing.key
 ```
@@ -179,7 +177,7 @@ uv run python -m mcp_agent_mail.cli share export \
 ### Preview Locally
 
 ```bash
-uv run python -m mcp_agent_mail.cli share preview ./bundle
+am share preview ./bundle
 ```
 
 ### Export Features
