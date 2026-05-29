@@ -111,10 +111,7 @@
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/api/",
-      "headers": {
-        "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
-      }
+      "url": "http://127.0.0.1:8765/mcp/"
     },
     "sentry": {
       "type": "http",

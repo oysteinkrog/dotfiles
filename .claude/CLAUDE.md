@@ -107,23 +107,35 @@ disagreement *is* the value of the second opinion.
 
 When working across repos, read the target repo's `CLAUDE.md` and `AGENTS.md` for content rules, search tools, and cross-repo access policy. **ifboard can read ifkb; ifkb must never reference ifboard.**
 
-## MCP Agent Mail (mcp-agent-mail)
+## MCP Agent Mail (mcp-agent-mail) — Rust
 
-Agent-mail is installed at `~/mcp_agent_mail`. Start the server with `am` (shell alias).
-Server runs on `http://127.0.0.1:8765/api/`. Web UI at `http://127.0.0.1:8765/mail`.
+Agent-mail is the **rust** rewrite (`Dicklesworthstone/mcp_agent_mail_rust`). Two binaries
+live in `~/.local/bin` (on PATH): `mcp-agent-mail` (the MCP server) and `am` (operator CLI).
+The old Python install at `~/mcp_agent_mail` is retired — do not start it.
+
+The HTTP server runs as a **PM2 service** (`~/.config/pm2/ecosystem.config.js`): it launches
+`am serve-http --no-tui --no-auth --port 8765`. Localhost-only, **no bearer token** (no-auth).
+Store lives at `~/.mcp_agent_mail_git_mailbox_repo/` (SQLite + git archive).
+
+- Restart:  `pm2 restart mcp-agent-mail` (then `pm2 save`)
+- Health:   `curl -s http://127.0.0.1:8765/health` → 200, or `am doctor check`
+- Recover:  `am doctor fix` (clears stale procs/locks, repairs/rebuilds SQLite from the archive)
+
+The rust server is backward-compatible: it answers JSON-RPC on both `/mcp/` (canonical) and
+`/api/` (legacy), so existing project `.mcp.json` files on `/api/` keep working unchanged.
+Note: on WSL1/wslfs the Tantivy full-text index can't build (`os error 22`), so
+`search_messages` may be degraded — core messaging + file reservations are unaffected.
 
 ### Setup for new projects
 
-Add to `.mcp.json` in the project root:
+Prefer the user-scope registration in `~/.claude.json` (already present) — projects inherit it.
+If a project needs its own entry, add to `.mcp.json` in the project root (no auth header needed):
 ```json
 {
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/api/",
-      "headers": {
-        "Authorization": "Bearer ${MCP_AGENT_MAIL_TOKEN}"
-      }
+      "url": "http://127.0.0.1:8765/mcp/"
     }
   }
 }
@@ -135,7 +147,7 @@ Add to `.mcp.json` in the project root:
 - `send_message` — Post messages with thread support
 - `fetch_inbox` — Retrieve messages for an agent
 - `acknowledge_message` — Mark messages read
-- `search_messages` — Full-text search
+- `search_messages` — Full-text search (degraded on wslfs; see note above)
 - `file_reservation_paths` — Reserve files to avoid conflicts between agents
 - `release_file_reservations` — Unlock reserved paths
 - `macro_start_session` — Initialize agent workflow (convenience)
