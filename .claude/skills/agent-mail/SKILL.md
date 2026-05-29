@@ -142,13 +142,13 @@ Use bead IDs as your threading anchor:
 curl http://127.0.0.1:8765/health
 
 # Full diagnostics (CLI)
-uv run python -m mcp_agent_mail.cli doctor check --verbose
+am doctor check --verbose
 
 # Preview repairs (dry run, CLI)
-uv run python -m mcp_agent_mail.cli doctor repair --dry-run
+am doctor repair --dry-run
 
 # Apply repairs (CLI)
-uv run python -m mcp_agent_mail.cli doctor repair --yes
+am doctor repair --yes
 ```
 
 ---
@@ -172,13 +172,16 @@ register_agent(
 
 ## Human Overseer
 
-Send urgent messages to agents from the web UI at `http://127.0.0.1:8765/mail`:
+The PM2 server runs headless (`--no-tui`), so there is no web UI. To send urgent
+messages as a human, use the interactive `am` TUI console or the `am mail` CLI:
 
-1. Click "Human Overseer" mode
-2. Compose with `importance: urgent`
-3. Select target agents
+```bash
+am                                   # interactive operator TUI (reuses the running server)
+am mail send --help                  # non-interactive: compose an urgent message
+```
 
-Agents see urgent messages via `fetch_inbox(..., urgent_only=true)`.
+Set `importance: urgent` on the message. Agents see urgent messages via
+`fetch_inbox(..., urgent_only=true)`.
 
 ---
 
@@ -224,10 +227,14 @@ term1 OR term2
 ## Validation
 
 ```bash
-# Server health
-curl http://127.0.0.1:8765/health
-# → {"status": "healthy"}
+# Server health (rust daemon under PM2)
+curl http://127.0.0.1:8765/health        # → 200
 
-# Start server if needed
-am
+# (Re)start the server — it runs as a PM2 service
+pm2 restart mcp-agent-mail && pm2 save
+# or run headless manually: am serve-http --no-tui --no-auth --port 8765
+
+# Deeper diagnostics / self-heal
+am doctor check        # report
+am doctor fix          # clear stale procs+locks, repair/rebuild SQLite from archive
 ```
