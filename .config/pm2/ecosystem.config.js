@@ -10,7 +10,7 @@
 //    4806  zendesk-mcp        (supergateway-rs)
 //    4807  apify-mcp          (supergateway-rs)
 //    4808  atlassian-mcp      (supergateway-rs)
-//    8765  mcp-agent-mail     (agent coordination)
+//    8765  mcp-agent-mail     (agent coordination — rust am serve-http)
 
 const SUPERGATEWAY = "/c/work/supergateway-rs/target/release/supergateway-rs";
 const LOG_DIR = "/c/users/oystein/.config/pm2/logs";
@@ -99,16 +99,12 @@ module.exports = {
     supergatewayApp("apify-mcp",     "/c/users/oystein/bin/apify-mcp",   4807),
     supergatewayApp("atlassian-mcp", "npx -y mcp-remote https://mcp.atlassian.com/v1/mcp", 4808),
 
-    // ── MCP Agent Mail (agent coordination) ─────────────────────
+    // ── MCP Agent Mail (agent coordination — rust am serve-http, localhost no-auth) ──
     {
       name: "mcp-agent-mail",
-      cwd: "/c/users/oystein/mcp_agent_mail",
-      script: "scripts/run_server_with_token.sh",
-      args: "--port 8765",
-      interpreter: "bash",
-      env: {
-        HTTP_BEARER_TOKEN: "459f9002c2f4ca0b206a9579e0d40e8d6124f3ab162c52f73251d4e42a015dfc",
-      },
+      script: "/c/users/oystein/.local/bin/am",
+      args: "serve-http --no-tui --no-auth --port 8765",
+      interpreter: "none",
       autorestart: true,
       max_restarts: 10,
       min_uptime: "10s",
