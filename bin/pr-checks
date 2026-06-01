@@ -34,8 +34,12 @@ def parse_args():
     p = argparse.ArgumentParser(description="Beautiful PR check status")
     p.add_argument("pr", nargs="?", help="PR number (auto-detect if omitted)")
     p.add_argument("--repo", default=None, help="owner/repo")
-    p.add_argument("--watch", "-w", action="store_true", help="Poll every 60s until done")
-    p.add_argument("--json", action="store_true", help="Output JSON instead")
+    p.add_argument("--watch", "-w", action="store_true", help="Poll until done: one append-only line per poll, hard timeout, stuck-detection")
+    p.add_argument("--interval", type=int, default=60, help="Poll interval in seconds (default: 60)")
+    p.add_argument("--timeout", type=int, default=1800, help="Max wall-clock seconds before giving up (default: 1800 = 30 min, 0 = unlimited)")
+    p.add_argument("--max-stable-polls", type=int, default=10, help="If the pending set is identical for N consecutive polls, give up as 'stuck' (default: 10)")
+    p.add_argument("--summary-to", default=None, help="Write final JSON summary to this path")
+    p.add_argument("--json", action="store_true", help="Output JSON instead (one-shot)")
     return p.parse_args()
 
 
@@ -59,6 +63,15 @@ def get_checks(pr_number, repo_flag):
     if repo_flag:
         cmd.extend(["--repo", repo_flag])
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # `gh pr checks` exit semantics (undocumented; from source):
+    #   0  = all checks pass
+    #   1  = at least one check failed (VALID data on stdout)
+    #   8  = checks still pending (no failures yet)
+    # Real errors (PR/repo not found, auth, network) → non-zero AND empty stdout
+    # AND stderr containing "GraphQL:" or "could not"/"HTTP 4/5".
+    if not result.stdout.strip() and result.returncode != 0:
+        err = (result.stderr or "").strip().splitlines()[:3]
+        raise RuntimeError(f"gh exit {result.returncode}: {' | '.join(err) or '(empty)'}")
     lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
 
     checks = []
@@ -179,6 +192,119 @@ def render(checks, pr_number, pr_url=""):
     print()
 
 
+PENDING_STATES = {"pending", "queued", "in_progress", "waiting"}
+
+
+def watch_loop(pr_number, repo_flag, pr_url, *, interval, timeout, max_stable_polls, summary_to):
+    """Block until all checks terminal, hard timeout fires, or set stays stuck for N polls.
+
+    Exit codes:
+        0 = all checks passed
+        1 = at least one check failed (but all terminal)
+        2 = timeout (wall-clock exceeded)
+        3 = stuck (pending set unchanged for max_stable_polls polls)
+        4 = repeated gh failures
+    """
+    import json
+    start = time.monotonic()
+    deadline = (start + timeout) if timeout and timeout > 0 else None
+    prev_pending = None
+    stable_count = 0
+    gh_fail_count = 0
+    poll_index = 0
+    last_checks = []
+
+    def emit_line(msg):
+        elapsed = int(time.monotonic() - start)
+        print(f"[T+{elapsed:04d}s poll#{poll_index}] {msg}", flush=True)
+
+    def finish(code, reason):
+        elapsed = int(time.monotonic() - start)
+        statuses = {c["status"] for c in last_checks}
+        counts = {k: sum(1 for c in last_checks if c["status"] == k) for k in ["pass", "fail", "pending", "queued", "in_progress", "waiting", "skipping"]}
+        failed = [c["name"] for c in last_checks if c["status"] == "fail"]
+        pending = [c["name"] for c in last_checks if c["status"] in PENDING_STATES]
+        summary = {
+            "pr": pr_number,
+            "exit_code": code,
+            "reason": reason,
+            "elapsed_seconds": elapsed,
+            "polls": poll_index,
+            "counts": counts,
+            "failed_checks": failed,
+            "still_pending": pending,
+        }
+        print(f"[DONE code={code} reason={reason} elapsed={elapsed}s polls={poll_index}]", flush=True)
+        if failed:
+            print(f"  failed: {', '.join(failed)}", flush=True)
+        if pending:
+            print(f"  still-pending: {', '.join(pending)}", flush=True)
+        if summary_to:
+            try:
+                with open(summary_to, "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2)
+            except Exception as e:
+                print(f"  warn: could not write summary to {summary_to}: {e}", file=sys.stderr)
+        sys.exit(code)
+
+    while True:
+        poll_index += 1
+        now = time.monotonic()
+        if deadline and now >= deadline:
+            emit_line("TIMEOUT")
+            finish(2, "wall-clock-timeout")
+        try:
+            checks = get_checks(pr_number, repo_flag)
+            gh_fail_count = 0
+        except subprocess.TimeoutExpired:
+            gh_fail_count += 1
+            emit_line(f"gh timed out (consec={gh_fail_count})")
+            if gh_fail_count >= 5:
+                finish(4, "gh-repeatedly-unresponsive")
+            time.sleep(min(interval, 30))
+            continue
+        except RuntimeError as e:
+            emit_line(f"gh hard error: {e}")
+            finish(4, f"gh-error: {e}")
+        except Exception as e:
+            gh_fail_count += 1
+            emit_line(f"gh error: {e} (consec={gh_fail_count})")
+            if gh_fail_count >= 5:
+                finish(4, "gh-repeatedly-failing")
+            time.sleep(min(interval, 30))
+            continue
+
+        last_checks = checks
+
+        statuses = {c["status"] for c in checks}
+        pending_now = frozenset(c["name"] for c in checks if c["status"] in PENDING_STATES)
+        counts = {k: sum(1 for c in checks if c["status"] == k) for k in ["pass", "fail", "skipping"]}
+        counts["pending"] = len(pending_now)
+
+        if not (statuses & PENDING_STATES):
+            emit_line(f"terminal: ✓{counts['pass']} ✗{counts['fail']} ⊝{counts['skipping']}")
+            finish(1 if "fail" in statuses else 0, "all-checks-terminal")
+
+        if prev_pending is not None and pending_now == prev_pending:
+            stable_count += 1
+        else:
+            stable_count = 0
+            prev_pending = pending_now
+
+        emit_line(
+            f"✓{counts['pass']} ✗{counts['fail']} ⏳{counts['pending']} ⊝{counts['skipping']}"
+            + (f" stable={stable_count}/{max_stable_polls}" if stable_count else "")
+        )
+
+        if max_stable_polls > 0 and stable_count >= max_stable_polls:
+            finish(3, f"pending-set-stable-for-{stable_count}-polls")
+
+        try:
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            finish(130, "user-interrupt")
+
+
 def main():
     args = parse_args()
 
@@ -191,21 +317,21 @@ def main():
             sys.exit(1)
 
     if args.watch:
-        while True:
-            print("\033[2J\033[H", end="")
-            checks = get_checks(pr_number, args.repo)
-            render(checks, pr_number, pr_url)
-            statuses = {c["status"] for c in checks}
-            if not (statuses & {"pending", "queued", "in_progress", "waiting"}):
-                sys.exit(1 if "fail" in statuses else 0)
-            print(f"  {D}Refreshing in 60s... (Ctrl+C to stop){R}")
-            try:
-                time.sleep(60)
-            except KeyboardInterrupt:
-                print()
-                sys.exit(0)
+        watch_loop(pr_number, args.repo, pr_url,
+                   interval=args.interval,
+                   timeout=args.timeout,
+                   max_stable_polls=args.max_stable_polls,
+                   summary_to=args.summary_to)
+        return
     else:
-        checks = get_checks(pr_number, args.repo)
+        try:
+            checks = get_checks(pr_number, args.repo)
+        except RuntimeError as e:
+            print(f"{RED}{e}{R}", file=sys.stderr)
+            sys.exit(4)
+        except subprocess.TimeoutExpired:
+            print(f"{RED}gh timed out{R}", file=sys.stderr)
+            sys.exit(4)
         if args.json:
             import json
             print(json.dumps(checks, indent=2))
