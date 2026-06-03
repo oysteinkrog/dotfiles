@@ -32,6 +32,24 @@ curl -sS https://starship.rs/install.sh | sh
 
 Config: `~/.config/starship.toml` (symlinked from `.config/`)
 
+#### fff MCP server (file search for AI agents)
+
+[`fff`](https://github.com/dmtrKovalenko/fff) is a Rust MCP server that exposes
+`ffgrep`/`fffind`/`fff-multi-grep` — frecency-ranked, git-aware file search.
+Benchmarked faster than `rg`/`fzf` for repeated searches in long-running agent processes.
+
+```bash
+# Installs ~/.local/bin/fff-mcp and prints wiring instructions
+curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
+
+# Register as user-scope MCP for Claude Code (use ld-linux on WSL1, see fish/functions/claude.fish)
+claude mcp add -s user fff -- ~/.local/bin/fff-mcp
+```
+
+The PreToolUse hook at `.claude/hooks/rewrite-search.py` blocks raw `grep`/`find`/`egrep`/`fgrep`
+in bash and steers Claude toward `mcp__fff__ffgrep` / `mcp__fff__fffind` (or `rg`/`fd` if fff
+isn't registered). Append `# noqa: search-rewrite` to a command to opt out.
+
 ### Install dotfiles
 
 ```bash
