@@ -87,3 +87,19 @@ bin/codedb
 
 # Misc
 list-worktrees.sh
+
+# Editor/script backups (never track): .bak, .bak-fff, .bak.0.1.64, etc.
+*.bak
+*.bak.*
+*.bak-*
+
+# Claude Code runtime state (machine-local, regenerated)
+.claude/.last-update-result.json
+.claude/scheduled_tasks.lock
+.claude/jobs/
+
+# Skill installer artifacts (backup + interrupted-install temp dirs)
+.claude/skills/*.old_*
+.claude/skills/.old_*
+.claude/skills/*.tmp_install_*
+.claude/skills/.tmp_install_*
