@@ -1,0 +1,49 @@
+#!/bin/bash
+# WSL1 wrapper for murmur's claude-code-pty engine.
+#
+# WSL1's lxcore ELF loader returns ENOEXEC for binaries with a PT_LOAD segment
+# whose p_align > the page size (0x1000). Claude Code's Bun-compiled binary uses
+# 0x4000, so historically this wrapper launched it via ld-linux to bypass the
+# kernel's ELF parser. But that makes process.execPath point at the loader, which
+# breaks Claude Code's bundled grep/find shell wrappers (they run
+# `exec -a ugrep "$execpath" -G ...` -> `ld-linux -G ...`).
+#
+# New behavior: locate the binary that actually exists, patch its oversized
+# p_align down to 0x1000 in place (idempotent, via claude-wsl-elf-fix), then exec
+# it DIRECTLY so process.execPath is the real binary. Fall back to ld-linux only
+# if patching is impossible, so it always starts.
+#
+# Unlike the interactive `claude` fish function, this does NOT add
+# --dangerously-skip-permissions; murmur supplies its own flags. Args pass through.
+set -u
+
+fixer="$(command -v claude-wsl-elf-fix || true)"
+[ -n "$fixer" ] || fixer="$HOME/bin/claude-wsl-elf-fix"
+
+# Resolve the best available claude binary:
+#   1. native install (symlink -> versions/X.Y.Z) — the one that exists today
+#   2. legacy npm global install (only if it reappears)
+bin=""
+if [ -x "$HOME/.local/bin/claude" ]; then
+    bin="$(realpath "$HOME/.local/bin/claude")"
+elif npm_bin="$(npm root -g 2>/dev/null)/@anthropic-ai/claude-code/bin/claude.exe" && [ -x "$npm_bin" ]; then
+    bin="$npm_bin"
+fi
+
+if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    echo "claude-wsl: no claude binary found (looked at ~/.local/bin/claude and npm global)" >&2
+    exit 127
+fi
+
+# Non-ELF (script shim): run directly.
+magic="$(head -c4 "$bin" 2>/dev/null | od -An -tx1 -N4 | tr -s ' ' | sed 's/^ //;s/ $//')"
+if [ "$magic" != "7f 45 4c 46" ]; then
+    exec "$bin" "$@"
+fi
+
+# ELF: patch then exec directly; fall back to ld-linux if we can't.
+if [ -x "$fixer" ] && python3 "$fixer" "$bin"; then
+    exec "$bin" "$@"
+else
+    exec /lib64/ld-linux-x86-64.so.2 "$bin" "$@"
+fi

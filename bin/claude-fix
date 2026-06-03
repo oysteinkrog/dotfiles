@@ -1,0 +1,92 @@
+#!/bin/bash
+# Run this after Claude Code auto-updates (or any time) to make the native-install
+# binary directly executable on WSL1.
+#
+# Background: WSL1's lxcore ELF loader rejects binaries whose PT_LOAD p_align
+# exceeds the page size (0x1000); Claude's Bun binary uses 0x4000. The interactive
+# `claude` fish function already patches the current version on every launch, so
+# you normally never need this. It exists for the gap where a freshly-updated
+# version is launched by something OTHER than the fish function (IDE extension,
+# a bash script, murmur) before your first terminal launch of that version.
+#
+# It patches EVERY version in the versions dir (idempotent, safe on a mapped/
+# running binary — only rewrites 8-byte p_align fields), so whichever one the
+# symlink points at is ready regardless of how it's launched.
+set -u
+
+fixer="$(command -v claude-wsl-elf-fix || true)"
+[ -n "$fixer" ] || fixer="$HOME/bin/claude-wsl-elf-fix"
+versions_dir="$HOME/.local/share/claude/versions"
+archive_dir="$HOME/.local/share/cc-versions"
+link="$HOME/.local/bin/claude"
+
+if [ ! -x "$fixer" ]; then
+    echo "claude-fix: patcher not found at $fixer" >&2
+    exit 1
+fi
+
+# Accurate PT_LOAD p_align readout (readelf wraps each entry across two lines and
+# puts Align on the second, so an awk '/LOAD/' grabs PhysAddr by mistake). Read the
+# ELF program headers directly instead.
+aligns() {
+    python3 - "$1" <<'PY'
+import struct, sys
+with open(sys.argv[1], "rb") as f:
+    head = f.read(64)
+    e_phoff = struct.unpack_from("<Q", head, 0x20)[0]
+    e_phentsize = struct.unpack_from("<H", head, 0x36)[0]
+    e_phnum = struct.unpack_from("<H", head, 0x38)[0]
+    f.seek(e_phoff); ph = f.read(e_phentsize * e_phnum)
+out = []
+for i in range(e_phnum):
+    b = i * e_phentsize
+    if struct.unpack_from("<I", ph, b)[0] == 1:  # PT_LOAD
+        out.append(hex(struct.unpack_from("<Q", ph, b + 48)[0]))
+print(" ".join(out))
+PY
+}
+
+rc=0
+patched=0
+patch_dir() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    local any=0
+    for v in "$dir"/*; do
+        [ -f "$v" ] || continue
+        # ELF only
+        [ "$(head -c4 "$v" 2>/dev/null | od -An -tx1 -N4 | tr -s ' ' | sed 's/^ //;s/ $//')" = "7f 45 4c 46" ] || continue
+        any=1
+        before="$(aligns "$v")"
+        if python3 "$fixer" "$v" >/dev/null 2>&1; then
+            after="$(aligns "$v")"
+            if [ "$before" != "$after" ]; then
+                printf '  patched %-12s LOAD align: %s-> %s\n' "$(basename "$v")" "$before" "$after"
+                patched=$((patched+1))
+            else
+                printf '  ok      %-12s LOAD align: %s\n' "$(basename "$v")" "$after"
+            fi
+        else
+            printf '  FAILED  %s (would need ld-linux fallback)\n' "$(basename "$v")" >&2
+            rc=1
+        fi
+    done
+    return 0
+}
+
+if [ ! -d "$versions_dir" ]; then
+    echo "claude-fix: no versions dir at $versions_dir" >&2
+    rc=1
+fi
+echo "managed ($versions_dir):"
+patch_dir "$versions_dir"
+if [ -d "$archive_dir" ]; then
+    echo "archive ($archive_dir):"
+    patch_dir "$archive_dir"
+fi
+
+if [ -L "$link" ]; then
+    echo "current: $link -> $(realpath "$link")"
+fi
+[ "$patched" -gt 0 ] && echo "claude-fix: patched $patched binary(ies)." || echo "claude-fix: all binaries already fine."
+exit "$rc"
