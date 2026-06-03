@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""
+WSL1 ELF fix for Claude Code's Bun-compiled binary.
+
+WSL1's lxcore ELF loader returns ENOEXEC for binaries that have a PT_LOAD
+segment with p_align > the page size (0x1000). Bun/zig+lld emit a writable
+LOAD segment aligned to 0x4000, which trips this bug, so the binary can only
+be launched via the dynamic loader (ld-linux ...). That in turn makes
+process.execPath point at the loader, which breaks Claude Code's bundled
+grep/find shell wrappers (they run `exec -a ugrep "$execpath" -G ...`).
+
+This script lowers any oversized PT_LOAD p_align to 0x1000 *in place*. It is:
+  - idempotent (no write if nothing needs changing),
+  - safe to run while a claude session has the file mapped (the running
+    process has already parsed its program headers and never re-reads them),
+  - non-destructive to size/layout (only rewrites 8-byte p_align fields), so
+    Bun's appended payload is untouched.
+
+Usage:   claude-wsl-elf-fix <binary>
+Exit 0:  binary is now directly executable on WSL1 (patched or already fine)
+Exit 1:  could not make it safe -> caller should fall back to ld-linux
+"""
+import struct
+import sys
+
+PAGE = 0x1000
+PT_LOAD = 1
+
+
+def main(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+    except OSError as e:
+        print(f"claude-wsl-elf-fix: cannot read {path}: {e}", file=sys.stderr)
+        return 1
+
+    if head[:4] != b"\x7fELF" or len(head) < 64:
+        return 1  # not an ELF; caller handles
+    if head[4] != 2 or head[5] != 1:
+        return 1  # only ELF64 little-endian
+
+    e_phoff = struct.unpack_from("<Q", head, 0x20)[0]
+    e_phentsize = struct.unpack_from("<H", head, 0x36)[0]
+    e_phnum = struct.unpack_from("<H", head, 0x38)[0]
+    if e_phoff == 0 or e_phentsize < 56 or e_phnum == 0:
+        return 1
+
+    try:
+        with open(path, "r+b") as f:
+            f.seek(e_phoff)
+            phdrs = f.read(e_phentsize * e_phnum)
+            edits = []  # (file_offset, new_align)
+            for i in range(e_phnum):
+                base = i * e_phentsize
+                p_type = struct.unpack_from("<I", phdrs, base)[0]
+                if p_type != PT_LOAD:
+                    continue
+                p_offset = struct.unpack_from("<Q", phdrs, base + 8)[0]
+                p_vaddr = struct.unpack_from("<Q", phdrs, base + 16)[0]
+                p_align = struct.unpack_from("<Q", phdrs, base + 48)[0]
+                if p_align <= PAGE:
+                    continue
+                # Only safe if the segment stays page-mappable at 0x1000.
+                if (p_vaddr - p_offset) % PAGE != 0:
+                    print(
+                        "claude-wsl-elf-fix: LOAD segment not page-congruent; "
+                        "cannot safely lower p_align",
+                        file=sys.stderr,
+                    )
+                    return 1
+                edits.append((e_phoff + base + 48, PAGE))
+
+            for off, val in edits:
+                f.seek(off)
+                f.write(struct.pack("<Q", val))
+            f.flush()
+            if edits:
+                print(f"claude-wsl-elf-fix: patched {len(edits)} LOAD p_align -> 0x1000 in {path}")
+    except OSError as e:
+        print(f"claude-wsl-elf-fix: cannot patch {path}: {e}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("usage: claude-wsl-elf-fix <binary>", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(main(sys.argv[1]))
