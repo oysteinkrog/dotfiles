@@ -14,9 +14,10 @@ set -U FZF_DEFAULT_OPTS "--height 40% --layout=reverse --border"
 # opam configuration
 #source /c/users/oystein/.opam/opam-init/init.fish > /dev/null 2> /dev/null; or true
 
-# Set NVM default Node version
-if test -d ~/.nvm
-    nvm use 22 >/dev/null 2>&1
+# Node v22 via nvm — prepend directly to avoid the ~8s `nvm use` cost on every shell.
+# If you switch node versions, update this path (or run `nvm use` manually).
+if test -d ~/.nvm/versions/node/v22.14.0/bin
+    fish_add_path -p ~/.nvm/versions/node/v22.14.0/bin
 end
 
 # Re-prepend ~/.local/bin so locally-installed Linux-native tools (e.g. the
@@ -38,13 +39,6 @@ set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
 
 # WSL: use Windows browser for links (gh auth, xdg-open, etc.)
 set -x BROWSER explorer.exe
-
-# Auto-start shared MCP services via PM2
-if type -q pm2
-    if not pm2 pid pal-mcp >/dev/null 2>&1; or test (pm2 pid pal-mcp 2>/dev/null) = "0"
-        pm2 start ~/.config/pm2/ecosystem.config.js 2>/dev/null
-    end
-end
 
 # opencode
 fish_add_path /c/users/oystein/.opencode/bin
