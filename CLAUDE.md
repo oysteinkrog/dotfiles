@@ -155,6 +155,21 @@ gog -a oystein@initialforce.com drive files list --limit 10
 Flags: `-j` for JSON, `-p` for plain TSV, `--results-only` to drop pagination envelope.
 Agent sandboxing: `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
 
+## Oracle Consultation Policy
+
+**Fable (claude-fable-5) is the primary oracle.** For second opinions, design validation,
+debugging help, and architecture reviews, consult Fable first and by default.
+
+- **GPT Pro is reserved for extremely important or complex tasks only** (e.g. high-stakes
+  architecture decisions, problems Fable could not crack, board-level deliverables).
+  Do not reach for it for routine second opinions.
+- **Never use GPT Pro alone.** Whenever GPT Pro is consulted, ALWAYS also consult Fable
+  on the same question and compare the two answers. Present both views, clearly labelled,
+  and call out disagreements explicitly.
+- This supersedes any skill or doc that frames GPT Pro as the default/smartest oracle
+  (e.g. `/consult-oracles`, `/swarm-oracle`): run those patterns with Fable as the
+  primary, adding GPT Pro only under the criteria above.
+
 ## Multi-Agent Orchestration (Claude Code Teams & Agents)
 
 Multi-agent work runs inside Claude Code via the built-in `Agent`, `SendMessage`,

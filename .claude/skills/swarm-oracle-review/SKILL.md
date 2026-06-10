@@ -21,6 +21,13 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 # Oracle Review Skill
 
+> **Oracle policy (2026-06):** Fable (`claude-fable-5`) is the primary oracle. By
+> default the FOR/AGAINST sessions below run as two fresh Fable subagents (`Agent`
+> tool with `model: "fable"`; Fable is not reachable through PAL). The PAL 2x GPT-Pro
+> setup is the escalation tier — extremely important or complex validations only, and
+> always paired with a Fable consultation on the same prompt. See `/consult-oracles`
+> and the Oracle Consultation Policy in `~/CLAUDE.md`.
+
 Two-part process: (1) oracle consensus validation with FOR/AGAINST stances,
 then (2) iterative hardening loop until findings converge to near-zero.
 
@@ -42,9 +49,9 @@ then (2) iterative hardening loop until findings converge to near-zero.
 
 ### Setup
 
-Run 2 concurrent oracle sessions using PAL MCP `consensus` tool:
-- **Model 1:** GPT-5.4-Pro with FOR stance
-- **Model 2:** GPT-5.4-Pro with AGAINST stance
+Run 2 concurrent oracle sessions:
+- **Default tier:** two Fable subagents (`Agent`, `model: "fable"`), one FOR stance, one AGAINST stance, spawned in a single message
+- **Escalation tier** (extremely important/complex only): PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST), plus a parallel Fable consult on the same prompt
 
 ### Oracle Prompt Template
 
@@ -174,11 +181,11 @@ performance impact, data integrity, rollback strategy.
 ## Full Hardening Pipeline Example
 
 ```
-Phase 1: Oracle (2x GPT-5.4-Pro)
+Phase 1: Oracle (2x Fable FOR/AGAINST; escalate to 2x GPT-5.5-Pro + Fable if extremely important)
   -> Fix CRITICAL/HIGH findings
 Phase 2: Agent Review (10 Opus, multi-lens)
   -> Fix all findings
-Phase 3: Oracle (2x GPT-5.4-Pro) on fixes
+Phase 3: Oracle (2x Fable FOR/AGAINST) on fixes
   -> Verify fixes, find remaining issues
 Phase 4: Agent Hardening (8 Opus, fresh eyes)
   -> Embed cross-cutting, convert ACs, split oversized
@@ -195,4 +202,4 @@ Phase 5: Final Correctness (10 Opus)
 3. **Track convergence** — if issues aren't decreasing, the artifact needs redesign, not more rounds
 4. **Validate fixes against plan** — hardening must not drift from the original design intent
 5. **Oracle before agents, agents before oracle** — alternate perspectives for best coverage
-6. **Verify PAL MCP is running** before launching oracle sessions (agents silently fall back to self-analysis without it)
+6. **Verify PAL MCP is running** before launching GPT/Gemini oracle sessions (agents silently fall back to self-analysis without it); Fable subagents need no PAL

@@ -1,13 +1,20 @@
 ---
 name: oracle-consensus
 model: opus
-description: Run 2x Pro oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness via the PAL MCP consensus tool. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents; escalate to PAL 2x GPT-Pro (always paired with Fable) for extremely important or complex validations. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"
 ---
 
 # Oracle Consensus
 
-Use the PAL MCP `consensus` tool to run structured FOR/AGAINST debate between two high-capability models on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
+> **Oracle policy (2026-06):** Fable (`claude-fable-5`) is the primary oracle — the
+> default FOR/AGAINST debate runs as two fresh Fable subagents (`Agent` tool with
+> `model: "fable"`; Fable is not reachable through PAL). The PAL 2x GPT-Pro consensus
+> is the **escalation tier**, for extremely important or complex validations only, and
+> must always run alongside a Fable consultation on the same question. See
+> `/consult-oracles` and the Oracle Consultation Policy in `~/CLAUDE.md`.
+
+Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
 ## When to Use
 
@@ -19,7 +26,7 @@ Use the PAL MCP `consensus` tool to run structured FOR/AGAINST debate between tw
 
 ## Prerequisites
 
-Verify PAL MCP is running before launching oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results.
+For the escalation tier only: verify PAL MCP is running before launching GPT oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. The default Fable tier needs no PAL.
 
 ## Workflow
 
@@ -46,24 +53,39 @@ The evaluation prompt must be self-contained — models do not share context bet
 
 ### Step 2: Configure Stances
 
-Default configuration uses two Pro-tier models with opposing stances:
+**Default tier (Fable):** spawn two fresh Fable subagents in a single message with
+opposing stances. Each prompt is self-contained (evaluation prompt + file paths);
+the agents share no context.
+
+```
+Agent({ subagent_type: "general-purpose", model: "fable",
+  prompt: "<evaluation prompt>\n\nStance: Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific — cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive." })
+
+Agent({ subagent_type: "general-purpose", model: "fable",
+  prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
+```
+
+Then skip to Step 4 and synthesize the two responses yourself.
+
+**Escalation tier (PAL 2x GPT-Pro — extremely important/complex only, always paired
+with a parallel Fable consult on the same evaluation prompt):**
 
 ```json
 {
   "models": [
-    {"model": "gpt-5.4-pro", "stance": "for", "stance_prompt": "Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific — cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive."},
-    {"model": "gpt-5.4-pro", "stance": "against", "stance_prompt": "Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative."}
+    {"model": "gpt-5.5-pro", "stance": "for", "stance_prompt": "Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific — cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive."},
+    {"model": "gpt-5.5-pro", "stance": "against", "stance_prompt": "Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative."}
   ]
 }
 ```
 
-#### Alternate Configurations
+#### Alternate Configurations (escalation tier)
 
 **Architecture validation (3 models):**
 ```json
 [
-  {"model": "gpt-5.4-pro", "stance": "for"},
-  {"model": "gpt-5.4-pro", "stance": "against"},
+  {"model": "gpt-5.5-pro", "stance": "for"},
+  {"model": "gpt-5.5-pro", "stance": "against"},
   {"model": "gemini-3.1-pro-preview", "stance": "neutral", "stance_prompt": "Provide an independent technical assessment. Focus on feasibility, risk, and alternatives the other evaluators may miss."}
 ]
 ```
@@ -71,14 +93,15 @@ Default configuration uses two Pro-tier models with opposing stances:
 **Bead readiness (2 models, specific stance prompts):**
 ```json
 [
-  {"model": "gpt-5.4-pro", "stance": "for", "stance_prompt": "Argue these beads are implementation-ready. Each bead should have: clear ACs in Given/When/Then, correct file paths, correct dependencies, no spec contradictions, and be self-contained."},
-  {"model": "gpt-5.4-pro", "stance": "against", "stance_prompt": "Find beads that are NOT ready. Look for: vague ACs, wrong file paths, missing dependencies, contradictions between beads, beads too large for atomic implementation, cross-cutting requirements not embedded."}
+  {"model": "gpt-5.5-pro", "stance": "for", "stance_prompt": "Argue these beads are implementation-ready. Each bead should have: clear ACs in Given/When/Then, correct file paths, correct dependencies, no spec contradictions, and be self-contained."},
+  {"model": "gpt-5.5-pro", "stance": "against", "stance_prompt": "Find beads that are NOT ready. Look for: vague ACs, wrong file paths, missing dependencies, contradictions between beads, beads too large for atomic implementation, cross-cutting requirements not embedded."}
 ]
 ```
 
-### Step 3: Run Consensus
+### Step 3: Run Consensus (escalation tier only)
 
-Use the PAL MCP consensus tool. The tool manages the multi-step flow internally:
+Use the PAL MCP consensus tool, with the paired Fable subagent launched in the same
+message. The tool manages the multi-step flow internally:
 
 1. **Step 1 (your analysis):** Write the evaluation prompt and your own independent assessment
 2. **Steps 2-N (model consultations):** Each model responds with its stance
