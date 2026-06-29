@@ -57,14 +57,15 @@ One command uploads the images and posts them as a PR/issue comment:
 
 ```bash
 with-secrets R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE_URL -- \
-  scripts/post_pr_images.sh \
+  uv run --with boto3 scripts/post_pr_images.py \
     --repo InitialForce/ScDesktop --number 7220 \
     --title "Installer theme screenshots" \
     shot1.png shot2.png shot3.png
 ```
 
-(`with-secrets` is the fish helper; `--number` works for both PRs and issues, which share the
-comment endpoint. It prints the new comment's URL.)
+(`with-secrets` is the fish helper; `gh` must be authenticated for the post step. `--number`
+works for both PRs and issues, which share the comment endpoint. It prints the new comment's
+URL.)
 
 Just the upload (no comment), to get Markdown image lines you can paste anywhere:
 
@@ -73,8 +74,8 @@ with-secrets R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PU
   uv run --with boto3 scripts/upload_r2.py --prefix pr-7220 shot1.png shot2.png
 ```
 
-Add `--url-only` for bare URLs. Python (via `uv`) makes the uploader cross-platform; no
-global installs.
+Add `--url-only` for bare URLs. Both scripts run through `uv`, so boto3 is fetched on demand
+and nothing is installed globally; they are cross-platform (use `python3` / `uv` on any OS).
 
 ## Security model
 
