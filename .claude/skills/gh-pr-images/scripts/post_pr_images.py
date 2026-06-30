@@ -1,15 +1,16 @@
-#!/usr/bin/env -S uv run --with boto3 --quiet python
-"""Upload images to Cloudflare R2 and post them inline in a GitHub PR/issue comment.
+#!/usr/bin/env python3
+"""Upload images via the gh-pr-images Worker and post them inline in a GitHub PR/issue comment.
 
 For PRIVATE repos this is the only way to render images inline without committing
-them: GitHub's camo proxy fetches the public R2 URL and serves it in the comment.
+them: GitHub's camo proxy fetches the public Worker URL and serves it in the comment.
 
-    uv run --with boto3 post_pr_images.py \\
+    python3 post_pr_images.py \\
         --repo InitialForce/ScDesktop --number 7220 \\
         --title "Installer theme screenshots" shot1.png shot2.png
 
-Auth:
-  - The five R2_* env vars must be set (see upload_r2.py) for the upload.
+Setup:
+  - The Worker URL must be configured (WORKER_URL in upload.py or
+    $GH_PR_IMAGES_WORKER_URL). No secret is needed for upload.
   - `gh` must be installed and authenticated; its token is used only to post the
     comment. PRs and issues share the /issues/{n}/comments endpoint, so --number
     works for either.
@@ -22,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-from upload_r2 import upload_files
+from upload import upload_files
 
 
 def main() -> int:
@@ -34,7 +35,7 @@ def main() -> int:
     )
     parser.add_argument("--title", default="", help="optional heading for the comment")
     parser.add_argument(
-        "--prefix", default="", help="R2 key prefix; defaults to pr-<number>"
+        "--prefix", default="", help="key prefix; defaults to pr-<number>"
     )
     args = parser.parse_args()
 

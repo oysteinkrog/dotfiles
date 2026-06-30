@@ -1,0 +1,20 @@
+# Cloudflare Worker config for gh-pr-images.
+# Deploy once for the whole company:  wrangler deploy
+#
+# The R2 bucket is private; this Worker is its only public surface. Nothing here
+# is a secret, so this file is safe to commit.
+
+name = "gh-pr-images"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Binds the private R2 bucket as `env.BUCKET` inside the Worker.
+# Create the bucket first:  wrangler r2 bucket create gh-pr-attachments
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "gh-pr-attachments"
+
+# Optional: gate uploads behind a bearer token. Leave unset for open
+# (upload-only) access, or set it with:
+#   wrangler secret put UPLOAD_TOKEN
+# Clients then pass it via $GH_PR_IMAGES_TOKEN.
