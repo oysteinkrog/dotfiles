@@ -182,21 +182,22 @@ Agent({
   name: "facet-<slug>",
   team_name: "<feature-or-task>",
   run_in_background: true,
-  prompt: "You are researching [FACET] for [FEATURE].\n\nRead CLAUDE.md first, then:\n1. Read actual source code at [FILE_PATHS]\n2. Document findings per the template\n3. Write report to [OUTPUT_PATH]\n4. Commit: git add [OUTPUT_PATH] && git commit -m 'research: [FACET]'"
+  prompt: "You are researching [FACET] for [FEATURE].\n\nRead CLAUDE.md first, then:\n1. Read actual source code at [FILE_PATHS]\n2. Document findings per the template\n3. Return your findings as text in your final assistant message (do NOT write a report file — the leader persists it)"
 })
 ```
 
-**Worktree isolation — pick ONE output channel, not both.**
+**Subagents return findings as text; the leader persists them.** The harness blocks
+subagent Write calls for report/findings files, so research/design/review agents cannot
+write their own report file. Every such agent puts its findings in its **final assistant
+message**, and the **leader** writes them to the shared directory (see Step 5). This means:
 
-- **File output (committed report on the main branch)** — default. Do NOT pass
-  `isolation: "worktree"`. A committed report written inside a temporary worktree
-  disappears when the worktree is reaped, so the leader cannot read it from the
-  main checkout. File output requires shared-branch teammates (and file
-  reservations via agent-mail if they touch anything else).
-- **Message-only output** — pass `isolation: "worktree"` AND change the prompt's
-  step 3 to "Put your findings in your final assistant message (no files)." The
-  leader synthesizes from the agent's returned message (tool result), not from a
-  file path. Use this when the only deliverable is the synthesized summary.
+- Set `isolation: "worktree"` freely for these agents — their only output is the returned
+  message (tool result), which survives the worktree being reaped.
+- The leader synthesizes from each agent's returned message, then persists per-agent /
+  per-round findings itself so there are durable artifacts across rounds.
+- Code files written by execution-swarm teammates (`/swarm`) are unaffected — that block
+  targets report-style files only. Execution swarms still commit code on the shared branch
+  (no worktrees) per "Agent Swarm Rules" in CLAUDE.md.
 
 The execution swarm (`/swarm`) is a different shape entirely — it MUST use shared
 branch (same-branch, no worktrees) per "Agent Swarm Rules" in CLAUDE.md.
@@ -214,13 +215,14 @@ SendMessage({ to: "facet-<slug>", content: "status?" })   # ping a specific team
 can answer follow-ups). Do NOT use it on execution-swarm teammates — those are
 terminal by design.
 
-Wait for all teammates to complete. For file-output teammates, collect reports
-from the committed output paths. For message-only teammates, use the content of
-the teammate's final message (returned as the `Agent` tool result).
+Wait for all teammates to complete. Each teammate's findings arrive as the content of
+its final message (returned as the `Agent` tool result). Persist them yourself: write
+each agent's returned findings to the shared directory (e.g. `[OUTPUT_PATH]`) so there
+are durable artifacts before you synthesize.
 
 ### Step 5: Synthesize
 
-Read all N reports. Synthesize into a single cohesive document:
+Read all N returned reports. Synthesize into a single cohesive document:
 - Common findings across agents
 - Contradictions or conflicts to resolve
 - Key decisions and recommendations
@@ -249,10 +251,8 @@ Your assigned facet: [FACET]
 1. Read CLAUDE.md in the project root
 2. [TYPE-SPECIFIC INSTRUCTIONS]
 3. Be thorough — read actual source code, not just file names
-4. Write your report to: [OUTPUT_PATH]
-5. Commit your report immediately:
-   git add [OUTPUT_PATH]
-   git commit -m "{type}: {facet} research/design/review"
+4. Return your report as text in your final assistant message (do NOT write a report
+   file — the harness blocks that, and the leader persists your findings to [OUTPUT_PATH])
 
 ## Output Format
 ### Summary (3-5 sentences)
