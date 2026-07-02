@@ -190,9 +190,12 @@ NOT N×M total agents in one shot. Example phrasings and what they mean:
 - If the work is inherently breadth-first (e.g. "scan for news"), each round can take a new
   angle/lane. If depth-first (e.g. "dig into these findings"), each round escalates from the
   prior round's output.
-- Always write findings to a shared directory (e.g. `data/<project>-<date>/findings-round-<K>-agent-<N>.md`)
-  so the leader has durable artifacts across rounds — agent final messages alone are not enough
-  when rounds compound.
+- Subagents **return their findings as text** (in their final assistant message) — the harness
+  blocks subagent Write calls for report/findings files. The **leader** persists each round's
+  returned findings to a shared directory (e.g. `data/<project>-<date>/findings-round-<K>-agent-<N>.md`)
+  so there are durable artifacts across rounds — the leader-written files, not the agents' ephemeral
+  messages, are what later rounds build on. (Code files written by execution-swarm teammates are
+  unaffected; the block targets report-style files only.)
 
 **Why N agents in parallel, not one big agent:** parallel agents cover more ground faster and
 each keeps a clean context budget for its lane. Why M rounds instead of one bigger round:
