@@ -39,23 +39,26 @@ Activate when the user says:
 #### 1. Pre-flight
 
 ```bash
-# Start agent-mail if not running (required for file reservations)
-curl -sf http://127.0.0.1:8765/api/health > /dev/null 2>&1 && echo "Agent-mail: running" || { echo "Starting agent-mail..."; cd ~/mcp_agent_mail && nohup python3 -m uvicorn main:app --host 127.0.0.1 --port 8765 > /dev/null 2>&1 & sleep 2; }
+# Verify the live agent-mail server is reachable (rust rewrite, pm2-managed, NO auth).
+# Do NOT start any server here. On failure, the LEADER runs `pm2 restart mcp-agent-mail`
+# (or `am doctor fix`) and re-checks http://127.0.0.1:8765/health before spawning.
+curl -sf http://127.0.0.1:8765/health > /dev/null 2>&1 && echo "Agent-mail: running" || echo "Agent-mail DOWN — run 'pm2 restart mcp-agent-mail' (or 'am doctor fix'), then re-check http://127.0.0.1:8765/health before spawning teammates."
 
-# Ensure project .mcp.json has agent-mail configured
+# Ensure the PROJECT .mcp.json registers agent-mail (no-auth rust entry). This MUST
+# live in the PROJECT .mcp.json: subagents inherit project scope, but the user-scope
+# ~/.claude.json is NOT inherited by subagents, so a user-scope entry is invisible to teammates.
 python3 -c "
 import json, os
 p = '.mcp.json'
 cfg = json.load(open(p)) if os.path.exists(p) else {'mcpServers': {}}
 if 'mcp-agent-mail' not in cfg.get('mcpServers', {}):
     cfg.setdefault('mcpServers', {})['mcp-agent-mail'] = {
-        'type': 'http', 'url': 'http://127.0.0.1:8765/api/',
-        'headers': {'Authorization': 'Bearer \${MCP_AGENT_MAIL_TOKEN}'}
+        'type': 'http', 'url': 'http://127.0.0.1:8765/mcp/'
     }
     json.dump(cfg, open(p, 'w'), indent=2)
-    print('Added agent-mail to .mcp.json')
+    print('Added agent-mail to project .mcp.json')
 else:
-    print('Agent-mail already in .mcp.json')
+    print('Agent-mail already in project .mcp.json')
 "
 
 # Show what's ready
@@ -164,24 +167,43 @@ Before editing ANY file, reserve it via the mcp-agent-mail MCP:
 3. Test/file folders must mirror source structure.
 4. Follow .editorconfig and analyzer rules.
 5. Reserve files before editing. Never edit unreserved files.
+6. NEVER `git switch`/`git checkout`/`git branch`/`git reset`/`git rebase` in this
+   shared checkout — all teammates share one working tree and index; any branch or
+   HEAD change corrupts other teammates' in-flight commits. If an acceptance test needs
+   a throwaway branch or a real commit graph, make a scratch clone under the session
+   scratchpad (`git clone . <scratchpad>/scratch-{BEAD_ID}`) and operate there.
+   Branch/HEAD restore is LEADER-ONLY.
 
 ## Steps
 
 1. Read and understand related existing code thoroughly.
 2. Reserve all files you plan to edit via agent-mail file_reservation_paths.
 3. Implement according to acceptance criteria.
-4. Commit IMMEDIATELY after writing files (before full test suite):
-     git add <specific files>
-     git commit -m "<area>({BEAD_ID}): short description"
+4. Commit IMMEDIATELY after writing files (before full test suite). Stage only your
+   own files, then commit with the `-- <your files>` pathspec (NOT a bare `git commit`):
+     git add <only your new/changed files>
+     git commit -m "<area>({BEAD_ID}): short description" -- <your files>
+   Parallel teammates share one index; a bare commit sweeps another agent's staged files
+   into yours. The `-- <your files>` pathspec makes the commit include ONLY your listed
+   paths, whatever else is staged. New/untracked files must still be `git add`-ed first —
+   a pathspec commit cannot pick up an unstaged new file (it errors `pathspec did not
+   match any file(s) known to git`).
 5. Run project checks (tests, linting — see CLAUDE.md).
    - For .NET/MSBuild projects: pass `--no-dependencies` (or equivalent) when
      multiple teammates may be building simultaneously, to avoid MSB3021 lock
      conflicts.
-6. If checks fail, fix and amend: git add <files> && git commit --amend --no-edit
+6. If checks fail, fix and amend (keep it path-scoped): git add <only your files> && git commit --amend --no-edit -- <your files>
 7. Release file reservations via agent-mail release_file_reservations.
 8. Close: br close {BEAD_ID}
 9. Mark your task completed: TaskUpdate({ taskId, status: "completed" })
 10. Exit.
+
+Do NOT go idle or stop with a claimed task in an unfinished state (no idle-in-progress).
+A task is finished ONLY after commit → `br close {BEAD_ID}` → `TaskUpdate({ taskId,
+status: "completed" })`. If you cannot finish (blocked, out of budget), run the
+"On abort / shutdown" path below (release reservations, `TaskUpdate({ taskId,
+owner: null, status: "pending" })`) and exit so the leader reclaims it — never leave
+it idle-in-progress.
 
 ## On abort / shutdown (leader sent a stop signal)
 
@@ -252,6 +274,13 @@ busy-poll; the notifications are the primary signal.
   `--no-dependencies` in the prompt template (already embedded in section 4, step 5).
 - **Beads committed but not closed**: Check `git log` for bead IDs and close manually.
 - **Task claimed but teammate crashed**: see stuck-task rescue in `/swarm-status`.
+- **Unexpected branch switch / rewritten HEAD** (a teammate violated the no-switch
+  rule): if `git status`/`git log` shows the shared checkout on the wrong branch or a
+  detached/rewritten HEAD, recover LEADER-ONLY — never let a teammate self-heal a branch:
+  (a) quiesce — send every running teammate the "On abort / shutdown" script so no new
+  commits land; (b) `git switch <shared-branch>` to restore the intended branch;
+  (c) `git cherry-pick <stray-shas>` to replay any commits stranded on the temp branch,
+  then delete the temp branch.
 
 #### 7. Report
 
