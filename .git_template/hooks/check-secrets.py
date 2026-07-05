@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 BANNED: list[tuple[int, str, str]] = [
+    (64, "ac1965cfe1837cc09d20afe8e3333fcc4019add4016c8bafd53347cc646ba07c", "mcp-agent-mail bearer token leaked in settings.json.bak (2026-07-05 audit)"),
     (13, "32568ece5a3127cc89f28257bda8c3d60375f0e3fc640c75d39df895d3e00b98", "proxy-domain"),
     (37, "853b5858f506ec297bf0baa634b1c2185f5845dbbadfd8d153b3acb81e0ddc3a", "proxy-key-v1"),
     (69, "da554d4f1e141ab7c0e048caa08ecca1bea7fd620eebd3eb928c250ce03d6186", "proxy-key-v2"),
