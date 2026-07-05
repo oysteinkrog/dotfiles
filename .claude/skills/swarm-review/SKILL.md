@@ -1,5 +1,5 @@
 ---
-name: multi-lens-review
+name: swarm-review
 model: opus
 description: Run 10 parallel review agents, each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
 argument-hint: "<target: plan file, bead list, or code path> [--lenses L1,L2,...] [--team-size N]"

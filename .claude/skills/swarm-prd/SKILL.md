@@ -1,5 +1,5 @@
 ---
-name: prd-start
+name: swarm-prd
 description: "Generate a comprehensive plan/PRD for AI agent execution. Creates agent-operable plans with architecture, security, testing, and user stories that convert to beads. Triggers on: create a prd, write prd for, plan this feature, requirements for, spec out."
 ---
 

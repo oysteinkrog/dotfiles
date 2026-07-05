@@ -1,5 +1,5 @@
 ---
-name: bead-rewrite
+name: swarm-beads-rewrite
 model: opus
 description: Apply architecture audit findings to rewrite, augment, or restructure existing beads. Use after a code audit reveals gaps, when VM/model splits are needed, or when beads need restructuring based on new understanding of the codebase.
 triggers:

@@ -1,5 +1,5 @@
 ---
-name: hardening-pipeline
+name: swarm-hardening
 model: opus
 description: Run the full iterative hardening loop (multi-lens review, oracle consensus, fresh-eyes hardening, final correctness pass) on beads, plans, or code. Each round finds and fixes issues; loop converges when no CRITICAL/HIGH issues remain.
 argument-hint: "<target: beads, plan file, or code path> [--max-rounds N] [--skip-oracle]"

@@ -1,5 +1,5 @@
 ---
-name: bead-quality
+name: swarm-beads-quality
 model: opus
 description: Run the full bead quality pipeline — review, oracle validation, hardening, and final verification. Iteratively improves beads until they are implementation-ready with zero issues. Use after creating beads or when beads need quality improvement.
 triggers:

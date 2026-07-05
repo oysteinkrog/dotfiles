@@ -1,5 +1,5 @@
 ---
-name: agent-swarm
+name: swarm-agents
 model: opus
 description: Spin up a team of parallel Opus agents to research, design, review, plan, or create beads. Generic multi-agent orchestration for any task that benefits from parallel exploration. Use when user says "spin up N agents", "research swarm", "design swarm", "review with N agents", or "plan with agents".
 triggers:

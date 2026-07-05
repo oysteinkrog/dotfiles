@@ -1,5 +1,5 @@
 ---
-name: prd-to-br
+name: swarm-beads-quick
 description: "Convert a PRD to br (beads_rust) issues. Creates an epic with child issues for each user story, sets up dependencies, and appends quality gates. Triggers on: convert prd, prd to beads, create beads from prd, prd to br, create issues from prd."
 ---
 

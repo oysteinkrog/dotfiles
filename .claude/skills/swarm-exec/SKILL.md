@@ -1,3 +1,7 @@
+---
+name: swarm-exec
+description: Alias for the execution swarm; delegates to /swarm.
+---
 # Swarm Exec
 
 Alias for the execution swarm — delegates to `/swarm`.
