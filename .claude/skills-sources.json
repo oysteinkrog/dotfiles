@@ -4,6 +4,11 @@
       "name": "dzhng-skills",
       "repo": "https://github.com/dzhng/skills",
       "skills_dir": "skills"
+    },
+    {
+      "name": "cc-slidev",
+      "repo": "https://github.com/rhuss/cc-slidev.git",
+      "skills_dir": "slidev/skills"
     }
   ]
 }
