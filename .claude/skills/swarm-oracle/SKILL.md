@@ -1,5 +1,5 @@
 ---
-name: oracle-consensus
+name: swarm-oracle
 model: opus
 description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents; escalate to PAL 2x GPT-Pro (always paired with Fable) for extremely important or complex validations. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"

@@ -1,5 +1,5 @@
 ---
-name: partial-stage
+name: git-partial-stage
 description: |
   Non-interactive partial staging of git hunks (git add -p alternative).
   Use when the user wants to stage specific hunks, make partial commits,
