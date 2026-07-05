@@ -1,5 +1,3 @@
-./vimperator/info
-/.vimperator/info
 .vim/bundle/*
 .vim/plugged/*
 .config/fisher
