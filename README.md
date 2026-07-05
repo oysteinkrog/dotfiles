@@ -46,9 +46,13 @@ curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 claude mcp add -s user fff -- ~/.local/bin/fff-mcp
 ```
 
-The PreToolUse hook at `.claude/hooks/rewrite-search.py` blocks raw `grep`/`find`/`egrep`/`fgrep`
-in bash and steers Claude toward `mcp__fff__ffgrep` / `mcp__fff__fffind` (or `rg`/`fd` if fff
-isn't registered). Append `# noqa: search-rewrite` to a command to opt out.
+Claude Code hooks actually wired in `.claude/settings.json`: `dcg` (destructive
+command guard) and `.claude/hooks/trauma_guard.py` (blocks commands matching
+learned trauma patterns) on PreToolUse for Bash, plus the gated aiolos telemetry
+forwarder on all lifecycle events (`bin/aiolos-hook-forwarder`; enable/disable
+via `aiolos-hooks`). A former `rewrite-search.py` hook that steered raw
+`grep`/`find` toward fff/rg/fd was never wired into settings.json and has been
+removed (it lives in git history if wanted again).
 
 ### Install dotfiles
 
