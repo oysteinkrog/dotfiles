@@ -42,10 +42,14 @@
 against="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 git rev-parse --verify HEAD >/dev/null 2>&1 && against="HEAD"
 
+# Case-sensitive: the marker convention is uppercase; a case-insensitive
+# match false-positives on ordinary prose like "do not commit it" in docs.
+# This hook file is excluded from the scan so changes to the marker list
+# itself can be committed (the diff necessarily contains the markers).
 function hasExpression() {
-    if git diff --staged | grep -iq $1
+    if git diff --staged -- . ':(exclude).git_template/hooks/pre-commit' | grep -q "$1"
     then
-        echo "Found: $1"gc
+        echo "Found: $1"
         return 1
     fi
     return 0
