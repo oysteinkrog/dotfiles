@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "name": "dzhng-skills",
+      "repo": "https://github.com/dzhng/skills",
+      "skills_dir": "skills"
+    }
+  ]
+}

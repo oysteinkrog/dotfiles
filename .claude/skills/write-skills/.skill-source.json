@@ -1,0 +1,7 @@
+{
+  "managed_by": "skills-sync",
+  "source": "dzhng-skills",
+  "repo": "https://github.com/dzhng/skills",
+  "upstream_path": "skills/authoring/write-skills",
+  "commit": "be6c7af00983e70d1f40ca325e380acc2c0085e5"
+}
