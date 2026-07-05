@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# skills-sync — manage Claude Code skills sourced from external git repos.
+#
+# Sources are declared in ~/.claude/skills-sources.json. Each source is a git
+# repo containing skill directories (any layout; discovered by SKILL.md).
+# Skills are copied (not symlinked) into ~/.claude/skills/ so they are
+# tracked by the dotfiles repo. A lockfile records the synced commit and a
+# content hash per skill so local edits are detected and never clobbered
+# silently.
+#
+# Commands:
+#   skills-sync list                 sources and their installed skills
+#   skills-sync status               compare installed state vs upstream
+#   skills-sync sync [SOURCE]        install/update skills (all sources by default)
+#   skills-sync add URL [opts]       register a new source (then run sync)
+#   skills-sync remove SOURCE        unregister a source (--purge deletes skills)
+#
+# sync options: --force (overwrite locally edited skills), --dry-run
+# add options:  --name N (default: owner-repo), --dir D (default: auto),
+#               --ref R (default: default branch)
+
+set -euo pipefail
+
+MANIFEST="${SKILLS_SYNC_MANIFEST:-$HOME/.claude/skills-sources.json}"
+LOCKFILE="${SKILLS_SYNC_LOCK:-$HOME/.claude/skills-sources.lock.json}"
+SKILLS_DIR="${SKILLS_SYNC_TARGET:-$HOME/.claude/skills}"
+CACHE_DIR="${SKILLS_SYNC_CACHE:-$HOME/.cache/skills-sync}"
+
+die() { echo "error: $*" >&2; exit 1; }
+note() { echo "$*" >&2; }
+
+need() { command -v "$1" >/dev/null || die "required tool missing: $1"; }
+need jq; need git; need sha256sum
+
+ensure_files() {
+  [ -f "$MANIFEST" ] || echo '{"sources":[]}' > "$MANIFEST"
+  [ -f "$LOCKFILE" ] || echo '{"sources":{}}' > "$LOCKFILE"
+  mkdir -p "$SKILLS_DIR" "$CACHE_DIR"
+}
+
+# Content hash of a skill dir: sha256 over sorted (relpath, filehash) pairs.
+# Excludes .skill-source.json (written by us after copy).
+dir_hash() {
+  local dir="$1"
+  (cd "$dir" && find . -type f ! -name '.skill-source.json' -print0 \
+    | sort -z \
+    | xargs -0 -r sha256sum) | sha256sum | cut -d' ' -f1
+}
+
+clone_or_update() { # $1=name $2=repo $3=ref -> echoes commit
+  local name="$1" repo="$2" ref="$3" dir="$CACHE_DIR/$1"
+  if [ -d "$dir/.git" ]; then
+    git -C "$dir" fetch --quiet --depth 1 origin ${ref:+"$ref"} 2>/dev/null \
+      || git -C "$dir" fetch --quiet origin
+    git -C "$dir" checkout --quiet --detach FETCH_HEAD
+  else
+    rm -rf "$dir"
+    if [ -n "$ref" ]; then
+      git clone --quiet --depth 1 --branch "$ref" "$repo" "$dir"
+    else
+      git clone --quiet --depth 1 "$repo" "$dir"
+    fi
+  fi
+  git -C "$dir" rev-parse HEAD
+}
+
+# Find skill dirs (containing SKILL.md) under a root, print relative paths.
+discover_skills() { # $1=clone_dir $2=subdir(optional)
+  local root="$1"
+  [ -n "${2:-}" ] && root="$1/$2"
+  [ -d "$root" ] || die "skills dir not found: $root"
+  (cd "$1" && find "${2:-.}" -maxdepth 5 -name SKILL.md -printf '%h\n' | sed 's|^\./||' | sort)
+}
+
+manifest_sources() { jq -r '.sources[].name' "$MANIFEST"; }
+
+get_source() { # $1=name -> json object
+  jq -e --arg n "$1" '.sources[] | select(.name==$n)' "$MANIFEST" \
+    || die "unknown source: $1 (see: skills-sync list)"
+}
+
+cmd_list() {
+  ensure_files
+  local n_sources
+  n_sources=$(jq '.sources | length' "$MANIFEST")
+  [ "$n_sources" -gt 0 ] || { echo "no sources registered (use: skills-sync add <repo-url>)"; return; }
+  jq -r '.sources[].name' "$MANIFEST" | while read -r name; do
+    local repo ref commit
+    repo=$(jq -r --arg n "$name" '.sources[] | select(.name==$n) | .repo' "$MANIFEST")
+    ref=$(jq -r --arg n "$name" '.sources[] | select(.name==$n) | .ref // "default"' "$MANIFEST")
+    commit=$(jq -r --arg n "$name" '.sources[$n].commit // "never synced" | .[0:12]' "$LOCKFILE")
+    echo "$name  $repo  (ref: $ref, synced: $commit)"
+    jq -r --arg n "$name" '.sources[$n].skills // {} | keys[] | "  - " + .' "$LOCKFILE"
+  done
+}
+
+cmd_status() {
+  ensure_files
+  local dirty=0
+  jq -r '.sources[].name' "$MANIFEST" | while read -r name; do
+    local src repo ref locked_commit head
+    src=$(get_source "$name")
+    repo=$(jq -r '.repo' <<<"$src")
+    ref=$(jq -r '.ref // empty' <<<"$src")
+    locked_commit=$(jq -r --arg n "$name" '.sources[$n].commit // empty' "$LOCKFILE")
+    head=$(git ls-remote "$repo" "${ref:-HEAD}" | head -1 | cut -f1)
+    echo "== $name ($repo)"
+    if [ -z "$locked_commit" ]; then
+      echo "   never synced (upstream: ${head:0:12})"
+    elif [ "$locked_commit" = "$head" ]; then
+      echo "   up to date @ ${head:0:12}"
+    else
+      echo "   UPDATE AVAILABLE: ${locked_commit:0:12} -> ${head:0:12}"
+    fi
+    # local-edit check
+    jq -r --arg n "$name" '.sources[$n].skills // {} | to_entries[] | .key + "\t" + .value.hash' "$LOCKFILE" \
+    | while IFS=$'\t' read -r skill lhash; do
+        local d="$SKILLS_DIR/$skill"
+        if [ ! -d "$d" ]; then
+          echo "   $skill: MISSING locally (deleted?)"
+        elif [ "$(dir_hash "$d")" != "$lhash" ]; then
+          echo "   $skill: LOCALLY MODIFIED (sync will skip; use --force to overwrite)"
+        fi
+      done
+  done
+}
+
+sync_source() { # $1=name $2=force(0/1) $3=dryrun(0/1)
+  local name="$1" force="$2" dryrun="$3"
+  local src repo ref subdir commit clone
+  src=$(get_source "$name")
+  repo=$(jq -r '.repo' <<<"$src")
+  ref=$(jq -r '.ref // empty' <<<"$src")
+  subdir=$(jq -r '.skills_dir // empty' <<<"$src")
+
+  note "syncing $name from $repo ..."
+  commit=$(clone_or_update "$name" "$repo" "$ref")
+  clone="$CACHE_DIR/$name"
+
+  local installed updated skipped
+  installed=0; updated=0; skipped=0
+  local skills_json='{}'
+
+  while read -r rel; do
+    [ -n "$rel" ] || continue
+    local skill target lhash
+    skill=$(basename "$rel")
+    target="$SKILLS_DIR/$skill"
+    lhash=$(jq -r --arg n "$name" --arg s "$skill" '.sources[$n].skills[$s].hash // empty' "$LOCKFILE")
+
+    if [ -d "$target" ]; then
+      if [ -z "$lhash" ]; then
+        # exists but not managed by us for this source
+        local owner
+        owner=$(jq -r --arg s "$skill" '.source // empty' "$target/.skill-source.json" 2>/dev/null || true)
+        if [ "$owner" != "$name" ] && [ "$force" != 1 ]; then
+          note "  SKIP $skill: directory exists and is not managed by source '$name' (--force to overwrite)"
+          skipped=$((skipped+1)); continue
+        fi
+      elif [ "$(dir_hash "$target")" != "$lhash" ] && [ "$force" != 1 ]; then
+        note "  SKIP $skill: locally modified since last sync (--force to overwrite)"
+        skipped=$((skipped+1)); continue
+      fi
+    fi
+
+    if [ "$dryrun" = 1 ]; then
+      note "  would install $skill  <-  $rel"
+    else
+      rm -rf "$target"
+      mkdir -p "$target"
+      cp -a "$clone/$rel/." "$target/"
+      jq -n --arg src "$name" --arg repo "$repo" --arg path "$rel" --arg commit "$commit" \
+        '{managed_by:"skills-sync", source:$src, repo:$repo, upstream_path:$path, commit:$commit}' \
+        > "$target/.skill-source.json"
+      local h
+      h=$(dir_hash "$target")
+      skills_json=$(jq --arg s "$skill" --arg p "$rel" --arg h "$h" \
+        '.[$s] = {path:$p, hash:$h}' <<<"$skills_json")
+      if [ -n "$lhash" ]; then updated=$((updated+1)); else installed=$((installed+1)); fi
+      note "  ok  $skill  <-  $rel"
+    fi
+  done < <(discover_skills "$clone" "$subdir")
+
+  if [ "$dryrun" != 1 ]; then
+    # keep lock entries for skills we skipped (they stay at their old hash)
+    local kept merged
+    kept=$(jq --arg n "$name" --argjson new "$skills_json" \
+      '(.sources[$n].skills // {}) | with_entries(select(.key as $k | $new | has($k) | not))' "$LOCKFILE")
+    merged=$(jq -n --argjson a "$kept" --argjson b "$skills_json" '$a + $b')
+    local tmp
+    tmp=$(mktemp)
+    jq --arg n "$name" --arg repo "$repo" --arg c "$commit" \
+       --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson skills "$merged" \
+       '.sources[$n] = {repo:$repo, commit:$c, synced_at:$t, skills:$skills}' \
+       "$LOCKFILE" > "$tmp" && mv "$tmp" "$LOCKFILE"
+  fi
+  note "  $name: $installed installed, $updated updated, $skipped skipped @ ${commit:0:12}"
+}
+
+cmd_sync() {
+  ensure_files
+  local force=0 dryrun=0 targets=()
+  for a in "$@"; do
+    case "$a" in
+      --force) force=1 ;;
+      --dry-run) dryrun=1 ;;
+      -*) die "unknown option: $a" ;;
+      *) targets+=("$a") ;;
+    esac
+  done
+  if [ ${#targets[@]} -eq 0 ]; then
+    mapfile -t targets < <(manifest_sources)
+  fi
+  [ ${#targets[@]} -gt 0 ] || die "no sources registered (use: skills-sync add <repo-url>)"
+  for t in "${targets[@]}"; do sync_source "$t" "$force" "$dryrun"; done
+}
+
+cmd_add() {
+  ensure_files
+  local repo="" name="" subdir="" ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name="$2"; shift 2 ;;
+      --dir)  subdir="$2"; shift 2 ;;
+      --ref)  ref="$2"; shift 2 ;;
+      -*) die "unknown option: $1" ;;
+      *) repo="$1"; shift ;;
+    esac
+  done
+  [ -n "$repo" ] || die "usage: skills-sync add <repo-url> [--name N] [--dir D] [--ref R]"
+  # normalize github shorthand owner/repo
+  case "$repo" in
+    http*|git@*) : ;;
+    */*) repo="https://github.com/$repo" ;;
+  esac
+  if [ -z "$name" ]; then
+    name=$(echo "$repo" | sed -E 's|\.git$||; s|.*[:/]([^/]+)/([^/]+)$|\1-\2|')
+  fi
+  jq -e --arg n "$name" '.sources[] | select(.name==$n)' "$MANIFEST" >/dev/null 2>&1 \
+    && die "source '$name' already registered"
+  local tmp
+  tmp=$(mktemp)
+  jq --arg n "$name" --arg r "$repo" --arg d "$subdir" --arg ref "$ref" \
+     '.sources += [{name:$n, repo:$r} + (if $d != "" then {skills_dir:$d} else {} end) + (if $ref != "" then {ref:$ref} else {} end)]' \
+     "$MANIFEST" > "$tmp" && mv "$tmp" "$MANIFEST"
+  echo "added source '$name' ($repo). Run: skills-sync sync $name"
+}
+
+cmd_remove() {
+  ensure_files
+  local name="" purge=0
+  for a in "$@"; do
+    case "$a" in
+      --purge) purge=1 ;;
+      -*) die "unknown option: $a" ;;
+      *) name="$a" ;;
+    esac
+  done
+  [ -n "$name" ] || die "usage: skills-sync remove <source> [--purge]"
+  get_source "$name" >/dev/null
+  if [ "$purge" = 1 ]; then
+    jq -r --arg n "$name" '.sources[$n].skills // {} | keys[]' "$LOCKFILE" | while read -r s; do
+      rm -rf "${SKILLS_DIR:?}/$s"
+      note "removed skill $s"
+    done
+  fi
+  local tmp
+  tmp=$(mktemp)
+  jq --arg n "$name" '.sources |= map(select(.name != $n))' "$MANIFEST" > "$tmp" && mv "$tmp" "$MANIFEST"
+  tmp=$(mktemp)
+  jq --arg n "$name" 'del(.sources[$n])' "$LOCKFILE" > "$tmp" && mv "$tmp" "$LOCKFILE"
+  rm -rf "${CACHE_DIR:?}/$name"
+  echo "removed source '$name'$([ "$purge" = 1 ] && echo " (skills purged)" || echo " (installed skills left in place)")"
+}
+
+case "${1:-}" in
+  list)   shift; cmd_list "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  sync)   shift; cmd_sync "$@" ;;
+  add)    shift; cmd_add "$@" ;;
+  remove) shift; cmd_remove "$@" ;;
+  ""|-h|--help|help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command: $1 (try: skills-sync help)" ;;
+esac

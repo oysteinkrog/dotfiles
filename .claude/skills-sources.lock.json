@@ -1,0 +1,71 @@
+{
+  "sources": {
+    "dzhng-skills": {
+      "repo": "https://github.com/dzhng/skills",
+      "commit": "be6c7af00983e70d1f40ca325e380acc2c0085e5",
+      "synced_at": "2026-07-05T14:27:26Z",
+      "skills": {
+        "eval-skills": {
+          "path": "skills/authoring/eval-skills",
+          "hash": "b60dc590dccd337e45fbb8a1c2debdb3a0866d6832d0d91effcfa9bf366d1866"
+        },
+        "write-skills": {
+          "path": "skills/authoring/write-skills",
+          "hash": "4d78b9f8237c10fb657c277a0d64191730ff43535fecaafd7ad6bb6a3b4b3d28"
+        },
+        "claude": {
+          "path": "skills/engineering/claude",
+          "hash": "e0a9b6e924d39be641cd253cbc6d0a5e4985032d148eff8070714cc478a9a323"
+        },
+        "close-spec": {
+          "path": "skills/engineering/close-spec",
+          "hash": "29e3e1d2e1f20602bdfcbb4f020a9a0853a7894b42075103b320e897af2da116"
+        },
+        "codex": {
+          "path": "skills/engineering/codex",
+          "hash": "84c7cabe5eb5e64ee0a6ccfcc5943ab73c6a2c7d69bfae581e3c397ea0ab0022"
+        },
+        "explore-unknowns": {
+          "path": "skills/engineering/explore-unknowns",
+          "hash": "574c28614db8532426320bbd8411e14533565338c8ee84e3e5d3ec22f4d213aa"
+        },
+        "implement-spec": {
+          "path": "skills/engineering/implement-spec",
+          "hash": "783a6b450f19f859010378cd10bfb7a834ad64889daed8524ca88266bf94b11e"
+        },
+        "implement-spec-with-codex": {
+          "path": "skills/engineering/implement-spec-with-codex",
+          "hash": "e25bc3905e65dd069d3ddc1f2acf34823fffe44b689298907b7915e2e1573fcf"
+        },
+        "refactor-clean": {
+          "path": "skills/engineering/refactor-clean",
+          "hash": "feabd4dcb7f046dd9b6f343f03cbd25022fc497f064105b19f0f22c5ffe9e176"
+        },
+        "write-docs": {
+          "path": "skills/engineering/write-docs",
+          "hash": "2001574b191b19ac0da2271c4c0d4d85cba3f41babce4b799569852805fd8ffa"
+        },
+        "write-spec": {
+          "path": "skills/engineering/write-spec",
+          "hash": "d782c180e2c9dadd3b406e3b4ec1902a30eaa196f191279042cfbbb712a77937"
+        },
+        "renderer": {
+          "path": "skills/graphics/renderer",
+          "hash": "b591f47dd87bd074f36f20bccd6276129b5c56dbe49513df79b84f3bd18ac7c4"
+        },
+        "compare-screenshots": {
+          "path": "skills/visual/compare-screenshots",
+          "hash": "3e8064b9ad762dd0d7a5f2073e4be75bc11bffab2d25a6ed2b8c917a10ef2323"
+        },
+        "preview-shots": {
+          "path": "skills/visual/preview-shots",
+          "hash": "5402ac041e2cf1a7c92334f21bc42b7f61cca6be8ca8bb1aa83d9f533f57127d"
+        },
+        "screenshot-critique": {
+          "path": "skills/visual/screenshot-critique",
+          "hash": "f92128a2606158484b43412f998d2ccacd4cdedb232221d2f62f6926993ef82e"
+        }
+      }
+    }
+  }
+}
