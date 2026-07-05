@@ -112,13 +112,6 @@
     "mcp-agent-mail": {
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/"
-    },
-    "sentry": {
-      "type": "http",
-      "url": "https://mcp.sentry.dev/sse",
-      "headers": {
-        "Authorization": "Bearer ${SENTRY_AUTH_TOKEN}"
-      }
     }
   }
 }
