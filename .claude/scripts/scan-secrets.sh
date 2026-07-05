@@ -2,8 +2,8 @@
 # scan-secrets.sh — Scan files for leaked secrets.
 #
 # Used by:
-#   - .git/hooks/pre-commit (scans staged files)
-#   - CI pipeline (scans all tracked files)
+#   - .git_template/hooks/pre-commit (repo hook via core.hooksPath; --staged)
+#   - manual full sweeps over tracked files (--all)
 #
 # Usage:
 #   scan-secrets.sh --staged     # Pre-commit: scan git staged content
