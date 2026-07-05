@@ -143,7 +143,7 @@ Rate overall readiness 1-10. List SPECIFIC blocking issues with bead IDs.
 
 ### Running Oracles
 
-Use `/swarm-oracle-standalone` or the PAL MCP consensus tool:
+Use `/consult-oracles` or the PAL MCP consensus tool:
 
 ```
 mcp__pal__consensus(

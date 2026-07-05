@@ -517,8 +517,8 @@ foundation/product/features/
 | `/swarm-beads-create` | Bead creation | Convert plans to beads (multi-agent) |
 | `/swarm-beads-quality` | Bead QA | Review + oracle + harden beads |
 | `/swarm-beads-rewrite` | Bead maintenance | Apply audit findings to beads |
-| `/swarm-beads-polish` | Bead QA (light) | Single-agent bead review |
+| `/beads-polish` | Bead QA (light) | Single-agent bead review |
 | `/swarm-beads-quick` | Bead creation (light) | Single-agent PRD→beads |
 | `/swarm-exec` | Implementation | Agent-tool swarm of teammates executing beads |
 | `/swarm-exec-status` | Monitoring | Check implementation swarm progress |
-| `/swarm-oracle-standalone` | Any time | Standalone oracle consultation |
+| `/consult-oracles` | Any time | Standalone oracle consultation |
