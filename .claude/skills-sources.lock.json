@@ -66,6 +66,45 @@
           "hash": "f92128a2606158484b43412f998d2ccacd4cdedb232221d2f62f6926993ef82e"
         }
       }
+    },
+    "cc-slidev": {
+      "repo": "https://github.com/rhuss/cc-slidev.git",
+      "commit": "e6d515c390e17357dc708b873fb697f1e228fc63",
+      "synced_at": "2026-07-05T16:06:10Z",
+      "skills": {
+        "diagram-design": {
+          "path": "slidev/skills/diagram-design",
+          "hash": "735ecd3029e9dff12aa263f6d962f8cc05333579f9e8d25207737f05467bc309"
+        },
+        "excalidraw-generation": {
+          "path": "slidev/skills/excalidraw-generation",
+          "hash": "f12bdf72f4a6ca3d94e2f5ee1ada7656b35e8bc539b2342d1d2335f55a1c90dd"
+        },
+        "latex-handouts": {
+          "path": "slidev/skills/latex-handouts",
+          "hash": "1eb40e976d8852679bd3ae8ce08ba94be24361d5e760a201519deb7d2cfaa0aa"
+        },
+        "presentation-design": {
+          "path": "slidev/skills/presentation-design",
+          "hash": "39e5e4692878f34661fa5815def2e8f947777119e4571e0960c6ef90b42e1046"
+        },
+        "slide-management": {
+          "path": "slidev/skills/slide-management",
+          "hash": "50e0ff84449f7ecd9404da0c0c17764fcc1859a38065d99c718068dac19b7bd6"
+        },
+        "slide-quality": {
+          "path": "slidev/skills/slide-quality",
+          "hash": "3f5304a0c7222344396c050165db3e6b7459e6415db32bdeb97a464977199b24"
+        },
+        "slidev-mastery": {
+          "path": "slidev/skills/slidev-mastery",
+          "hash": "949b674c9ac5d6a7f2c7dbf2befa14848d49b6c66a8bd15d074ef12b73ef1eaf"
+        },
+        "visual-design": {
+          "path": "slidev/skills/visual-design",
+          "hash": "efd1a5d45f32cf3e68ca0dddd21be927d570ee26a06fb0df95a7488c38b5710e"
+        }
+      }
     }
   }
 }
