@@ -135,26 +135,6 @@ ft sync --cookies $FT_CT0 $FT_AUTH_TOKEN --yes
 If sync fails with auth errors, cookies have expired — ask the user to re-extract
 `ct0` and `auth_token` from Chrome DevTools (Application > Cookies > x.com).
 
-## Google Workspace CLI — gogcli (gog)
-
-Go binary by Peter Steinberger (steipete). Single CLI for Gmail, Calendar, Drive, Contacts,
-Tasks, Sheets, Docs, Slides, People, Forms, Apps Script, Chat, Classroom.
-Called via Bash (not an MCP server — avoids context bloat).
-
-- **Binary:** `~/bin/gog`
-- **Repo:** https://github.com/steipete/gogcli
-- **Config:** `~/.config/gogcli/`
-- **Account:** `oystein@initialforce.com`
-
-### Usage
-```bash
-gog -a oystein@initialforce.com gmail labels list
-gog -a oystein@initialforce.com calendar events list --days 7
-gog -a oystein@initialforce.com drive files list --limit 10
-```
-Flags: `-j` for JSON, `-p` for plain TSV, `--results-only` to drop pagination envelope.
-Agent sandboxing: `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
-
 ## Oracle Consultation Policy
 
 **Fable (claude-fable-5) is the primary oracle.** For second opinions, design validation,
@@ -170,84 +150,25 @@ debugging help, and architecture reviews, consult Fable first and by default.
   (e.g. `/consult-oracles`, `/swarm-oracle`): run those patterns with Fable as the
   primary, adding GPT Pro only under the criteria above.
 
-## Multi-Agent Orchestration (Claude Code Teams & Agents)
+## Multi-Agent Orchestration
 
-Multi-agent work runs inside Claude Code via the built-in `Agent`, `SendMessage`,
-`TaskCreate`, and `TeamCreate` tools — no external tmux manager.
+Canonical guidance lives in the global CLAUDE.md (`~/.claude/CLAUDE.md`): see
+"Claude Code Teams & Agents" and "Agent Swarm Rules". Nothing repo-specific
+overrides it here.
 
-### Spawning teammates
-Send multiple `Agent` tool calls in a single message to run them concurrently:
+## Skill Sources (skills-sync)
 
-```
-Agent({ subagent_type: "general-purpose", name: "researcher-1",
-        team_name: "feature-x", run_in_background: true,
-        prompt: "<self-contained task> ..." })
-```
-
-- `name` makes the teammate addressable via `SendMessage({ to: "<name>" })`.
-- `team_name` groups teammates, shared tasks, and inboxes under
-  `~/.claude/teams/<team-name>/`.
-- `run_in_background: true` keeps the leader responsive while the teammate works.
-- `isolation: "worktree"` spawns the teammate on a temporary worktree (use for
-  research/design only — never for parallel bead implementation; see swarm rules).
-
-### Work distribution (bead integration)
-Use the beads CLI to compute what to do, then hand work out via `TaskCreate`:
+External skill repos are managed by `bin/skills-sync`: sources are declared in
+`~/.claude/skills-sources.json`, pinned commits and per-skill content hashes in
+`~/.claude/skills-sources.lock.json`, and skills are copied flat into
+`~/.claude/skills/<name>/` with a `.skill-source.json` provenance stamp.
+Local edits to an installed skill are detected by hash and never overwritten
+without `--force`.
 
 ```bash
-bv -robot-triage                   # recommendations, bottlenecks
-bv -robot-next                     # single best next action
-bv -robot-plan                     # parallel execution tracks
-bv -robot-alerts --severity=critical
+skills-sync list                 # sources + installed skills
+skills-sync status               # update check + local-edit detection
+skills-sync sync [SOURCE]        # install/update (--force overwrites local edits)
+skills-sync add <owner/repo>     # register a new source (--dir, --ref, --name)
+skills-sync remove <SOURCE>      # unregister (--purge deletes installed skills)
 ```
-
-Leader workflow:
-1. `br list --status open --json` — seed **all open beads in scope**, not just
-   `br ready`. If only ready beads are seeded, there are no downstream tasks
-   for `addBlockedBy` to unblock later.
-2. For each bead, `TaskCreate({ subject: "bd-XXX: ...", ... })`. Keep the
-   `bead_id → taskId` mapping in memory — you need it for the next step.
-3. Translate bead-space dependencies (from `br dep tree --json`) into task-space
-   with the mapping, then `TaskUpdate({ taskId, addBlockedBy: [<upstream-task-ids>] })`.
-   `addBlockedBy` takes task IDs, not bead IDs.
-4. Spawn teammates (`Agent({ name, team_name, ... })`) telling them to
-   `TaskList`, claim an unowned unblocked task (set `owner`), verify the claim
-   with `TaskGet` (race guard), implement, commit, `br close`, then
-   `TaskUpdate({ status: "completed" })`, then exit. Execution teammates are
-   **terminal** — the leader spawns a fresh one for the next bead. See the
-   `/swarm` skill for the full template.
-
-### Inter-agent messaging
-```
-SendMessage({ to: "<teammate-name>", content: "..." })   # direct
-```
-`SendMessage` continues the named teammate with full prior context. Use it for
-**artifact-swarm** teammates (researchers, designers, reviewers) whose work is
-multi-turn. Do NOT use it on **execution-swarm** teammates — those are
-one-bead-then-exit by design, which keeps each teammate's context window clean.
-Spawn a new `Agent` for the next bead instead.
-
-### File reservations (conflict prevention)
-Every teammate editing files MUST reserve them first via the `mcp-agent-mail` MCP
-(`file_reservation_paths`) and release after committing (`release_file_reservations`).
-See the global CLAUDE.md "Agent Swarm Rules" for details and the `/swarm` skill for
-pre-flight that starts agent-mail and wires it into `.mcp.json` automatically.
-
-### Monitoring
-```
-TaskList                           # overall progress + owners + blocked-by
-TaskGet({ taskId })                # full detail + comments
-```
-
-Claude Code's sidebar shows live status for every named teammate.
-`br ready` / `bv -robot-triage` stays the source of truth for bead backlog health.
-
-### Tips
-- Each teammate prompt MUST require an explicit `git commit` after each work unit —
-  teammates do not auto-commit (see "Agent Swarm Rules" in the global CLAUDE.md).
-- Prefer `SendMessage` to continue a named teammate; spawning a new `Agent` starts
-  fresh and loses the prior context.
-- For dependency-ordered assignment, encode the DAG via `TaskUpdate` `addBlockedBy`
-  rather than trying to orchestrate it from the leader step-by-step.
-- Heavy parallel work: spawn several `Agent` calls in a single leader message so
-  they actually run concurrently instead of serially.
