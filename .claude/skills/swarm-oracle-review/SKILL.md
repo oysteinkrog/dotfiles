@@ -13,7 +13,7 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 <!-- Decision table -->
 <!-- | User says | Use | -->
 <!-- |-----------|-----| -->
-<!-- | "consult oracles" (quick question) | /swarm-oracle-standalone | -->
+<!-- | "consult oracles" (quick question) | /consult-oracles | -->
 <!-- | "validate design with pro oracles" | /swarm-oracle-review | -->
 <!-- | "harden beads" | /swarm-oracle-review --target beads | -->
 <!-- | "full feature pipeline" | /swarm-pipeline (includes oracle phases) | -->
@@ -41,7 +41,7 @@ then (2) iterative hardening loop until findings converge to near-zero.
 
 ## When NOT to Use
 
-- Quick questions or second opinions (use `/swarm-oracle-standalone`)
+- Quick questions or second opinions (use `/consult-oracles`)
 - Code review (use `/swarm-agents type=review`)
 - Simple validation that doesn't need adversarial challenge
 
