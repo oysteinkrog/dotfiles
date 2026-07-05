@@ -80,6 +80,14 @@ if [ -x "$hook_dir/check-secrets.py" ]; then
     fi
 fi
 
+# Pattern-based secret scan (catches NEW secrets; complements the
+# hash-banlist in check-secrets.py which only knows already-leaked values).
+if [ -x ".claude/scripts/scan-secrets.sh" ]; then
+    if ! ".claude/scripts/scan-secrets.sh" --staged; then
+        exit 1
+    fi
+fi
+
 # A git hook script to find and fix trailing whitespace
 # in your commits. Bypass it with the --no-verify option
 # to git-commit
