@@ -1,5 +1,5 @@
 ---
-name: oracle-review
+name: swarm-oracle-review
 model: opus
 description: Run iterative oracle + agent hardening loop on any artifact (designs, plans, beads, architecture) until findings converge to near-zero. Combines /swarm-oracle with /swarm-review in alternating rounds. Use for the full hardening cycle, not just a single oracle pass. For oracle-only, use /swarm-oracle. For bead-only hardening, use /swarm-beads-quality.
 triggers:

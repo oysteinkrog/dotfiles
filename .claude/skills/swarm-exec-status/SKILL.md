@@ -1,3 +1,7 @@
+---
+name: swarm-exec-status
+description: Alias for swarm status; delegates to /swarm-status.
+---
 # Swarm Exec Status
 
 Alias for swarm status — delegates to `/swarm-status`.

@@ -1,5 +1,5 @@
 ---
-name: feature-pipeline
+name: swarm-pipeline
 model: opus
 description: Playbook for large-scale AI-assisted feature development. Covers 5 meta-patterns (two-track prioritization, escalating agent teams, oracle integration, convergence detection, fresh-eyes principle) plus full pipeline phases. Use when orchestrating a major feature from UX problem through implementation-ready beads.
 triggers:
