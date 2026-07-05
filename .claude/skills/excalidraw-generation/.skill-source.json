@@ -1,0 +1,7 @@
+{
+  "managed_by": "skills-sync",
+  "source": "cc-slidev",
+  "repo": "https://github.com/rhuss/cc-slidev.git",
+  "upstream_path": "slidev/skills/excalidraw-generation",
+  "commit": "e6d515c390e17357dc708b873fb697f1e228fc63"
+}

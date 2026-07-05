@@ -82,7 +82,6 @@ bin/codedb
 
 # External skill clones (third-party repos cloned into .claude/skills/).
 # Promote to a submodule (.gitmodules) if you want to track the pointer.
-.claude/skills/cc-slidev/
 .claude/skills/frontend-slides/
 
 # Misc
@@ -103,3 +102,6 @@ list-worktrees.sh
 .claude/skills/.old_*
 .claude/skills/*.tmp_install_*
 .claude/skills/.tmp_install_*
+
+# bv (beads viewer) local config and caches
+.bv/
