@@ -51,6 +51,16 @@ bin/dcg
 .config/fish/functions/*.bak
 
 # Large binaries (>10MB; install/build locally instead of tracking)
+# (docker, gog, Markpad.exe, hub.exe, gitui, rg.exe purged from git history
+# 2026-07-06 via filter-repo; they live on disk only)
+bin/docker
+bin/gog
+bin/Markpad.exe
+bin/hub.exe
+bin/gitui
+bin/rg.exe
+bin/grove
+bin/gcmw/
 bin/cass.exe
 bin/cass-old.exe
 bin/cm.exe
