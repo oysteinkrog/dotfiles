@@ -33,8 +33,15 @@ function grove --description "Git worktree manager (with shell cd support)"
             cd $saved_dir 2>/dev/null; or cd /c/WORK
         else if test -n "$postcd" -a -d "$postcd"
             cd $postcd
+            # Reflect the project in this tab's title (fish_title checks
+            # GROVE_TAB_TITLE first) — covers manual `gr <tag>`/`grove cd`
+            # in tabs that weren't spawned by `grove launch`.
+            set -gx GROVE_TAB_TITLE (basename $postcd)
         else
             cd $saved_dir 2>/dev/null; or cd /c/WORK
+            if test "$subcmd" = done
+                set -e GROVE_TAB_TITLE
+            end
         end
 
         return $cmd_status
