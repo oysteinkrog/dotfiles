@@ -44,20 +44,24 @@ git-hunks, skills-sync, etc.) are documented in the dotfiles repo's own CLAUDE.m
 
 ### On-demand retrieval (no global env exports)
 
-Secrets are **not** auto-exported into the shell environment. Use these fish helpers (defined in `~/.config/fish/functions/`):
+Secrets are **not** auto-exported into the shell environment. Use these shell-agnostic
+helpers (scripts in `~/bin`, on PATH; work from fish, bash, scripts, cron):
 
-```fish
-secret KEY                       # print value to stdout (length-only test: secret KEY | string length)
+```sh
+secret KEY                       # print value to stdout (length-only test: secret KEY | wc -c)
 secret --list                    # list available keys (no values)
-with-secrets KEY [KEY ...] -- CMD ARGS...   # run CMD with named keys in its env; vars vanish when CMD returns
+with-secrets KEY [KEY ...] -- CMD ARGS...   # run CMD with named keys in its env; vars vanish when CMD exits
 ```
 
-Examples:
-```fish
-with-secrets CLOUDFLARE_API_TOKEN -- curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/...
+Examples (any shell; quote so the calling shell does not expand the var itself):
+```sh
+with-secrets CLOUDFLARE_API_TOKEN -- sh -c 'curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/...'
 with-secrets GITHUB_PERSONAL_ACCESS_TOKEN -- gh api /user
-set -l body (with-secrets HUBSPOT_ACCESS_TOKEN -- curl -s -H "Authorization: Bearer $HUBSPOT_ACCESS_TOKEN" ...)
+body=$(with-secrets HUBSPOT_ACCESS_TOKEN -- sh -c 'curl -s -H "Authorization: Bearer $HUBSPOT_ACCESS_TOKEN" ...')
 ```
+
+Note: CMD must be a real command (PATH or path), not a shell function/alias of the
+calling shell. Wrap shell syntax in `sh -c '...'` (or `fish -c`).
 
 Why: subprocesses (npm postinstalls, MCP servers, anything you exec) used to inherit all 18 tokens by default. Now they get only what you name. **Don't restore the old behavior with ad-hoc `set -gx` lines** — that defeats the point.
 
