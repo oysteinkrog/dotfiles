@@ -47,9 +47,6 @@ complete -c ibX -f -a '(__git_alias_local_branches)'
 complete -c gm -f -a '(__git_alias_branches)'
 
 # Rebase (gr, gri, gria, griu, griau) - branches
-complete -c gr -f -a '(__git_alias_branches)'
-complete -c gri -f -a '(__git_alias_branches)'
-complete -c gria -f -a '(__git_alias_branches)'
 complete -c griu -f -a '(__git_alias_branches)'
 complete -c griau -f -a '(__git_alias_branches)'
 
@@ -66,7 +63,6 @@ complete -c gcsS -f -a '(__git_alias_branches)'
 # Reset (gwr, gwR, gir) - branches
 complete -c gwr -f -a '(__git_alias_branches)'
 complete -c gwR -f -a '(__git_alias_branches)'
-complete -c gir -f -a '(__git_alias_branches)'
 
 # Diff (gwd, gwD) - branches
 complete -c gwd -f -a '(__git_alias_branches)'
@@ -83,16 +79,10 @@ complete -c glb -f -a '(__git_alias_branches)'
 complete -c glS -f -a '(__git_alias_branches)'
 
 # Push - remotes then branches
-complete -c gp -f -a '(__git_alias_remotes)'
-complete -c gpf -f -a '(__git_alias_remotes)'
-complete -c gpF -f -a '(__git_alias_remotes)'
 
 # Fetch - remotes
-complete -c gf -f -a '(__git_alias_remotes)'
-complete -c gfa -f -a '(__git_alias_remotes)'
 
 # Remote show - remotes
-complete -c gRs -f -a '(__git_alias_remotes)'
 
 # Generic git wrapper - wraps git completions
 complete -c g -w git

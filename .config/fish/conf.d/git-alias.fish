@@ -77,9 +77,7 @@ end
 function gb
   git branch --sort=-committerdate $argv
 end
-function gba
-  git branch --all --verbose $argv
-end
+abbr -a gba 'git branch --all --verbose'
 function gbc
   git checkout -b $argv
 end
@@ -89,12 +87,8 @@ end
 function gbD
   git branch --delete --force (_git_transform_branch_args $argv)
 end
-function gbl
-  git branch --verbose $argv
-end
-function gbL
-  git branch --all --verbose $argv
-end
+abbr -a gbl 'git branch --verbose'
+abbr -a gbL 'git branch --all --verbose'
 function gbm
   git branch --move $argv
 end
@@ -107,18 +101,10 @@ end
 function gbR
   git branch --move --force $argv
 end
-function gbs
-  git show-branch $argv
-end
-function gbS
-  git show-branch --all $argv
-end
-function gbv
-  git branch --verbose $argv
-end
-function gbV
-  git branch --verbose --verbose $argv
-end
+abbr -a gbs 'git show-branch'
+abbr -a gbS 'git show-branch --all'
+abbr -a gbv 'git branch --verbose'
+abbr -a gbV 'git branch --verbose --verbose'
 function gbx
   git branch --delete $argv
 end
@@ -168,30 +154,14 @@ function ibX
 end
 
 # Commit (c)
-function gc
-  git commit --verbose $argv
-end
-function gca
-  git commit --verbose --all $argv
-end
-function gcm
-  git commit --message $argv
-end
-function gcS
-  git commit -S --verbose $argv
-end
-function gcSa
-  git commit -S --verbose --all $argv
-end
-function gcSm
-  git commit -S --message $argv
-end
-function gcam
-  git commit --all --message $argv
-end
-function gcma
-  git commit --all --message $argv
-end
+abbr -a gc 'git commit --verbose'
+abbr -a gca 'git commit --verbose --all'
+abbr -a gcm 'git commit --message'
+abbr -a gcS 'git commit -S --verbose'
+abbr -a gcSa 'git commit -S --verbose --all'
+abbr -a gcSm 'git commit -S --message'
+abbr -a gcam 'git commit --all --message'
+abbr -a gcma 'git commit --all --message'
 function gcx
   if count $argv > /dev/null
       git commit --fixup $argv
@@ -210,21 +180,11 @@ end
 function fcof
   gws --color=always | git_status_get_commit | xargs git checkout --force
 end
-function gcO
-  git checkout --patch $argv
-end
-function gcf
-  git commit --amend --reuse-message HEAD $argv
-end
-function gcSf
-  git commit -S --amend --reuse-message HEAD $argv
-end
-function gcF
-  git commit --verbose --amend $argv
-end
-function gcSF
-  git commit -S --verbose --amend $argv
-end
+abbr -a gcO 'git checkout --patch'
+abbr -a gcf 'git commit --amend --reuse-message HEAD'
+abbr -a gcSf 'git commit -S --amend --reuse-message HEAD'
+abbr -a gcF 'git commit --verbose --amend'
+abbr -a gcSF 'git commit -S --verbose --amend'
 function gcp
   if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
     git cherry-pick --ff "issue/$argv[1]"
@@ -259,15 +219,9 @@ function gcP
     git cherry-pick --no-commit $argv
   end
 end
-function gcpa
-  git cherry-pick --abort $argv
-end
-function gcpc
-  git cherry-pick --continue $argv
-end
-function gcr
-  git revert $argv
-end
+abbr -a gcpa 'git cherry-pick --abort'
+abbr -a gcpc 'git cherry-pick --continue'
+abbr -a gcr 'git revert'
 function fcr
   glss --color=always $argv | select_line_commit | xargs git revert $argv
 end
@@ -288,15 +242,9 @@ function gcsS
     git show --pretty=short --show-signature $argv
   end
 end
-function gcl
-  git-commit-lost $argv
-end
-function gcy
-  git cherry -v --abbrev $argv
-end
-function gcY
-  git cherry -v $argv
-end
+abbr -a gcl 'git-commit-lost'
+abbr -a gcy 'git cherry -v --abbrev'
+abbr -a gcY 'git cherry -v'
 
 # Conflict (C)
 function gCl
@@ -322,296 +270,124 @@ function gCT
 end
 
 # Data (d)
-function gd
-  git ls-files $argv
-end
-function gdc
-  git ls-files --cached $argv
-end
-function gdx
-  git ls-files --deleted $argv
-end
-function gdm
-  git ls-files --modified $argv
-end
-function gdu
-  git ls-files --other --exclude-standard $argv
-end
-function gdk
-  git ls-files --killed $argv
-end
+abbr -a gd 'git ls-files'
+abbr -a gdc 'git ls-files --cached'
+abbr -a gdx 'git ls-files --deleted'
+abbr -a gdm 'git ls-files --modified'
+abbr -a gdu 'git ls-files --other --exclude-standard'
+abbr -a gdk 'git ls-files --killed'
 function gdi
   git status --porcelain --short --ignored | sed -n "s/^!! //p" $argv
 end
 
 # Fetch (f)
-function gf
-  git fetch $argv
-end
-function gfa
-  git fetch --all $argv
-end
-function gfc
-  git clone $argv
-end
-function gfcr
-  git clone --recurse-submodules $argv
-end
-function gfm
-  git pull $argv
-end
+abbr -a gf 'git fetch'
+abbr -a gfa 'git fetch --all'
+abbr -a gfc 'git clone'
+abbr -a gfcr 'git clone --recurse-submodules'
+abbr -a gfm 'git pull'
 function gfr
   git pull --rebase $argv
 end
 
 # Flow (F)
-function gFi
-  git flow init $argv
-end
-function gFf
-  git flow feature $argv
-end
-function gFb
-  git flow bugfix $argv
-end
-function gFl
-  git flow release $argv
-end
-function gFh
-  git flow hotfix $argv
-end
-function gFs
-  git flow support $argv
-end
+abbr -a gFi 'git flow init'
+abbr -a gFf 'git flow feature'
+abbr -a gFb 'git flow bugfix'
+abbr -a gFl 'git flow release'
+abbr -a gFh 'git flow hotfix'
+abbr -a gFs 'git flow support'
 
-function gFfl
-  git flow feature list $argv
-end
-function gFfs
-  git flow feature start $argv
-end
-function gFff
-  git flow feature finish $argv
-end
-function gFfp
-  git flow feature publish $argv
-end
-function gFft
-  git flow feature track $argv
-end
-function gFfd
-  git flow feature diff $argv
-end
-function gFfr
-  git flow feature rebase $argv
-end
-function gFfc
-  git flow feature checkout $argv
-end
-function gFfm
-  git flow feature pull $argv
-end
-function gFfx
-  git flow feature delete $argv
-end
+abbr -a gFfl 'git flow feature list'
+abbr -a gFfs 'git flow feature start'
+abbr -a gFff 'git flow feature finish'
+abbr -a gFfp 'git flow feature publish'
+abbr -a gFft 'git flow feature track'
+abbr -a gFfd 'git flow feature diff'
+abbr -a gFfr 'git flow feature rebase'
+abbr -a gFfc 'git flow feature checkout'
+abbr -a gFfm 'git flow feature pull'
+abbr -a gFfx 'git flow feature delete'
 
-function gFbl
-  git flow bugfix list $argv
-end
-function gFbs
-  git flow bugfix start $argv
-end
-function gFbf
-  git flow bugfix finish $argv
-end
-function gFbp
-  git flow bugfix publish $argv
-end
-function gFbt
-  git flow bugfix track $argv
-end
-function gFbd
-  git flow bugfix diff $argv
-end
-function gFbr
-  git flow bugfix rebase $argv
-end
-function gFbc
-  git flow bugfix checkout $argv
-end
-function gFbm
-  git flow bugfix pull $argv
-end
-function gFbx
-  git flow bugfix delete $argv
-end
+abbr -a gFbl 'git flow bugfix list'
+abbr -a gFbs 'git flow bugfix start'
+abbr -a gFbf 'git flow bugfix finish'
+abbr -a gFbp 'git flow bugfix publish'
+abbr -a gFbt 'git flow bugfix track'
+abbr -a gFbd 'git flow bugfix diff'
+abbr -a gFbr 'git flow bugfix rebase'
+abbr -a gFbc 'git flow bugfix checkout'
+abbr -a gFbm 'git flow bugfix pull'
+abbr -a gFbx 'git flow bugfix delete'
 
-function gFll
-  git flow release list $argv
-end
-function gFls
-  git flow release start $argv
-end
-function gFlf
-  git flow release finish $argv
-end
-function gFlp
-  git flow release publish $argv
-end
-function gFlt
-  git flow release track $argv
-end
-function gFld
-  git flow release diff $argv
-end
-function gFlr
-  git flow release rebase $argv
-end
-function gFlc
-  git flow release checkout $argv
-end
-function gFlm
-  git flow release pull $argv
-end
-function gFlx
-  git flow release delete $argv
-end
+abbr -a gFll 'git flow release list'
+abbr -a gFls 'git flow release start'
+abbr -a gFlf 'git flow release finish'
+abbr -a gFlp 'git flow release publish'
+abbr -a gFlt 'git flow release track'
+abbr -a gFld 'git flow release diff'
+abbr -a gFlr 'git flow release rebase'
+abbr -a gFlc 'git flow release checkout'
+abbr -a gFlm 'git flow release pull'
+abbr -a gFlx 'git flow release delete'
 
-function gFhl
-  git flow hotfix list $argv
-end
-function gFhs
-  git flow hotfix start $argv
-end
-function gFhf
-  git flow hotfix finish $argv
-end
-function gFhp
-  git flow hotfix publish $argv
-end
-function gFht
-  git flow hotfix track $argv
-end
-function gFhd
-  git flow hotfix diff $argv
-end
-function gFhr
-  git flow hotfix rebase $argv
-end
-function gFhc
-  git flow hotfix checkout $argv
-end
-function gFhm
-  git flow hotfix pull $argv
-end
-function gFhx
-  git flow hotfix delete $argv
-end
+abbr -a gFhl 'git flow hotfix list'
+abbr -a gFhs 'git flow hotfix start'
+abbr -a gFhf 'git flow hotfix finish'
+abbr -a gFhp 'git flow hotfix publish'
+abbr -a gFht 'git flow hotfix track'
+abbr -a gFhd 'git flow hotfix diff'
+abbr -a gFhr 'git flow hotfix rebase'
+abbr -a gFhc 'git flow hotfix checkout'
+abbr -a gFhm 'git flow hotfix pull'
+abbr -a gFhx 'git flow hotfix delete'
 
-function gFsl
-  git flow support list $argv
-end
-function gFss
-  git flow support start $argv
-end
-function gFsf
-  git flow support finish $argv
-end
-function gFsp
-  git flow support publish $argv
-end
-function gFst
-  git flow support track $argv
-end
-function gFsd
-  git flow support diff $argv
-end
-function gFsr
-  git flow support rebase $argv
-end
-function gFsc
-  git flow support checkout $argv
-end
-function gFsm
-  git flow support pull $argv
-end
-function gFsx
-  git flow support delete $argv
-end
+abbr -a gFsl 'git flow support list'
+abbr -a gFss 'git flow support start'
+abbr -a gFsf 'git flow support finish'
+abbr -a gFsp 'git flow support publish'
+abbr -a gFst 'git flow support track'
+abbr -a gFsd 'git flow support diff'
+abbr -a gFsr 'git flow support rebase'
+abbr -a gFsc 'git flow support checkout'
+abbr -a gFsm 'git flow support pull'
+abbr -a gFsx 'git flow support delete'
 
 # Grep (g)
-function gg
-  git grep $argv
-end
-function ggi
-  git grep --ignore-case $argv
-end
-function ggl
-  git grep --files-with-matches $argv
-end
-function ggL
-  git grep --files-without-matches $argv
-end
-function ggv
-  git grep --invert-match $argv
-end
-function ggw
-  git grep --word-regexp $argv
-end
+abbr -a gg 'git grep'
+abbr -a ggi 'git grep --ignore-case'
+abbr -a ggl 'git grep --files-with-matches'
+abbr -a ggL 'git grep --files-without-matches'
+abbr -a ggv 'git grep --invert-match'
+abbr -a ggw 'git grep --word-regexp'
 
-function ggph
-  git-getparenthash $argv
-end
+abbr -a ggph 'git-getparenthash'
 
 # Index (i)
-function gia
-  git add $argv
-end
+abbr -a gia 'git add'
 function fia
   git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line | awk '{print $2}' | xargs git add $argv
 end
 function fir
   git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line | awk '{print $2}' | xargs git reset $argv
 end
-function giaa
-  git add --all $argv
-end
+abbr -a giaa 'git add --all'
 function giaf
   git add "**/*.$argv"
 end
-function giA
-  git add --patch $argv
-end
+abbr -a giA 'git add --patch'
 function fiA
   git -c color.status=always status --ignore-submodules=$_git_status_ignore_submodules --short $argv | select_line_status | awk '{print $2}' | xargs git add --patch $argv
 end
-function giu
-  git add --update $argv
-end
-function gid
-  git diff --no-ext-diff --cached $argv
-end
-function giD
-  git diff --no-ext-diff --cached --word-diff $argv
-end
-function gii
-  git update-index --assume-unchanged $argv
-end
-function giI
-  git update-index --no-assume-unchanged $argv
-end
-function gir
-  git reset $argv
-end
-function giR
-  git reset --patch $argv
-end
-function gix
-  git rm -r --cached $argv
-end
-function giX
-  git rm -rf --cached $argv
-end
+abbr -a giu 'git add --update'
+abbr -a gid 'git diff --no-ext-diff --cached'
+abbr -a giD 'git diff --no-ext-diff --cached --word-diff'
+abbr -a gii 'git update-index --assume-unchanged'
+abbr -a giI 'git update-index --no-assume-unchanged'
+abbr -a gir 'git reset'
+abbr -a giR 'git reset --patch'
+abbr -a gix 'git rm -r --cached'
+abbr -a giX 'git rm -rf --cached'
 
 # Log (l)
 function gl
@@ -668,9 +444,7 @@ function glb
     git log --topo-order --pretty=format:"$_git_log_brief_format" $argv
   end
 end
-function glc
-  git shortlog --summary --numbered $argv
-end
+abbr -a glc 'git shortlog --summary --numbered'
 function glS
   if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
     git log --show-signature "issue/$argv[1]"
@@ -690,38 +464,20 @@ function gm
     git merge $argv
   end
 end
-function gmC
-  git merge --no-commit $argv
-end
-function gmF
-  git merge --no-ff $argv
-end
-function gma
-  git merge --abort $argv
-end
-function gmt
-  git mergetool $argv
-end
+abbr -a gmC 'git merge --no-commit'
+abbr -a gmF 'git merge --no-ff'
+abbr -a gma 'git merge --abort'
+abbr -a gmt 'git mergetool'
 
 # Push (p)
-function gp
-  git push $argv
-end
-function gpf
-  git push --force-with-lease $argv
-end
-function gpF
-  git push --force $argv
-end
-function gpa
-  git push --all $argv
-end
+abbr -a gp 'git push'
+abbr -a gpf 'git push --force-with-lease'
+abbr -a gpF 'git push --force'
+abbr -a gpa 'git push --all'
 function gpA
   git push --all && git push --tags $argv
 end
-function gpt
-  git push --tags $argv
-end
+abbr -a gpt 'git push --tags'
 function gpc
   git push --set-upstream origin (__fish_git_current_branch) $argv
 end
@@ -730,156 +486,69 @@ function gpp
 end
 
 # Rebase (r)
-function gr
-  if test (count $argv) -eq 1 && string match -r '^\d+$' $argv[1] >/dev/null
-    git rebase "issue/$argv[1]"
-  else
-    git rebase $argv
-  end
-end
+# `gr` (git rebase) removed 2026-07-06: it shadowed the grove
+# shorthand autoloaded from functions/gr.fish. Use gri/gru/gra/grc etc.
 function gru
   git rebase @\{u\} $argv
 end
-function gra
-  git rebase --abort $argv
-end
-function grc
-  git rebase --continue $argv
-end
-function gri
-  git rebase --interactive $argv
-end
-function gria
-  git rebase --interactive --autosquash $argv
-end
+abbr -a gra 'git rebase --abort'
+abbr -a grc 'git rebase --continue'
+abbr -a gri 'git rebase --interactive'
+abbr -a gria 'git rebase --interactive --autosquash'
 function griu
   git rebase --interactive @\{u\} $argv
-end 
+end
 function griau
   git rebase --interactive --autosquash @\{u\} $argv
 end
-function grs
-  git rebase --skip $argv
-end
+abbr -a grs 'git rebase --skip'
 
 # Remote (R)
-function gR
-  git remote $argv
-end
-function gRl
-  git remote --verbose $argv
-end
-function gRa
-  git remote add $argv
-end
-function gRx
-  git remote rm $argv
-end
-function gRm
-  git remote rename $argv
-end
+abbr -a gR 'git remote'
+abbr -a gRl 'git remote --verbose'
+abbr -a gRa 'git remote add'
+abbr -a gRx 'git remote rm'
+abbr -a gRm 'git remote rename'
 function gRu
   git remote update $argv
 end
-function gRp
-  git remote prune $argv
-end
-function gRs
-  git remote show $argv
-end
-function gRb
-  git-hub-browse $argv
-end
+abbr -a gRp 'git remote prune'
+abbr -a gRs 'git remote show'
+abbr -a gRb 'git-hub-browse'
 
 # Stash (s)
-function gs
-  git stash $argv
-end
-function gsa
-  git stash apply $argv
-end
-function gsx
-  git stash drop $argv
-end
-function gsX
-  git-stash-clear-interactive $argv
-end
-function gsl
-  git stash list $argv
-end
-function gsL
-  git-stash-dropped $argv
-end
-function gsd
-  git stash show --patch --stat $argv
-end
-function gski
-  git stash --keep-index $argv
-end
-function gsp
-  git stash pop $argv
-end
-function gsP
-  git stash --patch $argv
-end
-function gsr
-  git-stash-recover $argv
-end
-function gss
-  git stash save --include-untracked $argv
-end
-function gsS
-  git stash save --patch --no-keep-index $argv
-end
-function gsw
-  git stash save --include-untracked --keep-index $argv
-end
+abbr -a gs 'git stash'
+abbr -a gsa 'git stash apply'
+abbr -a gsx 'git stash drop'
+abbr -a gsX 'git-stash-clear-interactive'
+abbr -a gsl 'git stash list'
+abbr -a gsL 'git-stash-dropped'
+abbr -a gsd 'git stash show --patch --stat'
+abbr -a gski 'git stash --keep-index'
+abbr -a gsp 'git stash pop'
+abbr -a gsP 'git stash --patch'
+abbr -a gsr 'git-stash-recover'
+abbr -a gss 'git stash save --include-untracked'
+abbr -a gsS 'git stash save --patch --no-keep-index'
+abbr -a gsw 'git stash save --include-untracked --keep-index'
 
 # Submodule (S)
-function gS
-  git submodule $argv
-end
-function gSa
-  git submodule add $argv
-end
-function gSf
-  git submodule foreach $argv
-end
-function gSi
-  git submodule init $argv
-end
-function gSI
-  git submodule update --init --recursive $argv
-end
-function gSl
-  git submodule status $argv
-end
-function gSm
-  git-submodule-move $argv
-end
-function gSs
-  git submodule sync $argv
-end
-function gSu
-  git submodule foreach git pull origin master $argv
-end
-function gSx
-  git-submodule-remove $argv
-end
+abbr -a gS 'git submodule'
+abbr -a gSa 'git submodule add'
+abbr -a gSf 'git submodule foreach'
+abbr -a gSi 'git submodule init'
+abbr -a gSI 'git submodule update --init --recursive'
+abbr -a gSl 'git submodule status'
+abbr -a gSm 'git-submodule-move'
+abbr -a gSs 'git submodule sync'
+abbr -a gSu 'git submodule foreach git pull origin master'
+abbr -a gSx 'git-submodule-remove'
 
 # Tag (t)
-function gt
-  git tag $argv
-end
-function gtl
-  git tag -l $argv
-end
-function gts
-  git tag -s $argv
-end
-function gtv
-  git verify-tag $argv
-end
+abbr -a gt 'git tag'
+abbr -a gtl 'git tag -l'
+abbr -a gts 'git tag -s'
+abbr -a gtv 'git verify-tag'
 
 # Working Copy (w)
 function gws
@@ -911,21 +580,11 @@ end
 function gwr
   git reset --soft (_git_transform_branch_args $argv)
 end
-function gwrm
-  git reset --mixed $argv
-end
+abbr -a gwrm 'git reset --mixed'
 function gwR
   git reset --hard (_git_transform_branch_args $argv)
 end
-function gwc
-  git clean -n $argv
-end
-function gwC
-  git clean -f $argv
-end
-function gwx
-  git rm -r $argv
-end
-function gwX
-  git rm -rf $argv
-end
+abbr -a gwc 'git clean -n'
+abbr -a gwC 'git clean -f'
+abbr -a gwx 'git rm -r'
+abbr -a gwX 'git rm -rf'
