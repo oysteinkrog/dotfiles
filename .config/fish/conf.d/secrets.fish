@@ -1,6 +1,7 @@
 # DISABLED 2026-05-11 — secrets are no longer globally exported.
 #
-# Use the on-demand helpers instead (see ~/.config/fish/functions/):
+# Use the on-demand helpers instead (shell-agnostic scripts in ~/bin,
+# work from fish, bash, cron, anything on PATH):
 #   secret KEY                    -> print value to stdout
 #   secret --list                 -> list available keys
 #   with-secrets KEY [...] -- CMD -> run CMD with named keys in its env
