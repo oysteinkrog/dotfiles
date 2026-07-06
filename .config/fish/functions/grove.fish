@@ -53,5 +53,5 @@ end
 # Subcommand/flag completions come from the clap-generated
 # completions/grove.fish (regenerate: grove __completions fish).
 # Only the dynamic project-tag completions live here.
-complete -c grove -f -a "(grove list --tags-only 2>/dev/null)" -n "__fish_use_subcommand"
-complete -c grove -f -n "__fish_seen_subcommand_from cd done freeze thaw path fork rename mv" -a "(grove list --tags-only 2>/dev/null)"
+complete -c grove -f -a "(__grove_tags)" -n "__fish_use_subcommand"
+complete -c grove -f -n "__fish_seen_subcommand_from cd done freeze thaw path fork rename mv" -a "(__grove_tags)"
