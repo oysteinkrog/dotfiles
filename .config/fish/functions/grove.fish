@@ -43,17 +43,8 @@ function grove --description "Git worktree manager (with shell cd support)"
     end
 end
 
+# Subcommand/flag completions come from the clap-generated
+# completions/grove.fish (regenerate: grove __completions fish).
+# Only the dynamic project-tag completions live here.
 complete -c grove -f -a "(grove list --tags-only 2>/dev/null)" -n "__fish_use_subcommand"
-complete -c grove -f -n "__fish_use_subcommand" -a "new" -d "Create new worktree project"
-complete -c grove -f -n "__fish_use_subcommand" -a "cd" -d "Change directory to project"
-complete -c grove -f -n "__fish_use_subcommand" -a "list ls" -d "List projects"
-complete -c grove -f -n "__fish_use_subcommand" -a "done" -d "Remove project"
-complete -c grove -f -n "__fish_use_subcommand" -a "fork" -d "Fork existing project"
-complete -c grove -f -n "__fish_use_subcommand" -a "launch" -d "Open terminal tabs"
-complete -c grove -f -n "__fish_use_subcommand" -a "adopt" -d "Import existing worktree"
-complete -c grove -f -n "__fish_use_subcommand" -a "rename mv" -d "Rename project"
-complete -c grove -f -n "__fish_use_subcommand" -a "freeze" -d "Freeze project"
-complete -c grove -f -n "__fish_use_subcommand" -a "thaw" -d "Unfreeze project"
-complete -c grove -f -n "__fish_use_subcommand" -a "path" -d "Print worktree path"
-complete -c grove -f -n "__fish_use_subcommand" -a "config" -d "Manage configuration"
-complete -c grove -f -n "__fish_seen_subcommand_from cd done freeze thaw path" -a "(grove list --tags-only 2>/dev/null)"
+complete -c grove -f -n "__fish_seen_subcommand_from cd done freeze thaw path fork rename mv" -a "(grove list --tags-only 2>/dev/null)"
