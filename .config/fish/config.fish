@@ -1,4 +1,4 @@
-set PATH ~/.local/bin ~/.cargo/bin ~/bin ~/bin/gcmw /home/linuxbrew/.linuxbrew/bin ~/go/bin $PATH
+set PATH ~/.local/bin ~/.cargo/bin ~/bin /home/linuxbrew/.linuxbrew/bin ~/go/bin $PATH
 
 # disable default vi mode prompt prefix
 function fish_mode_prompt
@@ -30,9 +30,6 @@ fish_add_path -p ~/.local/bin
 set --export BUN_INSTALL "$HOME/.bun"
 set --export PATH $BUN_INSTALL/bin $PATH
 
-# dotnet alias
-alias dotnet="dotnet.exe"
-
 # ripgrep config
 set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
 
@@ -41,3 +38,11 @@ set -x BROWSER explorer.exe
 
 # opencode
 fish_add_path /c/users/oystein/.opencode/bin
+
+# Folded in from former one-line conf.d files (each conf.d file costs a
+# DrvFs stat per shell start; one file beats five).
+fish_add_path -g ~/google-cloud-sdk/bin          # was conf.d/gcloud.fish
+if test -f "$HOME/.cargo/env.fish"               # was conf.d/rustup.fish
+    source "$HOME/.cargo/env.fish"
+end
+set -gx CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS 1   # was conf.d/superbot2.fish
