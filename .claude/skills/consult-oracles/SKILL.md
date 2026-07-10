@@ -1,33 +1,43 @@
 ---
 name: consult-oracles
 model: fable
-description: Consult Fable (primary oracle) for expert second opinions; escalate to GPT-5.5-Pro only for extremely important or complex tasks (always paired with Fable). Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult Fable (primary oracle) for expert second opinions; escalate to GPT-5.6 Sol (via Codex CLI) or GPT-5.5-Pro (via PAL) only for extremely important or complex tasks (always paired with Fable). Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 context: fork
 ---
 
 # Consult Oracles Skill
 
 Get expert analysis by consulting AI models. **Fable (claude-fable-5) is the primary
-oracle and the default choice.** GPT-5.5-Pro is reserved for extremely important or
-extremely complex tasks, and is never used alone — every GPT-Pro consultation is
-paired with a Fable consultation on the same question.
+oracle and the default choice.** The GPT escalation tier (GPT-5.6 Sol via Codex CLI,
+or GPT-5.5-Pro via PAL) is reserved for extremely important or extremely complex
+tasks, and is never used alone — every GPT escalation is paired with a Fable
+consultation on the same question.
 
 ## Oracle Hierarchy
 
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
-| **Fable** (`claude-fable-5`) | Fresh subagent via `Agent` tool with `model: "fable"` | **Default — all oracle consultations** |
-| `gpt-5.5-pro` | `mcp__pal__chat` | Extremely important or complex tasks ONLY — and always alongside Fable |
-| `gpt-5.5` | `mcp__pal__chat` | Rarely; cheaper GPT probe when Pro is overkill but a GPT view is explicitly wanted |
+| **Fable** (`claude-fable-5`) | Fresh subagent via `Agent` tool with `model: "fable"` | **Default — all oracle consultations (when available)** |
+| Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when the Fable spawn fails — substitute primary, flagged in the synthesis |
+| **GPT-5.6 Sol** (`gpt-5.6-sol`) | Codex CLI: `codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh "<question>"` | **Preferred GPT escalation** — extremely important or complex tasks ONLY, always alongside Fable. NOT reachable via PAL; explicit tier ID required (bare `gpt-5.6` hangs) |
+| `gpt-5.5-pro` | `mcp__pal__chat` | Alternate GPT escalation when PAL's structured flow (consensus, continuations) is wanted, or Codex is unavailable — same pairing rule |
+| `gpt-5.6-terra` / `gpt-5.5` | Codex CLI / `mcp__pal__chat` | Rarely; cheaper GPT probe when the escalation tier is overkill but a GPT view is explicitly wanted |
 | `gemini-3.1-pro-preview` | `mcp__pal__chat` | Cross-provider second opinion, bug hunting, deep code analysis |
 
 **Rules:**
-1. Default to Fable for every oracle consultation.
-2. Escalate to GPT-5.5-Pro only when the task is extremely important (high-stakes,
+1. Default to Fable for every oracle consultation, whenever it is available.
+2. **Fable availability fallback:** if the Fable spawn fails (model not accessible on
+   the current plan/harness, permission error, or repeated spawn errors), fall back to
+   an Opus subagent (`model: "opus"`) as the primary oracle. Say explicitly in your
+   synthesis that Opus substituted for Fable — do not silently downgrade. Do NOT treat
+   Fable unavailability as a reason to jump straight to GPT-Pro.
+3. Escalate to the GPT tier (GPT-5.6 Sol preferred, GPT-5.5-Pro via PAL as
+   alternate) only when the task is extremely important (high-stakes,
    hard-to-reverse decisions) or extremely complex (Fable's answer is uncertain or
    the problem resisted a first Fable pass).
-3. **Never consult GPT-Pro alone.** When GPT-Pro is used, ALWAYS also put the same
-   question to Fable and compare. Disagreements between them are the signal.
+4. **Never consult the GPT tier alone.** When it is used, ALWAYS also put the same
+   question to Fable (or the Opus fallback) and compare. Disagreements between them
+   are the signal.
 
 ## When to Use
 
@@ -59,20 +69,29 @@ Agent with:
 
 The subagent can read the repo, so include file paths rather than pasting everything inline.
 
-### Premium Escalation (GPT-5.5-Pro + Fable, always paired)
+### Premium Escalation (GPT + Fable, always paired)
 
 For extremely important or complex tasks, run BOTH in parallel (single message,
-two tool calls):
+two tool calls). **GPT-5.6 Sol via Codex CLI is the preferred GPT side** (PAL
+tops out at gpt-5.5-pro; GPT-5.6 is only reachable through Codex):
 
 ```
-Agent with:                          mcp__pal__chat with:
-- subagent_type: "general-purpose"   - prompt: "<same question>"
-- model: "fable"                     - model: "gpt-5.5-pro"
-- prompt: "<oracle question>"        - working_directory_absolute_path: "<repo root>"
-                                     - thinking_mode: "high"
+Agent with:                          Bash with:
+- subagent_type: "general-purpose"   codex exec --sandbox read-only \
+- model: "fable"                       -m gpt-5.6-sol \
+- prompt: "<oracle question>"          -c model_reasoning_effort=xhigh \
+                                       -o <scratchpad>/oracle-gpt.md \
+                                       "<same question>" 2>/dev/null
 ```
 
-Never fire the GPT-Pro call without the matching Fable call.
+Effort guide for the GPT side: `high` for hard-but-bounded questions, `xhigh`
+for genuinely contested ones; `max` only when a prior round came back shallow.
+
+Fall back to `mcp__pal__chat` with `model: "gpt-5.5-pro"`, `thinking_mode: "high"`
+when Codex is unavailable or you specifically want PAL's conversation
+continuations / consensus flow.
+
+Never fire the GPT escalation call without the matching Fable call.
 
 ### Cross-Provider Second Opinion (Gemini)
 
@@ -139,9 +158,9 @@ Trust Fable's response unless:
 - The reasoning seems flawed
 - Important constraints were missed
 - The answer contradicts well-established patterns
-- The problem warrants paired escalation to GPT-5.5-Pro
+- The problem warrants paired escalation to the GPT tier
 
-### Fable + GPT-5.5-Pro (Paired Escalation)
+### Fable + GPT (Paired Escalation)
 
 When they agree, that convergence is strong evidence — proceed.
 When they disagree, do NOT silently pick one:
@@ -157,14 +176,14 @@ When they disagree, do NOT silently pick one:
 ### Fable Analysis (Primary)
 <summary of Fable response>
 
-### GPT-5.5-Pro Analysis (Escalation)
+### GPT Analysis (Escalation — name the model used, e.g. GPT-5.6 Sol)
 <summary of GPT response>
 
 ### Decision
 <recommendation, grounded in whichever reasoning held up>
 
 <If the oracles disagreed>
-Disagreement: Fable suggested <X>, GPT-5.5-Pro suggested <Y>.
+Disagreement: Fable suggested <X>, GPT suggested <Y>.
 Resolution: <which was chosen and the evidence that decided it>.
 ```
 
@@ -181,11 +200,12 @@ Agent with:
   recommendation, risks, alternatives."
 ```
 
-### Extremely Hard Problem (Paired — Fable + GPT-5.5-Pro)
+### Extremely Hard Problem (Paired — Fable + GPT-5.6 Sol)
 ```
 Single message, two parallel tool calls:
 1. Agent (model: "fable") — "Analyze this race condition in <file:lines>..."
-2. mcp__pal__chat (model: "gpt-5.5-pro", thinking_mode: "high") — same question
+2. Bash — codex exec --sandbox read-only -m gpt-5.6-sol \
+     -c model_reasoning_effort=xhigh "<same question>" 2>/dev/null
 Then synthesize with the template above.
 ```
 
@@ -203,7 +223,8 @@ mcp__pal__chat with:
   Fable subagents stay inside Claude Code)
 - Verify recommendations against project constraints
 - Document which recommendation was chosen and why
-- GPT-Pro without a paired Fable consult is a policy violation — fix it before synthesizing
+- A GPT-tier consult without a paired Fable consult is a policy violation — fix it before synthesizing
+- Codex `codex exec` oracle calls and PAL calls both leave the machine (OpenAI API); Fable subagents stay inside Claude Code
 
 ## Related Skills
 - `/swarm-oracle` — FOR/AGAINST oracle consensus via PAL MCP (pipeline-integrated version)

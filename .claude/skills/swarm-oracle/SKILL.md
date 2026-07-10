@@ -1,7 +1,7 @@
 ---
 name: swarm-oracle
 model: opus
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents; escalate to PAL 2x GPT-Pro (always paired with Fable) for extremely important or complex validations. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents; escalate to GPT-5.6 Sol via Codex CLI or PAL 2x GPT-Pro (always paired with Fable) for extremely important or complex validations. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"
 ---
 
@@ -13,6 +13,11 @@ argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"
 > is the **escalation tier**, for extremely important or complex validations only, and
 > must always run alongside a Fable consultation on the same question. See
 > `/consult-oracles` and the Oracle Consultation Policy in `~/CLAUDE.md`.
+>
+> **Availability fallback:** if Fable spawns fail (model not accessible, permission or
+> repeated spawn errors), run the same FOR/AGAINST debate with `model: "opus"` subagents
+> instead and state the substitution in the verdict. Fable being unavailable is NOT a
+> reason to escalate to the GPT-Pro tier.
 
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
@@ -67,8 +72,22 @@ Agent({ subagent_type: "general-purpose", model: "fable",
 
 Then skip to Step 4 and synthesize the two responses yourself.
 
-**Escalation tier (PAL 2x GPT-Pro — extremely important/complex only, always paired
-with a parallel Fable consult on the same evaluation prompt):**
+**Escalation tier (extremely important/complex only, always paired with a parallel
+Fable consult on the same evaluation prompt).** Two GPT routes:
+
+*Preferred — GPT-5.6 Sol via Codex CLI* (GPT-5.6 is not reachable through PAL;
+use explicit tier IDs, the bare `gpt-5.6` alias hangs). Run FOR and AGAINST as
+two codex exec calls in one message:
+
+```bash
+codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+  -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." 2>/dev/null
+codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+  -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." 2>/dev/null
+```
+
+*Alternate — PAL 2x GPT-Pro* (when Codex is unavailable or the structured
+consensus flow is wanted):
 
 ```json
 {
