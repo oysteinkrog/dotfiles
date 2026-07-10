@@ -48,8 +48,20 @@ either does not.
 Every fact has exactly one canonical home; every other doc links to it.
 Repetition across docs is a maintenance bug — copies drift and the reader can't
 tell which is current. A root/global doc gets a short section plus pointers to
-the sub-docs; sub-docs cross-link back to that hub and to each other. When two
-docs explain the same thing, pick the hub and cut the other to a pointer.
+the sub-docs. When two docs explain the same thing, pick the hub and cut the
+other to a pointer.
+
+## Link the tree, downward
+
+Docs form a tree reachable from one root/hub doc: the hub links to each sub-doc,
+and a sub-doc links on to any module-level doc beneath it. Navigation flows
+**down** — a reader starts at the root and follows links in, so the whole tree is
+reachable from there. A doc links back up to its parent, or across to a sibling,
+**only to reuse a fact that already lives there** — an app doc pointing at the
+hub's deployment section instead of restating it, a boundary doc naming the
+sibling it defers to. That is the one-home rule doing its job. What you do *not*
+add is a rote "part of X" back-link that carries no information: it's noise, and
+the tree is already navigable from the root without it.
 
 ## Edit pass
 
