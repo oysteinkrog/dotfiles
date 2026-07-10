@@ -71,11 +71,13 @@ cat /tmp/codex-look-out.txt
 
 ### Pin a specific model
 
-Add `-m <model>` if the user asked for a specific Codex model:
+Add `-m <model>` if the user asked for a specific Codex model. Use explicit
+GPT-5.6 tier IDs (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) — the bare
+`gpt-5.6` alias hangs codex exec:
 
 ```bash
 codex exec --skip-git-repo-check --sandbox read-only \
-  -m gpt-5.4 \
+  -m gpt-5.6-sol \
   -o /tmp/codex-look-out.txt \
   "..." \
   -i /path/to/image.png \
