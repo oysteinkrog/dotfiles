@@ -65,11 +65,15 @@ PAL MCP still tops out at `gpt-5.5-pro`.
   indefinitely on this setup (process alive at 0% CPU, no output), and the
   interactive `/model` picker doesn't list the 5.6 models even though `-m`
   works (known upstream issue). `gpt-5.6-sol|terra|luna` all work.
-- **Reasoning effort:** `-c model_reasoning_effort=low|medium|high|xhigh|max`.
+- **Reasoning effort:** `-c model_reasoning_effort=<value>`. The API enum is
+  `none|minimal|low|medium|high|xhigh`; on top of that the CLI accepts `max`
+  (deepest single-task reasoning) and `ultra` (Sol Ultra — fans out subagents
+  for work that splits into parallel chunks). All of these are accepted by
+  `codex exec` too, not just interactive sessions (verified 2026-07-10).
   There is no exact effort mapping from 5.5 to 5.6 — start lower than you
   think and raise only if the result is shallow. Most tasks don't need
-  `xhigh`/`max`. (Interactive Codex also has an "ultra" mode that fans out
-  subagents; not applicable to `exec`.)
+  `max`/`ultra`; reserve `ultra` for genuinely decomposable work and expect
+  it to burn plan quota fast.
 - **Deprecated:** `gpt-5.2` and `gpt-5.3-codex` are dead under ChatGPT sign-in —
   fix any script still passing them.
 
