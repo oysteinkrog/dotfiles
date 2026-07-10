@@ -19,7 +19,7 @@ consultation on the same question.
 |--------|--------------|-------------|
 | **Fable** (`claude-fable-5`) | Fresh subagent via `Agent` tool with `model: "fable"` | **Default — all oracle consultations (when available)** |
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when the Fable spawn fails — substitute primary, flagged in the synthesis |
-| **GPT-5.6 Sol** (`gpt-5.6-sol`) | Codex CLI: `codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh "<question>"` | **Preferred GPT escalation** — extremely important or complex tasks ONLY, always alongside Fable. NOT reachable via PAL; explicit tier ID required (bare `gpt-5.6` hangs) |
+| **GPT-5.6 Sol** (`gpt-5.6-sol`) | Codex CLI (see `/codex` skill): `codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh "<question>"` — `ultra` instead of `xhigh` for decomposable questions | **Preferred GPT escalation** — extremely important or complex tasks ONLY, always alongside Fable. NOT reachable via PAL; explicit tier ID required (bare `gpt-5.6` hangs) |
 | `gpt-5.5-pro` | `mcp__pal__chat` | Alternate GPT escalation when PAL's structured flow (consensus, continuations) is wanted, or Codex is unavailable — same pairing rule |
 | `gpt-5.6-terra` / `gpt-5.5` | Codex CLI / `mcp__pal__chat` | Rarely; cheaper GPT probe when the escalation tier is overkill but a GPT view is explicitly wanted |
 | `gemini-3.1-pro-preview` | `mcp__pal__chat` | Cross-provider second opinion, bug hunting, deep code analysis |
@@ -84,8 +84,18 @@ Agent with:                          Bash with:
                                        "<same question>" 2>/dev/null
 ```
 
-Effort guide for the GPT side: `high` for hard-but-bounded questions, `xhigh`
-for genuinely contested ones; `max` only when a prior round came back shallow.
+Follow the `/codex` skill for prompting discipline, exec liveness pitfalls, and
+model details. Effort guide for the GPT side:
+
+- `high` — hard-but-bounded questions.
+- `xhigh` — the default for oracle escalations: genuinely contested questions.
+- `max` — only when a prior `xhigh` round came back shallow.
+- `ultra` (Sol Ultra, subagent fan-out) — only when the oracle question itself
+  decomposes into parallel sub-analyses: multi-facet architecture reviews
+  (correctness + security + ops in one question), evaluations spanning several
+  independent subsystems, or "assess all N options" questions. For a single
+  contested judgment call, `xhigh` beats `ultra` — fan-out adds breadth, not
+  depth, and burns plan quota fast.
 
 Fall back to `mcp__pal__chat` with `model: "gpt-5.5-pro"`, `thinking_mode: "high"`
 when Codex is unavailable or you specifically want PAL's conversation
