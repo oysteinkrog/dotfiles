@@ -2,6 +2,6 @@
   "managed_by": "skills-sync",
   "source": "dzhng-skills",
   "repo": "https://github.com/dzhng/skills",
-  "upstream_path": "skills/engineering/close-spec",
+  "upstream_path": "skills/engineering/review",
   "commit": "f7ace9d51c8300f45764492538ea15f038859ea7"
 }
