@@ -76,8 +76,12 @@ Then skip to Step 4 and synthesize the two responses yourself.
 Fable consult on the same evaluation prompt).** Two GPT routes:
 
 *Preferred — GPT-5.6 Sol via Codex CLI* (GPT-5.6 is not reachable through PAL;
-use explicit tier IDs, the bare `gpt-5.6` alias hangs). Run FOR and AGAINST as
-two codex exec calls in one message:
+use explicit tier IDs, the bare `gpt-5.6` alias hangs; see the `/codex` skill
+for prompting and exec pitfalls). Run FOR and AGAINST as two codex exec calls
+in one message. `xhigh` is the default effort; switch a stance to
+`model_reasoning_effort=ultra` (Sol Ultra, subagent fan-out) only when its
+evaluation decomposes into parallel facets — e.g. an AGAINST pass over a large
+bead set or a design spanning several independent subsystems:
 
 ```bash
 codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
