@@ -1,5 +1,9 @@
 # User-Level Claude Code Instructions
 
+## Explanation Style (applies to all user-facing output)
+
+Write user-facing explanations in clear, concise language without reducing technical precision. Prefer concrete wording over unexplained jargon. Use established domain terminology when it is the most precise choice, and briefly define it when the intended audience may not know it. Preserve material evidence, constraints, tradeoffs, caveats, and uncertainty. Do not rewrite code, identifiers, commands, quoted text, or prescribed formats merely to satisfy this style rule. Consider how much context the target audience has carefully, do not assume the target(s) have full context.
+
 ## Safety Rules (mined from session history)
 
 - **Never kill processes you didn't start.** Before killing any process, verify you started it in this session. Killing a running app instance is a critical error.
