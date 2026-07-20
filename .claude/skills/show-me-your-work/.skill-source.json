@@ -1,0 +1,9 @@
+{
+  "managed_by": "manual",
+  "source": "cursor/plugins",
+  "repo": "https://github.com/cursor/plugins",
+  "upstream_path": "pstack/skills/show-me-your-work",
+  "commit": "3fe2823ce17c1656c222d4b7c59d3f82fbf20143",
+  "installed_at": "2026-07-20",
+  "note": "Installed manually, not via skills-sync (would over-pull all pstack/skills). To update, re-copy from upstream_path at a newer commit."
+}
