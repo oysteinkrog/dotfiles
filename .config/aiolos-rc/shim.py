@@ -70,6 +70,18 @@ def is_inference(path):
     return path.split("?", 1)[0].startswith("/v1/messages")
 
 
+def is_upgrade(headers):
+    # A real protocol upgrade (WebSocket): `Upgrade: <proto>` and/or
+    # `Connection: Upgrade`. Only these switch the connection to a raw tunnel.
+    for k, v in headers:
+        kl = k.lower()
+        if kl == "upgrade" and v.strip():
+            return True
+        if kl == "connection" and "upgrade" in v.lower():
+            return True
+    return False
+
+
 async def read_headers(reader):
     head = await reader.readuntil(b"\r\n\r\n")
     lines = head.split(b"\r\n")
@@ -144,13 +156,16 @@ async def handle(cr, cw):
             return
         method, path, ver = parts
 
-        # Inference is pinned/rewritten (needs the aiolos account header), so it is
-        # buffered as a single request/response. Everything else to Anthropic is
-        # relayed as a transparent tunnel — the remote-control bridge setup
-        # (/v1/environments/bridge) and other endpoints may upgrade/stream, and a
-        # buffered proxy that strips Upgrade/Connection would break them (RC then
-        # fails with "Transport recovery exhausted").
-        if not is_inference(path):
+        # Route by REQUEST, not by connection. Every buffered response forces
+        # `Connection: close`, so the client never pools a shim connection to carry
+        # a later request of a different class. Only a real WebSocket upgrade turns
+        # the connection into a raw bidirectional tunnel — after `101` it carries no
+        # further HTTP requests, so there is nothing to misroute. This keeps
+        # inference classified per-request (a pooled control connection can't smuggle
+        # a /v1/messages POST straight to Anthropic, off aiolos and off the pin)
+        # while still fixing the remote-control bridge upgrade that a header-stripping
+        # buffered proxy broke ("Transport recovery exhausted").
+        if is_upgrade(headers):
             out = [request_line]
             for k, v in headers:
                 # Preserve Upgrade/Connection etc; only drop Host (rewritten) and
@@ -162,17 +177,17 @@ async def handle(cr, cw):
             out.append(f"Host: {ANTHROPIC_HOST}")
             head = ("\r\n".join(out) + "\r\n\r\n").encode("latin1")
 
-            log(f"{method} {path} -> anthropic (tunnel)")
+            log(f"{method} {path} -> anthropic (upgrade tunnel)")
             ur, uw = await asyncio.open_connection(
                 ANTHROPIC_HOST, ANTHROPIC_PORT,
                 ssl=client_ctx, server_hostname=ANTHROPIC_HOST)
             upstream_w = uw
-            uw.write(head)          # request head; body + any frames flow via tunnel
+            uw.write(head)          # request head; frames flow via the tunnel
             await uw.drain()
             await tunnel(cr, cw, ur, uw)
             return
 
-        # --- inference: buffered request to aiolos, with optional account pin ---
+        # --- buffered per-request: inference -> aiolos (+pin); else -> Anthropic ---
         clen, chunked, expect_continue = await read_body(cr, headers)
         if expect_continue:
             cw.write(b"HTTP/1.1 100 Continue\r\n\r\n")
@@ -191,14 +206,19 @@ async def handle(cr, cw):
         elif clen:
             body = await cr.readexactly(clen)
 
-        host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
-        if ACCOUNT_ID:
-            extra = [("x-aiolos-account-id", ACCOUNT_ID),
-                     ("x-aiolos-force-account-strict", "true")]
-            dest = "aiolos[" + ACCOUNT_ID + "]"
+        if is_inference(path):
+            host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
+            if ACCOUNT_ID:
+                extra = [("x-aiolos-account-id", ACCOUNT_ID),
+                         ("x-aiolos-force-account-strict", "true")]
+                dest = "aiolos[" + ACCOUNT_ID + "]"
+            else:
+                extra = []            # no pin -> aiolos load-balances
+                dest = "aiolos[lb]"
         else:
-            extra = []            # no pin -> aiolos load-balances
-            dest = "aiolos[lb]"
+            host, port, use_tls = ANTHROPIC_HOST, ANTHROPIC_PORT, True
+            extra = []
+            dest = "anthropic"
 
         log(f"{method} {path} -> {dest}")
 
