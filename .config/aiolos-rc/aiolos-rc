@@ -58,6 +58,13 @@ DEFAULT_ACCOUNT=""
 [ -f "$SECRETS/config.env" ] && . "$SECRETS/config.env"
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+# True only if $1 is alive AND is actually one of our shim processes — guards
+# --stop/--status against a recycled PID now owned by an unrelated process.
+is_our_shim() {
+  pid_alive "$1" || return 1
+  [ -r "/proc/$1/cmdline" ] || return 1
+  tr '\0' ' ' < "/proc/$1/cmdline" | grep -q 'aiolos-rc/shim\.py'
+}
 
 # --stop / --status operate on ALL running session shims.
 case "${1:-}" in
@@ -67,7 +74,7 @@ case "${1:-}" in
       [ -e "$f" ] || continue
       case "$f" in *.log) continue ;; esac
       pid="$(basename "$f")"
-      if pid_alive "$pid"; then kill "$pid" 2>/dev/null || true; n=$((n+1)); fi
+      if is_our_shim "$pid"; then kill "$pid" 2>/dev/null || true; n=$((n+1)); fi
       rm -f "$f" "$f.log"
     done
     echo "aiolos-rc: stopped $n session shim(s)"
@@ -78,7 +85,7 @@ case "${1:-}" in
       [ -e "$f" ] || continue
       case "$f" in *.log) continue ;; esac
       pid="$(basename "$f")"
-      if pid_alive "$pid"; then echo "aiolos-rc: $(cat "$f")"; any=1
+      if is_our_shim "$pid"; then echo "aiolos-rc: $(cat "$f")"; any=1
       else rm -f "$f" "$f.log"; fi
     done
     [ "$any" = 1 ] || echo "aiolos-rc: no session shims running"
@@ -143,10 +150,16 @@ if [ "$NOPIN" = 1 ]; then MODE="load-balanced"; else MODE="pinned:$ACCOUNT"; fi
 # preload at it. Torn down on exit by the trap below.
 SHIM_PID=""
 PORTFILE="$(mktemp "${TMPDIR:-/tmp}/aiolos-rc-port.XXXXXX")"
+# Per-session --settings override (flagSettings). Per-session (not a shared file in
+# the code dir) so concurrent instances never share or race on it; removed on exit.
+# Give it a .json name (mktemp, then rename) to match a settings file.
+_ov_tmp="$(mktemp "${TMPDIR:-/tmp}/aiolos-rc-settings.XXXXXX")"
+OVERRIDE_SETTINGS="$_ov_tmp.json"
+mv "$_ov_tmp" "$OVERRIDE_SETTINGS"
 cleanup() {
   if [ -n "$SHIM_PID" ] && pid_alive "$SHIM_PID"; then kill "$SHIM_PID" 2>/dev/null || true; fi
   [ -n "$SHIM_PID" ] && rm -f "$SHIMS_DIR/$SHIM_PID" "$SHIMS_DIR/$SHIM_PID.log"
-  rm -f "$PORTFILE"
+  rm -f "$PORTFILE" "$OVERRIDE_SETTINGS"
 }
 trap cleanup EXIT INT TERM
 
@@ -191,7 +204,6 @@ export LD_PRELOAD="$PRELOAD"
 export AIOLOS_RC_PORT="$PORT"
 export NODE_EXTRA_CA_CERTS="$CA"
 
-OVERRIDE_SETTINGS="$DIR/rc-override.settings.json"
 printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > "$OVERRIDE_SETTINGS"
 
 # Launch the native binary the same way ~/.config/fish/functions/claude.fish does
