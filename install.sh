@@ -37,6 +37,7 @@ files=(
 
 # Subdirectories inside .config to symlink individually
 config_dirs=(
+  aiolos-rc
   ConEmu
   fish
   fisher
