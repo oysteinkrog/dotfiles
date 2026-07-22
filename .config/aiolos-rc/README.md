@@ -25,12 +25,15 @@ privileged port. The shim terminates TLS with a local `api.anthropic.com` cert
 | `/v1/messages*` (inference) | aiolos, `x-aiolos-account-id: <X>` (strict) | work runs on account **X** |
 | everything else (RC, sessions, oauth, api) | `api.anthropic.com` on your stored **main** login | RC registers under your **main** account |
 
-Inference is buffered (to inject the account header); **everything else is relayed as a
-transparent full-duplex tunnel** so the remote-control bridge setup
-(`/v1/environments/bridge`) and any upgrade/streaming endpoint work. A buffered proxy
-that stripped `Upgrade`/`Connection` here made RC fail with "Transport recovery
-exhausted". (The bridge WebSocket itself goes direct to `bridge.claudeusercontent.com`,
-not through the shim.)
+Routing is **per request, not per connection**: every buffered response forces
+`Connection: close`, so the client never pools a shim connection to carry a later
+request of a different class (this keeps inference always classified and pinned; a
+control connection can't smuggle a `/v1/messages` POST straight to Anthropic, off
+aiolos). **Only a real WebSocket upgrade** switches that connection to a transparent
+full-duplex tunnel — needed because the remote-control bridge handshake upgrades, and
+a buffered proxy that stripped `Upgrade`/`Connection` made RC fail with "Transport
+recovery exhausted". (The bridge WebSocket itself goes direct to
+`bridge.claudeusercontent.com`, not through the shim.)
 
 ## Routing modes
 
