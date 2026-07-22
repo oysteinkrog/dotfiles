@@ -1,0 +1,15 @@
+# Build artifact (rebuilt per-machine by setup.sh; arch-specific)
+preload.so
+
+# Runtime state
+shims/
+rc-override.settings.json
+shim.log
+shim.pid
+shim.mode
+__pycache__/
+
+# Secrets/config live under ~/.config/secrets/aiolos-rc, never here — but guard
+# against an accidental local copy landing in this dir.
+certs/
+config.env
