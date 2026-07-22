@@ -113,6 +113,28 @@ async def pump(src, dst):
         pass
 
 
+async def tunnel(cr, cw, ur, uw):
+    """Full-duplex byte relay between client and upstream. Closing one side's
+    writer on EOF tears down the peer half, so WebSocket upgrades, SSE, long-poll,
+    keep-alive and bidirectional streams all pass through transparently."""
+    async def half(src, dst):
+        try:
+            while True:
+                data = await src.read(65536)
+                if not data:
+                    break
+                dst.write(data)
+                await dst.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                dst.close()
+            except Exception:
+                pass
+    await asyncio.gather(half(cr, uw), half(ur, cw))
+
+
 async def handle(cr, cw):
     upstream_w = None
     try:
@@ -121,10 +143,37 @@ async def handle(cr, cw):
         if len(parts) != 3:
             return
         method, path, ver = parts
-        clen, chunked, expect_continue = await read_body(cr, headers)
 
-        # If the client wants to wait for 100-continue, unblock it so it sends
-        # the body (we buffer the whole request before opening upstream).
+        # Inference is pinned/rewritten (needs the aiolos account header), so it is
+        # buffered as a single request/response. Everything else to Anthropic is
+        # relayed as a transparent tunnel — the remote-control bridge setup
+        # (/v1/environments/bridge) and other endpoints may upgrade/stream, and a
+        # buffered proxy that strips Upgrade/Connection would break them (RC then
+        # fails with "Transport recovery exhausted").
+        if not is_inference(path):
+            out = [request_line]
+            for k, v in headers:
+                # Preserve Upgrade/Connection etc; only drop Host (rewritten) and
+                # the aiolos pin guards (never let a client smuggle them upstream).
+                if k.lower() in ("host", "x-aiolos-account-id",
+                                 "x-aiolos-force-account-strict"):
+                    continue
+                out.append(f"{k}: {v}")
+            out.append(f"Host: {ANTHROPIC_HOST}")
+            head = ("\r\n".join(out) + "\r\n\r\n").encode("latin1")
+
+            log(f"{method} {path} -> anthropic (tunnel)")
+            ur, uw = await asyncio.open_connection(
+                ANTHROPIC_HOST, ANTHROPIC_PORT,
+                ssl=client_ctx, server_hostname=ANTHROPIC_HOST)
+            upstream_w = uw
+            uw.write(head)          # request head; body + any frames flow via tunnel
+            await uw.drain()
+            await tunnel(cr, cw, ur, uw)
+            return
+
+        # --- inference: buffered request to aiolos, with optional account pin ---
+        clen, chunked, expect_continue = await read_body(cr, headers)
         if expect_continue:
             cw.write(b"HTTP/1.1 100 Continue\r\n\r\n")
             await cw.drain()
@@ -142,19 +191,14 @@ async def handle(cr, cw):
         elif clen:
             body = await cr.readexactly(clen)
 
-        if is_inference(path):
-            host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
-            if ACCOUNT_ID:
-                extra = [("x-aiolos-account-id", ACCOUNT_ID),
-                         ("x-aiolos-force-account-strict", "true")]
-                dest = "aiolos[" + ACCOUNT_ID + "]"
-            else:
-                extra = []            # no pin -> aiolos load-balances
-                dest = "aiolos[lb]"
+        host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
+        if ACCOUNT_ID:
+            extra = [("x-aiolos-account-id", ACCOUNT_ID),
+                     ("x-aiolos-force-account-strict", "true")]
+            dest = "aiolos[" + ACCOUNT_ID + "]"
         else:
-            host, port, use_tls = ANTHROPIC_HOST, ANTHROPIC_PORT, True
-            extra = []
-            dest = "anthropic"
+            extra = []            # no pin -> aiolos load-balances
+            dest = "aiolos[lb]"
 
         log(f"{method} {path} -> {dest}")
 
