@@ -158,7 +158,11 @@ OVERRIDE_SETTINGS="$_ov_tmp.json"
 mv "$_ov_tmp" "$OVERRIDE_SETTINGS"
 cleanup() {
   if [ -n "$SHIM_PID" ] && pid_alive "$SHIM_PID"; then kill "$SHIM_PID" 2>/dev/null || true; fi
-  [ -n "$SHIM_PID" ] && rm -f "$SHIMS_DIR/$SHIM_PID" "$SHIMS_DIR/$SHIM_PID.log"
+  if [ -n "$SHIM_PID" ]; then
+    rm -f "$SHIMS_DIR/$SHIM_PID"
+    # Keep the per-session log for post-mortem when debugging.
+    [ -n "${RC_DEBUG:-}" ] || rm -f "$SHIMS_DIR/$SHIM_PID.log"
+  fi
   rm -f "$PORTFILE" "$OVERRIDE_SETTINGS"
 }
 trap cleanup EXIT INT TERM
