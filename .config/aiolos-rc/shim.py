@@ -55,6 +55,11 @@ client_ctx = ssl.create_default_context()
 HOP_BY_HOP = {
     "host", "connection", "proxy-connection", "keep-alive",
     "transfer-encoding", "upgrade", "te", "trailer",
+    # We re-frame the body (dechunk + buffer) and append our own
+    # Content-Length below, so the shim must own it exclusively. Forwarding
+    # the client's Content-Length too would emit a duplicate header, which
+    # RFC 9110 forbids and strict upstream parsers reject as smuggling.
+    "content-length",
     # never let the client smuggle its own pin
     "x-aiolos-account-id", "x-aiolos-force-account-strict",
 }
@@ -245,7 +250,19 @@ async def handle(cr, cw):
         await uw.drain()
 
         # Relay response until upstream closes (Connection: close). Handles
-        # Content-Length, chunked, and SSE streaming uniformly.
+        # Content-Length, chunked, and SSE streaming uniformly. Peek the first
+        # chunk to log the upstream status line under RC_DEBUG (no bodies) —
+        # this is what makes a failed remote-control bridge init diagnosable.
+        first = await ur.read(65536)
+        if first:
+            if DEBUG:
+                try:
+                    status_line = first.split(b"\r\n", 1)[0].decode("latin1", "replace")
+                    log(f"    <- {dest}: {status_line}")
+                except Exception:
+                    pass
+            cw.write(first)
+            await cw.drain()
         await pump(ur, cw)
     except (asyncio.IncompleteReadError, ConnectionError, asyncio.LimitOverrunError):
         pass
