@@ -104,6 +104,7 @@
       }
     }
   },
+  "cleanupPeriodDays": 36500,
   "syntaxHighlightingDisabled": false,
   "effortLevel": "xhigh",
   "autoUpdatesChannel": "latest",
