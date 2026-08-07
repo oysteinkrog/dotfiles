@@ -166,28 +166,13 @@ Note: on WSL1/wslfs the Tantivy full-text index can't build (`os error 22`), so
 ### Setup for new projects
 
 Prefer the user-scope registration in `~/.claude.json` (already present) — projects inherit it.
-If a project needs its own entry, add to `.mcp.json` in the project root (no auth header needed):
-```json
-{
-  "mcpServers": {
-    "mcp-agent-mail": {
-      "type": "http",
-      "url": "http://127.0.0.1:8765/mcp/"
-    }
-  }
-}
-```
+If a project needs its own entry, register an http `mcp-agent-mail` server in its
+`.mcp.json` pointing at that same URL (no auth header needed).
 
 ### Key tools
-- `ensure_project` — Register project before any messaging
-- `register_agent` — Create agent identity (name + role)
-- `send_message` — Post messages with thread support
-- `fetch_inbox` — Retrieve messages for an agent
-- `acknowledge_message` — Mark messages read
-- `search_messages` — Full-text search (degraded on wslfs; see note above)
-- `file_reservation_paths` — Reserve files to avoid conflicts between agents
-- `release_file_reservations` — Unlock reserved paths
-- `macro_start_session` — Initialize agent workflow (convenience)
+Tool names are discoverable from the server. The two that matter for coordination:
+`file_reservation_paths` before editing, `release_file_reservations` after committing.
+`ensure_project` then `register_agent` come first in any session.
 
 ## Claude Code Teams & Agents (Multi-Agent Orchestration)
 
@@ -253,12 +238,19 @@ NOT N×M total agents in one shot. Example phrasings and what they mean:
 - If the work is inherently breadth-first (e.g. "scan for news"), each round can take a new
   angle/lane. If depth-first (e.g. "dig into these findings"), each round escalates from the
   prior round's output.
-- Subagents **return their findings as text** (in their final assistant message) — the harness
-  blocks subagent Write calls for report/findings files. The **leader** persists each round's
-  returned findings to a shared directory (e.g. `data/<project>-<date>/findings-round-<K>-agent-<N>.md`)
-  so there are durable artifacts across rounds — the leader-written files, not the agents' ephemeral
-  messages, are what later rounds build on. (Code files written by execution-swarm teammates are
-  unaffected; the block targets report-style files only.)
+- Subagents **return their findings as text** (in their final assistant message) and the
+  **leader** persists each round's findings to a shared directory (e.g.
+  `data/<project>-<date>/findings-round-<K>-agent-<N>.md`) so there are durable artifacts
+  across rounds. The leader-written files, not the agents' ephemeral messages, are what
+  later rounds build on. Three reasons this is the default, none of them a harness-wide
+  block on Write:
+  - A worktree teammate's file lands inside its own worktree, so the leader never sees it
+    at the path it expects in the main checkout.
+  - `Explore`, `Plan`, and `qa-triager` have no Write tool at all (per-agent-type tool
+    allowlist), so they cannot write a report even when told to.
+  - Leader-written files keep one consistent naming scheme across rounds.
+  Agent types that do have Write (`general-purpose`, `claude`, the domain agents) can
+  write files normally; code files from execution-swarm teammates are expected.
 
 **Why N agents in parallel, not one big agent:** parallel agents cover more ground faster and
 each keeps a clean context budget for its lane. Why M rounds instead of one bigger round:
@@ -299,7 +291,7 @@ without polluting earlier agents' context.
    teammates are **terminal** — the leader spawns a fresh one for the next bead.
 
 Monitoring: `TaskList` for progress/owners/blocked-by, `TaskGet` for detail; the
-sidebar shows live teammate status. `br ready` / `bv -robot-triage` stays the
+sidebar shows live teammate status. `br ready` / `bv --robot-triage` stays the
 source of truth for backlog health.
 
 Use `/swarm`, `/swarm-agents`, `/swarm-exec`, `/swarm-review`, etc. skills for the
@@ -307,23 +299,21 @@ established orchestration patterns (research / design / review / bead implementa
 
 ## BV (Beads Viewer) + br (beads_rust)
 
-`bv` (`~/go/bin/bv`): TUI + robot API for beads issue tracker.
-`br`: CLI for bead management (`br ready`, `br show`, `br close`, `br update`).
-Key robot commands: `bv -robot-triage`, `bv -robot-next`, `bv -robot-plan`.
+`bv` (`~/go/bin/bv`) is a TUI plus robot API over the beads tracker; `br` is the CLI.
+**Never run bare `bv`** in agent context: it opens the TUI and hangs. Always pass a
+`--robot-*` flag. Full command reference: the `beads-br` and `beads-bv` skills.
 Agent workflow: triage → leader spawns teammates via `Agent` → coordinate via TaskCreate
 + SendMessage + agent-mail file reservations → teammates run `br close` and commit.
 
 ## Google Workspace CLI (gog)
 
 Go binary at `~/bin/gog` (steipete/gogcli; config `~/.config/gogcli/`), called via
-Bash rather than an MCP server to avoid context bloat. Always pass `-a` with the
-user's work email (provided in session context). Covers Gmail, Calendar, Drive,
-Contacts, Tasks, Sheets, Docs, Slides, People, Forms, Apps Script, Chat, Classroom.
-Flags: `-j` for JSON, `-p` for TSV, `--results-only` to drop the pagination envelope.
-Agent sandboxing: `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
-Gmail/Calendar are also available via Claude.ai remote MCPs (use those for quick
-reads; use `gog` for Drive, Docs, Sheets, Contacts, etc.). Example:
-`gog -a <work-email> calendar events list --days 7`
+Bash rather than an MCP server to avoid context bloat. **Always pass `-a` with the
+user's work email** (provided in session context). Run `gog --help` for the command
+surface and output flags. Agent sandboxing:
+`GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
+Gmail/Calendar are also on Claude.ai remote MCPs: use those for quick reads, and
+`gog` for Drive, Docs, Sheets, Contacts.
 
 ## Static Sites (GitHub Pages)
 
@@ -339,24 +329,11 @@ Two destinations — pick by **content ownership**, not by who's typing.
 The full policy for IFKB agents (and any agent operating inside `/c/work/ifkb`) is in
 `ifkb/knowledge-base/technical/website-publishing.md`. That policy is binding for company content; nothing in it restricts what goes on personal accounts.
 
-### Publishing — company content (`InitialForce/sites`)
-Fixed checkout at `/c/work/sites-repo`. Use `/publish-site` skill or manually:
-```bash
-# First time: git clone --branch gh-pages --single-branch https://github.com/InitialForce/sites.git /c/work/sites-repo
-cd /c/work/sites-repo && git pull origin gh-pages
-mkdir -p <category>/<slug> && cp -r /path/to/content/* <category>/<slug>/
-git add -A && git commit -m "add <category>/<slug>" && git push origin gh-pages
-```
-Result: `https://initialforce.github.io/sites/<category>/<slug>/` (org-member login required).
-
-### Publishing — personal content (`oysteinkrog/sites`)
-```bash
-# git clone --branch gh-pages --single-branch https://github.com/oysteinkrog/sites.git /c/work/sites-repo-personal
-cd /c/work/sites-repo-personal && git pull origin gh-pages
-mkdir -p <category>/<slug> && cp -r /path/to/content/* <category>/<slug>/
-git add -A && git commit -m "add <category>/<slug>" && git push origin gh-pages
-```
-Result: `https://oysteinkrog.github.io/sites/<category>/<slug>/` (public).
+### Publishing
+Use the `/publish-site` skill. Both repos serve from the **`gh-pages` branch**, via
+single-branch checkouts at the paths in the table above. Results land at
+`https://initialforce.github.io/sites/<category>/<slug>/` (org-member login required)
+and `https://oysteinkrog.github.io/sites/<category>/<slug>/` (public).
 
 ### Conventions (both repos)
 - Organize by category: `okrs/`, `bv/`, `docs/`, `reports/`, etc.
@@ -368,7 +345,7 @@ Cross-agent procedural memory. `cass` indexes session logs (14K+ sessions);
 `cm` extracts rules and provides them in context.
 
 - **cm:** `~/.local/bin/cm` (v0.2.3, rebuilt from source). Config: `~/.cass-memory/config.json`
-- **cass:** Windows binary via WSL wrapper at `~/.local/bin/cass` (v0.1.64). Data: `C:\Users\oystein\AppData\Roaming\coding-agent-search\` (the old `cass-old` data dir was orphaned legacy, now archived at `D:\archive\cass-old`).
+- **cass:** Windows binary via WSL wrapper at `~/.local/bin/cass` (0.6.x custom GPU/DirectML build; reports `cass 0.6.0` — don't let `cass upgrade` clobber it). Data: `C:\Users\oystein\AppData\Roaming\coding-agent-search\` (the old `cass-old` data dir was orphaned legacy, now archived at `D:\archive\cass-old`). Full setup/recovery runbook: dotfiles `docs/cass-setup.md`.
 
 ### Agent protocol
 1. **Start:** `cm context "<task>" --json --limit 5 --no-history` before significant work
@@ -376,14 +353,7 @@ Cross-agent procedural memory. `cass` indexes session logs (14K+ sessions);
 3. **Finish:** `cm outcome success` or `cm outcome failure`
 
 ### Key commands
-```bash
-cm context "<task>" --json       # Get relevant rules for a task
-cm playbook list                 # Show all rules
-cm reflect --session <path>      # Extract rules from a session (uses LLM)
-cm mark <id> --helpful           # Promote a rule
-cass search "<query>" --json     # Search session history
-cass index --full                # Re-index after new sessions
-```
+`cm --help` and `cass --help` carry the full surface; both take `--json`.
 
 ## Agent Swarm Rules
 
@@ -396,8 +366,9 @@ security fixes (16% reversion rate observed 2026-03-07). Instead:
 - Teammates commit directly after completing each bead
 - If a bead would touch 5+ files, split it into smaller beads first
 
-(Worktree isolation is still fine for read-only research/design teammates that produce
-a single report file and no code changes.)
+(Worktree isolation is still fine for read-only research/design teammates that return
+findings in their final message and make no code changes. Not for a teammate whose output
+is a file the leader must read: that file lands in the worktree, not the main checkout.)
 
 ### Never rewrite shared-checkout history
 Execution teammates share ONE working tree and index. A teammate must NEVER
@@ -468,7 +439,7 @@ See `/swarm` skill pre-flight for setup automation.
 - Tell teammates to read CLAUDE.md first
 - Specify file paths teammates will touch so file reservations can prevent conflicts
 - For ordered assignment, have the leader release tasks in dependency order (use
-  `br dep tree` / `bv -robot-plan` to compute the order) and use `TaskUpdate` with
+  `br dep tree` / `bv --robot-plan` to compute the order) and use `TaskUpdate` with
   `addBlockedBy` to encode the dependency graph so teammates only claim unblocked tasks
 
 ## Obsidian CLI
