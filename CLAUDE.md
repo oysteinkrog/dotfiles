@@ -109,6 +109,13 @@ All Python projects use **uv** (packages), **ruff** (lint/format), **ty** (type 
 After editing .py files: `ruff check --fix && ruff format && ty check`.
 See `/py-uv`, `/py-ruff`, `/py-ty` skills for details.
 
+## CASS (coding-agent session search)
+
+Full setup runbook for a new machine (Windows binary + WSL wrapper, scheduled
+maintenance task, semantic model, GPU/DirectML embedding build, WSLENV gotchas,
+known failure modes and recovery): see [docs/cass-setup.md](docs/cass-setup.md).
+The wrapper and maintenance scripts live in `.local/bin/` (tracked here).
+
 ## X/Twitter Bookmarks — fieldtheory-cli (ft)
 
 Local archive of X/Twitter bookmarks, searchable via `ft` CLI (`npm i -g fieldtheory`).
