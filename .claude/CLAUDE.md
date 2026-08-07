@@ -163,11 +163,32 @@ The rust server is backward-compatible: it answers JSON-RPC on both `/mcp/` (can
 Note: on WSL1/wslfs the Tantivy full-text index can't build (`os error 22`), so
 `search_messages` may be degraded — core messaging + file reservations are unaffected.
 
-### Setup for new projects
+### Setup for projects — MANDATORY per-repo registration (policy changed 2026-08-07)
 
-Prefer the user-scope registration in `~/.claude.json` (already present) — projects inherit it.
-If a project needs its own entry, register an http `mcp-agent-mail` server in its
-`.mcp.json` pointing at that same URL (no auth header needed).
+**Every repo that uses beads (`br`) or multi-agent swarms MUST carry its own
+`mcp-agent-mail` entry in the repo's `.mcp.json`.** This is a required uplift, not a
+preference — apply it to any such repo you touch that lacks the entry:
+
+```json
+"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:8765/mcp/" }
+```
+
+**There is deliberately NO user-scope registration in `~/.claude.json`** — it was removed
+2026-08-07. Do not re-add it. Why: the server was registered twice (user scope + project
+scope, same name, same URL), and it was the only server that intermittently failed to
+surface its tools to sessions and subagents — some agents got `file_reservation_paths`,
+others got nothing, with no config difference. The duplicate was the one structural
+difference from the always-reliable single-registration servers; best-supported theory is
+the two registrations race for one tool-namespace slot at session start (diagnosed on
+simhw bead bd-agentmail-tools-absent-jl8). One registration, project scope, everywhere.
+
+Two lessons that outlive the fix:
+- `ToolSearch` `select:` only matches **fully-qualified** names
+  (`mcp__mcp-agent-mail__file_reservation_paths`); bare tool names silently return
+  "no matching tools", which reads as the server being down when it isn't.
+- If the tools are genuinely absent from a session, the JSON-RPC endpoint works from
+  any shell and is the same transport:
+  `curl -s -X POST http://127.0.0.1:8765/mcp/ -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_reservation_paths","arguments":{...}}}'`
 
 ### Key tools
 Tool names are discoverable from the server. The two that matter for coordination:
