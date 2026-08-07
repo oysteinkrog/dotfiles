@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# cass — WSL wrapper that calls cass.exe on the Windows side.
+#
+# Why: On WSL1, Tantivy fails because WSL1 doesn't support the mmap
+# operations it needs. Running the Windows binary directly avoids this.
+#
+# Data dir: default (platform data dir, e.g. %APPDATA%\coding-agent-search\).
+# We do NOT inject --data-dir cass-old here — the legacy `cass-old` directory
+# was tied to v0.1.64 and is no longer indexed. Pass --data-dir explicitly
+# if you need to target an alternate location.
+
+CASS_EXE="/c/Users/Oystein/bin/cass.exe"
+
+# WSL env vars only reach a Windows exe when named in WSLENV. Forward the
+# frankensqlite page-buffer ceiling and the GPU-embedding opt-in when set
+# (cass-maintenance.sh relies on both).
+if [ -n "${FSQLITE_PAGE_BUFFER_MAX:-}" ]; then
+  export WSLENV="${WSLENV:+$WSLENV:}FSQLITE_PAGE_BUFFER_MAX"
+fi
+if [ -n "${CASS_SEMANTIC_GPU:-}" ]; then
+  export WSLENV="${WSLENV:+$WSLENV:}CASS_SEMANTIC_GPU"
+fi
+
+exec "$CASS_EXE" "$@"
