@@ -15,7 +15,8 @@ session logs (Claude Code, Codex, Cursor, ...) into a searchable archive
   + raw-mirror evidence store).
 - **Maintenance loop**: Windows Task Scheduler task `CASS-Maintenance` fires every
   30 min → `wscript.exe cass-maintenance.vbs` (hidden window) → `wsl.exe bash
-  ~/.local/bin/cass-maintenance.sh` → `cass index --semantic` + `cm reflect`.
+  ~/.local/bin/cass-maintenance.sh` → `cass index` (lexical, 0.6.23) +
+  `cass-gpu models backfill` (GPU semantic) + `cm reflect`.
   Both scripts are tracked in dotfiles (`.local/bin/`).
 
 ## Fresh-machine install
@@ -47,6 +48,44 @@ appended to `WSLENV` the same way, or exported from the Windows side.
 |---|---|
 | `FSQLITE_PAGE_BUFFER_MAX=1048576` | frankensqlite page-buffer ceiling (~4 GB) — prevents pool-OOM on large index runs |
 | `CASS_SEMANTIC_GPU=1` | opt-in DirectML GPU embedding (see below) |
+
+## Split-binary layout (REQUIRED as of 2026-08-09)
+
+Two binaries, strict division of labour:
+
+| Binary | Version | Runs | Never runs |
+|---|---|---|---|
+| `C:\Users\<user>\bin\cass.exe` | stock **0.6.23** | `cass index` (lexical incremental), lexical search, status/health | `--semantic` anything (safetensors embedder would mix vector provenance; its identity guard also refuses the ONNX index at query time) |
+| `C:\Users\<user>\bin\cass-gpu.exe` | gpu-embedding branch (reports 0.6.0) | `models backfill` (bounded, checkpointed GPU embedding); `search --mode semantic` | `cass index` (see regression below) |
+
+WSL wrappers: `~/.local/bin/cass` → cass.exe, `~/.local/bin/cass-gpu` →
+cass-gpu.exe (both tracked in dotfiles).
+
+Measured latencies (2026-08-09, warm-ish): lexical search 4 s on 0.6.23 vs
+56 s on the main-branch build (main is slow across the board on this
+dataset, not just at indexing); semantic search ~4 min via cass-gpu (vector
+index load over drvfs dominates). So interactive/lexical traffic stays on
+0.6.23 and semantic queries are an explicit `cass-gpu search --mode
+semantic` when the 4-minute cost is worth it.
+
+**Why split:** the main-branch build (post-0.6.23) has an incremental
+`cass index` memory regression: 30+ GB private bytes and a stall at ~2
+conversations processed, reproduced twice (2026-08-07 and 2026-08-09) under
+different system load; 0.6.23 incrementals use ~300 MB. `models backfill` on
+the same main-branch build is unaffected (bounded batches, checkpointed), so
+the GPU build handles only embedding. cass-maintenance.sh encodes this:
+step 1 `cass index` (0.6.23), step 1b `cass-gpu models backfill --tier
+{quality,fast}` loop until published.
+
+Query-time note: 0.6.23 REFUSES semantic queries over the ONNX-built index
+("Embedding space identity is unverifiable" — its identity guard cannot
+authenticate vectors produced by the newer build; the guard was reworked
+upstream after 0.6.23, so there is no local override). Semantic queries must
+go through `cass-gpu`. A stale `models/all-MiniLM-L6-v2.downloading` staging
+dir (leftover from a failed download) additionally pins the model lifecycle
+in "acquiring" and blocks semantic search on any binary — if `cass models
+status --json` says `state: acquiring` with 0 bytes present while the model
+files verify, remove the empty staging dir.
 
 ## GPU-accelerated semantic embedding (DirectML)
 
@@ -95,6 +134,14 @@ embedding parity exact (cosine 1.000000, vectors L2-normalized).
   "stalled". Upstream bug; retry or run attended with memory headroom.
 - **Semantic exit 9 "fastembed unavailable"**: model dir missing/incomplete →
   `echo y | cass models install`.
+- **Main-branch incremental `cass index` memory regression** (2026-08): 30+ GB
+  private bytes, stall at ~2 conversations, system commit pressure; watchdog
+  diagnostics fire but the process can linger for a long time holding
+  `index-run.lock` (later runs fail exit 7). Reproduced twice; 0.6.23 is fine.
+  This is WHY the split-binary layout exists — never run `cass-gpu index`.
+- **Flaky process-exit detection**: `tasklist.exe /FI` can transiently return
+  nothing under load, which looks like "process gone". Only trust an explicit
+  "No tasks are running" answer, and require several consecutive ones.
 
 ## Health checks
 

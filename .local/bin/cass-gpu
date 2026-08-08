@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# cass-gpu — WSL wrapper for the GPU/DirectML build (cass-gpu.exe).
+#
+# Split-binary layout (2026-08-09): cass.exe is stock 0.6.23 (stable lexical
+# indexing + search); cass-gpu.exe is the gpu-embedding branch build used ONLY
+# for bounded `models backfill` semantic embedding. Do NOT run `cass-gpu index`
+# — the main-branch incremental index has a 30+ GB memory regression.
+
+CASS_EXE="/c/Users/Oystein/bin/cass-gpu.exe"
+
+if [ -n "${FSQLITE_PAGE_BUFFER_MAX:-}" ]; then
+  export WSLENV="${WSLENV:+$WSLENV:}FSQLITE_PAGE_BUFFER_MAX"
+fi
+if [ -n "${CASS_SEMANTIC_GPU:-}" ]; then
+  export WSLENV="${WSLENV:+$WSLENV:}CASS_SEMANTIC_GPU"
+fi
+
+exec "$CASS_EXE" "$@"

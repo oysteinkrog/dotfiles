@@ -366,7 +366,7 @@ Cross-agent procedural memory. `cass` indexes session logs (14K+ sessions);
 `cm` extracts rules and provides them in context.
 
 - **cm:** `~/.local/bin/cm` (v0.2.3, rebuilt from source). Config: `~/.cass-memory/config.json`
-- **cass:** Windows binary via WSL wrapper at `~/.local/bin/cass` (0.6.x custom GPU/DirectML build; reports `cass 0.6.0` — don't let `cass upgrade` clobber it). Data: `C:\Users\oystein\AppData\Roaming\coding-agent-search\` (the old `cass-old` data dir was orphaned legacy, now archived at `D:\archive\cass-old`). Full setup/recovery runbook: dotfiles `docs/cass-setup.md`.
+- **cass:** split-binary layout (2026-08-09): `cass` wrapper → stock 0.6.23 (indexing + lexical/interactive search); `cass-gpu` wrapper → custom GPU/DirectML build (semantic embedding backfill and `search --mode semantic` only, ~4 min/query; reports `cass 0.6.0`, don't let `cass upgrade` clobber it). NEVER `cass index --semantic` and NEVER `cass-gpu index` (vector provenance / memory regression — see runbook). Data: `C:\Users\oystein\AppData\Roaming\coding-agent-search\` (the old `cass-old` data dir was orphaned legacy, now archived at `D:\archive\cass-old`). Full setup/recovery runbook: dotfiles `docs/cass-setup.md`.
 
 ### Agent protocol
 1. **Start:** `cm context "<task>" --json --limit 5 --no-history` before significant work
