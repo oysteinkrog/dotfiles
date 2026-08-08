@@ -27,9 +27,13 @@ export FSQLITE_PAGE_BUFFER_MAX="${FSQLITE_PAGE_BUFFER_MAX:-1048576}"
 # Fail-open: if GPU init fails, cass logs a warning and embeds on CPU.
 export CASS_SEMANTIC_GPU="${CASS_SEMANTIC_GPU:-1}"
 
+# Widen the redact memo cache for catch-up runs (upstream #291; default 4096
+# entries thrashes with CapacityLru evictions during bulk ingest).
+export CASS_REDACT_MEMO_CAPACITY="${CASS_REDACT_MEMO_CAPACITY:-65536}"
+
 # cass runs as a Windows exe; WSL env vars only cross the WSL->Windows boundary
 # when named in WSLENV. Without this line the exports above never reach cass.exe.
-export WSLENV="${WSLENV:+$WSLENV:}FSQLITE_PAGE_BUFFER_MAX:CASS_SEMANTIC_GPU"
+export WSLENV="${WSLENV:+$WSLENV:}FSQLITE_PAGE_BUFFER_MAX:CASS_SEMANTIC_GPU:CASS_REDACT_MEMO_CAPACITY"
 
 LOG_DIR="$HOME/.local/share"
 LOG_FILE="$LOG_DIR/cass-maintenance.log"
@@ -51,17 +55,43 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 echo
 echo "===== [$( ts )] CASS maintenance start (pid=$$) ====="
 
-# 1. Incremental index with --semantic (GPU/DirectML vector index).
-#    At 30-min cadence each run handles only a handful of new sessions, so
-#    semantic build stays cheap and we avoid mega-jobs.
-#    Memory bounded by fork patches: chunking (7e38ce3) + memo widening (a4e3110).
-echo "[$( ts )] cass index --semantic (incremental + GPU semantic)..."
-if cass index --semantic; then
+# 1. Incremental lexical index on the stable 0.6.23 binary (cass.exe).
+#    Split-binary layout (2026-08-09): the main-branch GPU build has an
+#    incremental-index memory regression (30+ GB private, stalls at ~2
+#    conversations — reproduced twice), so it must NOT run `cass index`.
+#    0.6.23 incrementals stay ~300 MB. Do NOT add --semantic here: 0.6.23
+#    embeds from model.safetensors and would silently mix vectors into the
+#    ONNX-provenance vector index (see docs/cass-setup.md, provenance rule).
+echo "[$( ts )] cass index (incremental lexical, 0.6.23)..."
+if cass index; then
   echo "[$( ts )]   cass index OK"
 else
   rc=$?
   echo "[$( ts )]   cass index FAILED (exit $rc)"
 fi
+
+# 1b. Semantic embedding via the GPU build (cass-gpu.exe, DirectML/ONNX).
+#     `models backfill` is checkpointed and bounded per batch, which sidesteps
+#     the main-branch `index` regression. Loop until published, capped per run;
+#     at 30-min cadence one batch per tier normally suffices.
+CASS_GPU_EXE="/c/users/oystein/bin/cass-gpu.exe"
+for tier in quality fast; do
+  for attempt in 1 2 3 4 5; do
+    echo "[$( ts )] cass-gpu models backfill --tier $tier (batch $attempt)..."
+    out=$("$CASS_GPU_EXE" models backfill --tier "$tier" --embedder fastembed \
+          --batch-conversations 1000 --json 2>&1)
+    rc=$?
+    if [ $rc -ne 0 ]; then
+      echo "[$( ts )]   backfill $tier FAILED (exit $rc): $(echo "$out" | tail -3)"
+      break
+    fi
+    if echo "$out" | grep -q '"published"\|published'; then
+      echo "[$( ts )]   backfill $tier published"
+      break
+    fi
+    echo "[$( ts )]   backfill $tier batch done, not yet published"
+  done
+done
 
 # 2. Reflect on recent main sessions.
 echo "[$( ts )] cm reflect on recent sessions..."
