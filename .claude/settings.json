@@ -1,169 +1,17 @@
 {
-  "cleanupPeriodDays": 36500,
   "env": {
-    "USE_BUILTIN_RIPGREP": "0",
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
   },
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "default"
   },
-  "model": "claude-fable-5[1m]",
-  "skillOverrides": {
-    "ab-testing": "off",
-    "admin-page-for-nextjs-sites": "off",
-    "agent-ergonomics-and-intuitiveness-maximization-for-cli-tools": "off",
-    "agent-fungibility-philosophy": "off",
-    "architecture-diagram": "off",
-    "automating-your-automations": "off",
-    "bd-to-br-migration": "off",
-    "beads-compliance-and-completion-verification": "off",
-    "brenner": "off",
-    "brennerbot-with-ntm": "off",
-    "browser-extension-automation": "off",
-    "caam": "off",
-    "cc-hooks": "off",
-    "changelog-md-workmanship": "off",
-    "close-spec": "off",
-    "code-review-gemini-swarm-with-ntm": "off",
-    "codebase-archaeology": "off",
-    "codebase-audit": "off",
-    "codebase-pattern-extraction": "off",
-    "codebase-report": "off",
-    "compare-screenshots": "off",
-    "csctf": "off",
-    "cursor": "off",
-    "de-slopify": "off",
-    "diagram-design": "off",
-    "documentation-website-for-software-project": "off",
-    "dsr": "off",
-    "eval-skills": "off",
-    "excalidraw-generation": "off",
-    "explore-unknowns": "off",
-    "frankensearch-integration-for-rust-projects": "off",
-    "frankensuite-website-development": "off",
-    "frontend-slides": "off",
-    "ga4": "off",
-    "gdb-for-debugging": "off",
-    "gh-actions": "off",
-    "gh-cli": "off",
-    "gh-og-share-images": "off",
-    "gh-pr-images": "off",
-    "gh-triage-ru": "off",
-    "ghostty": "off",
-    "giil": "off",
-    "git-repo-janitor": "off",
-    "git-stash-janitor": "off",
-    "git-worktree-branch-rationalization": "off",
-    "harness-eval": "off",
-    "imagegen-nano-banana": "off",
-    "implement-spec": "off",
-    "implement-spec-with-codex": "off",
-    "installer-workmanship": "off",
-    "lab-deploy": "off",
-    "latex-handouts": "off",
-    "lean-formal-feedback-loop": "off",
-    "library-updater": "off",
-    "mcp-server-design": "off",
-    "mermaid": "off",
-    "mock-code-finder": "off",
-    "modes-of-reasoning-project-analysis": "off",
-    "multi-model-triangulation": "off",
-    "multi-pass-bug-hunting": "off",
-    "ntm": "off",
-    "og-share-images": "off",
-    "operationalizing-expertise": "off",
-    "path-rationalization": "off",
-    "planning-workflow": "off",
-    "pr-checks": "off",
-    "presentation-design": "off",
-    "preview-shots": "off",
-    "ralph-tui-create-beads": "off",
-    "ralph-tui-create-beads-rust": "off",
-    "ralph-tui-create-json": "off",
-    "ralph-tui-prd": "off",
-    "readme-writing": "off",
-    "reality-check-for-project": "off",
-    "refactor-clean": "off",
-    "renderer": "off",
-    "research-software": "off",
-    "ru-multi-repo-workflow": "off",
-    "rust-cli-with-sqlite": "off",
-    "rust-crates-publishing": "off",
-    "rust-undefined-behavior-exorcist": "off",
-    "saas-billing-patterns-for-stripe-and-paypal": "off",
-    "saas-cli-auth-flow": "off",
-    "saas-customer-analytics": "off",
-    "screenshot-critique": "off",
-    "secret-lookup": "off",
-    "security-audit-for-saas": "off",
-    "seo-for-saas-businesses": "off",
-    "simplify-and-refactor-code-isomorphically": "off",
-    "slack-migration-to-mattermost-phase-1-extraction": "off",
-    "slack-migration-to-mattermost-phase-2-setup-and-import": "off",
-    "slack-migration-to-mattermost-phase-3-ongoing-maintenance": "off",
-    "slb": "off",
-    "slide-management": "off",
-    "slide-quality": "off",
-    "slidev-mastery": "off",
-    "stripe-checkout": "off",
-    "supabase": "off",
-    "swarm-beads-rewrite": "off",
-    "swarm-hardening": "off",
-    "swarm-oracle-review": "off",
-    "swarm-prd": "off",
-    "swarm-status": "off",
-    "tanstack": "off",
-    "tax-return-preparation-and-advice-generic": "off",
-    "testing-conformance-harnesses": "off",
-    "testing-fuzzing": "off",
-    "testing-golden-artifacts": "off",
-    "testing-metamorphic": "off",
-    "testing-real-service-e2e-no-mocks": "off",
-    "tui-glamorous": "off",
-    "tui-inspector": "off",
-    "user-support-ticketing-system-for-saas": "off",
-    "user-support-triage-for-saas-and-open-source-projects": "off",
-    "vercel": "off",
-    "vibing-with-ntm": "off",
-    "video-obs-youtube-music": "off",
-    "visual-design": "off",
-    "wezterm": "off",
-    "wills-and-estate-planning-skill": "off",
-    "world-class-doctor-mode-for-cli-tools": "off",
-    "wrangler": "off",
-    "write-docs": "off",
-    "write-skills": "off",
-    "write-spec": "off",
-    "write-tests": "off"
-  },
+  "model": "opus[1m]",
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "matcher": "",
@@ -177,23 +25,6 @@
             "type": "command",
             "command": "cm outcome success 2>/dev/null || true",
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "StopFailure": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
           }
         ]
       }
@@ -205,23 +36,6 @@
           {
             "type": "command",
             "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state aW5wdXQ=",
-            "async": true
-          },
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -240,11 +54,6 @@
             "type": "command",
             "command": "cm outcome failure 2>/dev/null || true",
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
           }
         ]
       }
@@ -256,11 +65,6 @@
           {
             "type": "command",
             "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state d29ya2luZw==",
-            "async": true
-          },
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -280,62 +84,21 @@
           },
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/rg-replace-guard.sh"
-          },
-          {
-            "type": "command",
             "command": "bash ~/.claude/hooks/grove-worktree-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
-            "async": true
           }
         ]
       }
     ]
-  },
-  "worktree": {
-    "baseRef": "fresh"
   },
   "statusLine": {
     "type": "command",
     "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
   "enabledPlugins": {
+    "obsidian@obsidian-skills": true,
     "rust-analyzer-lsp@claude-plugins-official": false,
     "frontend-design@claude-plugins-official": true,
-    "ui-ux-pro-max@ui-ux-pro-max-skill": false,
-    "cowork-plugin-management@inline": false
+    "ui-ux-pro-max@ui-ux-pro-max-skill": true
   },
   "extraKnownMarketplaces": {
     "ui-ux-pro-max-skill": {
@@ -345,18 +108,11 @@
       }
     }
   },
+  "cleanupPeriodDays": 36500,
   "syntaxHighlightingDisabled": false,
-  "effortLevel": "high",
+  "effortLevel": "xhigh",
   "autoUpdatesChannel": "latest",
-  "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
-  "skipWorkflowUsageWarning": true,
-  "editorMode": "normal",
-  "autoCompactEnabled": true,
-  "fileCheckpointingEnabled": false,
-  "teammateMode": "in-process",
-  "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true,
   "mcpServers": {
     "mcp-agent-mail": {
       "type": "http",
