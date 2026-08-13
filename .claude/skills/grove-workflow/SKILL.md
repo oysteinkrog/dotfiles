@@ -64,8 +64,8 @@ For the `desktop` repo, `dir_prefix` is empty — tags map directly to
 
 | Command | Purpose |
 |---|---|
-| `grove new <tag> [--issue N] [--branch B] [--base REF] [--no-fetch]` | Create a worktree + branch, register it |
-| `grove fork [<src>] <new_tag> [--issue N] [--branch B] [--no-fetch]` | Fork an existing project's branch into a new worktree |
+| `grove new <tag> [--issue N] [--branch B] [--base REF] [--no-fetch] [--ephemeral] [--ttl DUR]` | Create a worktree + branch, register it |
+| `grove fork [<src>] <new_tag> [--issue N] [--branch B] [--no-fetch] [--ephemeral] [--ttl DUR]` | Fork an existing project's branch into a new worktree |
 | `grove list [--short] [--json] [--no-status]` | List all projects (optionally with git status) |
 | `grove status [<tag>...]` | Detailed git status for one or more tags |
 | `grove path <tag>` | Print the worktree path for a tag |
@@ -101,6 +101,10 @@ real cwd).
   `DESKTOP-1234-phonecam`); `--branch` overrides that entirely and takes
   precedence if both are given. With neither, the branch is just `<tag>`.
 - Tag validation: 1–40 chars, no `/` or whitespace.
+- `--ephemeral` (either command) redirects the worktree to
+  `<work_dir>/.scratch/<tag>` and stamps the registry entry with an
+  absolute-UTC `expires_at` (14d default, `--ttl` to override — see
+  "For Agents" below for the full contract).
 
 ### `grove done` — read this before ever calling it
 
@@ -169,19 +173,41 @@ status computation.
    untracked files) unless you pass `--force`, and **agents must never pass
    `--force`**. If `done` refuses, that is a signal to actually finish or clean
    up the work, not to force past it.
-3. **No permanent home for ephemeral/scratch work yet.** Grove does not have an
-   ephemeral-worktree mode today — `--ephemeral` / a `.scratch` namespace does
-   **not exist** in this version. Until it ships
-   (`bd-grove-lifecycle-p0ur.6`, which will make `grove new --ephemeral` the
-   mandated path and update this section), throwaway work goes in the current
-   **session's scratchpad** (`/tmp/claude-*`, the directory named in your own
-   session's system prompt), never under `/c/work/desktop`.
-   <!-- TODO(bd-grove-lifecycle-p0ur.6): once grove new --ephemeral / .scratch
-   namespace ships, replace this bullet with the mandated ephemeral-worktree
-   flow and drop the scratchpad fallback. -->
-4. **Scratchpad clones** (the swarm-rule pattern of `git clone . <scratchpad>/scratch-...`
-   for a throwaway branch/commit graph) also go in the session scratchpad —
-   never in `/c/work/desktop` or any other grove `work_dir`, registered or not.
+3. **Ephemeral/scratch worktrees go through `grove new --ephemeral` / `grove
+   fork --ephemeral`.** This is the mandated path for agent scratch worktrees
+   — rebase lanes, probes, throwaway branches — anything that doesn't need to
+   outlive the task. Add `--ephemeral` to either command:
+   - The worktree lands under `<work_dir>/.scratch/<tag>` instead of
+     `<work_dir>/<tag>`, so it's visually and structurally separate from
+     durable projects.
+   - The registry entry gets an absolute-UTC `expires_at`. Default TTL is
+     **14 days** when `--ttl` is omitted; pass `--ttl <DUR>` to override
+     (`14d`, `48h`, `30m`, `2w`, `90s` — an integer plus a unit suffix).
+   - Expiry is evaluated **lazily** — nothing fires at the expiry instant.
+     `grove list` marks ephemerals (⏳ unexpired, ⌛ expired) and adds
+     "N ephemeral"/"N expired" to its summary footer; the actual sweep
+     happens whenever `grove gc` next runs (`bd-grove-lifecycle-p0ur.10`). A
+     machine that's off past expiry just delays collection — it doesn't lose
+     the worktree.
+   - `grove done <tag>` works on ephemeral worktrees exactly as it does on
+     durable ones (dirty/unpushed checks, registry cleanup) — no special
+     casing needed.
+   - The location itself declares disposability: because `.scratch` entries
+     are always safe to delete after TTL (dirty/unpushed checks only, no
+     judgment call about intent), `grove gc` can be aggressive there in a way
+     it never could be for a bare top-level `work_dir/<tag>`.
+4. **`.scratch/` is also the mandated home for raw scratch clones** — the
+   swarm-rule pattern of `git clone . <scratchpad>/scratch-...` for a
+   throwaway branch/commit graph. Put these under `<work_dir>/.scratch/`
+   too, not in the session's own tmp scratchpad, once the PreToolUse hook
+   permitting raw worktree/clone creation there lands
+   (`bd-grove-lifecycle-p0ur.7`). Such clones have no grove registry entry
+   and thus no `expires_at` — `grove gc` instead applies a default TTL from
+   each directory's mtime to every *unregistered* directory it finds under
+   `.scratch`, so nothing under there escapes collection just because it was
+   never `grove new`'d. Until the hook lands, fall back to the session's own
+   scratchpad (`/tmp/claude-*`, named in your session's system prompt) for
+   raw clones — never bare `/c/work/desktop` or any other grove `work_dir`.
 5. Use `grove list --json` / `grove path <tag>` to discover or resolve tags
    programmatically, not by guessing directory names. Remember `list` can be slow
    (see above) — don't block a time-sensitive script on it without a long timeout.
