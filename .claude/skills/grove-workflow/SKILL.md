@@ -205,9 +205,12 @@ status computation.
    and thus no `expires_at` — `grove gc` instead applies a default TTL from
    each directory's mtime to every *unregistered* directory it finds under
    `.scratch`, so nothing under there escapes collection just because it was
-   never `grove new`'d. Until the hook lands, fall back to the session's own
-   scratchpad (`/tmp/claude-*`, named in your session's system prompt) for
-   raw clones — never bare `/c/work/desktop` or any other grove `work_dir`.
+   never `grove new`'d. The PreToolUse hook (`grove-worktree-guard.sh`,
+   registered user-level) now enforces this: raw `git worktree add` /
+   `git clone` / `gh repo clone` targeting a grove `work_dir` is blocked
+   with an actionable message, while `.scratch/` targets and the session
+   scratchpad (`/tmp/claude-*`) stay allowed. Bypass (rare, deliberate):
+   append `# noqa: grove-worktree`.
 5. Use `grove list --json` / `grove path <tag>` to discover or resolve tags
    programmatically, not by guessing directory names. Remember `list` can be slow
    (see above) — don't block a time-sensitive script on it without a long timeout.
@@ -215,3 +218,27 @@ status computation.
    run `grove done`, `rename`, `freeze`/`thaw`, or `repo remove` against a tag you
    don't own without confirming with the user first — these mutate shared state
    other sessions may depend on.
+
+## Garbage collection (`grove gc`)
+
+`grove gc [--dry-run] [--yes]` audits the work_dir across 8 categories
+(stale registry entries, unregistered worktrees, non-worktree dirs, expired
+`.scratch` ephemerals, stale harness worktrees, prunable git metadata,
+merged-project done-candidates, `.archive` size). `--yes` auto-applies only
+the mechanically safe categories (1/4/5/6); unregistered worktrees are
+prompt-or-report only and non-worktree dirs are always report-only. Every
+destructive path re-checks dirty/unpushed state itself, applies a 48h
+liveness guard (mtime, `/proc/*/cwd`, agent-mail reservations), and logs
+branch deletions to `.archive/deleted-branches.txt`. A full dry-run over
+~90 worktrees takes ~8 minutes of drvfs I/O — schedule away from builds,
+and note it compares against local remote-tracking refs (it never fetches).
+
+**Weekly scheduled audit**: Windows Task Scheduler task `grove-gc-weekly`
+(Sundays 06:00) runs `wsl.exe -e bash -lc
+/c/users/oystein/.dotfiles/bin/grove-gc-weekly.sh`, which writes
+`/c/work/desktop/.grove/gc-report-<date>.txt` and appends one JSON trend
+line (worktree/unregistered/.scratch counts, `.archive` size) to
+`/c/work/desktop/.grove/gc-history.jsonl`. Report-only; it never deletes.
+Manage with `schtasks /Query|/Run|/Delete /TN grove-gc-weekly` (via
+`cmd.exe`). Watch the trend line: a rising unregistered count means agents
+are bypassing grove again.
