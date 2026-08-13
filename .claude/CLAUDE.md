@@ -396,8 +396,12 @@ Execution teammates share ONE working tree and index. A teammate must NEVER
 `git switch`/`git checkout`/`git branch`/`git reset`/`git rebase` in the shared
 checkout — any branch or HEAD change corrupts other teammates' in-flight commits
 (orphaned/misrouted commits observed 2026-07-02). If a task genuinely needs a throwaway
-branch or a real commit graph, use a **scratchpad clone** (`git clone . <scratchpad>/scratch-...`)
-and operate there. Branch/HEAD restore is **leader-only**; never let a teammate self-heal a branch.
+branch or a real commit graph, use a **scratchpad clone** in the session scratchpad —
+literal path pattern `/tmp/claude-*/.../scratchpad` (named in your own system prompt),
+e.g. `git clone . <that-scratchpad-path>/scratch-...` — and operate there. **Never
+clone or `git worktree add` directly under any grove `work_dir`** (e.g.
+`/c/work/desktop`); use `grove new --ephemeral` for a scratch worktree there instead.
+Branch/HEAD restore is **leader-only**; never let a teammate self-heal a branch.
 
 ### Atomic commits per work unit
 When writing prompts for any autonomous teammate, **always include explicit git commit
