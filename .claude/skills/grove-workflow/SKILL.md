@@ -234,8 +234,10 @@ branch deletions to `.archive/deleted-branches.txt`. A full dry-run over
 and note it compares against local remote-tracking refs (it never fetches).
 
 **Weekly scheduled audit**: Windows Task Scheduler task `grove-gc-weekly`
-(Sundays 06:00) runs `wsl.exe -e bash -lc
-/c/users/oystein/.dotfiles/bin/grove-gc-weekly.sh`, which writes
+(Sundays 06:00) runs `wsl.exe -d Ubuntu-24.04 -e bash -lc
+/c/users/oystein/.dotfiles/bin/grove-gc-weekly.sh` (the `-d` pin matters:
+the default distro is Ubuntu-22.04 whose glibc 2.35 cannot run the
+24.04-built grove binary), which writes
 `/c/work/desktop/.grove/gc-report-<date>.txt` and appends one JSON trend
 line (worktree/unregistered/.scratch counts, `.archive` size) to
 `/c/work/desktop/.grove/gc-history.jsonl`. Report-only; it never deletes.
