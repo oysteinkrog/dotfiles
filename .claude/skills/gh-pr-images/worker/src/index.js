@@ -13,12 +13,20 @@
 // secret to additionally gate uploads behind a bearer token.
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+// Self-contained HTML reports (e.g. QA screenshot reports with base64-embedded
+// PNGs) run larger than single images, so they get their own cap.
+const MAX_BYTES_HTML = 40 * 1024 * 1024; // 40 MB
 const ALLOWED = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
+  "text/html": "html",
 };
+
+function maxBytesFor(contentType) {
+  return contentType === "text/html" ? MAX_BYTES_HTML : MAX_BYTES;
+}
 
 function randomKey(prefix, name) {
   const id = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
@@ -51,13 +59,14 @@ export default {
         });
       }
 
+      const maxBytes = maxBytesFor(contentType);
       const declaredLen = Number(request.headers.get("content-length") || "0");
-      if (declaredLen > MAX_BYTES) {
+      if (declaredLen > maxBytes) {
         return new Response("file too large\n", { status: 413 });
       }
 
       const body = await request.arrayBuffer();
-      if (body.byteLength > MAX_BYTES) {
+      if (body.byteLength > maxBytes) {
         return new Response("file too large\n", { status: 413 });
       }
 
