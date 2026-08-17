@@ -9,6 +9,16 @@ NODE_EXTRA_CA_CERTS) and routes each request by path:
 
   * /v1/messages*   -> aiolos, with `x-aiolos-account-id: <X>` added
                        => the session's INFERENCE runs on account X.
+  * GET /api/oauth/usage -> aiolos, unpinned
+                       => Claude Code's fetchUtilization poll is answered at
+                          FLEET scope (aiolos serves the least-constrained
+                          routable account's snapshot). Forwarded to Anthropic
+                          instead, this returns the MAIN login's own windows,
+                          and when those are exhausted the client hard-blocks
+                          itself ("You've hit your weekly limit") even though
+                          the fleet has headroom — a context-full session then
+                          can't even send its /compact request. Observed live
+                          2026-08-17.
   * everything else -> api.anthropic.com, forwarded unchanged
                        => remote-control / sessions / identity register under
                           the caller's own (main) claude.ai login, so the
@@ -73,6 +83,13 @@ def log(msg):
 
 def is_inference(path):
     return path.split("?", 1)[0].startswith("/v1/messages")
+
+
+def is_fleet_usage(method, path):
+    # Claude Code's utilization poll. Exact path, GET only — the rest of
+    # /api/oauth/* (token refresh, profile, roles) must keep reaching Anthropic
+    # under the caller's own login.
+    return method == "GET" and path.split("?", 1)[0] == "/api/oauth/usage"
 
 
 def is_upgrade(headers):
@@ -211,6 +228,7 @@ async def handle(cr, cw):
         elif clen:
             body = await cr.readexactly(clen)
 
+        drop_client_auth = False
         if is_inference(path):
             host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
             if ACCOUNT_ID:
@@ -220,6 +238,15 @@ async def handle(cr, cw):
             else:
                 extra = []            # no pin -> aiolos load-balances
                 dest = "aiolos[lb]"
+        elif is_fleet_usage(method, path):
+            # Never pinned: the answer describes the pool, not this session's
+            # inference account (aiolos ignores pin headers on this route).
+            # Nothing on the aiolos route consumes the caller's credentials, so
+            # the main login's OAuth token must not transit to the VPS.
+            host, port, use_tls = AIOLOS_HOST, AIOLOS_PORT, AIOLOS_TLS
+            extra = []
+            drop_client_auth = True
+            dest = "aiolos[usage]"
         else:
             host, port, use_tls = ANTHROPIC_HOST, ANTHROPIC_PORT, True
             extra = []
@@ -229,7 +256,10 @@ async def handle(cr, cw):
 
         out = [f"{method} {path} {ver}"]
         for k, v in headers:
-            if k.lower() in HOP_BY_HOP or k.lower() == "expect":
+            kl = k.lower()
+            if kl in HOP_BY_HOP or kl == "expect":
+                continue
+            if drop_client_auth and kl in ("authorization", "x-api-key"):
                 continue
             out.append(f"{k}: {v}")
         hosthdr = host if port in (443, 80) else f"{host}:{port}"
