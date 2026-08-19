@@ -2,8 +2,11 @@
 # Weekly grove gc audit (bd-grove-lifecycle-p0ur.11).
 # Invoked by Windows Task Scheduler task "grove-gc-weekly" via:
 #   wsl.exe -e bash -lc /c/users/oystein/.dotfiles/bin/grove-gc-weekly.sh
-# Report-only: runs grove gc --dry-run, writes a dated report, and appends one
-# JSON trend line to gc-history.jsonl. Never deletes anything.
+# Runs grove gc --yes: auto-applies ONLY the mechanically safe categories
+# (1 stale registry entries, 4 expired-clean .scratch ephemerals, 5 stale-clean
+# harness worktrees, 6 git worktree prune) — pinned by tests in the grove repo;
+# everything else stays report-only. Writes a dated report and appends one
+# JSON trend line to gc-history.jsonl.
 # Scheduled Sunday 06:00 to stay clear of build windows (~8 min of drvfs I/O).
 set -u
 GROVE=/c/users/oystein/.cargo/bin/grove
@@ -11,7 +14,7 @@ WORK=/c/work/desktop
 OUT="$WORK/.grove/gc-report-$(date +%F).txt"
 HIST="$WORK/.grove/gc-history.jsonl"
 
-"$GROVE" gc --dry-run --repo desktop > "$OUT" 2>&1
+"$GROVE" gc --yes --repo desktop > "$OUT" 2>&1
 rc=$?
 
 wt_total=$(git -C "$WORK/master" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')
