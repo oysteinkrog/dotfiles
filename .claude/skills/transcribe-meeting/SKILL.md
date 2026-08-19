@@ -69,6 +69,16 @@ ssh mizar 'cd /data/pool/$USER-transcribe && UV_EXTRA_INDEX_URL=https://download
 scp mizar:/data/pool/$USER-transcribe/out.json "$SCRATCH/"
 ```
 
+**Candidate engine — franken_whisper** (Dicklesworthstone/franken_whisper,
+sister of franken_tts/franken_ocr): agent-first Rust ASR orchestrator routing
+whisper.cpp / insanely-fast-whisper / whisper-diarization backends, NDJSON
+streaming, SQLite persistence. Single-binary ergonomics would replace this
+step's Python plumbing, and its whisper-diarization backend (NeMo-based) gives
+speaker IDs without an HF token. Not yet trialed here; accuracy of its
+diarization backend vs pyannote community-1 is unverified, and it does not
+solve name mapping (step 4 still applies). If installed, prefer it for the
+CPU path; benchmark against the fallback script once on a tech-pool box.
+
 **HF token:** pyannote models (incl. community-1) are gated. Check
 `secret --list` for `HF_TOKEN`; if absent, ask the user once to add it
 (`https://hf.co/settings/tokens`, accept the model terms) rather than silently
