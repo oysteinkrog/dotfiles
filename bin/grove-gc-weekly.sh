@@ -17,6 +17,29 @@ HIST="$WORK/.grove/gc-history.jsonl"
 "$GROVE" gc --yes --repo desktop > "$OUT" 2>&1
 rc=$?
 
+# Stale build-output sweep (user-approved 2026-08-19): BUILD*/ dirs are
+# regenerable, multi-GB, and dominate per-worktree disk. Delete any
+# <worktree>/BUILD* whose own mtime AND whose worktree root mtime are both
+# older than 14 days, unless a live process has its cwd inside the worktree.
+# Only cost on a false positive: one full rebuild.
+build_swept=0
+now=$(date +%s)
+for b in "$WORK"/*/BUILD*/; do
+  [ -d "$b" ] || continue
+  wt="$(dirname "$b")"
+  b_age=$(( (now - $(stat -c %Y "$b")) / 86400 ))
+  wt_age=$(( (now - $(stat -c %Y "$wt")) / 86400 ))
+  [ "$b_age" -ge 14 ] && [ "$wt_age" -ge 14 ] || continue
+  live=0
+  for pid in /proc/[0-9]*; do
+    case "$(readlink "$pid/cwd" 2>/dev/null)" in "$wt"|"$wt"/*) live=1; break;; esac
+  done
+  [ "$live" -eq 0 ] || { echo "[build-sweep] skip live: $b" >> "$OUT"; continue; }
+  sz=$(du -sk "$b" 2>/dev/null | cut -f1)
+  rm -rf "$b" && { echo "[build-sweep] removed $b (${sz}KB, build ${b_age}d, worktree ${wt_age}d)" >> "$OUT"; build_swept=$((build_swept+1)); }
+done
+echo "[build-sweep] swept $build_swept stale BUILD dirs" >> "$OUT"
+
 wt_total=$(git -C "$WORK/master" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')
 reg_total=$(jq -r '.projects | length' "$WORK/.grove/registry.json" 2>/dev/null || echo -1)
 unreg=$(comm -23 \
