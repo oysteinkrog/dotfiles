@@ -1,15 +1,18 @@
 ---
 name: transcribe-meeting
 description: |
-  Transcribe a meeting screen recording (or plain audio) with full speaker
-  diarization and real participant names. Use when the user says "transcribe
-  this video/recording/meeting", "who said what", "diarize", or drops a
-  Meet/Teams/Zoom recording. Pipeline: ffmpeg extract -> roster from the
-  meeting UI tiles -> faster-whisper ASR + senko diarization with the roster
-  count (97% measured) or WhisperX + pyannote community-1 -> voice-to-name
-  mapping verified against the UI's active-speaker highlight. Local CPU/GPU
-  or tech-pool offload (mizar). Engines chosen by benchmark, not vibes: see
-  EVALUATION.md.
+  Transcribe a meeting screen recording (or plain audio) with speaker
+  diarization and real participant names, in one of two modes: "fast"
+  (minutes, good-enough labels, for triage and internal notes) or "careful"
+  (frame-verified attribution you can quote people on). Use when the user
+  says "transcribe this video/recording/meeting", "who said what",
+  "diarize", or drops a Meet/Teams/Zoom recording. Invoke as
+  /transcribe-meeting [fast|careful] <file>; default is careful when the
+  output will be shared or quotes people, fast otherwise. Engines chosen by
+  benchmark (see EVALUATION.md): faster-whisper ASR + senko diarization with
+  the roster count from the meeting-UI tiles; WhisperX + pyannote
+  community-1 as the one-pass alternative. Local CPU/GPU or tech-pool
+  offload (mizar).
 allowed-tools:
   - Bash
   - Read
@@ -34,7 +37,22 @@ Never upload the recording to an external service; everything runs locally or
 on company machines. Internal meeting audio may go to tech-pool boxes; check
 the data class before shipping anything more sensitive there.
 
-## Step 1 — Probe, extract, roster
+## Pick the mode first
+
+| | **fast** | **careful** |
+|---|---|---|
+| Use for | Triage, "what was this meeting about", personal notes | Anything shared, posted, or quoting people by name |
+| Turnaround (48-min meeting) | ~10-20 min on mizar | ~40-60 min plus review |
+| ASR | faster-whisper `small` locally / `large-v3-turbo` on mizar, no cleanup pass | `large-v3-turbo` (or WhisperX one-pass), plus a mis-hearing cleanup pass with corrections listed in the header |
+| Diarization | senko with roster count (or auto if audio-only) | senko with roster count; WhisperX + pyannote community-1 instead when the HF token works, or as a cross-check on contested turns |
+| Name binding | 1 frame anchor per speaker, longest turn each; audio-only files keep SPEAKER_NN labels | 2+ independent anchors per speaker, micro-speaker sweep, content cross-checks, `[unverified]` markers on anything left |
+| Expected quality | ~93-97% attribution; short interjections may be mislabeled or lost; wording approximate | Every named turn anchored; measured 97%+ before frame pass, near-total after |
+| Deliverable | Transcript + 5-bullet gist in chat | Transcript + summary + header (participants, method, limitations), Slack canvas / artifact as asked |
+
+The user's word wins. If unstated: output leaves this chat or names people →
+careful; otherwise fast. Say which mode you chose in one line before running.
+
+## Step 1 — Probe, extract, roster (both modes)
 
 ```bash
 ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 "$VIDEO"
@@ -45,28 +63,26 @@ scripts/frames.sh "$VIDEO" "$SCRATCH/frames" 30 600 1500 2400   # spread over th
 Read the frames. Record: meeting app, **participant names from tile labels**,
 **human speaker count N** (exclude bots like the Fireflies notetaker; note
 joins/leaves — the layout reflows), and the layout phases (screen-share vs
-gallery). N drives engine configuration; the names constrain step 4.
+gallery). N drives the diarizer; the names constrain step 4. Audio-only
+input: skip frames, get N from the user or filename context if available.
 
-## Step 2 — Transcribe + diarize (pick one row)
-
-| Situation | Command |
-|---|---|
-| Default: known roster, no GPU (this is almost always the right row) | `asr_fw.py` (faster-whisper large-v3-turbo) + `diarize_senko.py audio.wav diar.json N` + `assign_speakers.py` |
-| HF token available and set up, or a CUDA GPU | `transcribe_whisperx.py` (WhisperX large-v3-turbo + pyannote community-1, word-level alignment, one pass) |
-| Quick triage of a short/low-stakes clip | `asr_fw.py ... small`, senko without N |
-
-All scripts use uv inline deps. Run torch-dependent ones with the CPU wheel
-pin or a GPU-less box downloads multi-GB CUDA wheels:
+## Step 2 — Transcribe + diarize
 
 ```bash
 export UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu UV_INDEX_STRATEGY=unsafe-best-match
+uv run scripts/asr_fw.py audio.wav asr.json large-v3-turbo   # fast mode locally: small
+uv run scripts/diarize_senko.py audio.wav diar.json $N
 ```
 
+One-pass alternative (careful mode, HF token set up, or any CUDA GPU):
+`with-secrets HF_TOKEN -- uv run scripts/transcribe_whisperx.py audio.wav out.json`
+gives word-aligned segments with SPEAKER_NN labels in a single run.
+
 **Where to run.** WSL1 (this laptop) is the slowest option and hits uv/wheel
-quirks; prefer a tech-pool box (all CPU-only since the VFIO change, but a
-Ryzen 5800X does ASR at ~3x realtime and senko in ~2-6 min for an hour of
-audio). rigel/vega have GPUs but are the research cluster; only use them when
-the data belongs there. Offload pattern:
+quirks; prefer a tech-pool box (CPU-only since the VFIO change, but a Ryzen
+5800X does large-v3-turbo ASR at ~3x realtime and senko in 2-6 min per hour
+of audio). rigel/vega have GPUs but are the research cluster; only use them
+when the data belongs there. Offload pattern:
 
 ```bash
 ssh mizar 'mkdir -p /data/pool/$USER-transcribe'
@@ -74,11 +90,7 @@ scp "$SCRATCH/audio.wav" ~/.claude/skills/transcribe-meeting/scripts/*.py mizar:
 ssh mizar 'cd /data/pool/$USER-transcribe && export UV_EXTRA_INDEX_URL=... && uv run diarize_senko.py audio.wav diar.json 6'
 ```
 
-Reference wall times, 48-min meeting on mizar: faster-whisper large-v3-turbo
-ASR ~15 min; senko diarization 2:10 (auto) / 6:18 (oracle spectral);
-WhisperX+pyannote see EVALUATION.md.
-
-**HF token setup (one-time, for the WhisperX row).** `HF_TOKEN` lives in the
+**HF token setup (one-time, for the WhisperX path).** `HF_TOKEN` lives in the
 secret store (`with-secrets HF_TOKEN -- ...`; copy to `~/.hf_token` mode 600
 on a remote box). Two gates, both mandatory: the account must accept the
 terms at hf.co/pyannote/speaker-diarization-community-1, AND a fine-grained
@@ -102,7 +114,7 @@ segment and merges consecutive same-speaker segments into `**[mm:ss] Name:**`
 turns. Run it once without `names.json` to get the anonymous transcript for
 step 4, then again with the mapping.
 
-## Step 4 — Bind names with the video (mandatory for screen recordings)
+## Step 4 — Bind names with the video
 
 Meeting UIs mark the active speaker; treat that as ground truth:
 
@@ -114,22 +126,28 @@ Meeting UIs mark the active speaker; treat that as ground truth:
 - Trap: a static mic icon means unmuted, not speaking. Only the
   border/highlight or top-bar chip marks the active speaker.
 
-Procedure:
-1. For each anonymous SPEAKER_NN, extract a frame ~2 s into its 3-5 longest
-   turns (`scripts/frames.sh`) and Read them. The consistently highlighted
-   tile names the cluster. Require **2+ independent anchors** per speaker.
+**fast mode:** one frame ~2 s into each speaker's longest turn. If a frame is
+ambiguous, take the next-longest turn. Label and move on; note in the header
+that attribution is single-anchor.
+
+**careful mode:**
+1. For each anonymous SPEAKER_NN, extract frames ~2 s into its 3-5 longest
+   turns and Read them. Require **2+ independent anchors** per speaker.
 2. Cross-check with content: someone addressed by name did not say that line;
    the person answering a question addressed to X probably is X; a voice
    heard after P left the call is not P.
 3. Diarizers under-serve speakers with seconds of airtime even with the right
    count (measured: a 7-second speaker vanished at 97% overall accuracy).
-   Sweep the transcript for short unattributed or suspicious turns and verify
-   those moments with frames directly.
-4. Leftover uncertainty is marked `[unverified]` in the transcript, never
-   guessed silently.
+   Sweep for short unattributed or suspicious turns and verify those moments
+   with frames directly.
+4. Leftover uncertainty is marked `[unverified]`, never guessed silently.
 
 ## Step 5 — Clean and deliver
 
+**fast:** transcript file + a short gist in chat. State the mode and its
+limits in one header line.
+
+**careful:**
 - ASR cleanup: fix domain mis-hearings (product names, people, jargon) with
   targeted replacements; list the corrections in the header; keep the raw
   output on disk. Watch for errors split across segment boundaries.
