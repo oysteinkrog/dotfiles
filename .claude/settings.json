@@ -8,7 +8,7 @@
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
   },
   "permissions": {
-    "defaultMode": "default"
+    "defaultMode": "auto"
   },
   "model": "opus[1m]",
   "hooks": {
@@ -118,5 +118,10 @@
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/"
     }
-  }
+  },
+  "tui": "fullscreen",
+  "theme": "dark-daltonized",
+  "editorMode": "vim",
+  "verbose": true,
+  "agentPushNotifEnabled": true
 }
