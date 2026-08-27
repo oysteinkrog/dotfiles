@@ -46,17 +46,41 @@ function claude --description 'Claude Code (native install + WSL1 p_align patch 
     end
     set -l real (realpath "$bin")
 
+    # Claude Code has real subcommands (rc, mcp, doctor, ...), and injecting a
+    # root-level flag BEFORE one breaks `remote-control`/`rc`: its fast path only
+    # fires when the subcommand is the first argument, and the Commander fallback
+    # it otherwise lands in slices argv at a fixed offset, so the subcommand name
+    # itself reaches the bridge arg parser -> `Error: Unknown argument: rc`.
+    # See https://github.com/anthropics/claude-code/issues/42485
+    # Skip-permissions is a session flag anyway, so only inject it for a plain
+    # session launch, never in front of a subcommand.
+    set -l cmd $argv
+    if contains -- "$argv[1]" rc remote-control
+        # The bridge rejects --dangerously-skip-permissions; the equivalent for
+        # the sessions it spawns is --permission-mode bypassPermissions. It has to
+        # go AFTER the subcommand, or the fast path is bypassed all over again.
+        if not contains -- --permission-mode $argv
+            set cmd $argv[1] --permission-mode bypassPermissions $argv[2..]
+        end
+    else if contains -- "$argv[1]" agents auth auto-mode doctor gateway import \
+            install mcp plugin plugins project sandbox setup-token ultrareview \
+            update upgrade
+        # Other subcommands take no session flags; pass them through untouched.
+    else
+        set cmd --dangerously-skip-permissions $argv
+    end
+
     # Non-ELF (script shim): run directly.
     if test (head -c4 "$real" 2>/dev/null | command od -An -tx1 -N4 | string trim) != "7f 45 4c 46"
-        command "$real" --dangerously-skip-permissions $argv
+        command "$real" $cmd
         return $status
     end
 
     # ELF: make it directly executable on WSL1, then run it directly so
     # process.execPath is the real binary. Fall back to ld-linux if we can't.
     if claude-wsl-elf-fix "$real"
-        command "$real" --dangerously-skip-permissions $argv
+        command "$real" $cmd
     else
-        /lib64/ld-linux-x86-64.so.2 "$real" --dangerously-skip-permissions $argv
+        /lib64/ld-linux-x86-64.so.2 "$real" $cmd
     end
 end
