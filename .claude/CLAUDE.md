@@ -135,6 +135,46 @@ For short messages you may apply the checklist inline rather than invoking the f
 skill, but the em-dash rule and AI-tell removal still apply. Pairs with the `voice`
 skill when matching Oystein's own writing register.
 
+
+## Plain Language (`plain-language` skill, hard rule, applies always)
+
+**Very clear and simple language at all times in output meant for human readers.**
+Standing instruction from Oystein. Not a preference to weigh against other goals, and
+not a mode reserved for formal documents. It covers **all English a human will read**,
+not just titles: terminal replies and summaries, artifacts and documents, headings,
+PR titles and bodies, commit messages, Jira, Slack, email, README and docs prose,
+user-facing UI and error strings, and code comments meant for a person.
+
+Write so the reader understands on the first pass. Lead with the answer. Short common
+words (use, not leverage; wrong, not suboptimal). One idea per sentence. Active voice.
+Concrete numbers and names. Say plainly when you do not know.
+
+**Plain never means vague.** Keep the domain term where it is the precise word, and
+keep the numbers, units, constraints and caveats. Simplify the sentence around a
+technical term, never the term itself.
+
+**Never write a slogan or an aphorism**, in a title, a heading, a pull quote, an
+opening line or a closing line. If a sentence would fit on a poster, it is performing
+rather than informing; rewrite it as the plain fact it stands in for. Same for hype
+words (seamless, robust, powerful, comprehensive), rule-of-three lists, "not only X
+but also Y", and "it's not X, it's Y".
+
+Titles get the sharpest version of this test: read alone with no context, the reader
+must be able to say what the document is. The case that prompted the rule was an
+artifact titled **"The Phone Stays Mounted"** for a phonecam settings brief. Correct
+name: **"Phonecam Settings Brief"**.
+
+**Run the `plain-language` skill before sending, publishing, or handing over anything
+written for a person.** It carries the full rule set, the banned-shapes table, and the
+review procedure.
+
+Out of scope: code identifiers, quoted text, prescribed formats, machine-parsed
+output, and any wording Oystein specifies himself, which always wins.
+
+Relationship to the neighbours: `humanizer` and `de-slopify` scrub tells from a
+finished draft; `plain-language` is the register to write in from the start. Do not
+compensate for a plain title by making the body flowery, and never treat `humanizer`'s
+"add soul" as licence for a slogan.
 ## Repo Index — Initial Force
 
 | Repo | Local path | GitHub | Access |
