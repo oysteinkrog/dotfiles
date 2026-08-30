@@ -5,13 +5,19 @@
       {
         "matcher": "Write|Edit|Bash|Artifact",
         "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/hooks/plain-language-guard.py" }
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+          }
         ]
       },
       {
-        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian).*",
+        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence).*",
         "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/hooks/plain-language-guard.py" }
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+          }
         ]
       }
     ],
@@ -19,7 +25,10 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/hooks/plain-language-guard.py" }
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+          }
         ]
       }
     ],
@@ -27,7 +36,10 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/hooks/plain-language-guard.py" }
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+          }
         ]
       }
     ]
