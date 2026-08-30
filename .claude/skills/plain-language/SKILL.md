@@ -182,18 +182,28 @@ measurably improves the tool rather than weakening it: on the eval corpus it rai
 separation from 0.955 to 0.974 AUC and cut false alarms on real repo prose from 58% to
 31%, because domain vocabulary is noise for the distinction that matters.
 
-To regenerate one for a repo, take words that appear at least 60 times in its docs and
-have a Zipf frequency below 3.3.
+To regenerate one for a repo:
+
+```sh
+python evals/build_corpus.py --repo . --glossary
+```
+
+That keeps words appearing at least 60 times in the repo's own docs whose Zipf
+frequency is below 3.3.
 
 ## What the hook covers
 
 A hook runs the gate on anything about to reach a person: writes to `.md` and `.txt`,
-commit messages, pull request bodies, Jira and Confluence text, Slack messages, email,
+commit messages, pull request bodies, Jira and Confluence text, Slack messages and
+canvases, Zendesk support replies, email (through the Gmail tools or the `gog` CLI),
 artifacts and artifact comment replies, and the reply you are about to send in chat.
-A failing gate returns the findings and you fix the text and try again.
+A failing gate hands back the findings; fix them and try again.
 
-The hook skips code, config, generated files, localisation and resource files, product
-strings, and anything shorter than 40 words. Off switches, in order:
+The hook skips code, config, generated files, localisation and resource files, and
+product strings. Text that is not English is detected and skipped, so translated
+documentation is never charged for not being English. Below 40 words the score means
+nothing, so short text is judged on the hard rules alone: an em dash is an em dash in
+ten words. Off switches, in order:
 
 - `PLAINLANG_OFF=1` turns everything off.
 - `PLAINLANG_MODE=warn` reports without blocking.
@@ -208,11 +218,14 @@ whether the argument holds, or whether the reader has the background to follow i
 A passage can score 95 and still be useless. The register rules above are the job; the
 scorer is a check on the part of the job that a machine can see.
 
-The measured limits, from the eval set: it separates plain from inflated writing at
-0.98 AUC and agrees with blind judges at Spearman 0.69. On outside data it tracks
-human difficulty ratings about as well as the best classic readability formula, and it
-puts professionally graded texts in the right order 96% of the time. Per-rule
-precision and recall are in `evals/`.
+The measured limits. On the eval set it separates plain from inflated writing at 0.999
+AUC and agrees with blind judges at Spearman 0.71, but treat that as a ceiling: the
+inflated variants were written to order. The honest figure is real repo prose against
+real unprompted assistant prose, which separates at 0.784. On outside data the reading
+cost tracks human difficulty ratings at Spearman 0.55, ahead of every classic
+readability formula, and it puts editor-graded texts in the right order for 186 of 189
+articles. All 43 pattern rules reach precision 1.00 on 738 hand-built cases, 300 of
+them written to make the rules misfire. Method and numbers in `evals/RESULTS.md`.
 
 ## Procedure
 
