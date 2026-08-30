@@ -1,0 +1,12 @@
+# Build output and caches
+tool/.venv/
+tool/uv.lock
+**/__pycache__/
+*.pyc
+data/*.cache
+
+# Eval corpora are NOT committed. This repo is public, and the corpora are built
+# from a private monorepo's commit messages and documentation and from local
+# session logs. Rebuild them with evals/build_corpus.py and evals/fetch_external.sh.
+evals/data/
+!evals/data/.gitkeep
