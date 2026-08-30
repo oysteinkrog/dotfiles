@@ -298,6 +298,39 @@ Three changes followed:
 3. The gate threshold stays low (34), so the score barely gates anything on its
    own. The hard rules do the gating, which is what section 5 already showed.
 
-A fourth arm is measured separately: skill text plus one checker pass fixing only
-the findings, with the number ignored. That tests whether the findings help when
-they are not being optimised against.
+## 12. The findings help; the number is what hurt
+
+A fourth arm was run to separate the two: skill text plus **one** checker pass,
+fixing the findings the writer agreed with, leaving the ones it thought were
+wrong, and never looking at the number. Judged blind against arms A and B by two
+fresh panels.
+
+| Arm | tool score | clarity | AI smell | fidelity | title | best | worst |
+|---|---|---|---|---|---|---|---|
+| A no guidance | 72.0 | 7.50 | 4.17 | 9.58 | **8.27** | 13 | 27 |
+| B skill text only | 83.3 | 8.54 | 4.00 | 9.52 | 6.33 | 5 | 13 |
+| D skill + findings, number ignored | 82.0 | **8.54** | **3.83** | 9.35 | 8.00 | **30** | **8** |
+
+48 best-of-three votes. D over A: 30 to 13, p = 0.014. D over B: 30 to 5,
+p = 2e-05.
+
+D carries a **lower** tool score than the score-chasing arm (82.0 against 84.9)
+and than the skill-only arm, and it is the one people want. Across 24 notes it
+fixed 19 findings and deliberately kept 53, with a reason each time: "viable" is
+the spec's own word in open question 5, "variance" is the statistical term the
+peer-review result is stated in, the title-case hit comes from an identifier.
+Roughly three quarters of the findings were rejected on judgement, and that is
+the intended use.
+
+Two caveats. The judge panels differ between the two experiments, so A's and B's
+absolute numbers move between the tables; only the comparisons inside one
+experiment are sound. And both experiments use the same 24 fact lists.
+
+Put the two results together and the design falls out of the evidence:
+
+- **The findings are the product.** Each one names a specific thing to look at,
+  and a writer with judgement gets a real gain from reading them.
+- **The number is a thermometer.** It exists to decide whether the gate opens.
+  Optimised, it drives out exactly the specifics that make writing useful.
+- **The right instruction is "run it once".** Not "until it passes", and never
+  "until the score stops improving".
