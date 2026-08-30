@@ -20,11 +20,17 @@ VOCAB_LIMIT = 120_000
 
 
 def read_norm(path: Path, key: str, value: str) -> dict[str, float]:
-    if not path.exists():
-        print(f"  missing: {path.name}", file=sys.stderr)
+    """Read one norm file. The shipped copies are gzipped to keep the repo small."""
+    gz = path.with_suffix(path.suffix + ".gz")
+    if path.exists():
+        opener = lambda: path.open(newline="", encoding="utf-8-sig", errors="replace")  # noqa: E731
+    elif gz.exists():
+        opener = lambda: gzip.open(gz, "rt", newline="", encoding="utf-8-sig", errors="replace")  # noqa: E731
+    else:
+        print(f"  missing: {path.name} (and {gz.name})", file=sys.stderr)
         return {}
     out: dict[str, float] = {}
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
+    with opener() as fh:
         sample = fh.read(8192)
         fh.seek(0)
         delim = "\t" if sample.count("\t") > sample.count(",") else ","
