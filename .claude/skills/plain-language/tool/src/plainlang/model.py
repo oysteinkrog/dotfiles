@@ -74,6 +74,8 @@ class Weights:
     r50: float = 22.0
     curve: float = 1.6
 
+    min_english_share: float = 0.13   # below this the text is not English
+
     # Gate
     max_errors: int = 0
     min_score: float = 70.0
@@ -114,6 +116,7 @@ class Report:
     findings: list[Finding]
     stats: dict[str, float]
     top_costs: list[tuple[str, float]]
+    language: str = "en"
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -195,6 +198,21 @@ what which who whom whose how why all any each few more most other some only own
 same too s t just don now up down out off over under again further once about
 into through during before after above below between both against per via
 """.split())
+
+
+# The 30 commonest English function words. Ordinary English prose is 25 to 50
+# per cent of these. Swedish, Dutch and Finnish documentation is near zero, and
+# scoring it as English charges every word as rare and unknown.
+_EN_MARKERS = frozenset("""
+the of and to a in that it is was for on as with be at by this from or an are
+have has had not but they you we he she which will can all would there their
+""".split())
+
+
+def english_share(tokens: list[str]) -> float:
+    if not tokens:
+        return 1.0
+    return sum(1 for t in tokens if t.lower() in _EN_MARKERS) / len(tokens)
 
 
 class Scorer:
@@ -359,10 +377,11 @@ class Scorer:
     # -- document ----------------------------------------------------------
 
     def score(self, source: str, *, kind: str = "document") -> Report:
-        from .segment import in_spans, parse, quote_spans, words as tokenize
+        from .segment import fence_spans, in_spans, parse, quote_spans, words as tokenize
 
         doc = parse(source)
         quoted = quote_spans(source)
+        fenced = fence_spans(source)
         self.lex.prime({t.lower().strip("'\u2019-") for s in doc.sentences for t, _ in tokenize(s.text)})
         spend: dict[str, float] = {"lexical": 0.0, "sentence": 0.0, "tells": 0.0, "structure": 0.0}
         findings: list[Finding] = []
@@ -451,7 +470,13 @@ class Scorer:
                 continue
             haystack = source if rule.surface == "raw" else doc.prose
             for m in rule.pattern.finditer(haystack):
-                if rule.surface != "raw" and in_spans(m.start(), quoted):
+                if rule.surface == "raw":
+                    # A fenced block in prose is quoted evidence, which the skill
+                    # puts out of scope even for the machine-residue rules: a bug
+                    # report about a leaked citation marker has to show one.
+                    if in_spans(m.start(), fenced):
+                        continue
+                elif in_spans(m.start(), quoted):
                     continue
                 excerpt = doc.source[m.start():m.end()][:90]
                 line, col = doc.line_col(m.start())
@@ -460,6 +485,28 @@ class Scorer:
                     rule.id, rule.severity, line, col, excerpt,
                     rule.message, rule.suggest, round(cost, 2),
                 ))
+
+        share = english_share([tok for sent in doc.sentences for tok, _ in tokenize(sent.text)])
+        # A non-Latin script gives almost no [A-Za-z] tokens, so the function-word
+        # share cannot see it. Measure the script directly as well.
+        letters = [c for c in doc.prose if c.isalpha()]
+        latin_share = (sum(1 for c in letters if ord(c) < 0x250) / len(letters)) if letters else 1.0
+        language = "en"
+        if latin_share < 0.85:
+            language = "not-english"
+        elif n_words >= 30 and share < self.w.min_english_share:
+            language = "not-english"
+        if language != "en":
+            # Not English. Report it and score nothing, rather than charging every
+            # word as rare and unknown.
+            return Report(
+                score=100.0, grade="A", words=n_words, sentences=len(lengths), rate=0.0,
+                spend={k: 0.0 for k in spend}, findings=[],
+                stats={"mean_sentence_words": 0.0, "max_sentence_words": 0.0,
+                       "length_cv": 0.0, "errors": 0.0, "warnings": 0.0,
+                       "english_share": round(share, 3), "latin_share": round(latin_share, 3)},
+                top_costs=[], language=language,
+            )
 
         total = sum(spend.values())
         rate = (total / n_words * 100) if n_words else 0.0
@@ -480,8 +527,10 @@ class Scorer:
                 "length_cv": round(cv, 3),
                 "errors": float(sum(1 for f in findings if f.severity == "error")),
                 "warnings": float(sum(1 for f in findings if f.severity == "warn")),
+                "english_share": round(share, 3),
             },
             top_costs=sorted(word_costs.items(), key=lambda kv: -kv[1])[:12],
+            language=language,
         )
 
 
