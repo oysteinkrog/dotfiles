@@ -226,3 +226,8 @@ def quote_spans(text: str) -> list[tuple[int, int]]:
 
 def in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
     return any(s <= pos < e for s, e in spans)
+
+
+def fence_spans(text: str) -> list[tuple[int, int]]:
+    """Ranges covered by a fenced code block."""
+    return [m.span() for m in _FENCE.finditer(text)]
