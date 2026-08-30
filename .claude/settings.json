@@ -333,7 +333,7 @@
         ]
       },
       {
-        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian).*",
+        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence).*",
         "hooks": [
           {
             "type": "command",

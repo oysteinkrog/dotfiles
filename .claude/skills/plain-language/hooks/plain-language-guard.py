@@ -50,6 +50,11 @@ WRITING_ASK = re.compile(
 MIN_WORDS = int(os.environ.get("PLAINLANG_MIN_WORDS", "40"))
 STOP_MIN_WORDS = int(os.environ.get("PLAINLANG_STOP_MIN_WORDS", "60"))
 
+# Cheap pre-filter so short text only pays for a scorer run when there is
+# something a hard rule could catch.
+HARD_HINT = re.compile("[\u2014\u2013]|oaicite|contentReference|turn[0-9]+search|utm_source="
+                       "|as an AI language model|\\[cite:|not only |it's not |it is not ", re.I)
+
 
 def read_event() -> dict:
     try:
@@ -126,35 +131,63 @@ def _read_file_arg(cmd: str, flag: str) -> str:
         return ""
 
 
+def from_gog(cmd: str) -> tuple[str, str] | None:
+    """The Google Workspace CLI sends mail and writes documents from the shell."""
+    m = re.search(r"\bgog\s+(?:gmail|docs?)\s+(?:send|reply|draft|create|append|update)\b", cmd)
+    if not m:
+        return None
+    tail = cmd[m.end():]
+    for pattern in (r"--body\s*(['\"])(?P<b>[^\n]*?)\1", r"--(?:text|content)\s*(['\"])(?P<b>[^\n]*?)\1"):
+        q = re.search(pattern, tail)
+        if q and word_count(q.group("b")) >= 8:
+            return q.group("b"), "email or document"
+    docs = [d for d in _heredocs(tail) if word_count(d) >= 25]
+    if docs:
+        return max(docs, key=word_count), "email or document"
+    return None
+
+
 def from_bash(cmd: str) -> tuple[str, str] | None:
-    is_pr = re.search(r"\bgh\s+(?:pr|issue)\s+(?:create|edit|comment)\b", cmd) or \
+    """Pull the commit message or pull request body out of a shell command.
+
+    Everything here is anchored to the position of the git or gh token, because
+    a command that merely mentions `git commit` inside a test fixture or a
+    heredoc of Python must not be read as a commit message.
+    """
+    got = from_gog(cmd)
+    if got:
+        return got
+    m_pr = re.search(r"\bgh\s+(?:pr|issue)\s+(?:create|edit|comment)\b", cmd) or \
         re.search(r"\bgh\s+api\b[^\n]*\bpulls?\b", cmd)
-    is_commit = re.search(r"\bgit\s+commit\b", cmd)
-    label = "pull request body" if is_pr else ("commit message" if is_commit else "")
+    m_commit = re.search(r"(?<![\w/-])git\s+commit\b", cmd)
+    if not (m_pr or m_commit):
+        return None
+    at = (m_pr or m_commit).end()
+    label = "pull request body" if m_pr else "commit message"
+    tail = cmd[at:]
 
-    if is_pr:
-        body = _read_file_arg(cmd, r"--body-file")
+    if m_pr:
+        body = _read_file_arg(tail, r"--body-file")
         if body:
             return body, label
-    if is_commit:
-        body = _read_file_arg(cmd, r"-F|--file")
+    else:
+        body = _read_file_arg(tail, r"-F|--file")
         if body:
             return body, label
 
-    # Quoted values.
-    for pattern, lab in (
-        (r"gh\s+(?:pr|issue)\s+(?:create|edit|comment)\b.*?--body\s*(['\"])(?P<b>.*?)\1", "pull request body"),
-        (r"gh\s+api\b.*?-f\s+body=(['\"])(?P<b>.*?)\1", "pull request body"),
-        (r"git\s+commit\b[^\n]*?-m\s*(['\"])(?P<b>.*?)\1", "commit message"),
-    ):
-        m = re.search(pattern, cmd, re.S)
-        if m and word_count(m.group("b")) >= 25:
-            return m.group("b"), lab
+    # A quoted value on the same line. Do not let it run across a newline, or a
+    # short -m followed by an unrelated heredoc swallows the whole script.
+    for pattern in (r"--body\s*(['\"])(?P<b>[^\n]*?)\1",
+                    r"-f\s+body=(['\"])(?P<b>[^\n]*?)\1",
+                    r"-m\s*(['\"])(?P<b>[^\n]*?)\1"):
+        m = re.search(pattern, tail)
+        if m and word_count(m.group("b")) >= 8:
+            return m.group("b"), label
 
-    if label:
-        docs = [d for d in _heredocs(cmd) if word_count(d) >= 25]
-        if docs:
-            return max(docs, key=word_count), label
+    # A heredoc, but only one opened after the git or gh token.
+    docs = [d for d in _heredocs(tail) if word_count(d) >= 25]
+    if docs:
+        return max(docs, key=word_count), label
     return None
 
 
@@ -184,10 +217,28 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
         html = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.S | re.I)
         html = re.sub(r"<[^>]+>", " ", html)
         return (html, f"artifact {Path(path).name}")
-    if "slack" in n and "send" in n:
-        return (ti.get("text") or ti.get("message") or "", "Slack message")
-    if "gmail" in n and any(k in n for k in ("send", "draft", "reply", "forward")):
-        return (ti.get("body") or ti.get("message") or "", "email")
+    if "slack" in n and any(k in n for k in ("send", "draft", "canvas", "reply")):
+        for key in ("text", "message", "markdown", "content", "document_content"):
+            v = ti.get(key)
+            if isinstance(v, str) and v:
+                return (v, "Slack message")
+        return None
+    if any(k in n for k in ("gmail", "mail_send", "send_email")) and \
+            any(k in n for k in ("send", "draft", "reply", "forward", "create")):
+        for key in ("body", "message", "text", "html"):
+            v = ti.get(key)
+            if isinstance(v, str) and v:
+                return (v, "email")
+        return None
+    if "zendesk" in n and any(k in n for k in ("comment", "reply", "ticket", "create", "update")):
+        for key in ("body", "comment", "html_body", "public_comment", "text"):
+            v = ti.get(key)
+            if isinstance(v, str) and v:
+                return (v, "support reply")
+        comment = ti.get("comment")
+        if isinstance(comment, dict) and isinstance(comment.get("body"), str):
+            return (comment["body"], "support reply")
+        return None
     if "jira" in n or "confluence" in n:
         for key in ("body", "commentBody", "description", "bodyMarkdown"):
             v = ti.get(key)
@@ -261,10 +312,23 @@ def main() -> int:
         if not got:
             return 0
         text, label = got
-        if not text or SKIP_MARKER.search(text) or word_count(text) < MIN_WORDS:
+        if not text or SKIP_MARKER.search(text):
+            return 0
+        short = word_count(text) < MIN_WORDS
+        if short and not HARD_HINT.search(text):
+            # Too little text for the score to mean anything, and no sign of a
+            # hard rule. Nothing to say.
             return 0
         rep = gate(text)
-        if not rep or not rep.get("_failed"):
+        if not rep:
+            return 0
+        if short:
+            # Short text is judged on the hard rules alone. An em dash is an em
+            # dash in ten words; a cost per hundred words is not.
+            if not rep["stats"].get("errors"):
+                return 0
+            rep["findings"] = [f for f in rep["findings"] if f["severity"] == "error"]
+        elif not rep.get("_failed"):
             return 0
         if mode == "warn":
             print(summarise(rep, label), file=sys.stderr)

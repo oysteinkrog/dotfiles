@@ -52,32 +52,12 @@ fi
 
 echo "hook"
 if [ -f "$GUARD" ]; then
-  run_hook() { printf '%s' "$1" | python3 "$GUARD" >/dev/null 2>&1; echo $?; }
-  ev_write() { python3 -c "
-import json,sys
-print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Write',
-                  'tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]}}))" "$1" "$2"; }
-
-  got=$(run_hook "$(ev_write /tmp/x.md "$SLOP")")
-  [ "$got" = 2 ] && printf '  ok    %-42s exit 2\n' "blocks an inflated .md write" \
-                 || { printf '  FAIL  %-42s exit %s, wanted 2\n' "blocks an inflated .md write" "$got"; fails=$((fails+1)); }
-
-  got=$(run_hook "$(ev_write /tmp/x.md "$PLAIN")")
-  [ "$got" = 0 ] && printf '  ok    %-42s exit 0\n' "allows a plain .md write" \
-                 || { printf '  FAIL  %-42s exit %s, wanted 0\n' "allows a plain .md write" "$got"; fails=$((fails+1)); }
-
-  got=$(run_hook "$(ev_write /tmp/x.cs "$SLOP")")
-  [ "$got" = 0 ] && printf '  ok    %-42s exit 0\n' "ignores a code file" \
-                 || { printf '  FAIL  %-42s exit %s, wanted 0\n' "ignores a code file" "$got"; fails=$((fails+1)); }
-
-  got=$(run_hook "$(ev_write /tmp/x.md "plainlang: skip
-$SLOP")")
-  [ "$got" = 0 ] && printf '  ok    %-42s exit 0\n' "honours the skip marker" \
-                 || { printf '  FAIL  %-42s exit %s, wanted 0\n' "honours the skip marker" "$got"; fails=$((fails+1)); }
-
-  got=$(printf '%s' "$(ev_write /tmp/x.md "$SLOP")" | PLAINLANG_OFF=1 python3 "$GUARD" >/dev/null 2>&1; echo $?)
-  [ "$got" = 0 ] && printf '  ok    %-42s exit 0\n' "PLAINLANG_OFF switches it off" \
-                 || { printf '  FAIL  %-42s exit %s, wanted 0\n' "PLAINLANG_OFF switches it off" "$got"; fails=$((fails+1)); }
+  if PLAINLANG_GUARD="$GUARD" python3 "$HERE/hooks/test_guard.py" > /tmp/plainlang-hooktest.log 2>&1; then
+    printf '  ok    %-42s %s\n' "hook cases" "$(tail -1 /tmp/plainlang-hooktest.log)"
+  else
+    printf '  FAIL  %-42s\n' "hook cases"; sed -n '/^FAIL/p' /tmp/plainlang-hooktest.log | head -5
+    fails=$((fails + 1))
+  fi
 else
   printf '  skip  %-42s guard not installed\n' "hook"
 fi
