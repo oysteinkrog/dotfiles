@@ -1,0 +1,495 @@
+# glossary.txt - domain/technical terms that cost NOTHING in the plain-language
+# scorer. Format: one lowercase term per line, comments start with #.
+# A domain term is never penalised for being rare: keep the precise word,
+# simplify the sentence around it.
+#
+# This is the GENERAL, shipped glossary: precise vocabulary that any Initial
+# Force repo would need across five domains - software engineering, .NET,
+# video, imaging, and biomechanics/sports science. It is hand-built from
+# domain knowledge, not mined from any one repo's docs, so it does not
+# duplicate a per-project glossary generated separately for a specific
+# codebase (that kind of list belongs next to the project, not in this
+# shared skill).
+#
+# Built 2026-08-31, four source buckets:
+#   1. Common software/.NET/architecture vocabulary with no exact plain
+#      synonym (async, mutex, viewmodel, serialization, idempotent, etc.)
+#      plus general engineering/QA process terms (unit test, feature flag,
+#      canary release, distributed tracing, etc.)
+#   2. Video/imaging/camera-pipeline vocabulary (codec, keyframe, demosaic,
+#      bayer, rolling shutter, chromatic aberration, nyquist, etc.)
+#   3. Biomechanics and sports-science vocabulary (kinematics, ground
+#      reaction force, pronation, VO2 max, motor unit, etc.)
+#
+# Two mechanical filters were applied after drafting, so the list only
+# contains words actually worth protecting:
+#   - Rule 1: dropped any term that is also a key in simpler.tsv (a word
+#     cannot simultaneously be "the precise term, free of charge" and "a
+#     hard word with a plain synonym" - those two files must not overlap).
+#   - Rule 2: dropped any single word whose Zipf frequency in
+#     lexicon.tsv.gz is 4.5 or higher - a word that common is already free
+#     in the cost model, so listing it here would add nothing (this is why
+#     ordinary words that happen to appear in these domains, e.g. driver,
+#     resolution, moment, gain, lock, are absent: they are common English
+#     words first). Multi-word phrases have no single row in that table, so
+#     the Zipf rule does not apply to them directly, and the scorer today
+#     only ever checks one word at a time (see model.py Scorer.word_cost) -
+#     a multi-word entry here is inert until a phrase-aware matcher exists,
+#     kept anyway for that forward compatibility, matching simpler.tsv.
+#
+# Deliberately excluded as ordinary abstract English, not domain vocabulary
+# (this is what makes the list conservative): words like canonical,
+# estimation, validated, framing, residual, adversarial, foundational,
+# taxonomy read as technical but are not precise to any of the five domains
+# above - they have ordinary plain meanings and should keep costing under
+# the normal lexical model, not be exempted here.
+#
+# Also excluded on purpose: hardware vendor/product names (Trackman,
+# Bertec, Basler, GenICam, etc.), internal tool/codename vocabulary (simhw,
+# autoqa, worktree, bead, nav-map, etc.), and any other term specific to one
+# product's own documentation - those belong in that project's own
+# generated glossary, not in this shared, general one.
+abduction
+acceleration
+accelerometer
+acid
+adapter pattern
+adduction
+agonist
+aliasing
+allocation
+alpha channel
+anaerobic threshold
+angular momentum
+angular velocity
+antagonist
+anthropometric
+anthropometric landmark
+anthropometry
+antialiasing
+aperture
+api
+aspect ratio
+assertion
+async
+asynchronous
+atomic
+authentication
+authorization
+autofocus
+await
+background job
+backpressure
+bad pixel correction
+barrel distortion
+barrier
+bayer
+benchmark
+bilateral
+biomechanical
+biomechanics
+bios
+bisect
+bit depth
+bitrate
+blocking call
+blue-green deployment
+bodyweight
+bokeh
+bootloader
+boxing
+breakpoint
+buffer overflow
+builder pattern
+cache
+cache invalidation
+cadence
+calibration
+callback
+canary release
+cancellation token
+ccm
+center of mass
+center of pressure
+centre of mass
+centre of pressure
+certificate
+checksum
+cherry-pick
+chroma
+chroma subsampling
+chromatic aberration
+chromaticity
+circuit breaker
+clipping
+closure
+code coverage
+codec
+color depth
+color grading
+color temperature
+colorspace
+concentric
+concurrency
+container
+container format
+continuous deployment
+continuous integration
+contralateral
+contrast detection
+contravariance
+coroutine
+countermovement
+covariance
+crud
+culling
+dangling pointer
+dark current
+data binding
+dead pixel
+deadlock
+debayering
+debounce
+decode
+decorator pattern
+degrees of freedom
+delegate
+demosaic
+demosaicing
+demux
+demuxer
+denoise
+denoising
+dependency graph
+dependency injection
+dependency inversion
+depth of field
+deserialize
+deterministic
+disparity
+dispatcher
+distal
+distortion
+distributed tracing
+dominant limb
+downscale
+drift
+dynamic range
+dynamometer
+dynamometry
+eager loading
+eccentric
+electromyography
+emg
+encapsulation
+encode
+encryption
+endpoint
+enum
+epipolar
+epoch
+ergometer
+error budget
+event loop
+event-driven
+eventual consistency
+exception
+exposure
+exposure triangle
+extension
+external rotation
+extrinsics
+facade pattern
+factory pattern
+fascicle
+feature flag
+firewall
+firmware
+fisheye
+fixture
+flake
+flaky test
+flexion
+focal length
+foot-strike pattern
+force plate
+force-velocity relationship
+forward kinematics
+fragment
+framebuffer
+framerate
+frontal
+fuzz test
+gait
+gamma
+gamma correction
+garbage collection
+gateway
+generic
+genu valgum
+genu varum
+ghosting
+global shutter
+golgi tendon organ
+goniometer
+goniometry
+ground contact time
+ground reaction force
+grpc
+gyroscope
+handedness
+handshake
+hash
+hashing
+hdr
+heap
+heart rate variability
+heel-strike
+histogram
+homography
+hot pixel
+hypermobility
+hypervisor
+idempotency
+idempotent
+image stabilization
+impulse
+imu
+inertial measurement unit
+instrumentation
+integration test
+interface segregation
+interlace
+internal rotation
+interop
+interpolation
+intrinsics
+inverse kinematics
+inversion of control
+ipsilateral
+iso
+iso invariance
+isoinertial
+isokinetic
+isometric
+isotonic
+jitter
+joint angle
+jwt
+kelvin
+kernel
+keyframe
+kinematic
+kinematics
+kinesthesia
+kinetic
+kinetics
+kyphosis
+lactate threshold
+lambda
+latency
+launch monitor
+laxity
+lazy loading
+lens shading
+letterbox
+linter
+liskov substitution
+livelock
+load balancer
+load test
+log encoding
+lordosis
+luma
+lut
+marker-based
+markerless
+marshalling
+maximal oxygen uptake
+mechanical work
+mechanoreceptor
+memory leak
+merge conflict
+message queue
+microservice
+middleware
+migration
+mipmap
+mocap
+mock
+moire
+momentum
+monocular
+monolith
+monorepo
+mosaic
+motion blur
+motion capture
+motor unit
+muscle activation
+muscle spindle
+mutation testing
+mutex
+mux
+muxer
+mvc
+mvvm
+myoelectric
+negative work
+non-blocking
+null reference
+nullable
+nyquist
+oauth
+observability
+observable
+observer
+occlusion
+open-closed principle
+orm
+overexposed
+overload
+override
+oversampling
+partition
+payload
+phase detection
+pincushion distortion
+pinvoke
+pixel
+pixel binning
+plyometric
+pointer
+polymorphism
+positive work
+power output
+pressure pad
+prnu
+profiling
+progressive
+pronation
+proprioception
+proprioceptor
+protobuf
+proximal
+proxy
+ptc
+pub-sub
+publish-subscribe
+q-angle
+quantization
+quantum efficiency
+race condition
+range of motion
+raster
+rasterization
+rasterize
+rate limiting
+raw format
+reactive programming
+read noise
+rebase
+recruitment pattern
+reentrant
+reflection
+regression
+regression test
+replication
+repository pattern
+retry
+rgb
+rollback
+rolling shutter
+sagittal
+scheduler
+schema
+scoliosis
+segment
+semaphore
+sensor
+sensor readout
+serialization
+serializer
+service level objective
+service mesh
+shader
+sharding
+shot noise
+single responsibility principle
+singleton
+skeletal model
+smoke test
+socket
+somatotype
+span
+stack
+stack overflow
+stack trace
+stance phase
+static analysis
+stereo
+stress test
+stretch reflex
+stride
+struct
+structured logging
+stub
+subnet
+subpixel
+subscription
+supination
+swing phase
+synchronous
+synergist
+telemetry
+telephoto
+tendon stiffness
+tensiomyography
+tessellation
+texture
+thread
+thread-safe
+threadpool
+throttle
+throughput
+timecode
+timeout
+timestamp
+toe-off
+token
+tone mapping
+tonemapping
+torque
+transaction
+transcode
+transverse
+triangulation
+uefi
+ultrasonography
+unboxing
+underexposed
+undersampling
+unilateral
+unit of work
+unit test
+upscale
+use-after-free
+valgus
+varus
+vectorscope
+velocity
+vertex
+vertical jump
+viewmodel
+viewport
+vignetting
+virtual method
+virtualization
+vo2 max
+volatile
+watchdog
+waveform monitor
+webhook
+white balance
+worker thread
+yuv

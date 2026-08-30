@@ -1,0 +1,366 @@
+# simpler.tsv - hard word/phrase -> plain, meaning-preserving replacement.
+# Format: hard_word<TAB>plain replacement (lowercase column 1, comments start with #).
+# Used by the plain-language scorer: a word here costs extra ONLY if it is
+# already scored as rare/abstract by the lexicon (see model.py); this list
+# does not ban words, it prices unearned difficulty when a plain synonym
+# carries the same meaning.
+#
+# Sources merged 2026-08-30:
+#   - US federal plain language guidelines, "Use simple words and phrases"
+#     (github.com/GSA/plainlanguage.gov, _pages/guidelines/words/use-simple-words-phrases.md,
+#     the current home of the retired plainlanguage.gov word list) - 237 pairs
+#   - UK Government Digital Service style guide, "Words to avoid" section
+#     (gov.uk/guidance/style-guide/a-to-z-of-gov-uk-style) - 41 pairs
+#   - retext-simplify word list (github.com/retextjs/retext-simplify,
+#     lib/patterns.js), a superset of the federal list used by the retext
+#     linting ecosystem - 313 pairs
+#   - too-wordy (github.com/duereg/too-wordy) was checked as a cross-reference
+#     but carries no replacement word of its own (flag-only list), so it
+#     contributed no additional pairs.
+#
+# Dropped deliberately, and why:
+#   - Precise technical/engineering terms with no exact plain equivalent in
+#     this codebase's domain (software, .NET, video, biomechanics):
+#     calibration, deploy, interface, parameter(s), function, optimum/optimal,
+#     component(s), monitor, capability, robust, state-of-the-art (the last
+#     two are already governed by the hype-word rule elsewhere, not a lexical
+#     synonym), plus the task's explicit ban list (latency, throughput,
+#     concurrency, deterministic, idempotent, serialization, quantization,
+#     allocation, mutex, semaphore, hysteresis, jitter, drift, kinematics,
+#     kinetics).
+#   - Meaning-changing substitutions: represents->is, whereas->because (whereas
+#     is contrastive, not causal), effect->choose (retext's own mapping is
+#     wrong; effect means "bring about", not "choose"), and a set of vague
+#     bureaucratic-jargon words whose plain "equivalent" loses real content
+#     (key, promote, focus, land, dialogue, commit, pledge, strengthening,
+#     transform, progress, overarching, liaise, counter, impact, drive,
+#     drive out, hub, portal, one-stop shop, ring fencing).
+#   - Rows that were not actually a word-for-word pair: punctuation notes
+#     ("/ (slash)"), placeholder variables ("a and/or b", "and/or"),
+#     deletion-only advice with no replacement word ("there is", "the use
+#     of", "it is", "the month of", "your office", "time period"), and two
+#     malformed combined-key rows from the source table ("assist,
+#     assistance" and "utilize, utilization" - both words are kept as their
+#     own separate lines).
+#   - i.e. was corrected from the source's wrong "as in" to "that is" (i.e.
+#     means "that is", not "as in"; e.g. means "for example" and was kept).
+a number of	some
+abundance	enough
+accede to	agree to
+accelerate	speed up
+accentuate	stress
+accompany	go with
+accomplish	carry out
+accorded	given
+accordingly	so
+accrue	add
+accurate	correct
+acquiesce	agree
+acquire	get
+additional	more
+address	discuss
+addressees	you
+addressees are requested	please
+adjacent to	next to
+adjustment	change
+admissible	accepted
+advance	improve
+advantageous	helpful
+adversely impact	hurt
+adversely impact on	hurt
+advise	recommend
+afford an opportunity	allow
+agenda	plan
+aggregate	add
+aircraft	plane
+all of	all
+alleviate	ease
+allocate	divide
+along the lines of	as in
+already existing	existing
+alternatively	or
+ameliorate	help
+anticipate	expect
+apparent	clear
+appreciable	many
+appropriate	proper
+approximate	about
+approximately	about
+arrive onboard	arrive
+as a means of	to
+as of yet	yet
+as prescribed by	in
+as to	about
+as yet	yet
+ascertain	find out
+assist	help
+assistance	aid
+at the present time	at present
+at this point in time	now
+at this time	now
+attain	meet
+attempt	try
+attributable to	because
+authorise	allow
+authorize	allow
+because of the fact that	because
+belated	late
+benefit	help
+benefit from	enjoy
+bestow	award
+by means of	by
+by virtue of	by
+caveat	warning
+cease	stop
+close proximity	near
+collaborate	work with
+combat	solve
+combat environment	combat
+combined	joint
+commence	start
+comply with	follow
+comprise	form
+concerning	about
+consequently	so
+consolidate	combine
+constitutes	is
+contains	has
+convene	meet
+currently	now
+deem	believe
+delete	cut
+deliver	make
+demonstrate	show
+depart	leave
+designate	appoint
+desire	want
+determine	decide
+disclose	show
+discontinue	drop
+disincentivise	discourage
+disseminate	give
+due to the fact that	due to
+during the period	during
+e.g.	for example
+each and every	each
+economical	cheap
+effect modifications	make changes
+elect	choose
+eliminate	cut
+elucidate	explain
+employ	use
+empower	allow
+encounter	meet
+endeavor	try
+ensure	make sure
+enumerate	count
+equipments	equipment
+equitable	fair
+equivalent	equal
+establish	set up
+evaluate	check
+evidenced	showed
+evident	clear
+exclusively	only
+exhibit	show
+expedite	hasten
+expeditious	fast
+expend	spend
+expertise	ability
+expiration	end
+facilitate	help
+factual evidence	evidence
+failed to	didn't
+feasible	can be done
+females	women
+finalise	complete
+finalize	complete
+first and foremost	first
+for a period of	for
+for the purpose of	to
+forfeit	give up
+formulate	plan
+forward	send
+foster	encourage
+frequently	often
+functionality	features
+furnish	give
+going forward	from now on
+has a requirement for	needs
+has no effect	does nothing
+herein	here
+heretofore	until now
+herewith	below
+honest truth	truth
+however	but
+i.e.	that is
+identical	same
+identify	find
+if and when	if
+immediately	at once
+impacted	affected
+implement	carry out
+in a timely manner	on time
+in accordance with	by
+in addition	also
+in all likelihood	probably
+in an effort to	to
+in between	between
+in excess of	more than
+in lieu of	instead
+in light of the fact that	because
+in many cases	often
+in order for	for
+in order that	for
+in order to	to
+in regard to	about
+in relation to	about
+in some instances	sometimes
+in terms of	as
+in the amount of	for
+in the event of	if
+in the near future	shortly
+in view of	since
+in view of the above	so
+inasmuch as	since
+incentivise	encourage
+inception	start
+incumbent upon	must
+indicate	show
+indication	sign
+individuals	people
+initial	first
+initiate	start
+interpose no objection	don't object
+is applicable to	applies to
+is authorised to	may
+is authorized to	may
+is in consonance with	agrees with
+is responsible for	handles
+it appears	seems
+it is essential	must
+it is requested	please
+leverage	use
+liaison	discussion
+limited number	limits
+magnitude	size
+maintain	keep
+maximum	greatest
+methodology	method
+minimise	cut
+minimize	decrease
+minimum	least
+modify	change
+moving forward	from now on
+multiple	many
+necessitate	cause
+nevertheless	besides
+not certain	uncertain
+not later than	by
+not many	few
+not often	rarely
+not unless	only if
+not unlike	alike
+notify	let know
+notwithstanding	inspite of
+null and void	null
+numerous	many
+objective	aim
+obligate	bind
+observe	see
+obtain	get
+on a regular basis	regularly
+on the contrary	but
+on the other hand	but
+one particular	one
+operate	run
+option	choice
+owing to the fact that	because
+participate	take part
+particulars	details
+pass away	die
+perform	do
+permit	let
+pertaining to	about
+point in time	moment
+portion	part
+possess	have
+practicable	practical
+preclude	prevent
+previous	earlier
+previously	before
+prior to	before
+prioritise	focus on
+prioritize	rank
+proceed	do
+procure	get
+proficiency	skill
+promulgate	issue
+provide	give
+provided that	if
+provides guidance for	guides
+purchase	buy
+pursuant to	by
+readily apparent	clear
+refer back	refer
+reflect	say
+regarding	about
+relative to	about
+relocate	move
+remain	stay
+remainder	rest
+remuneration	pay
+render	give
+request	ask
+require	need
+requirement	need
+reside	live
+residence	house
+retain	keep
+satisfy	meet
+selection	choice
+set forth in	in
+shall	must
+should you wish	if you want
+similar to	like
+slim down	make smaller
+solicit	ask for
+span across	cross
+strategise	plan
+strategize	plan
+streamline	simplify
+submit	send
+subsequent	later
+subsequent to	after
+subsequently	after
+substantial	large
+successfully complete	complete
+sufficient	enough
+tackle	stop
+take action to	act
+terminate	end
+the undersigned	I
+therefore	so
+therein	there
+thereof	its
+this day and age	today
+timely	prompt
+took advantage of	preyed on
+transmit	send
+transpire	happen
+under the provisions of	under
+until such time as	until
+utilisation	use
+utilise	use
+utilization	use
+utilize	use
+validate	confirm
+various different	different
+viable	practical
+vice	instead of
+warrant	call for
+whether or not	whether
+with reference to	about
+with respect to	about
+with the exception of	except for
+witnessed	saw
