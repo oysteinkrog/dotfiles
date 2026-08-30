@@ -148,8 +148,14 @@ see. What the agents did to raise it: stripped backticks off identifiers, droppe
 a bead id out of a title, and chopped sentences into fragments. Every one of those
 raises the score and costs the reader.
 
-So treat the number as a thermometer, not a target. The findings are specific and
-worth acting on; the number is only there to decide whether the gate opens.
+A fourth group did it the way this skill now says: one pass, fix the findings you
+agree with, leave the rest, ignore the number. Two fresh judge panels picked that
+group best 30 times out of 48, against 13 for no guidance and 5 for the skill
+text alone. Its tool score was **lower** than the score-chasing group's. Across
+24 notes it fixed 19 findings and deliberately kept 53, with a reason each time.
+
+So the findings are the product and the number is a thermometer. Read the
+findings, use judgement, and rejecting most of them is normal.
 
 ### How the score works
 
