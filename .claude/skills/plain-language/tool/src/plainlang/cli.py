@@ -102,6 +102,13 @@ def main(argv: list[str] | None = None) -> int:
             failed = True
             continue
         rep = scorer.score(text)
+        if rep.language != "en":
+            if args.command == "json":
+                print(rep.to_json())
+            elif not args.quiet and args.command in {"check", "gate", "score", "explain"}:
+                print(f"{target}: not English "
+                      f"({rep.stats.get('english_share', 0):.0%} English function words), not gated")
+            continue
         if SKIP_MARKER.search(text):
             bad, why = False, ""
             if not args.quiet and args.command in {"check", "gate", "score"}:

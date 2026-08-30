@@ -131,8 +131,25 @@ pl explain draft.md        # where every point of cost went
 echo "$BODY" | pl check -  # read from stdin
 ```
 
-It reports a score out of 100 and a list of findings. The gate fails on any hard-rule
+It reports a list of findings and a score out of 100. The gate fails on any hard-rule
 violation, or when the score falls below the minimum in `data/weights.json`.
+
+**Fix the findings. Never chase the score.** Read the findings, fix the ones you
+agree with, leave the ones you think are wrong and say which and why, then stop.
+Do not run it again to watch the number move.
+
+This is not a style preference, it is a measured result. In a blind test, 24
+notes were written three ways from the same facts: with no guidance, with this
+skill, and with this skill plus five rounds of raising the score. Two blind judge
+panels ranked the score-chasing version worst 39 times out of 48, and best once.
+Its tool score was the highest of the three, and its clarity was the lowest.
+Chasing the number made the writing worse in exactly the way the number cannot
+see. What the agents did to raise it: stripped backticks off identifiers, dropped
+a bead id out of a title, and chopped sentences into fragments. Every one of those
+raises the score and costs the reader.
+
+So treat the number as a thermometer, not a target. The findings are specific and
+worth acting on; the number is only there to decide whether the gate opens.
 
 ### How the score works
 
@@ -203,8 +220,14 @@ precision and recall are in `evals/`.
 2. Read every line back as the reader. Apply the test and the rules.
 3. Sweep the banned-shapes table. They cluster in first and last lines of sections.
 4. Check every title, heading, and pull quote in isolation.
-5. Run `pl check` on the draft and fix what it finds.
+5. Run `pl check` once. Fix the findings you agree with. Leave the ones you think
+   are wrong and say which and why. Then stop.
 6. Cut whatever survives that is not carrying meaning.
+
+Three things never to do, because each raises the score and costs the reader:
+remove backticks, identifiers, bead ids, versions, paths or issue keys; chop a
+sentence into fragments to shorten it; make a title blander. A specific
+identifier in a title is information, not filler.
 
 ## Precedence over other guidance
 

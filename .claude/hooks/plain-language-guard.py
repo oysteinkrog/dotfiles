@@ -96,9 +96,12 @@ def summarise(rep: dict, label: str) -> str:
         fix = f" -> {f['suggest']}" if f.get("suggest") else ""
         lines.append(f"  {f['line']}:{f['col']} [{f['severity']}] {f['rule']}: {f['message']} \"{excerpt}\"{fix}")
         shown += 1
-    lines.append("Rewrite the text against the plain-language skill, then try again. "
-                 "If this text is out of scope (product copy, quoted material, a machine format), "
-                 "say so and add a `plainlang: skip` line.")
+    lines.append(
+        "Fix the findings above, not the number. Do not delete identifiers, versions, paths or "
+        "backticks, and do not chop sentences into fragments: that raises the score and costs the "
+        "reader. If a finding is wrong, say so and leave it. If this text is out of scope (product "
+        "copy, quoted material, a machine format), say so and add a `plainlang: skip` line."
+    )
     return "\n".join(lines)
 
 

@@ -96,24 +96,65 @@ def summarise(rep: dict, label: str) -> str:
         fix = f" -> {f['suggest']}" if f.get("suggest") else ""
         lines.append(f"  {f['line']}:{f['col']} [{f['severity']}] {f['rule']}: {f['message']} \"{excerpt}\"{fix}")
         shown += 1
-    lines.append("Rewrite the text against the plain-language skill, then try again. "
-                 "If this text is out of scope (product copy, quoted material, a machine format), "
-                 "say so and add a `plainlang: skip` line.")
+    lines.append(
+        "Fix the findings above, not the number. Do not delete identifiers, versions, paths or "
+        "backticks, and do not chop sentences into fragments: that raises the score and costs the "
+        "reader. If a finding is wrong, say so and leave it. If this text is out of scope (product "
+        "copy, quoted material, a machine format), say so and add a `plainlang: skip` line."
+    )
     return "\n".join(lines)
 
 
 # --- extracting the human-facing text from a tool call ----------------------
 
+def _heredocs(cmd: str) -> list[str]:
+    """Bodies passed as heredocs, which is how most PR and commit text arrives."""
+    out = []
+    for m in re.finditer(r"<<-?\s*['\"]?(?P<tag>[A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n(?P<body>.*?)\n\s*(?P=tag)\b",
+                         cmd, re.S):
+        out.append(m.group("body"))
+    return out
+
+
+def _read_file_arg(cmd: str, flag: str) -> str:
+    m = re.search(rf"{flag}[= ]\s*(['\"]?)(?P<path>[^\s'\"]+)\1", cmd)
+    if not m:
+        return ""
+    try:
+        return Path(m.group("path")).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def from_bash(cmd: str) -> tuple[str, str] | None:
-    m = re.search(r"git\s+commit\b[^\n]*?-m\s*(['\"])(?P<msg>.*?)\1", cmd, re.S)
-    if m and word_count(m.group("msg")) >= 25:
-        return m.group("msg"), "commit message"
-    m = re.search(r"gh\s+(?:pr|issue)\s+(?:create|edit)\b.*?--body(?:-file)?\s*(['\"])(?P<b>.*?)\1", cmd, re.S)
-    if m:
-        return m.group("b"), "pull request body"
-    m = re.search(r"gh\s+api\b.*?-f\s+body=(['\"])(?P<b>.*?)\1", cmd, re.S)
-    if m:
-        return m.group("b"), "pull request body"
+    is_pr = re.search(r"\bgh\s+(?:pr|issue)\s+(?:create|edit|comment)\b", cmd) or \
+        re.search(r"\bgh\s+api\b[^\n]*\bpulls?\b", cmd)
+    is_commit = re.search(r"\bgit\s+commit\b", cmd)
+    label = "pull request body" if is_pr else ("commit message" if is_commit else "")
+
+    if is_pr:
+        body = _read_file_arg(cmd, r"--body-file")
+        if body:
+            return body, label
+    if is_commit:
+        body = _read_file_arg(cmd, r"-F|--file")
+        if body:
+            return body, label
+
+    # Quoted values.
+    for pattern, lab in (
+        (r"gh\s+(?:pr|issue)\s+(?:create|edit|comment)\b.*?--body\s*(['\"])(?P<b>.*?)\1", "pull request body"),
+        (r"gh\s+api\b.*?-f\s+body=(['\"])(?P<b>.*?)\1", "pull request body"),
+        (r"git\s+commit\b[^\n]*?-m\s*(['\"])(?P<b>.*?)\1", "commit message"),
+    ):
+        m = re.search(pattern, cmd, re.S)
+        if m and word_count(m.group("b")) >= 25:
+            return m.group("b"), lab
+
+    if label:
+        docs = [d for d in _heredocs(cmd) if word_count(d) >= 25]
+        if docs:
+            return max(docs, key=word_count), label
     return None
 
 
@@ -130,6 +171,8 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
     if name == "Bash":
         return from_bash(ti.get("command") or "")
     if name == "Artifact":
+        if ti.get("action") == "reply":
+            return (ti.get("text") or "", "artifact comment reply")
         # The page is a file on disk; score its visible text.
         path = ti.get("file_path")
         if not path or ti.get("action") not in (None, "publish"):
@@ -182,14 +225,27 @@ def last_assistant_text(transcript: str) -> str:
     return ""
 
 
-def blocked_once(session: str) -> bool:
-    """One block per turn, so a stubborn reply cannot spin the loop."""
+def blocked_recently(session: str, seconds: int = 90) -> bool:
+    """Do not block the same session twice in quick succession.
+
+    `stop_hook_active` is the real loop guard; this is the backstop for a reply
+    that keeps failing for a reason the model cannot fix, so the turn ends
+    rather than spinning.
+    """
+    import time
+
     STATE.mkdir(parents=True, exist_ok=True)
     marker = STATE / f"{re.sub(r'[^A-Za-z0-9_-]', '_', session)[:64]}.stop"
-    if marker.exists():
-        marker.unlink(missing_ok=True)
-        return True
-    marker.write_text("1")
+    now = time.time()
+    try:
+        if marker.exists() and now - marker.stat().st_mtime < seconds:
+            return True
+    except OSError:
+        return False
+    try:
+        marker.write_text(str(now))
+    except OSError:
+        pass
     return False
 
 
@@ -248,7 +304,7 @@ def main() -> int:
         rep = gate(text)
         if not rep or not rep.get("_failed"):
             return 0
-        if mode == "warn" or blocked_once(ev.get("session_id") or "default"):
+        if mode == "warn" or blocked_recently(ev.get("session_id") or "default"):
             return 0
         print(summarise(rep, "your reply"), file=sys.stderr)
         return 2

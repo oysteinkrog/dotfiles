@@ -48,7 +48,7 @@ HARD: list[Rule] = [
 SHAPES: list[Rule] = [
     Rule(
         "not-x-its-y", "error",
-        _r(r"\b(?:it'?s|this is|that'?s|they'?re|we'?re)\s+not\s+(?:just\s+)?(?:a|an|the)?[^.,;:!?]{1,40},\s*(?:it'?s|this is|that'?s|they'?re|we'?re|but)\b"),
+        _r("\\b(?:(?:is|are|was|were)\\s*n[o'’]t|['’](?:s|re)\\s+not)\\s+(?:just\\s+|really\\s+|simply\\s+)?(?:an?|the|this|that|these|those|its|their|our|your|his|her|my|one|another)\\s+[^.,;:!?]{1,45},\\s*(?:it|that|they)['’](?:s|re)\\b"),
         "\"Not X, it's Y\" contrast formula.",
         "State what it is.",
         cost=5.0,
@@ -69,7 +69,7 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "isnt-about", "warn",
-        _r(r"\b(?:this|it|that)\s+is\s*n[o']t\s+about\b[^.!?]{1,60}\bit'?s about\b"),
+        _r("\\b(?:(?:is|are|was|were)\\s*n[o'’]t|['’](?:s|re)\\s+not)\\s+about\\s+(?!\\d)[^.!?;]{0,60}(?:[.!?]\\s+)?\\s*(?:it['’]s|that['’]s|they['’]re|they\\s+are|it\\s+is)\\s+about\\s+(?!\\d)"),
         "\"It isn't about X, it's about Y\" formula.",
         "State the point directly.",
         cost=4.0,
@@ -97,35 +97,35 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "in-todays", "warn",
-        _r(r"\bin (?:today'?s|the modern|an? increasingly)\b[^.!?]{0,40}\b(?:world|landscape|era|environment|age)\b"),
+        _r("\\bin\\s+(?:(?:today['’]s|the\\s+modern|this\\s+modern|our\\s+modern|the\\s+present[- ]day)\\s+(?:[a-z][a-z-]*\\s+){0,3}(?:world|landscape|market|marketplace|era|age|climate|environment|industry|ecosystem|economy|culture|society)|today['’]s\\s+(?:fast|ever|rapidly|quickly|hyper|increasingly|highly)-[a-z]+|an?\\s+increasingly\\s+[a-z][a-z-]*|an?\\s+(?:age|era)\\b|the\\s+(?:age|era)\\s+of)\\b[^.,;:!?]{0,40},"),
         "Scene-setting opener.",
         "Delete it.",
         cost=4.0,
     ),
     Rule(
         "whether-youre", "warn",
-        _r(r"\bwhether you'?(?:re|are)\b[^.!?]{1,60}\bor\b"),
+        _r("(?:\\A|[.!?]\\s+|\\n[ \\t]*\\n\\s*)whether\\s+you(?:['’]re|\\s+are)\\b(?:[^.!?]|\\.(?=\\d)){1,60}\\bor\\b(?:[^.,!?]|\\.(?=\\d)){1,30},"),
         "\"Whether you're X or Y\" audience framing.",
         "Address the reader once, directly.",
         cost=2.5,
     ),
     Rule(
         "vague-attribution", "warn",
-        _r(r"\b(?:experts?|researchers?|studies|many|some|analysts?|critics?|observers?|industry (?:leaders|watchers))\s+(?:agree|say|argue|believe|suggest|note|have (?:noted|argued|shown)|show)\b"),
+        _r('\\b(?:(?:many|some|most)\\s+(?:developers?|engineers?|programmers?|people|coaches|practitioners|scientists?|academics?|teams|users?|experts?|researchers?)|experts?|researchers?|studies|analysts?|critics?|observers?|commentators?|pundits?|industry\\s+(?:leaders|watchers|experts))\\s+(?:agrees?|says?|argues?|believes?|suggests?|notes?|claims?|maintains?|contends?|points?\\s+out|shows?|have\\s+(?:noted|argued|shown|found|said))\\b|\\b(?:many|some)\\s+(?:agree|say|argue|believe|suggest|contend|maintain|insist)\\b|\\bresearch\\s+(?:suggests?|shows?|indicates?|says?)\\b|\\bit\\s+(?:is|was)\\s+(?:widely|generally|commonly|broadly|often|well)\\s+(?:believed|accepted|assumed|understood|held|thought|agreed|regarded|considered)\\b'),
         "Vague attribution with no source.",
         "Name the source and the date.",
         cost=3.0,
     ),
     Rule(
         "worth-noting", "warn",
-        _r(r"\b(?:it'?s|it is)\s+(?:worth|important|essential|crucial)\s+(?:noting|to note|to remember|to mention|to understand)\b"),
+        _r("\\b(?<!\\bwhether\\s)(?<!\\bif\\s)(?:it'?s|it is)\\s+(?:worth|important|essential|crucial|useful|worthwhile|helpful)\\s+(?:noting|mentioning|highlighting|remembering|emphasi[sz]ing|pointing out|to note|to remember|to mention|to understand|to highlight|to point out|to emphasi[sz]e)\\s+that\\b|\\bit bears (?:noting|mentioning|repeating|highlighting)\\s+that\\b|\\b(?:one thing|another thing|something) worth (?:noting|mentioning|highlighting|pointing out|remembering)\\b|(?:^|[.!?]\\s+|\\n)\\s*notably,"),
         "Hedge before the point.",
         "Make the point.",
         cost=3.0,
     ),
     Rule(
         "at-its-core", "warn",
-        _r(r"\b(?:at its core|at the end of the day|in essence|fundamentally speaking|when all is said and done|the bottom line is)\b"),
+        _r('\\bat (?:its|their) (?:core|essence|heart|simplest|most basic level|most fundamental level)\\s*,|\\bat a fundamental level\\b|\\b(?:in essence|at the end of the day|when all is said and done|the bottom line is|fundamentally speaking|in the final analysis)\\b|(?:^|[.!?]\\s+|\\n)\\s*fundamentally,'),
         "Pseudo-profound opener.",
         "Delete it.",
         cost=3.0,
@@ -146,21 +146,21 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "pivotal-role", "warn",
-        _r(r"\b(?:plays?|played|playing) an? (?:vital|significant|crucial|pivotal|key|central|critical|important) role\b"),
+        _r('\\b(?:plays?|played|playing|serves?|served|serving|has|have|had)\\s+an?\\s+(?:vital|significant|crucial|pivotal|key|central|critical|important|essential|instrumental|integral|major|indispensable)\\s+role\\b'),
         "Significance inflation.",
         "Say what it actually does.",
         cost=3.0,
     ),
     Rule(
         "broader-landscape", "warn",
-        _r(r"\b(?:evolving|shifting|changing|broader|wider|ever-changing) (?:landscape|ecosystem|tapestry|fabric|paradigm)\b"),
+        _r('\\b(?:broader|wider|larger|evolving|shifting|changing|ever-changing|global|overall)\\s+(?:\\w+\\s+)?(?:landscape|ecosystem|tapestry|fabric|paradigm|arena|milieu)[ \\t]*(?:[,.;:\\n]|of\\b|for\\b|$)|\\bagainst the backdrop of\\b|\\bin the grand scheme of things\\b'),
         "Abstract scene-setting.",
         "Name the thing that changed.",
         cost=4.0,
     ),
     Rule(
         "journey-framing", "warn",
-        _r(r"\b(?:our|the|my) (?:journey|path|road|quest|adventure) (?:to|toward|towards|through)\b"),
+        _r('\\b(?:a|an|the|our|my|this|your|their)\\s+(?:(?!user\\b|customer\\b|coach(?:es)?\\b)\\w+\\s+)?journey\\s+(?:through|towards?|of|for|so far|we|has|had|begins?|began|started|continues|ends)\\b|\\bembark(?:ed|s|ing)?\\s+on\\s+(?:a|an|the|our|this|their)\\s+(?:\\w+\\s+)?journey\\b|\\balong (?:this|that|our|my) journey\\b'),
         "Journey framing.",
         "Name the phases or the goal.",
         cost=3.0,
@@ -174,7 +174,7 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "in-order-to", "info",
-        _r(r"\bin order to\b"),
+        _r('\\bin order (?:to|for\\b[^.!?;,\\n]{0,40}?\\bto)\\s+(?:avoid|allow|enable|ensure|prevent|stop|keep|make|get|give|take|put|set|let|do|be|have|use|reuse|run|test|verify|check|confirm|validate|fix|repair|reproduce|release|build|rebuild|compile|deploy|ship|land|merge|rebase|commit|push|pull|sync|flush|clean|clear|reset|restart|start|launch|open|close|load|save|read|write|send|receive|handle|catch|throw|log|track|trace|measure|compute|calculate|generate|emit|render|draw|display|show|hide|report|expose|hook|wire|bind|register|resolve|inject|mock|stub|seed|arm|disarm|capture|record|stream|decode|encode|scrub|seek|index|import|export|convert|migrate|upgrade|bump|pin|apply|remove|delete|add|create|update|edit|rename|move|copy|split|reduce|improve|optimi[sz]e|match|align|adjust|tune|calibrate|normali[sz]e|filter|sort|group|compare|diff|find|search|locate|identify|detect|isolate|debug|diagnose|investigate|understand|know|see|tell|explain|document|describe|name|label|mark|flag|gate|block|unblock|guard|support|cover|satisfy|meet|reach|achieve|maintain|preserve|drop|skip|ignore|suppress|force|trigger|fire|invoke|call|dispatch|schedule|throttle|debounce|retry|wait|poll|watch|monitor|observe|subscribe|dispose|free|allocate|cache|store|persist|serialize|deserialize|parse|format|escape|strip|trim|wrap|work|help|focus|separate|share|limit|cap|extend|simplify|clarify|pick|choose|select|decide|plan|design|refactor|rewrite|port|replace|swap|switch|toggle|turn|bring|leave|surface|silence|widen|narrow|speed|serve|point|read)\\b'),
         "Padding.",
         "Use \"to\".",
         cost=1.0,
@@ -195,42 +195,42 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "moreover", "info",
-        _r(r"(?m)^\s*(?:>|[-*+]\s+|\d+[.)]\s+)?(?:Moreover|Furthermore|Additionally|Notably|Importantly|Ultimately|Overall|In conclusion|To summari[sz]e|In summary)\b[,:]"),
+        _r('(?m)(?:(?:^[ \\t]*(?:>[ \\t]*)?|(?<=[.!?]\\s)(?<![0-9]\\.\\s)|(?<=[.!?]["\')]\\s))(?:Moreover|Furthermore|Additionally|In addition|Notably|Importantly|Ultimately|Overall|In conclusion|To summari[sz]e|In summary)\\b[ \\t]*[,:]|^[ \\t]*(?:>[ \\t]*)?(?:[-*+][ \\t]+|\\d+[.)][ \\t]+)(?:Moreover|Furthermore|Additionally|In addition|Notably|Importantly|Ultimately|Overall|In conclusion|To summari[sz]e|In summary)\\b[ \\t]*,)'),
         "Conjunctive opener stacked at the start of a sentence.",
         "Join the sentences, or just state the next fact.",
         cost=1.5,
     ),
     Rule(
         "robust-hype", "warn",
-        _r(r"\b(?:seamless(?:ly)?|robust|comprehensive|powerful|cutting[- ]edge|state[- ]of[- ]the[- ]art|game[- ]?changer|game[- ]changing|best[- ]in[- ]class|world[- ]class|unparalleled|unmatched|revolutionary|groundbreaking|innovative|elegant(?:ly)?|effortless(?:ly)?|blazing(?:ly)? fast|turnkey|holistic|synergy|synerg\w+)\b"),
+        _r('\\b(?:best[- ]in[- ]class|world-class|cutting[- ]edge|enterprise[- ]grade|industry[- ]leading|future[- ]proof|turnkey|unparalleled|groundbreaking|revolutionary|game[- ]?chang(?:er|ers|ing)|blazing(?:ly)?[- ]fast|best[- ]in[- ]breed)\\b|\\bstate-of-the-art\\b|(?<!the )\\bstate of the art\\b|\\bunmatched[ \\t]+(?:accuracy|precision|performance|reliability|quality|speed|power|value|experience|coverage|control|clarity|detail|results?|flexibility)\\b|\\b(?:robust|comprehensive|powerful|seamless|elegant|effortless|scalable|innovative|holistic)\\b[ \\t]*(?:,[ \\t]*|[ \\t]+(?:and|yet|but)[ \\t]+)(?:\\w+ly[ \\t]+)?(?:robust|comprehensive|powerful|seamless|elegant|effortless|scalable|innovative|holistic|intuitive|flexible|reliable|performant|extensible|rock[- ]solid|state-of-the-art|best[- ]in[- ]class|world-class|cutting[- ]edge|enterprise[- ]grade|industry[- ]leading|future[- ]proof)\\b|\\b(?:intuitive|reliable|performant|extensible|rock[- ]solid|lightning[- ]fast)\\b[ \\t]*(?:,[ \\t]*|[ \\t]+(?:and|yet|but)[ \\t]+)(?:\\w+ly[ \\t]+)?(?:robust|comprehensive|powerful|seamless|elegant|effortless|scalable|innovative|holistic)\\b'),
         "Hype register.",
         "Say what it does and give the number.",
         cost=3.0,
     ),
     Rule(
         "promo-adjectives", "info",
-        _r(r"\b(?:vibrant|rich tapestry|breathtaking|stunning|must[- ]have|must[- ]visit|renowned|nestled|boasts?|in the heart of|meticulous(?:ly)?|profound(?:ly)?)\b"),
+        _r('\\b(?:innovative|industry[- ]leading|revolutionar(?:y|ily)|game[- ]?chang(?:er|ers|ing)|unparalleled|groundbreaking|world-class|best[- ]in[- ]class|cutting[- ]edge|state-of-the-art|stunning|breathtaking|sleek|effortless(?:ly)?|beautifully crafted|vibrant|rich tapestry|must-have|must-visit|renowned|nestled|boasts|in the heart of)\\b|\\bunmatched[ \\t]+(?:accuracy|precision|performance|reliability|quality|speed|power|value|experience|coverage|control|clarity|detail|results?|flexibility)\\b'),
         "Promotional adjective.",
         "Cut it or replace with a fact.",
         cost=2.0,
     ),
     Rule(
         "ai-vocab", "info",
-        _r(r"\b(?:leverage[sd]?|leveraging|utili[sz]e[sd]?|utili[sz]ing|utili[sz]ation|facilitate[sd]?|myriad|plethora|intricate|intricacies|nuanced|realm|paradigm|underscore[sd]?|underscores|showcase[sd]?|navigate the|foster(?:ing|s)?|streamline[sd]?|bolster(?:ing|s)?|garner(?:ing|ed|s)?|pivotal|crucial|vital|noteworthy|commendable|multifaceted|ever[- ]evolving|treasure trove|deep dive|dive deep|unlock(?:ing|s)? the)\b"),
+        _r('\\bleverag(?:es|ed|ing)(?![-\\w])|\\b(?:to|can|could|should|would|will|shall|must|may|might|we|you|they|it|and|then|please|simply)[ \\t]+leverage[ \\t]+(?:the|our|your|their|its|this|that|these|those|existing|a|an)\\b|\\butili[sz](?:e|es|ed|ing)(?![-\\w])|\\b(?:in|into|within|across|throughout) the realm of\\b|(?<!the )\\bunderscor(?:es|ed|ing)[ \\t]+(?:the|this|that|a|an|how|why|just|our|its|their)\\b|\\bshowcas(?:e|es|ed|ing)(?![-\\w])|\\bfacilitat(?:e|es|ed|ing)\\b|\\b(?:plethora|myriad|multifaceted|intricacies|treasure trove|ever[- ]evolving|commendable|meticulous(?:ly)?|paradigm shift|rich tapestry)\\b|\\b(?:deep dive|dive deep)\\b|\\bunlock(?:s|ing)?[ \\t]+the[ \\t]+(?:power|potential|full[ \\t]+(?:power|potential|value))\\b|\\bnavigat(?:e|es|ing) the (?:complexit\\w+|landscape|nuances?|challenges?)\\b'),
         "Word that appears far more often in AI prose than in human prose.",
         "Use the plain word.",
         cost=1.5,
     ),
     Rule(
         "significance-tail", "warn",
-        _r(r"(?:\bthis\b[^.!?]{0,40})?\b(?:speaks to|is a reflection of|represents a (?:shift|turning point|milestone)|marks a (?:new|turning|significant)|sets the stage for|paves the way for|opens the door to)\b"),
+        _r("\\b(?:cannot|can ?not|can't|could not)[ \\t]+be[ \\t]+over(?:stated|emphasi[sz]ed)\\b|\\b(?:hard|difficult|impossible)[ \\t]+to[ \\t]+over(?:state|emphasi[sz]e)\\b|\\bis[ \\t]+(?:a[ \\t]+)?(?:really[ \\t]+|truly[ \\t]+)?big[ \\t]+deal\\b|\\b(?:marks|represents|signals)[ \\t]+(?:a|an)[ \\t]+(?:(?:major|real|significant|important|new|genuine|fundamental|huge|profound)[ \\t]+)?(?:milestone|turning point|watershed|inflection point|sea change|paradigm shift)\\b|\\b(?:marks|represents|signals)[ \\t]+(?:a|an)[ \\t]+(?:major|real|significant|important|new|genuine|fundamental|huge|profound)[ \\t]+(?:step (?:forward|change)|shift|leap|change|advance)\\b|\\bserves?[ \\t]+as[ \\t]+(?:a|the)[ \\t]+(?:foundation|cornerstone|springboard|launching pad|stepping stone)\\b|\\bmatters?[ \\t]+more[ \\t]+than[ \\t]+(?:almost[ \\t]+|nearly[ \\t]+|just about[ \\t]+)?(?:anything|everything)\\b|\\b(?:this|that|it)[ \\t]+(?:\\w+[ \\t]+)?is[ \\t]+(?:hugely[ \\t]+|deeply[ \\t]+|truly[ \\t]+)?significant[ \\t]+for\\b|\\bspeaks[ \\t]+to[ \\t]+(?:the[ \\t]+)?(?:importance|value|power|strength)\\b|\\bis[ \\t]+a[ \\t]+reflection[ \\t]+of\\b|\\bsets[ \\t]+the[ \\t]+stage[ \\t]+for\\b|\\bpaves[ \\t]+the[ \\t]+way[ \\t]+for\\b|\\bopens[ \\t]+the[ \\t]+door[ \\t]+to\\b"),
         "Sentence exists to assert importance.",
         "Delete it, or replace with what happens next.",
         cost=3.5,
     ),
     Rule(
         "rhetorical-question", "info",
-        _r(r"(?m)^\s*(?:So )?(?:What|Why|How|Where)\b[^.!?\n]{0,60}\?\s*$"),
+        _r('(?m)\\bever wondered\\b|\\bwhat could possibly go wrong\\b|\\bwhy (?:does|do|is) (?:this|that|it) matter\\b(?:[^.?!\\n]|\\.(?=\\d)){0,40}\\?|(?<=[a-z] )what (?:does|do|is) (?:this|that|it) mean\\b(?:[^.?!\\n]|\\.(?=\\d)){0,40}\\?|^[#>*\\s-]*(?:But|So|And)\\s+(?:which|what|why|how|who|where)\\b(?:[^.?!\\n]|\\.(?=\\d)){0,70}\\?|(?<=[.!?] )But\\s+(?:which|what|why|how|who|where)\\b(?:[^.?!\\n]|\\.(?=\\d)){0,70}\\?|(?:^[#>*\\s-]*|(?<=[.!?] ))Is (?:that|this) really\\b(?:[^.?!\\n]|\\.(?=\\d)){0,70}\\?|^#{1,6}\\s*(?:Ready|Want|Curious|Wondering|Looking)\\s+to\\b[^\\n?]{0,70}\\?\\s*$'),
         "Rhetorical question as a heading or standalone line.",
         "Replace with the answer.",
         cost=2.0,
@@ -244,7 +244,7 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "bold-lead-in", "info",
-        _r(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+\*\*[^*\n]{2,60}\*\*\s*[:—-]\s+\S"),
+        _r('(?:\\*\\*(?!(?:bug|reported by|fix version|fixed|changed|added|removed|deprecated|security|known issues?|environment|severity|priority|assignee|reporter|component)\\s*:)[^*\\n]{1,40}(?::\\*\\*|\\*\\*\\s*:)(?:[^*]{0,200})){2}\\*\\*(?!(?:bug|reported by|fix version|fixed|changed|added|removed|deprecated|security|known issues?|environment|severity|priority|assignee|reporter|component)\\s*:)[^*\\n]{1,40}(?::\\*\\*|\\*\\*\\s*:)'),
         "\"**Bold lead-in:** explanation\" list format.",
         "Fine in moderation. Too many in a row reads as generated.",
         cost=0.5,
@@ -260,9 +260,7 @@ SHAPES: list[Rule] = [
 ARTIFACTS: list[Rule] = [
     Rule(
         "tool-artifact", "error",
-        _r(r"(?:oaicite|oai_citation|contentReference|turn\d+search\d+|attributableIndex|"
-           r"grok_card|grok_render_citation_card_json|ppl-ai-file-upload|\[cite:\s*\d+\]|"
-           r"\[span_\d+\]\(start_span\))"),
+        _r('(?<![`\'"‘’“”])\\b(?:cite)?turn\\d+(?:search|view|news|forum|image|video|file)\\d+\\b(?![\'"’”])|(?<![`\'"‘’“”])\\b(?:oaicite|oai_citation|contentReference|attributableIndex|grok_card|grok_render_citation_card_json|ppl-ai-file-upload)\\b|【\\d+†[^】\\n]{0,40}】|(?<![\'"‘’“”])\\[cite:\\s*\\d+\\](?![\'"’”])|\\[span_\\d+\\]\\(start_span\\)'),
         "Chatbot citation markup left in the text.",
         "Delete it and cite the source properly.",
         cost=8.0, surface="raw",
@@ -276,17 +274,14 @@ ARTIFACTS: list[Rule] = [
     ),
     Rule(
         "assistant-residue", "error",
-        _r(r"\b(?:as an AI language model|as of my (?:last|knowledge) (?:update|cutoff)|"
-           r"I hope this helps|I'?m sorry, but I|certainly!|great question|"
-           r"I don'?t have real-time access|based on (?:the )?available information)\b"),
+        _r("(?m)^\\s*(?:Certainly\\s*[!,]|Sure thing[!,]|Absolutely[!,]|(?:Great|Good|Excellent) question\\b)|\\bas an AI language model\\b|\\bas of my (?:last|knowledge) (?:update|cutoff)\\b|\\bI don'?t have real-time access\\b|\\bI(?:'ve| have) gone ahead and\\b|\\b(?:I hope|hope) (?:this|that) helps\\b|\\blet me know if you'?d like\\b|\\bfeel free to (?:reach out|ask|let me know)\\b"),
         "Chat assistant boilerplate.",
         "Delete it.",
         cost=6.0,
     ),
     Rule(
         "unfilled-placeholder", "error",
-        _r(r"\[(?:your name|insert[^\]]{0,30}|name here|company name|date here|x{3,}|todo)\]"
-           r"|<!--\s*(?:add|insert|todo)[^>]*-->"),
+        _r('(?m)(?:\\[(?:your\\s+name|company(?:\\s+name)?|insert[^\\]\\n]{0,30}|name\\s+here|date\\s+here|x{3,}|todo|tbd|author|email|placeholder)\\](?!\\()|\\b(?:by|on)\\s+\\[(?:name|date)\\](?!\\()|<[a-z0-9_]{0,24}_here>|(?<!`)\\b(?:fixes|closes|resolves|refs|ref)\\s*:\\s*[a-z]{2,}-x{3,}\\b|\\b\\w+\\s*:\\s*(?:tbd|todo)\\b(?=\\s*(?:[.\\n]|$))|\\blorem\\s+ipsum\\b|\\binsert\\s+(?!(?:the|a|an|this|that|these|those|each|both|one|it)\\b)(?:\\w+\\s+){0,3}here\\b|<!--\\s*(?:add|insert|todo|fixme)[^>]*-->)(?![^`\\n]*`)'),
         "Placeholder that was never filled in.",
         "Fill it in or cut it.",
         cost=6.0, surface="raw",
@@ -307,38 +302,35 @@ EXTRA: list[Rule] = [
     ),
     Rule(
         "question-then-answer", "warn",
-        _r(r"(?<![?.!])\b(?:the (?:result|catch|problem|kicker|upshot|twist|reason)|so what|"
-           r"the answer)\?\s+[A-Z]"),
+        _r("\\?\\s+(?:because\\b|\\d)|\\bso what\\b(?:[^.?!\\n]|\\.(?=\\d)){0,40}\\?|\\bwas th(?:at|is) enough\\?|\\bwhat(?:'s| is| was) going on(?: here)?\\?|\\bwhy should (?:you|we|i) (?:care|worry)\\?|\\bwh(?:y|at) does (?:that|this|it) matter\\?|\\bwhat does (?:that|this|it) mean(?: (?:for|in) [^.?!\\n]{0,30})?\\?|\\b(?:who cares|what gives|why bother|sound familiar)\\?|\\?\\s+(?:it|they|that|this) (?:do(?:es)?|is|are|was|were|can|will|has|have)\\b|\\?\\s+(?:the (?:short|honest) answer|the answer is)\\b"),
         "Rhetorical question answered immediately.",
         "Write the answer as a statement.",
         cost=2.5,
     ),
     Rule(
         "despite-thrives", "warn",
-        _r(r"\bdespite (?:these |the |its |ongoing )?(?:challenges|limitations|setbacks|concerns|criticism)\b"
-           r"[^.!?]{0,60}\b(?:continues?|remains?|thrives?|persists?|is (?:still|poised))\b"),
+        _r('\\b(?:despite|in\\s+spite\\s+of|although|even\\s+though|even\\s+so|even\\s+with|nevertheless|nonetheless|notwithstanding|regardless\\s+of|while)\\b(?:[^.!?]|\\.\\d){0,80}?(?:\\bthriv(?:e|es|ing)\\b|\\bflourish(?:es|ing)?\\b|\\bgo(?:es)?\\s+from\\s+strength\\s+to\\s+strength\\b|\\b(?:continue|continues|keep|keeps)\\s+(?:to\\s+)?(?:shine|shining|thrive|thriving|impress|impressing|excel|excelling)\\b|\\b(?:continue|continues|keep|keeps)\\s+(?:to\\s+)?(?:deliver|delivering|grow|growing|perform|performing|improve|improving)\\s+(?:\\w+\\s+){0,2}(?:strongly|beautifully|admirably|remarkably|impressively|handsomely|nicely)\\b|\\b(?:deliver|delivering|delivers)\\s+a\\s+steady\\s+stream\\s+of\\s+(?:green|glowing|positive|healthy|strong|successful|happy|clean)\\b|\\bheld\\s+up\\s+(?:beautifully|admirably|remarkably|nicely)\\b|\\b(?:remain|remains|stay|stays)\\s+(?:(?:remarkably|impressively|surprisingly|exceptionally|admirably|notably|refreshingly)\\s+)?(?:resilient|confident|optimistic|unshaken|buoyant|upbeat)\\b|\\b(?:remain|remains|stay|stays)\\s+(?:remarkably|impressively|surprisingly|exceptionally|admirably|notably)\\s+(?:robust|strong|healthy|solid)\\b|\\b(?:remain|remains|stay|stays)\\s+in\\s+(?:excellent|great|good|robust|rude)\\s+(?:health|shape|form|standing)\\b)'),
         "Acknowledge-then-dismiss template.",
         "State the problem and what is being done about it.",
         cost=3.0,
     ),
     Rule(
         "hedge-stack", "info",
-        _r(r"\b(?:could|may|might|can|would)\s+(?:potentially|possibly|eventually|ultimately|"
-           r"conceivably|perhaps|arguably)\b"),
+        _r('(?:\\b(?:possibly|potentially|perhaps|maybe|probably|conceivably|arguably|presumably|seemingly|seems?\\s+likely|appears?\\s+likely)\\b(?:(?!\\b(?:but|though|although|however|whereas|yet|while|and|or|nor|so|because|since)\\b)(?:[^.!?;:]|\\.\\d)){0,40}?\\b(?:could|may|might|possibly|potentially|perhaps|maybe|probably|conceivably|arguably|presumably|seemingly|seems?\\s+likely|appears?\\s+likely)\\b|\\b(?:could|may|might)\\b(?:(?!\\b(?:but|though|although|however|whereas|yet|while|and|or|nor|so|because|since)\\b)(?:[^.!?;:]|\\.\\d)){0,40}?\\b(?:possibly|potentially|perhaps|maybe|probably|conceivably|arguably|presumably|seemingly)\\b)'),
         "Two hedges stacked.",
         "Pick one, or state the condition.",
         cost=1.5,
     ),
     Rule(
         "negation-chain", "warn",
-        _r(r"\bno\s+\w+,\s+no\s+\w+(?:,\s+(?:no\s+\w+|just\s+\w+))"),
+        _r('(?:^|(?<=\\n)|(?<=[.!?][ \\t]))no\\s+(?:\\w+[\\s-]+){0,2}\\w+,\\s+no\\s+(?:\\w+[\\s-]+){0,2}\\w+,\\s+(?:just|only|simply|merely|purely)\\s+(?!as\\b|like\\b|then\\b|when\\b|before\\b|after\\b|because\\b|if\\b|so\\b|about\\b|over\\b|under\\b|\\d)'),
         "\"No X, no Y, just Z\" drumroll.",
         "Say what it is.",
         cost=3.0,
     ),
     Rule(
         "copula-avoidance", "info",
-        _r(r"\b(?:serves? as|stands? as|functions? as|acts? as an?)\b"),
+        _r("\\b(?:serves?|serving)\\s+as\\s+(?:an?|the|its|their|our|your|this|that|these|those)\\b|\\bconstitut(?:es|ed|ing)\\s+(?:an?|the)\\b|\\b(?:thought|regarded|viewed|construed|conceived)\\s+of\\s+as\\s+(?:an?|the)\\b|\\brepresents?\\s+(?:an?|the)\\b|(?:^|(?<=\\n)|(?<=[.!?][ \\t]))(?:(?!\\b(?:treat|treats|treated|regard|regards|regarded|consider|considers|considered|use|uses|used|see|sees|seen|view|views|viewed|describe|describes|described|rename|renames|plot|plots|list|lists|count|counts|show|shows|know|known|define|defines|classify|classifies|mark|marks|report|reports|leave|leaves|keep|keeps|take|takes)\\b)(?:[^.!?\\n]|\\.(?=\\S))){0,120}?\\b(?:exists?|existing|stands?|acts?|functions?|functioning)\\s+as\\s+(?:an?|the|its|their|our|your|this|that)\\s+(?:[\\w'’-]+\\s+){0,2}[\\w'’-]+\\s+(?:of|in|for|with|between|to|across|behind|under)\\b"),
         "Substitute for a plain \"is\".",
         "Use \"is\".",
         cost=1.0,
@@ -352,8 +344,7 @@ EXTRA: list[Rule] = [
     ),
     Rule(
         "imagine-a-world", "warn",
-        _r(r"\b(?:imagine (?:a|an|if)|picture (?:a|this)|consider for a moment|"
-           r"what if I told you)\b"),
+        _r("\\b(?<!not )(?<!n't )(?<!hard to )(?<!ficult to )(?:imagine|picture|envision|visuali[sz]e)\\s+(?:a|an)\\s+(?:\\w+\\s+){0,2}(?:where|in which|without|with no)\\b|\\bpicture this\\s*(?=[:;.!?,]|$)|\\b(?:imagine|picture|envision|consider)\\s+for a moment\\b|\\b(?:imagine|envision)\\s+if\\b|\\bwhat if I told you\\b"),
         "Speculative opener.",
         "Start with the fact.",
         cost=3.0,
