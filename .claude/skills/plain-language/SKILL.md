@@ -183,10 +183,11 @@ than a name, ask a question, or open on a participle.
 ### Domain terms
 
 Put terms that should cost nothing in `<repo>/.plainlang/glossary.txt`, one per line.
-The scorer walks up from the working directory to find it. Adding a domain glossary
-measurably improves the tool rather than weakening it: on the eval corpus it raised
-separation from 0.955 to 0.974 AUC and cut false alarms on real repo prose from 58% to
-31%, because domain vocabulary is noise for the distinction that matters.
+The scorer walks up from the working directory to find it. 444 general technical terms
+ship with the skill; this repo adds 6,891 of its own. Adding a domain glossary improves
+the tool rather than weakening it: on the eval corpus it cuts false alarms on real repo
+prose from 23.3% to 15.1% and raises judge agreement from 0.688 to 0.705, because domain
+vocabulary is noise for the distinction that matters.
 
 To regenerate one for a repo:
 
