@@ -72,15 +72,29 @@ The obvious worry with exempting technical vocabulary is that it blunts the
 detector. It does the opposite, because domain words are noise for the
 distinction that matters.
 
+Measured on the shipped configuration: fitted weights, the 444-term curated list
+that ships with the skill, and this repo's own 6,891-term generated list.
+
 | Glossary | terms | AUC | judge agreement | false alarm on repo prose |
 |---|---|---|---|---|
-| none | 0 | 0.955 | 0.631 | 59.4% |
-| shipped list only | 1,712 | 0.967 | 0.656 | 40.6% |
-| shipped plus per-repo list | 8,221 | 0.974 | 0.666 | 27.1% |
+| none | 0 | 0.998 | 0.688 | 23.3% |
+| shipped list only | 444 | 0.999 | 0.691 | 19.8% |
+| shipped plus per-repo | 7,197 | 0.999 | 0.705 | **15.1%** |
 
-Returns flatten past about 7,000 terms. The per-repo list is generated from
-words appearing at least 60 times in the repo's own docs with a Zipf frequency
-below 3.3.
+The per-repo list is generated from words appearing at least 60 times in the
+repo's own docs with a Zipf frequency below 3.3:
+`python evals/build_corpus.py --repo . --glossary`.
+
+**The first version of this experiment reported much larger effects**, and the
+difference is worth recording. Run on hand-set weights against a 1,712-term
+draft glossary, it showed 0.955 to 0.974 AUC and 59.4% down to 27.1% false
+alarms. Two things changed after it: the weights were fitted, and the shipped
+list was rebuilt as 444 hand-checked terms instead of 1,712 mined ones. Fitted
+weights absorb much of what the glossary was doing, so the glossary's marginal
+effect is now smaller. The direction is the same in both runs and on every
+metric, and the glossary still cuts false alarms by a third, but the large
+numbers belonged to the untuned configuration and should not be quoted for the
+shipped one.
 
 ## 5. Source of the gating power
 
