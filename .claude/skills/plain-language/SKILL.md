@@ -186,6 +186,27 @@ Sentences cost by length above about 20 words, by agentless passives, and by hav
 every sentence the same length. Headings cost when they read as a sentence rather
 than a name, ask a question, or open on a participle.
 
+### Second-language readers
+
+Every human reader here has English as a second language, Norwegian or Brazilian
+Portuguese first. That was tested rather than assumed, using OneStopEnglish, whose
+three levels are graded for English learners.
+
+It changed less than expected. The model already orders learner-graded text
+correctly for 186 of 189 articles. Two candidate additions were measured and both
+lost: word prevalence normed on non-native speakers, and CEFR-graded vocabulary.
+Both charge domain terms, because a general-population norm cannot tell `latency`
+from `utilize`, and these readers are domain experts who know `latency`.
+
+What it did change: nothing is charged for being a Latinate word any more. No
+controlled-language standard written for non-native readers carries an Anglo-Saxon
+preference, and for a Portuguese reader the Latinate word is usually the cognate
+and so the easier one. Twelve suggestions that replaced a cognate with a phrasal
+verb are gone.
+
+The known gap: object relative clauses have the best-quantified second-language
+penalty in the literature and need a parser this tool does not have.
+
 ### Domain terms
 
 Put terms that should cost nothing in `<repo>/.plainlang/glossary.txt`, one per line.
