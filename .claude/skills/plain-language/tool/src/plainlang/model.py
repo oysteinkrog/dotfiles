@@ -42,6 +42,16 @@ class Weights:
     conc_scale: float = 1.6
     conc_cap: float = 1.0
     w_conc: float = 0.30
+    # Prevalence: the share of people who report knowing the word (Brysbaert et
+    # al. 2019). Normed on native speakers, so it saturates near 1.0 for almost
+    # all ordinary vocabulary and only separates the genuinely obscure.
+    free_prev: float = 0.97
+    prev_scale: float = 0.30
+    prev_cap: float = 1.5
+    w_prev: float = 0.0
+    # A word in the learner core vocabulary costs nothing. Membership only ever
+    # removes cost, so it cannot make the model stricter.
+    w_core_free: bool = False
     w_oov: float = 0.45            # per syllable above 3 for unknown words
     oov_cap: float = 2.0
     unearned_mult: float = 2.2     # hard word with a plain synonym
@@ -220,6 +230,9 @@ class Scorer:
         self.w = weights or Weights.load()
         self.lex = lexicon or Lexicon()
         self.glossary = _load_wordset("glossary.txt") | _discover_glossary()
+        self.core_vocab: set[str] = set()
+        if self.w.w_core_free:
+            self.core_vocab = _load_wordset("wordlists/ngsl.txt")
         self.simpler = _load_simpler()
         self.rules: list[Rule] = list(ALL_RULES)
 
@@ -235,6 +248,8 @@ class Scorer:
             return 0.0, "glossary"
         if raw.isupper() and len(raw) > 1:
             return 0.0, "acronym"
+        if self.core_vocab and w in self.core_vocab:
+            return 0.0, "core vocabulary"
         if mid_sentence_cap and raw[:1].isupper():
             return 0.0, "proper-noun"
 
@@ -271,6 +286,11 @@ class Scorer:
                 if c:
                     cost += self.w.w_conc * c * gate
                     why.append(f"abstract(conc {n.conc:.1f})")
+        if self.w.w_prev and n.prev is not None:
+            c = min(max(0.0, (self.w.free_prev - n.prev) / self.w.prev_scale), self.w.prev_cap)
+            if c:
+                cost += self.w.w_prev * c
+                why.append(f"not widely known(prev {n.prev:.2f})")
 
         if w in self.simpler and cost > 0:
             cost = max(cost * self.w.unearned_mult, self.w.unearned_floor)
