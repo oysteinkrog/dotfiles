@@ -49,7 +49,19 @@ python try_pattern.py em-dash '<regex>'   # try a candidate without editing rule
 python ablate.py                    # per-rule hits by register
 python ablate.py --groups           # does each rule group pay for itself
 python validate_external.py         # CLEAR and OneStopEnglish
+python backtest_hook.py --calls <toolcalls.json> --replies <replies.json>
+python backtest_hook.py --calls ... --dump-blocked 40   # read what it refused
 ```
+
+`backtest_hook.py` replays real historical tool calls and replies through the
+hook's own extraction and gate logic, in process. It is the only test here that
+measures what the gate costs rather than whether it is right, and it found two
+bugs the rule tests could not: a crash on `awk -F,` that made the guard fail open
+for every command containing a bare `-F`, and CMake files being scored as prose
+because `CMakeLists.txt` ends in `.txt`.
+
+Its input comes from a session-log extractor and is not committed: those files
+hold the contents of real commits, documents and messages.
 
 ## How the fitting works
 
