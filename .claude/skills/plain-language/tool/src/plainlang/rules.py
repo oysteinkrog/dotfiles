@@ -31,15 +31,22 @@ def _r(pat: str, flags: int = re.I) -> re.Pattern[str]:
     return re.compile(pat, flags)
 
 
-# --- Hard rules -------------------------------------------------------------
+# --- Style, priced but not gated --------------------------------------------
+# An em dash is a tell, not a comprehension problem. It costs budget and shows as
+# a finding; it no longer stops the write. See evals/RESULTS.md section 18.
 
 HARD: list[Rule] = [
     Rule(
-        "em-dash", "error",
+        "em-dash", "warn",
         _r(r"(?<![0-9\s])[—–](?![0-9])|(?<=\s)[—–](?![0-9])|(?<=\w) -- (?=\w)"),
         "Em dash or en dash used as punctuation.",
         "Use a period, comma, colon, or parentheses.",
-        cost=6.0,
+        # Priced level with the other strong tells (in-todays, testament,
+        # broader-landscape are all 4.0) rather than the 6.0 near-veto it was.
+        # An em dash marks text as machine-written and blind judges react to it,
+        # so it is not free; it contributes nothing to reading difficulty, so it
+        # does not gate. Sweep in evals/RESULTS.md section 18.
+        cost=4.0,
     ),
 ]
 
@@ -47,14 +54,14 @@ HARD: list[Rule] = [
 
 SHAPES: list[Rule] = [
     Rule(
-        "not-x-its-y", "error",
+        "not-x-its-y", "warn",
         _r("\\b(?:(?:is|are|was|were)\\s*n[o'’]t|['’](?:s|re)\\s+not)\\s+(?:just\\s+|really\\s+|simply\\s+)?(?:an?|the|this|that|these|those|its|their|our|your|his|her|my|one|another)\\s+[^.,;:!?]{1,45},\\s*(?:it|that|they)['’](?:s|re)\\b"),
         "\"Not X, it's Y\" contrast formula.",
         "State what it is.",
         cost=5.0,
     ),
     Rule(
-        "not-only-but-also", "error",
+        "not-only-but-also", "warn",
         _r(r"\bnot only\b[^.!?]{1,120}?\bbut (?:also|it also|they also)\b"),
         "\"Not only X, but also Y\" negative parallelism.",
         "Split into two sentences.",
@@ -83,7 +90,10 @@ SHAPES: list[Rule] = [
     ),
     Rule(
         "why-it-matters", "warn",
-        _r(r"\b(?:why (?:this|it|that) matters|what (?:this|it) means for you|the (?:real )?(?:kicker|catch|twist))\b"),
+        # "the catch rate" and "the twist angle" are measurements. The trope is
+        # the bare noun used as a tease.
+        _r(r"\b(?:why (?:this|it|that) matters|what (?:this|it) means for you"
+           r"|the (?:real )?(?:kicker|catch|twist)\b(?!\s+(?:rate|rates|angle|angles|up|block|word|clause|phrase)))\b"),
         "Significance tease.",
         "Say the consequence.",
         cost=3.0,
@@ -252,9 +262,11 @@ SHAPES: list[Rule] = [
 ]
 
 
-# --- Machine residue -------------------------------------------------------
-# Literal software leakage. These are bugs rather than style, so they are the
-# most durable signals available and carry almost no false-positive risk.
+# --- Machine residue, the only hard rules ----------------------------------
+# Literal software leakage and unfilled templates. These are defects rather than
+# style: a leaked citation marker or a `[Your Name]` in shipped text is wrong
+# whatever the reader makes of the prose. They are the only rules that stop a
+# write, and they carry almost no false-positive risk.
 # Sources: Wikipedia:Signs of AI writing (WP:AICATCH), 2026-08-30.
 
 ARTIFACTS: list[Rule] = [

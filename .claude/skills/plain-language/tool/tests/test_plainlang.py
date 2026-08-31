@@ -98,9 +98,28 @@ def test_nothing_is_banned_outright(scorer):
 
 # --- rules ------------------------------------------------------------------
 
-def test_em_dash_is_a_hard_rule(scorer):
+def test_em_dash_is_priced_but_does_not_gate(scorer):
+    """An em dash is a tell, not a comprehension problem.
+
+    It still costs budget and still shows as a finding. It no longer stops a
+    write: the goal is that a person understands the text, and an em dash does
+    not stand in the way of that.
+    """
     rep = scorer.score("The phone reports its state — and the desktop shows it.")
-    assert any(f.rule == "em-dash" and f.severity == "error" for f in rep.findings)
+    hit = next(f for f in rep.findings if f.rule == "em-dash")
+    assert hit.severity == "warn"
+    assert hit.cost > 0
+    assert rep.stats["errors"] == 0
+
+
+def test_only_defects_gate(scorer):
+    """A hard rule means something objectively wrong, not something inelegant."""
+    for text in ("The rebuild is scheduled for 26.2 citeturn0search3 and the drift held.",
+                 "Reviewed by [NAME] on [DATE]. The plate matched within 0.5 N."):
+        assert scorer.score(text).stats["errors"] > 0, text
+    for text in ("The phone reports its state — and the desktop shows it.",
+                 "It is not a flake, it's a real deadlock in the capture pipeline."):
+        assert scorer.score(text).stats["errors"] == 0, text
 
 
 def test_hyphen_is_not_an_em_dash(scorer):

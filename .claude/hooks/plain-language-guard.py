@@ -77,10 +77,14 @@ WRITING_ASK = re.compile(
 MIN_WORDS = int(os.environ.get("PLAINLANG_MIN_WORDS", "40"))
 STOP_MIN_WORDS = int(os.environ.get("PLAINLANG_STOP_MIN_WORDS", "60"))
 
-# Cheap pre-filter so short text only pays for a scorer run when there is
-# something a hard rule could catch.
-HARD_HINT = re.compile("[\u2014\u2013]|oaicite|contentReference|turn[0-9]+search|utm_source="
-                       "|as an AI language model|\\[cite:|not only |it's not |it is not ", re.I)
+# Cheap pre-filter so short text only pays for a scorer run when there is a
+# defect it could catch. Style is not in this list: below MIN_WORDS the score is
+# meaningless, and no style rule gates, so a short inelegant line is let through
+# on purpose.
+HARD_HINT = re.compile("oaicite|contentReference|turn[0-9]+search|attributableIndex"
+                       "|grok_card|ppl-ai-file-upload|utm_source="
+                       "|as an AI language model|as of my last update|\\[cite:"
+                       "|\\[(?:your name|insert|name here|date here|todo)\\]|lorem ipsum", re.I)
 
 
 def read_event() -> dict:
@@ -114,9 +118,10 @@ def gate(text: str, *, min_score: float | None = None) -> dict | None:
 
 
 def summarise(rep: dict, label: str) -> str:
+    defects = int(rep["stats"].get("errors", 0))
     lines = [
-        f"plain-language gate: {label} scored {rep['score']:.0f}/100 ({rep['grade']}), "
-        f"{int(rep['stats'].get('errors', 0))} hard-rule violation(s)."
+        f"plain-language gate: {label} scored {rep['score']:.0f}/100 ({rep['grade']})."
+        + (f" {defects} defect(s): leaked markup or an unfilled placeholder." if defects else "")
     ]
     shown = 0
     for f in rep.get("findings", []):
