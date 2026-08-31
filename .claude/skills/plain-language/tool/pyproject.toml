@@ -22,3 +22,10 @@ dev = [
 
 [project.scripts]
 pl = "plainlang.cli:main"
+
+[tool.pytest.ini_options]
+# Without this, running pytest from a host repository's root collects that whole
+# repository. In the monorepo that reached a script calling sys.exit(1) at import
+# and took the run down with 11 collection errors.
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
