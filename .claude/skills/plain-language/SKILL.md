@@ -62,7 +62,9 @@ requirement it is standing in for.
    lines, closing lines. This is the failure that keeps recurring.
 9. **No hype register.** Nothing is seamless, robust, comprehensive, powerful,
    elegant, or a game changer unless you are quoting someone.
-10. **No em dashes.** Hard rule. Use a period, comma, colon, or parentheses.
+10. **No em dashes.** Use a period, comma, colon, or parentheses. This is a tell,
+    not a comprehension problem: it marks writing as machine-made. The scorer
+    charges it and names it, and it does not stop a write.
 11. **Cut padding.** Delete "it's worth noting that", "at its core", "in order to",
     "the fact that", "needless to say", "let's dive in", "here's why it matters".
 
@@ -131,8 +133,16 @@ pl explain draft.md        # where every point of cost went
 echo "$BODY" | pl check -  # read from stdin
 ```
 
-It reports a list of findings and a score out of 100. The gate fails on any hard-rule
-violation, or when the score falls below the minimum in `data/weights.json`.
+It reports a list of findings and a score out of 100. The gate fails when the score
+falls below the minimum in `data/weights.json`, or on a **defect**: chatbot citation
+markup, a tracking parameter, chat-assistant boilerplate, or an unfilled `[NAME]`
+placeholder. Those four are wrong whatever the reader makes of the prose.
+
+Style is priced, not gated. An em dash, a slogan title, a hype word and a
+significance tail all cost budget and all appear as findings, and none of them
+stops a write on its own. Enough of them together will take the score below the
+line, which is the point: the score is the part validated against how hard people
+actually find text to read.
 
 **Fix the findings. Never chase the score.** Read the findings, fix the ones you
 agree with, leave the ones you think are wrong and say which and why, then stop.
@@ -185,6 +195,20 @@ more. Details in `evals/RESULTS.md` section 15.
 Sentences cost by length above about 20 words, by agentless passives, and by having
 every sentence the same length. Headings cost when they read as a sentence rather
 than a name, ask a question, or open on a participle.
+
+### What gates and what only costs
+
+Four defects stop a write: leaked chatbot citation markup, a tracking parameter in
+a URL, chat-assistant boilerplate, and an unfilled `[NAME]` placeholder. They are
+wrong whatever the reader makes of the prose.
+
+Everything else is priced. An em dash costs 4 points, the same as the other strong
+tells, and does not stop anything on its own. Measured on 84,340 real tool calls
+and 8,791 real replies, that change cut refusals by 62% on writes and commits and
+53% on chat replies, and took false alarms on real repo prose from 15.1% to 4.7%.
+
+Nothing under 40 words is gated unless it contains a defect. A cost per hundred
+words means nothing at fourteen words.
 
 ### Second-language readers
 

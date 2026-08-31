@@ -229,5 +229,12 @@ def in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
 
 
 def fence_spans(text: str) -> list[tuple[int, int]]:
-    """Ranges covered by a fenced code block."""
-    return [m.span() for m in _FENCE.finditer(text)]
+    """Ranges a raw-surface rule must not look inside.
+
+    Fenced blocks and inline code spans. A machine-residue rule runs on the raw
+    source so it can see inside URLs, which means it also sees the examples in a
+    document that documents it. A marker in backticks is being quoted; a real
+    leak appears bare.
+    """
+    return [m.span() for m in _FENCE.finditer(text)] + \
+           [m.span() for m in _INLINE_CODE.finditer(text)]
