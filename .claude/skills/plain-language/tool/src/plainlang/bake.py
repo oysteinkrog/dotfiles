@@ -65,12 +65,13 @@ def main() -> int:
     print("reading norms", file=sys.stderr)
     aoa = read_norm(args.norms / "aoa.csv", "word", "aoa_mean")
     conc = read_norm(args.norms / "concreteness.csv", "word", "conc_mean")
-    # Prevalence is deliberately not baked. Both the native (Brysbaert et al.
-    # 2019) and non-native (Brysbaert, Keuleers & Mandera 2021) datasets are
-    # CC BY-NC-SA 4.0: non-commercial, and share-alike would attach to this file.
-    # This repository is public and the skill is meant for company-wide use, so
-    # the licence is wrong on both counts. Neither version measured any gain
-    # (evals/RESULTS.md sections 13 and 16), so nothing is lost by leaving it out.
+    # Prevalence is deliberately not baked. Neither the native (Brysbaert et al.
+    # 2019) nor the non-native (Brysbaert, Keuleers & Mandera 2021) version earned
+    # a place: the native one saturates, and the non-native one charges the domain
+    # vocabulary these readers know, lowering judge agreement and raising false
+    # alarms at every weight. See evals/RESULTS.md sections 13 and 16. Both files
+    # are in data/norms/ so the experiment can be repeated; read one in here and
+    # set w_prev to try it.
     prev: dict[str, float] = {}
 
     vocab: set[str] = set()
