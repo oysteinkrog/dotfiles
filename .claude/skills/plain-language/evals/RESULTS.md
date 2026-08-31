@@ -722,3 +722,115 @@ Across the same 2,500 sessions that is 1.6 s per session for the no-op path and
 0.25 s for the scored path, so **about 1.9 seconds per session**. The no-op path
 dominates because the hook is wired on every Bash call; it exits without invoking
 the scorer unless it finds a commit message or a pull request body.
+
+## 18. Em dash demoted, and what a hard rule now means
+
+Oystein, 2026-08-31: *"em-dash is not that bad.. not sure if it should hard stop?
+the goal here is to have humans actually understand things."*
+
+Section 17 had just shown that em dash accounted for 93.5% of tool-call refusals
+and 98.4% of reply send-backs. So the gate was almost entirely enforcing one rule,
+and that rule contributes nothing to reading difficulty. It is not in the
+reading-cost model at all, and the sweep below confirms it: agreement with human
+difficulty ratings is flat at 0.626 whatever the em-dash cost.
+
+An em dash marks writing as machine-made. It does not stand between a reader and
+the meaning. Those are different goals, and the second one is now the stated one.
+
+### The new definition of a hard rule
+
+A hard rule is a **defect**: something objectively wrong in the text, whatever the
+reader makes of the prose. Four survive:
+
+| Rule | What it catches |
+|---|---|
+| `tool-artifact` | leaked chatbot citation markup: `oaicite`, `contentReference`, `turn0search3` |
+| `tracking-url` | `utm_source=chatgpt.com` and friends left in a URL |
+| `assistant-residue` | "As an AI language model", "as of my last update" |
+| `unfilled-placeholder` | `[NAME]`, `[INSERT X]`, `Lorem ipsum` |
+
+Demoted to priced warnings: `em-dash`, `not-x-its-y`, `not-only-but-also`. They
+still cost budget and still appear as findings. Enough of them together takes the
+score below the line, which is the intended mechanism: the score is the half
+validated against how hard people actually find text to read.
+
+### Pricing the em dash
+
+Sweep at the shipped threshold of 34:
+
+| em-dash cost | inflated text caught | plain rewrites blocked | repo prose blocked | judge agreement | CLEAR |
+|---|---|---|---|---|---|
+| 6.0 (the old near-veto) | 95.7% | 1.1% | 7.8% | 0.702 | 0.626 |
+| **4.0 (shipped)** | **93.5%** | **1.1%** | **5.6%** | **0.697** | **0.626** |
+| 2.5 | 88.2% | 1.1% | 4.4% | 0.691 | 0.626 |
+| 1.5 | 77.4% | 1.1% | 4.4% | 0.683 | 0.626 |
+| 0.0 | 64.5% | 1.1% | 4.4% | 0.662 | 0.626 |
+
+4.0 puts it level with the other strong tells (`in-todays`, `testament`,
+`broader-landscape` are all 4.0) instead of being the outlier at 6.0. Judge
+agreement falling as the cost falls says the judges do react to em dashes, so it
+is not free. CLEAR staying flat says it is not a reading-difficulty signal, so it
+does not gate.
+
+Read the 95.7% and 64.5% with care. The inflated variants were written to a prompt
+that explicitly asked for em dashes, so how much of that corpus the em-dash rule
+catches is partly a fact about my prompt. The backtest on real history is the
+better guide.
+
+### What it did to the scorecard
+
+| Metric | before | after |
+|---|---|---|
+| separation, AUC | 0.999 | 0.997 |
+| judge agreement | 0.702 | 0.697 |
+| **false alarm on repo prose** | **15.1%** | **4.7%** |
+| inflated text caught by the gate | 100% | 93.0% |
+| the user's own chat prose refused | 29% | 13% |
+
+**A third of the false alarms, for seven points of the catch rate**, and the catch
+rate lost was the em-dash-driven part. This is the better trade for the stated
+goal, and it is the direction the standing instruction not to be too strict
+already pointed.
+
+The threshold script reselected 34 independently after the change.
+
+### A consequence worth stating
+
+Short text is judged on defects alone, and there are no style defects any more. So
+**nothing under 40 words is gated unless it contains leaked markup.** A 14-word
+commit message with an em dash now goes through. That follows from the goal: a cost
+per hundred words means nothing at fourteen words, and a fourteen-word line is
+almost never why a reader fails to understand something. The pre-filter that used
+to look for em dashes in short text now looks only for defect markers.
+
+### The backtest, re-run
+
+Same 84,340 tool calls and 8,791 replies, after the demotion:
+
+| | before | after |
+|---|---|---|
+| tool calls refused | 1,198 (48.8% of text-carrying) | **451 (18.4%)** |
+| share of all tool calls | 1.42% | **0.53%** |
+| short text refused on a hard rule | 78 | **0** |
+| replies sent back | 6,118 (69.6%) | **2,853 (32.5%)** |
+| median reply score | 39 | **49** |
+
+Refusals down 62% on the tool path and 53% on replies. The steady-state forecast,
+the same replies with em dashes replaced by commas, is 8.6% and a median of 74,
+essentially unchanged from before: the demotion cut the *transitional* cost of a
+history full of em dashes, not the eventual rate.
+
+### Two precision fixes this section forced out
+
+Both were found by the tool refusing this file.
+
+**A document that documents the defect rules tripped them.** Section 18 quotes
+`utm_source=chatgpt.com` as an example of what `tracking-url` catches, and the
+machine-residue rules run on the raw source so they can see inside URLs, which
+means they also saw the example. Raw-surface rules now skip inline code spans as
+well as fenced blocks: a marker in backticks is being quoted, a real leak appears
+bare. Verified both ways.
+
+**"the catch rate" is a measurement.** `why-it-matters` matched the bare noun in
+"seven points of the catch rate". It now refuses to fire when the noun is followed
+by rate, angle, block, word, clause or phrase.

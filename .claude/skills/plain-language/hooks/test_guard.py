@@ -43,12 +43,16 @@ CASES = [
     ("write .cs is out of scope", "Write", {"file_path": "/tmp/a.cs", "content": SLOP}, 0),
     ("write a resource file is out of scope", "Write", {"file_path": "/tmp/Strings/a.resx", "content": SLOP}, 0),
     ("skip marker is honoured", "Write", {"file_path": "/tmp/a.md", "content": "plainlang: skip\n" + SLOP}, 0),
-    ("short .md with an em dash", "Edit", {"file_path": "/tmp/a.md", "new_string": EM_DASH}, 2),
+    # Short text is judged on defects alone, and an em dash is not a defect. A
+    # cost per hundred words means nothing at fourteen words, and a fourteen-word
+    # line is almost never why a reader fails to understand something.
+    ("short .md with an em dash", "Edit", {"file_path": "/tmp/a.md", "new_string": EM_DASH}, 0),
     ("short .md, clean", "Edit", {"file_path": "/tmp/a.md", "new_string": "The seek path rebuilds the index, which is why the first scrub is slow."}, 0),
     ("short .md, only soft findings", "Edit", {"file_path": "/tmp/a.md", "new_string": "In today's fast-paced world, our journey to capture is a testament to the landscape."}, 0),
     ("short .cs with an em dash", "Edit", {"file_path": "/tmp/a.cs", "new_string": EM_DASH}, 0),
     ("commit message, inflated", "Bash", {"command": 'git commit -m "%s"' % SLOP}, 2),
-    ("commit message with an em dash", "Bash", {"command": 'git commit -m "video: rebuild the index \u2014 it was stale after import and the scrubber read past the end"'}, 2),
+    ("short commit with an em dash", "Bash", {"command": 'git commit -m "video: rebuild the index \u2014 it was stale after import and the scrubber read past the end"'}, 0),
+    ("short commit with leaked markup", "Bash", {"command": 'git commit -m "video: rebuild the index citeturn0search3 because it was stale after the import"'}, 2),
     ("a script that mentions git commit", "Bash", {"command": "python3 - <<'PY'\ncases = [\"git commit -m oaicite\"]\nprint(cases)\nPY"}, 0),
     ("pull request body in a heredoc", "Bash", {"command": "gh pr create --title x --body \"$(cat <<'EOF'\n" + SLOP + "\nEOF\n)\""}, 2),
     ("heredoc opened before any git token", "Bash", {"command": "cat <<'EOF' > /tmp/n.txt\n" + SLOP + "\nEOF\ngit commit -m 'fix: one line'"}, 0),
