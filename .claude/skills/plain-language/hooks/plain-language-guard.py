@@ -38,6 +38,33 @@ SKIP_PATH = re.compile(
     re.I,
 )
 SKIP_SUFFIX = re.compile(r"\.(?:resx|xaml|xlf|xliff|po|pot|json|ya?ml|csv|tsv|lock)$", re.I)
+# Files that end in a prose suffix but are not prose. CMakeLists.txt is the one
+# that actually bit: a backtest over 84,340 real tool calls found CMake files
+# being scored as documents, with their `#` comments read as markdown headings.
+SKIP_NAME = re.compile(
+    r"^(?:CMakeLists\.txt|CMakeCache\.txt|requirements(?:-\w+)?\.txt|constraints\.txt|"
+    r"robots\.txt|LICENSE\.txt|NOTICE\.txt|conanfile\.txt|\.?env\.txt)$", re.I)
+
+# Content that is code even though its name says prose.
+_CODE_LINE = re.compile(
+    r"^\s*(?:#!|//|/\*|\*/|\*\s|--\s|;;|<\?|\}|\{|\)|\]|"
+    r"(?:if|for|while|switch|function|def|class|return|import|from|using|include|"
+    r"set|option|add_\w+|target_\w+|project|cmake_\w+|export|local|declare)\s*[({\s]|"
+    r"[\w.\[\]\*&]+\s*(?:=|\+=|:=|<<|->)\s*\S)|[;{}]\s*$")
+
+
+def looks_like_code(text: str) -> bool:
+    """True when the body reads as source rather than prose.
+
+    Judged on the share of substantive lines that look like code. A quarter is
+    enough: a document quoting a few commands stays prose, a build file with a
+    long comment header does not.
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip() and len(ln.strip()) > 2]
+    if len(lines) < 6:
+        return False
+    hits = sum(1 for ln in lines if _CODE_LINE.search(ln))
+    return hits / len(lines) >= 0.25
 
 SKIP_MARKER = re.compile(r"(?mi)^\s*(?:<!--\s*)?plainlang:\s*skip")
 
@@ -122,12 +149,20 @@ def _heredocs(cmd: str) -> list[str]:
 
 
 def _read_file_arg(cmd: str, flag: str) -> str:
-    m = re.search(rf"{flag}[= ]\s*(['\"]?)(?P<path>[^\s'\"]+)\1", cmd)
-    if not m:
+    """Read the file named by a flag such as --body-file or -F.
+
+    The flag pattern is wrapped in its own group: without that, an alternation
+    like `-F|--file` binds looser than the rest of the pattern, so a bare `-F`
+    matches with no path captured. `awk -F,` then crashed the hook, and because
+    the guard fails open on any exception it silently skipped the check for every
+    command containing one.
+    """
+    m = re.search(rf"(?:{flag})[= ]\s*(['\"]?)(?P<path>[^\s'\"]+)\1", cmd)
+    if not m or not m.group("path"):
         return ""
     try:
         return Path(m.group("path")).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except (OSError, ValueError):
         return ""
 
 
@@ -197,10 +232,14 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
         path = ti.get("file_path") or ""
         if SKIP_PATH.search(path) or SKIP_SUFFIX.search(path):
             return None
+        if SKIP_NAME.match(Path(path).name):
+            return None
         if Path(path).suffix.lower() not in PROSE_SUFFIXES:
             return None
         text = ti.get("content") or ti.get("new_string") or ""
-        return (text, f"write {Path(path).name}") if text else None
+        if not text or looks_like_code(text):
+            return None
+        return (text, f"write {Path(path).name}")
     if name == "Bash":
         return from_bash(ti.get("command") or "")
     if name == "Artifact":
