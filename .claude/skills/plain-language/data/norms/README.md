@@ -5,32 +5,35 @@ scoring time.
 
 | File | Source | Licence |
 |---|---|---|
-| `aoa.csv` | Kuperman, Stadthagen-Gonzalez & Brysbaert (2012), *Behavior Research Methods* 44(4). OSF `d7x6q`, `AoA_51715_words.xlsx`, column `AoA_Kup_lem`. | No explicit grant stated. Standard academic norm set, cite the paper. |
-| `concreteness.csv` | Brysbaert, Warriner & Kuperman (2014), *Behavior Research Methods* 46. Via github.com/ArtsEngine/concreteness, column `Conc.M`, single words only. | No explicit grant stated. Cite the paper. |
+| `aoa.csv.gz` | Kuperman, Stadthagen-Gonzalez & Brysbaert (2012), *Behavior Research Methods* 44(4). OSF `d7x6q`, `AoA_51715_words.xlsx`, column `AoA_Kup_lem`. | No explicit grant stated. Standard academic norm set; cite the paper. |
+| `concreteness.csv.gz` | Brysbaert, Warriner & Kuperman (2014), *Behavior Research Methods* 46. Via github.com/ArtsEngine/concreteness, column `Conc.M`, single words only. | No explicit grant stated. Cite the paper. |
+| `prevalence.csv.gz` | Brysbaert, Mandera, McCormick & Keuleers (2019), *Behavior Research Methods*. OSF `g4xrt`, column `Pknown`: the share of **native** respondents who know the word. | CC BY-NC-SA 4.0, see `license_osf_gakre.txt`. |
+| `prevalence_l2.csv.gz` | Brysbaert, Keuleers & Mandera (2021), *Studies in Second Language Research*. OSF `gakre`, column `accuracy`: the share of **non-native** respondents who recognise the word. | CC BY-NC-SA 4.0, see `license_osf_gakre.txt`. |
 | `evp_cefr.csv` | CEFR-J Vocabulary Profile v1.5, compiled by Yukio Tono, Tokyo University of Foreign Studies. github.com/openlanguageprofiles/olp-en-cefrj. A1 to B2 only. | Free for research and commercial use with attribution. |
 | `voa_special_english.txt` | VOA Special English core word list, 1,477 words, via Simple English Wikipedia's copy. | Underlying list is US government work, public domain. |
-| Zipf frequency | SUBTLEX-US through the `wordfreq` package, build-time only. | Apache 2.0. |
+| Zipf frequency | SUBTLEX-US through the `wordfreq` package, build time only, not stored here. | Apache 2.0. |
 
-## Word prevalence is deliberately absent
+## The two prevalence files are here, and are not in the lexicon
 
-Both versions were obtained, tested and removed:
+Both are redistributed verbatim, with their licence text alongside, and attributed
+above. Oystein ruled on 2026-08-31 that the non-commercial clause does not bite on
+an internal engineering tool.
 
-- Native: Brysbaert, Mandera, McCormick & Keuleers (2019), OSF `g4xrt`.
-- Non-native: Brysbaert, Keuleers & Mandera (2021), OSF `gakre`, column `accuracy`.
+They are excluded from `lexicon.tsv.gz` for a different reason: **neither earned a
+place, and the non-native one made the tool measurably worse.**
 
-**Both are CC BY-NC-SA 4.0.** That is non-commercial, and share-alike would attach
-to any file built from them, including `lexicon.tsv.gz`. This repository is public
-and the skill is intended for company-wide use, so the licence is wrong on both
-counts.
+- The native version saturates, because it is normed on native speakers.
+  `utilize`, `commence`, `seamless` and `handset` all sit at 0.99.
+- The non-native version has real spread (`delve` 0.37, `quantization` 0.56,
+  `latency` 0.70) and still lowered judge agreement, lowered agreement with human
+  difficulty ratings, and raised false alarms at every weight tried. It measures
+  what non-native speakers in general know, and these readers are domain experts,
+  so it charges the vocabulary the glossary exists to protect.
 
-It also earned nothing. The native version saturates because it is normed on
-native speakers. The non-native version has real spread (`delve` 0.37,
-`quantization` 0.56, `latency` 0.70) but charges domain vocabulary the readers
-know, because they are domain experts: at every weight it lowered judge agreement
-and agreement with human difficulty ratings and raised false alarms, without
-improving the learner-graded ordering. Numbers in `../../evals/RESULTS.md`
-sections 13 and 16.
+Numbers in `../../evals/RESULTS.md` sections 13 and 16. Keeping the files here
+means that experiment can be re-run; keeping them out of the derived lexicon means
+no derivative work carries the share-alike obligation, which is the clause the
+ruling above does not speak to.
 
-The prevalence columns stay in the code (`w_prev` in `weights.json`, the `prev`
-field in `lexicon.py`) so the measurement can be repeated by anyone who obtains
-the data themselves under its own licence.
+To try it again: set `w_prev` in `data/weights.json`, add the column back in
+`bake.py`, and rebuild. The `prev` field already exists in `lexicon.py`.
