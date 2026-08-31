@@ -597,26 +597,24 @@ conclusion for a reason that was an artefact of my own test code. The corrected
 harness only ever adds to a word the base model already charges. The conclusion
 survived; the reason changed.
 
-### Licence, and an exposure already in the public repository
+### Licence
 
-Both prevalence datasets, native and non-native, are **CC BY-NC-SA 4.0**. That is
-non-commercial, and share-alike attaches to derivatives, which would include
-`lexicon.tsv.gz`. This repository is public and the skill is meant for
-company-wide use at a commercial company, so the licence is wrong on both counts.
+Both prevalence datasets are CC BY-NC-SA 4.0. Oystein ruled on 2026-08-31 that the
+non-commercial clause does not bite on an internal engineering tool, so both files
+are in the repository, redistributed verbatim with their licence text and
+attribution in `data/norms/README.md`.
 
-The native file was committed in `b1a03db` and its values were baked into the
-shipped lexicon, for no functional benefit, because `w_prev` has always been 0.
-Both files are now out of the repository and the lexicon is rebuilt without the
-column: 126,777 words, 800 KiB, prevalence values 0.
+They stay out of `lexicon.tsv.gz` on the measurement above, not on the licence.
+That has a side benefit worth naming: the shipped lexicon is a derived work, and
+keeping this data out of it means no derived file carries the share-alike
+obligation. Share-alike is about redistribution rather than commercial use, so it
+is a separate question from the one that was ruled on.
 
-Two things this does not do. It does not remove the file from git history, which is
-a rewrite of shared history and not mine to make. And it is not legal advice: the
-non-commercial clause on an internal engineering tool is genuinely arguable, and
-that call belongs to a person.
+The rebuilt lexicon is 126,777 words and 800 KiB, with no prevalence column.
 
-Rebuilt and re-verified: separation 0.999, judge agreement 0.702, false alarms
-15.1%, learner-graded ordering 186/189, agreement with human difficulty ratings
-0.530 against Dale-Chall's 0.504, all 43 rules at precision 1.00.
+Re-verified after the rebuild: separation 0.999, judge agreement 0.702, false
+alarms 15.1%, learner-graded ordering 186/189, agreement with human difficulty
+ratings 0.530 against Dale-Chall's 0.504, all 43 rules at precision 1.00.
 
 ### What was kept
 
