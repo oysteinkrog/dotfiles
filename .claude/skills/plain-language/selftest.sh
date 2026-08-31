@@ -41,7 +41,7 @@ done
 
 echo "unit tests"
 if command -v uv >/dev/null 2>&1; then
-  if uv run --project "$HERE/tool" pytest -q >/dev/null 2>&1; then
+  if (cd "$HERE/tool" && uv run pytest -q) >/dev/null 2>&1; then
     printf '  ok    %-42s\n' "pytest"
   else
     printf '  FAIL  %-42s\n' "pytest"; fails=$((fails + 1))
