@@ -538,3 +538,91 @@ kept as a comment in `rules.py` next to where they were.
 - **Per-first-language cognate discounts** were recommended and are not
   implemented. They would need a Portuguese and a Norwegian cognate list, and no
   way to measure the benefit with the corpora here.
+
+## 16. The audience-matched norm, and why it still lost
+
+Section 13 rejected word prevalence because the version in the lexicon is normed
+on native speakers and saturates. That was the right reason but the wrong dataset:
+a **non-native** version exists from the same group, and it is the one norm here
+that actually matches the readers.
+
+Obtained: Brysbaert, Keuleers & Mandera (2021), *Studies in Second Language
+Research*, OSF `gakre`, the `accuracy` column, 61,851 words. It is the share of
+non-native respondents who recognise the word.
+
+It has the dynamic range the native version lacks:
+
+| word | non-native | native |
+|---|---|---|
+| use | 0.99 | 1.00 |
+| utilize | 0.91 | 0.99 |
+| paradigm | 0.86 | 0.93 |
+| commence | 0.75 | 0.99 |
+| seamless | 0.76 | 0.99 |
+| latency | 0.70 | 0.92 |
+| quantization | 0.56 | 0.59 |
+| delve | 0.37 | 0.92 |
+
+`delve` at 0.37 is exactly the kind of separation the native norm could not make.
+
+**And it made the tool worse at every weight.** Exempt words stay free, so this is
+the charge applied only to words the model already charges:
+
+| Configuration | AUC | judge | CLEAR | L2 ordering | false alarm |
+|---|---|---|---|---|---|
+| shipped | 0.999 | 0.702 | 0.671 | 186/189 | 15.1% |
+| non-native prevalence, k=0.5 | 0.999 | 0.691 | 0.660 | 186/189 | 17.4% |
+| non-native prevalence, k=1.0 | 0.999 | 0.685 | 0.644 | 186/189 | 18.6% |
+| non-native prevalence, k=2.0 | 0.997 | 0.661 | 0.609 | 187/189 | 23.3% |
+| CEFR-J B2 and above, k=0.4 | 0.999 | 0.694 | 0.672 | 185/189 | 16.3% |
+| CEFR-J B2 and above, k=1.0 | 0.999 | 0.682 | 0.670 | 185/189 | 18.6% |
+
+**The reason is in the table above it.** `latency` 0.70, `quantization` 0.56: the
+norm is measuring what non-native speakers *in general* know, and these readers
+are domain experts who know those words in English and use them daily. The signal
+cannot tell a technical term from an inflated one, so charging it hits precisely
+the vocabulary the glossary exists to protect. At k=2.0 it buys one article of
+learner-graded ordering for eight points of false alarm.
+
+This is the report's own recommendation 7, which it flagged as its least-supported
+item and inferred rather than measured: do not price your own domain's vocabulary
+with general-population norms. It is now measured.
+
+### A harness bug that nearly produced the wrong reason
+
+The first run of this experiment added the prevalence charge to *every* word,
+including glossary terms, acronyms and proper nouns that the model exempts. It
+showed false alarms jumping to 46.5% at k=2.0 and would have supported the same
+conclusion for a reason that was an artefact of my own test code. The corrected
+harness only ever adds to a word the base model already charges. The conclusion
+survived; the reason changed.
+
+### Licence, and an exposure already in the public repository
+
+Both prevalence datasets, native and non-native, are **CC BY-NC-SA 4.0**. That is
+non-commercial, and share-alike attaches to derivatives, which would include
+`lexicon.tsv.gz`. This repository is public and the skill is meant for
+company-wide use at a commercial company, so the licence is wrong on both counts.
+
+The native file was committed in `b1a03db` and its values were baked into the
+shipped lexicon, for no functional benefit, because `w_prev` has always been 0.
+Both files are now out of the repository and the lexicon is rebuilt without the
+column: 126,777 words, 800 KiB, prevalence values 0.
+
+Two things this does not do. It does not remove the file from git history, which is
+a rewrite of shared history and not mine to make. And it is not legal advice: the
+non-commercial clause on an internal engineering tool is genuinely arguable, and
+that call belongs to a person.
+
+Rebuilt and re-verified: separation 0.999, judge agreement 0.702, false alarms
+15.1%, learner-graded ordering 186/189, agreement with human difficulty ratings
+0.530 against Dale-Chall's 0.504, all 43 rules at precision 1.00.
+
+### What was kept
+
+`evp_cefr.csv`, the CEFR-J Vocabulary Profile (7,799 rows, A1 to B2, free for
+commercial use with attribution) and `voa_special_english.txt` (1,477 words, US
+government work, public domain). Neither is used by the model. They are kept
+because they are cleanly licensed and are the obvious data for a future
+learner-vocabulary experiment, and `data/norms/README.md` records every source and
+licence.
