@@ -65,7 +65,13 @@ def main() -> int:
     print("reading norms", file=sys.stderr)
     aoa = read_norm(args.norms / "aoa.csv", "word", "aoa_mean")
     conc = read_norm(args.norms / "concreteness.csv", "word", "conc_mean")
-    prev = read_norm(args.norms / "prevalence.csv", "word", "prevalence")
+    # Prevalence is deliberately not baked. Both the native (Brysbaert et al.
+    # 2019) and non-native (Brysbaert, Keuleers & Mandera 2021) datasets are
+    # CC BY-NC-SA 4.0: non-commercial, and share-alike would attach to this file.
+    # This repository is public and the skill is meant for company-wide use, so
+    # the licence is wrong on both counts. Neither version measured any gain
+    # (evals/RESULTS.md sections 13 and 16), so nothing is lost by leaving it out.
+    prev: dict[str, float] = {}
 
     vocab: set[str] = set()
     for i, w in enumerate(iter_wordlist("en", "best")):
