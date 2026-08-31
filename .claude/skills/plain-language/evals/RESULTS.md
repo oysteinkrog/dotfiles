@@ -348,3 +348,114 @@ Put the two results together and the design falls out of the evidence:
   Optimised, it drives out exactly the specifics that make writing useful.
 - **The right instruction is "run it once".** Not "until it passes", and never
   "until the score stops improving".
+
+## 13. Second-language readers
+
+Learned after the model was fitted. The writers and readers are Norwegian and
+Brazilian Portuguese first-language speakers. The obvious question is whether the
+cost model needs a different set of norms.
+
+**OneStopEnglish is the right corpus to answer it.** Its three levels are graded
+for English *learners*, not native readers, so it is the closest thing here to L2
+ground truth. Tested on 189 articles at all three levels:
+
+| Configuration | all three in the right order |
+|---|---|
+| shipped model | **186/189** |
+| plus word prevalence, weight 1.0 | 186/189 |
+| plus word prevalence, weight 2.0 | 185/189 |
+| plus a learner core-vocabulary free pass (NGSL, 2,801 words) | 186/189 |
+| plus both | 186/189 |
+| with age of acquisition removed | 184/189 |
+| with concreteness removed | 185/189 |
+
+**Neither candidate change earns its place.** Word prevalence (Brysbaert et al.
+2019, the share of people who report knowing a word) sounded like the most
+L2-relevant norm available. It is not, for a measurable reason: it is normed on
+native speakers and saturates. Of the words in the shipped lexicon that have a
+value, almost all ordinary vocabulary sits between 0.92 and 1.00, so it separates
+"words native speakers do not know" from everything else and little more.
+`utilize` is 0.99, `commence` 0.99, `seamless` 0.99, `handset` 0.99. Only
+genuinely obscure terms move (`quantization`, 0.59). Adding it also raised false
+alarms from 15.1% to 17.4% and cost judge agreement, which is the wrong direction
+for this audience.
+
+The learner core-vocabulary pass is neutral on every metric. Both are implemented
+and shipped switched off (`w_prev`, `w_core_free` in `data/weights.json`), so the
+measurement can be repeated rather than taken on trust.
+
+**Age of acquisition transfers, which was not obvious.** It is normed on native
+speakers, so it might not have described learner difficulty at all. Removing it
+costs two articles on the L2-graded ordering (186 to 184) and 0.082 of agreement
+with human difficulty ratings (section 9). It stays.
+
+**Both halves of the cost carry L2 signal, and they are complementary.** Word cost
+alone orders 179 of 189; sentence cost alone 169; together 186.
+
+**The sentence-length threshold is already right for this audience, and the
+published cap is too loose.** Sweeping it against the learner-graded ordering:
+
+| free sentence length | all three ordered |
+|---|---|
+| 10 words | 186/189 |
+| 12 | 186/189 |
+| **14 (shipped)** | **186/189** |
+| 18 | 185/189 |
+| 22 | 184/189 |
+| 26 | 183/189 |
+
+The fitted value of 14 sits on the plateau. The UK GDS guidance caps sentences at
+25 words; on this corpus 26 costs three articles against 14. The tuner reached 14
+from the in-house corpus and the CLEAR ratings alone, without seeing
+OneStopEnglish, so this is independent agreement rather than a circular fit.
+
+**What the L2 fact does change** is not the word-cost norms but the rule set and
+the register guidance: idioms and phrasal verbs are the best-evidenced L2 reading
+difficulty and there is no detector for them, and the plain-English preference for
+short Anglo-Saxon words over Latinate ones is not audience-neutral when half the
+readers speak a Romance language. Both are handled in section 14.
+
+## 14. What editors actually do when they simplify for learners
+
+The Latinate question is the one that worried me most. Plain-English guidance
+prefers the short Anglo-Saxon word: use over utilize, help over facilitate. For a
+Romance-language reader that is backwards, because the Latinate word is a cognate
+of their own (*utilizar*, *facilitar*), so it may be the easier one. Half this
+team reads Portuguese as a first language and half Norwegian, and the two pull in
+opposite directions.
+
+OneStopEnglish answers it without any new data. Professional editors rewrote the
+same 189 articles at three learner levels, so what they removed on the way down is
+evidence about what they believe makes text hard for learners.
+
+Medians per 100 words, and a paired direction test across all 189 articles:
+
+| Feature | elementary | intermediate | advanced | elementary below advanced |
+|---|---|---|---|---|
+| rare words (Zipf below 3.5) | 3.16 | 3.53 | 4.50 | 174/189, p = 2e-35 |
+| Latinate-suffixed words | 1.76 | 2.29 | 2.48 | 151/189, p = 4e-17 |
+| phrasal verbs | 0.53 | 0.59 | 0.65 | 112/187, p = 0.008 |
+
+**The plain-English preference survives.** Editors simplifying for learners strip
+Latinate words, strongly and consistently. That is direct evidence against the
+worry that the cognate effect reverses the guidance for this audience. Two honest
+limits: this shows what editors do, not what readers measurably find easier, and
+OneStopEnglish is a British ELT resource with a mixed-L1 learner population, so it
+cannot isolate the Portuguese-L1 subgroup. It is the best evidence available here,
+not proof.
+
+**Rare words are the workhorse**, which is what the frequency term already
+carries.
+
+**Phrasal verbs get no rule, on the measurement.** The direction is right and
+learner-simplified text does use slightly fewer, but the effect is about half the
+size of the other two, and my detector has visible false positives ("started
+about", "give on" are verb-plus-preposition coincidences, not phrasal verbs).
+Technical English also depends on them: set up, roll back, log in, check out. A
+rule built on a detector this noisy, against an effect this small, would cost more
+in false alarms than it earns. Recorded as a measured decision, not an oversight.
+
+An earlier run of this experiment reported a median of 0.00 phrasal verbs at every
+level. That was a broken detector, not a finding: the pattern required the verb and
+particle to be adjacent, so it missed every "set the flag up". Worth writing down,
+because a zero from a detector is the shape a real absence takes.
