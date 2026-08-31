@@ -1,4 +1,12 @@
 # simpler.tsv - hard word/phrase -> plain, meaning-preserving replacement.
+#
+# Removed 2026-08-31: 12 pairs whose replacement was a phrasal verb
+# (accelerate -> speed up, implement -> carry out, ascertain -> find out, ...).
+# Every reader of this text has English as a second language, Norwegian or
+# Brazilian Portuguese first. Those Latinate originals are transparent cognates
+# for a Romance first language, and phrasal verbs are a documented second-language
+# reading difficulty, so the suggestion made the text harder for the actual
+# audience. Removing them changed no measured metric. See evals/RESULTS.md s15.
 # Format: hard_word<TAB>plain replacement (lowercase column 1, comments start with #).
 # Used by the plain-language scorer: a word here costs extra ONLY if it is
 # already scored as rare/abstract by the lexicon (see model.py); this list
@@ -47,10 +55,7 @@
 a number of	some
 abundance	enough
 accede to	agree to
-accelerate	speed up
 accentuate	stress
-accompany	go with
-accomplish	carry out
 accorded	given
 accordingly	so
 accrue	add
@@ -76,7 +81,6 @@ aircraft	plane
 all of	all
 alleviate	ease
 allocate	divide
-along the lines of	as in
 already existing	existing
 alternatively	or
 ameliorate	help
@@ -92,7 +96,6 @@ as of yet	yet
 as prescribed by	in
 as to	about
 as yet	yet
-ascertain	find out
 assist	help
 assistance	aid
 at the present time	at present
@@ -113,7 +116,6 @@ by virtue of	by
 caveat	warning
 cease	stop
 close proximity	near
-collaborate	work with
 combat	solve
 combat environment	combat
 combined	joint
@@ -157,7 +159,6 @@ enumerate	count
 equipments	equipment
 equitable	fair
 equivalent	equal
-establish	set up
 evaluate	check
 evidenced	showed
 evident	clear
@@ -178,7 +179,6 @@ finalize	complete
 first and foremost	first
 for a period of	for
 for the purpose of	to
-forfeit	give up
 formulate	plan
 forward	send
 foster	encourage
@@ -199,7 +199,6 @@ identify	find
 if and when	if
 immediately	at once
 impacted	affected
-implement	carry out
 in a timely manner	on time
 in accordance with	by
 in addition	also
@@ -235,7 +234,6 @@ interpose no objection	don't object
 is applicable to	applies to
 is authorised to	may
 is authorized to	may
-is in consonance with	agrees with
 is responsible for	handles
 it appears	seems
 it is essential	must
@@ -290,7 +288,6 @@ preclude	prevent
 previous	earlier
 previously	before
 prior to	before
-prioritise	focus on
 prioritize	rank
 proceed	do
 procure	get
@@ -345,7 +342,6 @@ therein	there
 thereof	its
 this day and age	today
 timely	prompt
-took advantage of	preyed on
 transmit	send
 transpire	happen
 under the provisions of	under
