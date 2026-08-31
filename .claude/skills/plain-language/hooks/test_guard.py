@@ -24,6 +24,17 @@ PLAIN = ("The phone now owns its settings. The desktop shows them and sends chan
          "field types, so we do not need a backport. Tested on four handsets over two days, with "
          "no dropped frames.")
 EM_DASH = "The seek path rebuilds the index \u2014 that is why the first scrub is slow."
+CMAKE = """cmake_minimum_required(VERSION 3.20)
+project(bertec_emulator C)
+set(CMAKE_C_STANDARD 11)
+
+# ---- Headless-test discipline: strip /RTC1 from all Debug builds ----------
+# /RTC1 calls _RTC_Failure on a runtime check, which opens a modal dialog and
+# hangs the headless test runner for ever, so it is stripped everywhere.
+option(BERTEC_FREEZE_GOLDENS "Replay tests --freeze instead of --check" OFF)
+if(MSVC)
+  target_compile_options(bertec_ftdi_shim PRIVATE /MT /wd4100)
+endif()"""
 
 CASES = [
     # name, tool_name, tool_input, expected exit
@@ -52,6 +63,15 @@ CASES = [
     ("Slack canvas, inflated", "mcp__claude_ai_Slack__slack_create_canvas", {"markdown": SLOP}, 2),
     ("gog gmail send", "Bash", {"command": "gog gmail send -a x@y.com --to z --subject s --body \"$(cat <<'EOF'\n" + SLOP + "\nEOF\n)\""}, 2),
     ("gog gmail list", "Bash", {"command": "gog gmail list -a x@y.com --max 10"}, 0),
+    # Found by the historical backtest. A bare -F used to crash the guard, and
+    # because it fails open that silently skipped the check for every command
+    # containing one.
+    ("awk -F does not crash the guard", "Bash", {"command": "awk -F, '{print $1}' data.csv | sort -u"}, 0),
+    ("grep -F does not crash the guard", "Bash", {"command": "grep -F 'literal' log.txt | head"}, 0),
+    # Also from the backtest: CMakeLists.txt ends in .txt, and its # comments were
+    # read as markdown headings.
+    ("CMakeLists.txt is not prose", "Write", {"file_path": "/x/CMakeLists.txt", "content": CMAKE}, 0),
+    ("code saved as .txt is not prose", "Write", {"file_path": "/x/notes.txt", "content": CMAKE}, 0),
 ]
 
 

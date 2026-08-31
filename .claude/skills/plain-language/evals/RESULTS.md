@@ -624,3 +624,101 @@ government work, public domain). Neither is used by the model. They are kept
 because they are cleanly licensed and are the obvious data for a future
 learner-vocabulary experiment, and `data/norms/README.md` records every source and
 licence.
+
+## 17. Hook backtest on real session history
+
+The rule tests say each pattern is precise on cases written for it. This says what
+the gate does to real work. 84,340 tool calls and 9,238 final replies were pulled
+from 2,500 session logs and replayed through the hook's own extraction and gate
+logic. `evals/backtest_hook.py`.
+
+### Bugs found first
+
+**A crash that silently disabled the gate.** `_read_file_arg` built its pattern as
+`-F|--file[= ]...`, and the alternation binds looser than the rest, so a bare `-F`
+matched with no path captured and `Path(None)` raised. `awk -F,` is common, and the
+guard fails open on any exception, so **every Bash command containing a bare `-F`
+skipped the check entirely**. Fixed by wrapping the flag in its own group.
+
+Worth noting how this hid: failing open is the right default for a guard, and it is
+exactly what stopped this being visible. A hook that cannot break your session also
+cannot tell you it is broken.
+
+**CMake files scored as documents.** `PROSE_SUFFIXES` includes `.txt`, and
+`CMakeLists.txt` ends in `.txt`. Its `#` comments were read as markdown headings, so
+build files were refused for having slogan-shaped headings. Fixed two ways: a
+name list for the well-known offenders, and a content check that treats a body as
+code when at least a quarter of its substantive lines look like code. Verified not
+to eat a real document that quotes a command.
+
+### The tool-call path
+
+| Tool | calls | carried text | refused | rate |
+|---|---|---|---|---|
+| Bash | 72,886 | 719 | 245 | 34.1% |
+| Edit | 8,023 | 794 | 476 | 59.9% |
+| Write | 1,629 | 474 | 358 | 75.5% |
+| createJiraIssue | 180 | 180 | 38 | 21.1% |
+| addCommentToJiraIssue | 172 | 161 | 55 | 34.2% |
+| Artifact | 86 | 54 | 18 | 33.3% |
+| Slack send / draft | 60 | 59 | 2 | 3.4% |
+| **total** | **84,340** | **2,453** | **1,198** | **48.8%** |
+
+Only 2.9% of tool calls carry text the gate looks at, and 1.42% of all tool calls
+would have been refused.
+
+### What the refusals are for
+
+Refusals by cause, tool-call path:
+
+| Cause | share |
+|---|---|
+| hard rule and low score together | 45.9% |
+| em dash alone | 41.0% |
+| short text, hard rule only | 6.5% |
+| **low score only, no hard rule** | **6.5%** |
+| another hard rule alone | 0.6% |
+
+Stop path, 8,791 replies long enough to score, 69.6% sent back:
+
+| Cause | share |
+|---|---|
+| hard rule and low score together | 62.7% |
+| em dash alone | 35.6% |
+| **low score only, no hard rule** | **1.6%** |
+| another hard rule alone | 0.1% |
+
+**93.5% of tool-call refusals and 98.4% of reply send-backs involve a hard rule**,
+which for this corpus means an em dash. Those are true positives under the rule
+Oystein reaffirmed on 2026-08-28. The score contributes 6.5% and 1.6%.
+
+### Steady state, 9% not 70%
+
+The 69.6% figure is high because history is full of the thing the rule bans. To
+predict the steady state, em dashes in the same 8,791 replies were replaced with
+the comma the skill tells you to use instead. Nothing else changed.
+
+| Corpus | sent back | median score |
+|---|---|---|
+| history as written | 69.6% | 39 |
+| the same text with em dashes replaced by commas | **9.0%** | **74** |
+
+One mechanical substitution accounts for nearly the whole block rate. What remains
+is 792 replies, 741 of them on score alone: the score failures that the hard rule
+was previously masking.
+
+So the honest forecast is about one reply in eleven getting sent back once the ban
+is being followed, measured on text written before the register existed. Text
+written with the skill should do better: in the end-to-end test, the arm that used
+the skill had zero hard-rule hits.
+
+Block rates already fell either side of the skill landing, on small samples:
+tool calls 54.3% before to 39.0% after (n=210), replies 70.9% to 42.1% (n=401).
+
+### Latency
+
+Measured per invocation: 50 ms on the no-op path, 250 ms when it runs the scorer.
+Across the same 2,500 sessions that is 1.6 s per session for the no-op path and
+0.25 s for the scored path, so **about 1.9 seconds per session**. The no-op path
+dominates because the hook is wired on every Bash call; it exits without invoking
+the scorer unless it finds a commit message or a pull request body.
