@@ -413,6 +413,28 @@ MINED: list[Rule] = [
     ),
 ]
 
+
+# --- Second-language readers -----------------------------------------------
+# Every human reader of this text has English as a second language, Norwegian or
+# Brazilian Portuguese first. Two rules were written for that audience and both
+# were removed after measurement, which is recorded here so nobody adds them back
+# by reasoning from the literature alone:
+#
+#   false-friend    "actually / eventually / actual" read as a different word to
+#                   a Portuguese or Norwegian speaker (atual, aktuell = current).
+#                   Precision capped at 0.80 on the eval corpus. The whole effect
+#                   was the single word "actually", 17 of 20 hits, and its real
+#                   problem is padding rather than false friendship. "eventually"
+#                   never fired at all.
+#   double-negation Two negatives in one clause. Precision 0.58, and it fired on
+#                   plain rewrites almost as often as on inflated ones, so it does
+#                   not discriminate.
+#
+# What the second-language evidence did change is in data/simpler.tsv and
+# data/weights.json: no charge for a Latinate suffix, no unearned-difficulty
+# multiplier, and twelve suggestions removed that replaced a Latinate cognate
+# with a phrasal verb. See evals/RESULTS.md section 15.
+
 ALL_RULES: list[Rule] = HARD + SHAPES + ARTIFACTS + EXTRA + MINED
 GROUPS = {"hard": HARD, "shapes": SHAPES, "artifacts": ARTIFACTS, "extra": EXTRA, "mined": MINED}
 BY_ID = {r.id: r for r in ALL_RULES}

@@ -459,3 +459,82 @@ An earlier run of this experiment reported a median of 0.00 phrasal verbs at eve
 level. That was a broken detector, not a finding: the pattern required the verb and
 particle to be adjacent, so it missed every "set the flag up". Worth writing down,
 because a zero from a detector is the shape a real absence takes.
+
+## 15. Correction to section 14, and the resulting changes
+
+Section 14 concluded from the OneStopEnglish editors that "the plain-English
+preference survives". **That inference was wrong, and the reason is worth
+recording.**
+
+A research pass afterwards found Thrush (2001, *Technical Communication*), which
+tested the plain-English Germanic-over-Latinate rule directly across first-language
+groups. European-language readers scored much higher on the Latinate originals than
+Asian-language readers, and French speakers given a straight choice preferred the
+Latin-derived word over its Germanic synonym. It also found that **no controlled
+language standard written for non-native readers carries an Anglo-Saxon preference
+at all**: not ASD-STE100, not VOA Special English, not ISO 24495 or 24620. The rule
+appears only in general-audience Plain English Campaign guidance.
+
+The flaw in my experiment: it measured what British ELT editors *do*, and British
+ELT house style is downstream of the same convention. So the result cannot separate
+"editors strip Latinate words because it helps learners" from "editors strip
+Latinate words because their style guide says to". It looked like evidence for the
+convention and was partly an echo of it. The 151-of-189 figure stands as a fact
+about editors; it is not evidence about comprehension.
+
+### The measurable consequence
+
+The model carried a Latinate penalty in three places. Every removal was measured
+first, on all four metrics at once:
+
+| Configuration | AUC | judge | CLEAR | L2 ordering | false alarm |
+|---|---|---|---|---|---|
+| shipped before | 0.999 | 0.703 | 0.673 | 186/189 | 15.1% |
+| drop the 12 phrasal-verb suggestions | 0.999 | 0.704 | 0.673 | 186/189 | 15.1% |
+| drop all 100 Latinate suggestions | 0.999 | 0.702 | 0.672 | 186/189 | 15.1% |
+| drop the unearned-difficulty multiplier | 0.999 | 0.703 | 0.671 | 186/189 | 15.1% |
+| drop the Latinate charge on unknown words | 0.999 | 0.703 | 0.673 | 186/189 | 15.1% |
+
+**Every option is identical to three decimal places.** The Latinate machinery was
+doing nothing measurable, so removing it costs nothing and aligns the model with
+the only evidence that speaks to this audience. Now shipped:
+
+- `w_latinate` is 0. An unknown word is no longer charged for a Latinate suffix.
+- `unearned_mult` is 1.0 and `unearned_floor` is 0. A word is no longer charged
+  extra merely for having a plainer synonym. The synonym is still shown as a
+  suggestion when the word is charged on frequency grounds, so the advice survives
+  without the etymology penalty.
+- Twelve suggestions are deleted from `simpler.tsv`, the ones whose replacement was
+  a phrasal verb: `accelerate` to *speed up*, `implement` to *carry out*,
+  `ascertain` to *find out*, `establish` to *set up*, `collaborate` to *work with*,
+  `prioritise` to *focus on*, and six more. Those Latinate originals are
+  transparent cognates in Portuguese, and phrasal verbs are a documented
+  second-language difficulty, so the suggestion made the text harder for the real
+  audience. This is the one place where the two problems compounded.
+
+### Rules tried and removed
+
+Recorded so nobody adds them back by reasoning from the literature alone.
+
+| Rule | precision | why it went |
+|---|---|---|
+| `false-friend` (actually / eventually / actual) | 0.80 | The entire effect was the single word "actually", 17 of 20 hits, and its real problem is padding rather than false friendship. "eventually" never fired. Restricting to sentence-initial position dropped it to zero hits. |
+| `double-negation` | 0.58 | Fired on plain rewrites almost as often as on inflated ones, so it does not discriminate. |
+
+Both are below the 0.95 precision every other rule is held to. The reasoning is
+kept as a comment in `rules.py` next to where they were.
+
+### What is still not addressed
+
+- **Object relative clauses** have the best-quantified second-language penalty in
+  the literature (one study reports 91% comprehension on subject relatives against
+  46% on object relatives). Detecting them needs a parser, and this tool has none.
+  This is the largest known gap.
+- **Non-native word prevalence.** The prevalence norm in the lexicon is the
+  native-speaker one, which is why it saturates (section 13). A separate
+  non-native dataset exists from the same group, correlating about r = .85 with the
+  native ranking, and the 15% where they disagree is exactly where it would earn
+  its weight. Not yet obtained, so not yet tested.
+- **Per-first-language cognate discounts** were recommended and are not
+  implemented. They would need a Portuguese and a Norwegian cognate list, and no
+  way to measure the benefit with the corpora here.

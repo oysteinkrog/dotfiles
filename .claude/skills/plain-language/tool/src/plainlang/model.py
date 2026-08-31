@@ -54,6 +54,11 @@ class Weights:
     w_core_free: bool = False
     w_oov: float = 0.45            # per syllable above 3 for unknown words
     oov_cap: float = 2.0
+    # Extra charge for an unknown word carrying a Latinate suffix. Tunable
+    # because no standard written for second-language readers carries an
+    # Anglo-Saxon preference, and for a Romance first language the Latinate word
+    # is often the cognate and so the easier one.
+    w_latinate: float = 0.40
     unearned_mult: float = 2.2     # hard word with a plain synonym
     unearned_floor: float = 1.2    # and at least this much
 
@@ -269,8 +274,8 @@ class Scorer:
             rarity = self.w.zipf_cap
             extra = max(0, syllables(w) - 3)
             c = min(self.w.w_oov * extra, self.w.oov_cap)
-            if latinate_suffix(w):
-                c += 0.4
+            if self.w.w_latinate and latinate_suffix(w):
+                c += self.w.w_latinate
             if c:
                 cost += c
                 why.append("unknown word")

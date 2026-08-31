@@ -171,10 +171,16 @@ proper noun, a number, or inside code, a path, a URL or a quotation. The skill s
 keep the precise term and simplify the sentence around it, so the scorer does not
 charge you for the term.
 
-What costs extra is unearned difficulty: a hard word that has a plain synonym meaning
-the same thing. Those get a multiplier, from a 366-entry list drawn from the federal
-plain-language guidance. "Utilize" is expensive because "use" exists. "Latency" is
-free because nothing shorter means it.
+A hard word with a plain synonym gets that synonym shown as a suggested fix, from a
+list drawn from the federal plain-language guidance. It is a suggestion, not a
+surcharge. There used to be a cost multiplier on those words and it is gone: every
+reader here has English as a second language, Norwegian or Brazilian Portuguese
+first, and no controlled-language standard written for non-native readers penalises
+a word for being Latinate. For a Portuguese reader "utilize" is a cognate of
+*utilizar*, so it may be the easier word. Removing the multiplier changed no measured
+metric. Twelve suggestions went with it, the ones that replaced a Latinate cognate
+with a phrasal verb: `implement` to *carry out*, `ascertain` to *find out*, and ten
+more. Details in `evals/RESULTS.md` section 15.
 
 Sentences cost by length above about 20 words, by agentless passives, and by having
 every sentence the same length. Headings cost when they read as a sentence rather
