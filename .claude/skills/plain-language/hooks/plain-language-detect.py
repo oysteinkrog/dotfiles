@@ -31,9 +31,15 @@ STATE = Path(os.environ.get("TMPDIR", "/tmp")) / "plainlang-hook"
 # Files a person reads as prose. Everything else is code or machine format.
 PROSE_SUFFIXES = {".md", ".markdown", ".mdx", ".txt", ".rst", ".adoc"}
 # Paths that carry product copy or generated text, which other rules own.
+# Directory names are bounded on both sides. Unbounded, obj|bin|dist|vendor
+# matched any component starting with those letters, and re.I made BUILD match
+# as well, so docs/build-instructions.md, docs/object-model.md, dist-plan.md,
+# binder-notes.md, vendor-selection.md and distribution.md were all silently
+# exempt. Every one of those is a plausible real document.
 SKIP_PATH = re.compile(
     r"(?:/|^)(?:node_modules|\.git|BUILD|obj|bin|dist|vendor|third[_-]party|"
-    r"CHANGELOG\.md|LICENSE|\.beads/|locali[sz]ation|Resources?/|Strings?/)",
+    r"\.beads|locali[sz]ation|Resources?|Strings?)(?=/|$)"
+    r"|(?:/|^)(?:CHANGELOG\.md|LICENSE)$",
     re.I,
 )
 SKIP_SUFFIX = re.compile(r"\.(?:resx|xaml|xlf|xliff|po|pot|json|ya?ml|csv|tsv|lock)$", re.I)
@@ -45,8 +51,15 @@ SKIP_NAME = re.compile(
     r"robots\.txt|LICENSE\.txt|NOTICE\.txt|conanfile\.txt|\.?env\.txt)$", re.I)
 
 # Content that is code even though its name says prose.
+# A bare `* ` used to be in this list, meant for the interior of a C block
+# comment. It also matches a markdown `* ` bullet, so a release note written with
+# `*` bullets instead of `-` bullets read as 100% code at six lines or more and
+# skipped the gate, while the identical text with `-` bullets was refused. `/*`
+# and `*/` still match, which is what actually identifies a comment block, and
+# _MD_LIST takes list lines out of the ratio either way.
+_MD_LIST = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s")
 _CODE_LINE = re.compile(
-    r"^\s*(?:#!|//|/\*|\*/|\*\s|--\s|;;|<\?|\}|\{|\)|\]|"
+    r"^\s*(?:#!|//|/\*|\*/|--\s|;;|<\?|\}|\{|\)|\]|"
     r"(?:if|for|while|switch|function|def|class|return|import|from|using|include|"
     r"set|option|add_\w+|target_\w+|project|cmake_\w+|export|local|declare)\s*[({\s]|"
     r"[\w.\[\]\*&]+\s*(?:=|\+=|:=|<<|->)\s*\S)|[;{}]\s*$")
@@ -60,6 +73,9 @@ def looks_like_code(text: str) -> bool:
     long comment header does not.
     """
     lines = [ln for ln in text.splitlines() if ln.strip() and len(ln.strip()) > 2]
+    # A markdown list line is evidence of neither prose nor code, so it is left
+    # out of both halves of the ratio rather than counted against the text.
+    lines = [ln for ln in lines if not _MD_LIST.match(ln)]
     if len(lines) < 6:
         return False
     hits = sum(1 for ln in lines if _CODE_LINE.search(ln))
@@ -234,7 +250,10 @@ def from_bash(cmd: str) -> tuple[str, str] | None:
         return got
     m_pr = re.search(r"\bgh\s+(?:pr|issue)\s+(?:create|edit|comment)\b", cmd) or \
         re.search(r"\bgh\s+api\b[^\n]*\bpulls?\b", cmd)
-    m_commit = re.search(r"(?<![\w/-])git\s+commit\b", cmd)
+    # `git -C /repo commit` and `git --no-pager commit` are the same command.
+    # Requiring git and commit to be adjacent let either spelling through.
+    m_commit = re.search(
+        r"(?<![\w/-])git(?:\s+-[Cc]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+commit\b", cmd)
     if not (m_pr or m_commit):
         return None
     at = (m_pr or m_commit).end()
@@ -242,7 +261,9 @@ def from_bash(cmd: str) -> tuple[str, str] | None:
     tail = cmd[at:]
 
     if m_pr:
-        body = _read_file_arg(tail, r"--body-file")
+        # -F is the documented short form of --body-file for the pull request
+        # creation subcommand, and was not covered.
+        body = _read_file_arg(tail, r"--body-file|(?<![\w-])-F")
         if body:
             return body, label
     else:
@@ -252,12 +273,29 @@ def from_bash(cmd: str) -> tuple[str, str] | None:
 
     # A quoted value on the same line. Do not let it run across a newline, or a
     # short -m followed by an unrelated heredoc swallows the whole script.
-    for pattern in (r"--body\s*(['\"])(?P<b>[^\n]*?)\1",
-                    r"-f\s+body=(['\"])(?P<b>[^\n]*?)\1",
-                    r"-m\s*(['\"])(?P<b>[^\n]*?)\1"):
-        m = re.search(pattern, tail)
-        if m and word_count(m.group("b")) >= 8:
-            return m.group("b"), label
+    # Every quoted region for every flag that carries text, then the longest one.
+    #
+    # Two things were wrong before. The patterns used [^\n]*, so a message written
+    # the way git documents it, title then blank line then body, was read as the
+    # title alone: under eight words it gave up and the body was never scored.
+    # That is the commonest real commit shape, so it bypassed the gate. And only
+    # three flag spellings were covered, so `--message=`, a second `-m` carrying
+    # the body, `-b`, `--body=` and `--field body=` all went through unchecked.
+    #
+    # Matching the closing quote properly is what makes re.DOTALL safe here. A
+    # correctly paired quote cannot run past its own end into a later heredoc,
+    # which is why the newline exclusion was there to begin with. The negative
+    # lookbehind on the closer keeps an escaped quote inside the body.
+    best = ""
+    for flag in (r"-m", r"--message", r"--body", r"-b",
+                 r"-f\s+body=", r"--field\s+body=", r"-F\s+body="):
+        pattern = rf"(?<![\w-]){flag}(?:\s*=\s*|\s+|(?=['\"]))\$?(['\"])(?P<b>.*?)(?<!\\)\1"
+        for m in re.finditer(pattern, tail, re.S):
+            body = m.group("b")
+            if word_count(body) > word_count(best):
+                best = body
+    if word_count(best) >= 8:
+        return best, label
 
     # A heredoc, but only one opened after the git or gh token.
     docs = [d for d in _heredocs(tail) if word_count(d) >= 25]
