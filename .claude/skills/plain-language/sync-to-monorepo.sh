@@ -37,6 +37,36 @@ if "Synced from" not in t:
     print("  added the provenance note")
 PY
 
+# Mirror deletions. tar only ever adds, so a file deleted from the source used to
+# live on in the target for good. That is worse than clutter for this skill: a
+# stale copy of a scorer module or a data file in the target would keep being read
+# there while the source no longer has it, and the two copies would score the same
+# text differently. Five unreferenced data files were deleted on 2026-09-01 and
+# this is what stops the next five reappearing.
+#
+# Only files the sync itself is responsible for are considered, so anything the
+# target legitimately keeps of its own (its eval corpora, its virtualenv, its
+# caches) is left alone.
+removed=0
+while IFS= read -r rel; do
+  # Anything the target keeps of its own. These have to match at any depth:
+  # the virtualenv lives at tool/.venv, so a leading-anchored ./.venv/* pattern
+  # misses it, and on the first run that deleted 215 files out of the target's
+  # virtualenv. Harmless, because the gate never needed a virtualenv, but the
+  # pattern was still wrong.
+  case "$rel" in
+    */.venv/*|*/__pycache__/*|*.pyc|*.cache) continue ;;
+    ./evals/data/*) continue ;;
+    ./sync-to-monorepo.sh|./stage-in-repo.sh) continue ;;
+  esac
+  if [ ! -e "$SRC/${rel#./}" ]; then
+    rm -f "$DEST/${rel#./}"
+    echo "  removed (gone from source): ${rel#./}"
+    removed=$((removed + 1))
+  fi
+done < <(cd "$DEST" && find . -type f)
+[ "$removed" -gt 0 ] && echo "  $removed stale file(s) removed"
+
 echo "synced to $DEST"
 cat <<NEXT
 
