@@ -293,9 +293,13 @@ ARTIFACTS: list[Rule] = [
     ),
     Rule(
         "unfilled-placeholder", "error",
-        _r('(?m)(?:\\[(?:your\\s+name|company(?:\\s+name)?|insert[^\\]\\n]{0,30}|name\\s+here|date\\s+here|x{3,}|todo|tbd|author|email|placeholder)\\](?!\\()|\\b(?:by|on)\\s+\\[(?:name|date)\\](?!\\()|<[a-z0-9_]{0,24}_here>|(?<!`)\\b(?:fixes|closes|resolves|refs|ref)\\s*:\\s*[a-z]{2,}-x{3,}\\b|\\b\\w+\\s*:\\s*(?:tbd|todo)\\b(?=\\s*(?:[.\\n]|$))|\\blorem\\s+ipsum\\b|\\binsert\\s+(?!(?:the|a|an|this|that|these|those|each|both|one|it)\\b)(?:\\w+\\s+){0,3}here\\b|<!--\\s*(?:add|insert|todo|fixme)[^>]*-->)(?![^`\\n]*`)'),
+        _r('(?m)(?:\\[(?:your\\s+name|company(?:\\s+name)?|insert[^\\]\\n]{0,30}|name\\s+here|date\\s+here|x{3,}|todo|tbd|author|email|placeholder)\\](?!\\()|\\b(?:by|on)\\s+\\[(?:name|date)\\](?!\\()|<[a-z0-9_]{0,24}_here>|(?:^[ \\t>*+-]*|(?<=[.!?]\\s))(?:fixes|closes|resolves|refs|ref)\\s*:\\s*[a-z]{2,}-x{3,}\\b(?=[ \\t]*$)|\\b\\w+\\s*:\\s*(?:tbd|todo)\\b(?=\\s*(?:[.\\n]|$))|\\blorem\\s+ipsum\\b|\\binsert\\s+(?!(?:the|a|an|this|that|these|those|each|both|one|it)\\b)(?:\\w+\\s+){0,3}here\\b|<!--\\s*(?:add|insert|todo|fixme)[^>]*-->)(?![^`\\n]*`)'),
         "Placeholder that was never filled in.",
         "Fill it in or cut it.",
+        # The commit-trailer branch is anchored to the start of a line, because a
+        # real unfilled trailer is a line of its own. Unanchored it hard-blocked
+        # any sentence that described the convention, and this repository's own
+        # CLAUDE.md documents "Fixes: DESKTOP-XXXX" as the form to use.
         cost=6.0, surface="raw",
     ),
 ]
@@ -349,7 +353,15 @@ EXTRA: list[Rule] = [
     ),
     Rule(
         "title-case-heading", "info",
-        _r(r"(?m)^#{1,6}\s+(?:[A-Z][a-z]+\s+){2,}(?:[A-Z][a-z]+)\s*$"),
+        # Case-sensitive on purpose. _r defaults to re.I, which made [A-Z][a-z]+
+        # match any word, so this fired on every heading of three or more plain
+        # words: "What it costs on real history" was read as Title Case.
+        # [a-z]* rather than [a-z]+ so a one-letter word inside the run does not
+        # break it: "Why The Capture Lifecycle Needs A Second Pass" is Title Case
+        # and the "A" was ending the match. An all-caps acronym still does not
+        # match, because [A-Z][a-z]* takes only the first letter of "API" and then
+        # needs a space.
+        _r(r"(?m)^#{1,6}\s+(?:[A-Z][a-z]*\s+){2,}(?:[A-Z][a-z]*)\s*$", flags=0),
         "Heading in Title Case.",
         "Sentence case reads as written by a person.",
         cost=0.5,

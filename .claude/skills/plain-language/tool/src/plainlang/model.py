@@ -90,6 +90,21 @@ class Weights:
     curve: float = 1.6
 
     min_english_share: float = 0.13   # below this the text is not English
+    # A second, independent test the not-English decision must also fail.
+    # The function-word share cannot tell terse English from Norwegian: a
+    # changelog of eight `- Fixed force plate reconnect crash` bullets scores
+    # 0.000, exactly like Norwegian prose, and was being declared not-English
+    # and scored not at all. The share of tokens that carry an English Zipf
+    # frequency does separate them, measured 2026-09-01: English 1.000 in every
+    # shape tried, including bullets and bare headings, against Norwegian 0.485,
+    # Swedish 0.515, Portuguese 0.606, German 0.667 and Norwegian bullets 0.316.
+    min_known_share: float = 0.85
+    # Below this many words the score means nothing: the rate is cost per 100
+    # words, so one hard word in a 21-word release note reads as 12/100. The
+    # hook has always applied this floor and judged short text on the defect
+    # rules alone; it lives here now so `pl check` agrees with the hook instead
+    # of failing a bullet list the hook lets through.
+    min_scored_words: int = 40
 
     # Gate
     max_errors: int = 0
@@ -132,6 +147,9 @@ class Report:
     stats: dict[str, float]
     top_costs: list[tuple[str, float]]
     language: str = "en"
+    # False when the text is too short for the score to mean anything. The
+    # findings still stand; only the score is not evidence.
+    scorable: bool = True
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -407,6 +425,12 @@ class Scorer:
         doc = parse(source)
         quoted = quote_spans(source)
         fenced = fence_spans(source)
+        # A `>` blockquote is quoted material, which the skill puts out of scope
+        # for the same reason a `"..."` quotation is: the writer is showing you
+        # someone else's words, not choosing them. Before this, quoting a vendor's
+        # hype email or a Jira comment in a report scored the report on the quote.
+        quoted += [(s.start, s.start + len(s.text))
+                   for s in parse(source).sentences if s.block_kind == "quote"]
         self.lex.prime({t.lower().strip("'\u2019-") for s in doc.sentences for t, _ in tokenize(s.text)})
         spend: dict[str, float] = {"lexical": 0.0, "sentence": 0.0, "tells": 0.0, "structure": 0.0}
         findings: list[Finding] = []
@@ -418,8 +442,14 @@ class Scorer:
             toks = tokenize(sent.text)
             if not toks:
                 continue
+            if sent.block_kind == "quote":
+                continue
             content = [t for t, _ in toks]
-            if sent.block_kind not in {"heading", "table"}:
+            # List items are left out of the rhythm measure on purpose. Bullets are
+            # meant to be short and parallel, so their length variance is near zero
+            # by design; charging it flagged a ten-item release note of two-word
+            # bullets as flat writing.
+            if sent.block_kind not in {"heading", "table", "list_item"}:
                 lengths.append(len(content))
             n_words += len(content)
             for idx, (tok, off) in enumerate(toks):
@@ -514,12 +544,29 @@ class Scorer:
         share = english_share([tok for sent in doc.sentences for tok, _ in tokenize(sent.text)])
         # A non-Latin script gives almost no [A-Za-z] tokens, so the function-word
         # share cannot see it. Measure the script directly as well.
-        letters = [c for c in doc.prose if c.isalpha()]
+        # Measure the script on the SOURCE, not the masked prose. segment.py masks
+        # runs of non-Latin script, so by this point doc.prose is Latin by
+        # construction and a share taken from it would always be 1.0.
+        letters = [c for c in doc.source if c.isalpha()]
         latin_share = (sum(1 for c in letters if ord(c) < 0x250) / len(letters)) if letters else 1.0
+        # Share of alphabetic tokens this English lexicon actually knows. Glossary
+        # terms count as known: they are deliberate domain vocabulary, not evidence
+        # of another language.
+        alpha = [tok.lower() for sent in doc.sentences for tok, _ in tokenize(sent.text)
+                 if tok.isalpha()]
+        known = sum(1 for tok in alpha
+                    if tok in self.glossary or self.lex.lookup(tok).zipf is not None)
+        known_share = (known / len(alpha)) if alpha else 1.0
+
         language = "en"
-        if latin_share < 0.85:
+        if latin_share < 0.85 and n_words == 0:
+            # Non-Latin script and nothing left after masking it, so the document
+            # really is in another language. A document that MIXES the two keeps
+            # its English half scored, which is the point of the mask: before it,
+            # one quoted Chinese paragraph exempted the whole file.
             language = "not-english"
-        elif n_words >= 30 and share < self.w.min_english_share:
+        elif (n_words >= 30 and share < self.w.min_english_share
+              and known_share < self.w.min_known_share):
             language = "not-english"
         if language != "en":
             # Not English. Report it and score nothing, rather than charging every
@@ -529,8 +576,10 @@ class Scorer:
                 spend={k: 0.0 for k in spend}, findings=[],
                 stats={"mean_sentence_words": 0.0, "max_sentence_words": 0.0,
                        "length_cv": 0.0, "errors": 0.0, "warnings": 0.0,
-                       "english_share": round(share, 3), "latin_share": round(latin_share, 3)},
-                top_costs=[], language=language,
+                       "english_share": round(share, 3),
+                       "known_share": round(known_share, 3),
+                       "latin_share": round(latin_share, 3)},
+                top_costs=[], language=language, scorable=False,
             )
 
         total = sum(spend.values())
@@ -553,9 +602,12 @@ class Scorer:
                 "errors": float(sum(1 for f in findings if f.severity == "error")),
                 "warnings": float(sum(1 for f in findings if f.severity == "warn")),
                 "english_share": round(share, 3),
+                "known_share": round(known_share, 3),
+                "latin_share": round(latin_share, 3),
             },
             top_costs=sorted(word_costs.items(), key=lambda kv: -kv[1])[:12],
             language=language,
+            scorable=n_words >= self.w.min_scored_words,
         )
 
 

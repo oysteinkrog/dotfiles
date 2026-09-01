@@ -29,7 +29,7 @@ then it protects nothing.
 | `data/passages.json` | 96 real technical passages | Sampled from this repo's docs and commit bodies, English only, 40 to 260 words. |
 | `data/variants.json` | each passage in three registers, plus two blind judge panels | 12 agents rewrote each passage plain and inflated, keeping a fact list. 24 judge runs then scored all three variants blind, with the register hidden behind rotated tag letters. |
 | `data/human_writing.json` | 150 messages the user typed himself | Filtered from session logs. Used as a diagnostic, not a target: chat typing is not the register the skill governs. |
-| `data/rule_cases.json` | 308 positives, 430 near-misses, 300 adversarial cases | Written per rule by agents, then attacked by a second pass told to make each rule misfire on correct technical writing. |
+| `data/rule_cases.json` | 308 positives, 430 near-misses, 407 adversarial cases | Written per rule by agents, then attacked by a second pass told to make each rule misfire on correct technical writing. |
 | `data/external/clear.csv` | 4,724 excerpts with continuous human difficulty ratings | The CLEAR corpus (Crossley et al. 2022). Ships every classic formula's score on the same text, so we can compare directly. |
 | `data/external/onestop.jsonl` | 189 articles at three editor-graded levels | OneStopEnglish, CC BY-SA 4.0. |
 

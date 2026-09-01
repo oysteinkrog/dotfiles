@@ -43,9 +43,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--calls", type=Path, required=True)
     ap.add_argument("--replies", type=Path, default=None)
+    # The detector, for its text-extraction half only. This script does its own
+    # scoring in process, because shelling out 84,000 times would measure process
+    # startup rather than the gate.
     ap.add_argument("--guard", type=Path,
                     default=Path(os.environ.get("PLAINLANG_GUARD",
-                                                Path.home() / ".claude/hooks/plain-language-guard.py")))
+                                                ROOT / "hooks" / "plain-language-detect.py")))
     ap.add_argument("--weights", type=Path, default=None)
     ap.add_argument("--dump-blocked", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
@@ -54,6 +57,23 @@ def main() -> int:
     guard = load_guard(args.guard)
     weights = Weights.load(args.weights)
     scorer = Scorer(weights, Lexicon(mode="full"))
+
+    # Say which glossary is in effect, every run. The scorer finds a project
+    # glossary by walking up from the working directory, so the same corpus and
+    # the same weights give a different refusal rate depending on where you
+    # invoke this. That is not a bug in the scorer, it is how per-repo domain
+    # terms are meant to work, but an eval number that moves with the working
+    # directory and does not say so is unreviewable. Measured on 2026-09-01: run
+    # from the monorepo, 6,938 project terms, 451 refusals; run from the skill
+    # directory, 0 project terms, 876 refusals.
+    from plainlang.model import _discover_glossary  # noqa: PLC0415
+    project_terms = _discover_glossary()
+    print(f"cwd {Path.cwd()}")
+    print(f"glossary: {len(scorer.glossary)} terms total, "
+          f"{len(project_terms)} from a project .plainlang/glossary.txt")
+    print(f"weights: {args.weights or 'data/weights.json'}, "
+          f"min_score {weights.min_score}, max_errors {weights.max_errors}")
+    print(f"detector: {args.guard}\n")
 
     # Score in process. The hook shells out to `pl`; doing that 84,000 times would
     # measure process startup, not the gate.
