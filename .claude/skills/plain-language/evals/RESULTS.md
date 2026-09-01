@@ -1382,3 +1382,80 @@ it: 0.998 separation, 0.709 judge agreement, 3.4% false alarm on real repo prose
 
 Across all three audits: 25 defects reproduced, 21 fixed, 146 tests in the two
 suites where there were 76 at the start of the day.
+
+## 24. The CI lane, and why it gates defects only
+
+The local hook covers text an agent writes. A CI lane covers the rest: a person
+typing a pull request body in the web interface, and a commit that arrives without
+an agent session at all.
+
+### The verdict rule
+
+The lane fails only on a defect: leaked chatbot citation markup, a tracking
+parameter in a URL, chat-assistant boilerplate, an unfilled placeholder. A score
+below the floor and every style finding become warning annotations and a row in
+the job summary.
+
+The evidence for that split, measured over real master history:
+
+| Range | Items scored | Defects | Below the score floor |
+|---|---|---|---|
+| 6 most recent merged pull requests, real titles and bodies | 13 | 0 | 0 |
+| last 30 master commits | 27 | 0 | 2 |
+| last 200 master commits, including a knowledge-base import | 599 | 0 | 23 |
+
+A defect gate would have fired zero times. A score gate would have fired 23 times,
+clustered in decision records and knowledge-base pages that are fine. Two red
+lanes deadlock this repository's merge queue, so a lane that fires wrongly once a
+month is worse than no lane.
+
+The 3.4% false-alarm rate on this repository's own prose is the other half of the
+argument. That is a wrong block roughly every thirty prose pull requests, each one
+a dequeue and a human override. It is a good number for advice and a bad one for a
+gate.
+
+Annotate-only was rejected for the opposite reason: it never gates, so a pull
+request could merge with leaked chatbot markup in it, which is the one case
+nobody defends. Score-drop-against-base and a committed ratchet were rejected
+because both block on judgement calls the skill itself defines as advisory, and a
+ratchet invites the score-chasing failure section 11 measured.
+
+### One rule set, not two
+
+The helper imports the local hook and calls its `PROSE_SUFFIXES`, `SKIP_PATH`,
+`SKIP_SUFFIX`, `SKIP_NAME`, `looks_like_code`, `word_count`, `MIN_WORDS`,
+`HARD_HINT`, `SKIP_MARKER` and `gate`. So which files count as prose, what reads
+as code, the 40-word floor and the non-English detector have one definition. A
+second, divergent copy of that logic in CI would drift within weeks, and the
+drift would be silent.
+
+It also calls `os.chdir` to the repository root before loading the scorer, with
+the measurement in a comment, so nobody can change the verdict later by moving
+the job's working directory. Section 19 is why.
+
+### Exit codes are distinguished on purpose
+
+0 passes, 1 means this pull request's prose carries a defect, 2 means the gate
+could not run. A missing checkout, an unreadable commit range and a scorer that
+will not load all exit 2.
+
+They were all exit 1 until they were tested. That is worth recording, because the
+failure mode is a reviewer hunting for prose that is not there while the real
+problem is the runner.
+
+### Rollout
+
+The job is not in `ci-required`'s needs list, so the merge queue does not wait on
+it while it stays visible in the checks. Promotion means adding it to that list,
+and the evidence for promotion is roughly four weeks or a hundred runs in which
+every red traces to a real defect and none trace to infrastructure. The one
+unknown is the runner's python3 version, which the first step reports plainly
+while the lane is still non-blocking.
+
+### Accepted gaps
+
+A title or body edited after the last push goes unscored, because re-running on
+every edit would restart the heavy build lanes. A `plainlang: skip` line exempts
+a whole file or message, which is by design and greppable. A prose file changed
+by both the base branch and the pull request is scored as the merged content,
+which is the same exposure the determinism guard already accepts.
