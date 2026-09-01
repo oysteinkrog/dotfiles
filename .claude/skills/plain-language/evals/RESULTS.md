@@ -34,15 +34,25 @@ difficulty ratings, which ships every classic formula's score on the same text.
 Spearman against the human rating, 900-excerpt sample, magnitudes compared
 because some formulas score ease and some score difficulty.
 
-| Measure | Spearman |
-|---|---|
-| plainlang reading cost | **0.535** |
-| New Dale-Chall | 0.504 |
-| SMOG | 0.463 |
-| CAREC | 0.459 |
-| Flesch Reading Ease | 0.452 |
-| Flesch-Kincaid Grade Level | 0.441 |
-| Automated Readability Index | 0.401 |
+| Measure | Spearman, 900-excerpt sample | Spearman, all 4,724 |
+|---|---|---|
+| plainlang reading cost | **0.535** | **0.628** |
+| New Dale-Chall | 0.504 | 0.597 |
+| SMOG | 0.463 | 0.572 |
+| CAREC | 0.459 | 0.578 |
+| Flesch Reading Ease | 0.452 | 0.559 |
+| Flesch-Kincaid Grade Level | 0.441 | 0.547 |
+| Automated Readability Index | 0.401 | 0.518 |
+
+The right-hand column is the whole corpus and is the figure to quote. The sample
+column is kept because the numbers elsewhere in this file were measured on it.
+Every measure rises on the full corpus, and the ordering does not change: the
+tool leads the best classic formula by 0.031 either way.
+
+**This is an in-sample number and must not be called external validation.** The
+shipped weights were fitted on the in-house corpus and CLEAR at once, as section
+3 says two paragraphs down, so CLEAR is training data. The honest outside checks
+are OneStopEnglish, which the tuner never saw, and the blind judge panels.
 
 On OneStopEnglish, 189 news articles each rewritten by editors at three levels,
 the model puts all three in the right order for 186 of 189 articles (98.4%,
@@ -126,7 +136,7 @@ clear the 40-word floor in all three registers, 150 chat messages.
 | M3 false alarm on repo prose | 15.1% | 25% |
 | M4 pair accuracy | 100% (p = 3e-26) | 95% |
 | M6 slop caught by the gate | 100% | 95% |
-| M7 external agreement, CLEAR | 0.535, ahead of every classic formula | on a par |
+| M7 agreement with CLEAR ratings | 0.628 on all 4,724, ahead of every classic formula by 0.031; in-sample, see section 3 | on a par |
 | M8 graded ordering, OneStopEnglish | 98.4% | 90% |
 
 Median scores: plain rewrite 84.4, untouched repo prose 83.1, inflated rewrite
@@ -614,7 +624,8 @@ The rebuilt lexicon is 126,777 words and 800 KiB, with no prevalence column.
 
 Re-verified after the rebuild: separation 0.999, judge agreement 0.702, false
 alarms 15.1%, learner-graded ordering 186/189, agreement with human difficulty
-ratings 0.530 against Dale-Chall's 0.504, all 43 rules at precision 1.00.
+ratings 0.628 against Dale-Chall's 0.597 on all 4,724 excerpts, all 43 rules with
+cases at precision 1.00.
 
 ### What was kept
 
@@ -834,3 +845,256 @@ bare. Verified both ways.
 **"the catch rate" is a measurement.** `why-it-matters` matched the bare noun in
 "seven points of the catch rate". It now refuses to fire when the noun is followed
 by rate, angle, block, word, clause or phrase.
+
+## 19. The backtest number moves with the working directory
+
+Section 17 reported a refusal count without saying which glossary produced it.
+The same corpus, weights and rules give two different answers:
+
+| Working directory | Project terms | Text-carrying calls | Refused | Rate | Replies sent back |
+|---|---|---|---|---|---|
+| `/c/WORK/desktop/master` | 6,938 | 2,361 | 452 | 19.1% | 2,853 of 8,948 (31.9%) |
+| the skill directory, under `~/.dotfiles` | 0 | 2,360 | 876 | 37.1% | 4,218 of 8,948 (47.1%) |
+
+`_discover_glossary()` in `model.py:154` walks up from the working directory
+looking for `.plainlang/glossary.txt`. Both rows are the tool behaving as
+designed, because per-repo domain terms are the point, and section 3 already
+measured the effect: a domain glossary cuts false alarms on real repo prose from
+23.3% to 15.1%. The defect was in the eval script, which printed neither the
+working directory nor the glossary size, so two correct runs looked like one
+measurement contradicting itself. `evals/backtest_hook.py` now prints the working
+directory, the glossary size split by source, the weights file, `min_score`,
+`max_errors` and the detector path before it reports anything.
+
+The operational number is the first row, 452 refusals and 0.54% of all 84,340
+tool calls, because the hook runs with the working directory of the session it is
+gating, which is the monorepo.
+
+**The detector half makes no difference.** Running the same corpus through the
+superseded `hooks/plain-language-guard.py` and through `hooks/plain-language-detect.py`
+gives identical results: 2,361 considered, 452 refused, 180 skipped as not
+English, 2,853 replies sent back. The two files share their text-extraction code
+exactly, which an AST comparison of every top-level function and constant
+confirms; they differ only in how they reach the scorer, in process rather than
+through a subprocess. So the numbers in section 17 and 18 are unaffected by the
+restructuring.
+
+**Every eval script now prints its own configuration.** Patching only the
+backtest was not enough. One command after writing this section I ran the
+scorecard from the skill directory instead of the monorepo and read 8.0% where the
+real figure is 3.4%, and spent a while hunting a regression that did not exist.
+`run.py` and `validate_external.py` print the working directory, the glossary size
+split by source, `min_score` and `max_errors` before any result, the same as
+`backtest_hook.py`. The two readings, same code, one command apart:
+
+| | from the monorepo | from the skill directory |
+|---|---|---|
+| project glossary terms | 6,938 | 0 |
+| M1 separation | 0.998 | 0.997 |
+| M2 judge agreement | 0.709 | 0.693 |
+| M3 false alarm on repo prose | 3.4% | 8.0% |
+| M6 slop caught | 93.2% | 96.6% |
+| CLEAR, all 4,724 | 0.628 | 0.637 |
+
+Quote the left column. It is the configuration the hook runs in, because the hook
+inherits the working directory of the session it is gating.
+
+The CLEAR row is worth noticing on its own: the tool scores slightly BETTER on
+CLEAR without the domain glossary, 0.637 against 0.628. That is the expected
+direction and a small check on the glossary doing what it claims. CLEAR is
+general-audience text rated by general readers, so a monorepo glossary exempts
+words that really are hard for those readers. The glossary is there to stop
+charging this team for vocabulary this team knows, which is a different job.
+
+**One figure from section 17 does not reproduce.** That run reported 2,453
+text-carrying calls and 451 refusals against the same corpus file. Re-running it
+four ways, with each detector and from each working directory, never reproduces
+2,453; the extraction path is identical in both detectors and the corpus file has
+not changed since. The 452/2,361 figures above are the ones to use. Nothing in
+the conclusions moves: the refusal rate is about 19% of text-carrying calls and
+about half a percent of all calls either way.
+
+## 20. Adversarial audit of the scorer, and eight fixes
+
+Two Fable agents were given the code and told to break it with text nobody had
+written for it. The scorer audit returned 12 confirmed defects. I reproduced each
+one myself before acting on it, which mattered: one of the two worst was
+overstated and one proposed fix was wrong.
+
+### The eight defects
+
+**The language test was a gate bypass in both directions.** This was the worst of
+them, because a document called not English is scored not at all: the report comes
+back 100 out of 100 with no findings.
+
+Direction one, real English being waved through. A changelog of eight
+`- Fixed force plate reconnect crash after USB unplug` bullets has an English
+function-word share of 0.000, because terse lines carry no function words at all.
+Norwegian prose scores 0.000 on the same test. So the changelog was declared not
+English and never checked.
+
+Direction two, one quoted paragraph exempting a whole file. The test measured the
+share of Latin characters across the document, so appending a paragraph of Chinese
+to an inflated English passage took it from 4.4 and a failed gate to 100 and no
+findings. The share fell to 0.683, under the 0.85 threshold.
+
+The audit reported this as "any document quoting a paragraph of CJK is silently
+exempt". That is not quite true and the correction is worth recording: it depends
+on the ratio. My first attempt to reproduce it failed, because a shorter quotation
+left the share above the threshold. It takes roughly a paragraph against a
+paragraph.
+
+**The suggested fix for direction one did not work.** The audit proposed backing
+the function-word test with a lexicon hit rate, on the reasoning that "the
+changelog's tokens are ~100% lexicon hits, Swedish's are not". Measured, every
+language tested hit 1.000, because `Lexicon.lookup` returns a `Norms` object with
+`None` fields for an unknown word rather than returning `None`. The discriminator
+that does work is the share of tokens carrying an English Zipf frequency:
+
+| Sample | function-word share | Zipf-known share |
+|---|---|---|
+| English changelog, 8 terse bullets | 0.000 | 1.000 |
+| English bullets, 2 words each | 0.000 | 1.000 |
+| English headings only | 0.000 | 1.000 |
+| English prose | 0.394 | 1.000 |
+| Norwegian | 0.000 | 0.485 |
+| Swedish | 0.000 | 0.515 |
+| Portuguese | 0.061 | 0.606 |
+| German | 0.061 | 0.667 |
+| Norwegian, terse bullets | 0.053 | 0.316 |
+
+English is 1.000 in every shape tried. The threshold is 0.85, which is `min_known_share`
+in `weights.json`, and a document is now called not English only when both tests
+fail. For non-Latin script, `segment.py` masks runs of 12 or more non-Latin letters
+the way it masks code, so the English half of a mixed document is scored and only
+a document with nothing left after masking is reported as another language. Twelve
+is the floor so that a micro sign in a tolerance or a name with a diacritic stays
+ordinary prose.
+
+**A hard rule blocked this repository's own commit convention.** `unfilled-placeholder`
+is one of the four rules that fail the gate at any length and any score.
+"Commit bodies use the form Fixes: DESKTOP-XXXX so Jira links the issue" tripped
+it, and that sentence is describing what `CLAUDE.md` tells everyone to write. The
+trailer branch now needs a trailer position, line start or after a sentence end,
+and needs to end its line. A real unfilled trailer still gates, in a bare line, a
+bullet or a quote.
+
+**A markdown blockquote was charged to the person quoting it.** The skill puts
+quoted material out of scope and `"..."` quotations were already exempt, but `>`
+blocks were not. `block_kind == "quote"` was computed in `segment.py` and read by
+nothing. A three-sentence report quoting a vendor's marketing email scored 3.3 with
+findings for `robust-hype` and `promo-adjectives`, on the vendor's words. It now
+scores 94.3 with none, while writing the same sentences yourself still scores 2.9
+with six findings.
+
+**Four-space indentation hid a nested list.** CommonMark nests bullets and
+continues list paragraphs at four spaces, and the indented-code mask took all of
+it. An inflated paragraph written as a sub-bullet scored 100 with no findings. The
+mask now requires the line not to start with a list marker. Fixing it also caught
+a second bug in the same pattern: it matched exactly four spaces, so the deeper
+line of a two-line indented code block was never masked at all.
+
+**Fences had to be exactly three backticks.** Four is how you quote a block that
+itself contains three, and the inner code leaked out and was scored as writing. The
+pattern now takes three or more, requires the closer to be at least as long, and
+follows CommonMark in running an unclosed fence to end of file.
+
+**Bullets were charged for flat rhythm.** `uniform-rhythm` fires when sentence
+length variance collapses. Bullets are parallel by design, so a ten-item release
+note of two-word bullets scored 4 out of 100 on a measure that cannot apply to it.
+List items are now left out of the rhythm measure. Paragraphs of one length are
+still charged.
+
+**Short text got a grade the gate ignored.** The rate is cost per 100 words, so one
+hard word in a 21-word release note reads as 32 per 100 and the score reads as an F.
+The hook has always applied a 40-word floor and judged short text on the four defect
+rules alone. The scorer now carries that floor as `min_scored_words`, `Report.scorable`
+reports it, and `pl check` no longer fails what the hook allows. It says
+"too short to score, 21 words of 40 needed" instead of printing a letter grade.
+
+**`title-case-heading` fired on any three plain words.** This one was found by
+running the gate on this section. `_r` applies `re.I` by default, so `[A-Z][a-z]+`
+matched lowercase words too and the rule reported every ordinary sentence-case
+heading of three or more words as Title Case. "What it costs on real history" and
+"Defects reported and not yet fixed", both headings below, were flagged. It is
+compiled case-sensitively now. Fixing that exposed a second bug in the same
+pattern: `[a-z]+` needs two characters, so a one-letter word ended the run and
+"Why The Capture Lifecycle Needs A Second Pass" was missed. With `[a-z]*` the rule
+reaches 7 of 7 on its own cases, up from 6, and an all-caps acronym heading still
+does not match.
+
+The rule's precision was already reported as 1.00 on 18 hand-built cases. It was
+firing on most of this document's headings at the same time. The lesson is the one
+this file keeps relearning: cases written for a rule cannot tell you what the rule
+does to text nobody wrote for it.
+
+### The A/B against the committed code
+
+| Metric | before | after | |
+|---|---|---|---|
+| M1 separation, AUC plain vs slop | 0.997 | 0.998 | better |
+| M2 judge agreement, Spearman | 0.697 | 0.709 | better |
+| M3 false alarm on real repo prose | 4.7%, n=86 | 3.4%, n=88 | better |
+| M4 pair accuracy | 100% | 100% | held |
+| M6 slop caught by the gate | 93.0% | 93.2% | better |
+| CLEAR, all 4,724 excerpts | 0.628 | 0.628 | unchanged |
+| OneStopEnglish, all three in order | 186/189 | 186/189 | unchanged |
+
+The control was the committed version of `model.py`, `segment.py`, `rules.py` and
+`cli.py` in a scratch copy, run against the same corpora in the same working
+directory, so the glossary and the weights were identical.
+
+M3's denominator grew from 86 to 88 because two repo passages that the language
+bug had been skipping are now scored, and the false-alarm rate fell anyway.
+
+### What it costs on real history
+
+Replaying the same 84,340 historical tool calls:
+
+| | before | after |
+|---|---|---|
+| refused | 452, 19.1% of text-carrying calls | 517, 21.9% |
+| share of all tool calls | 0.54% | 0.61% |
+| skipped as not English | 180 | 23 |
+| chat replies sent back | 2,853, 31.9% | 2,940, 32.9% |
+
+157 items stop being silently exempt and 65 more are refused, so about 41% of the
+newly-checked text fails, against 19% overall. That is the expected direction: what
+the language bug was exempting was mostly short commit messages carrying an em dash.
+
+### Regression tests
+
+Twenty-six tests were added, taking the suite from 44 to 70. Eighteen of them fail
+against the committed code, which is how I know they test something. Two of those
+twelve fail on the old code only because they read `known_share` and `latin_share`
+from the stats dict, which the old code does not report; the other ten catch real
+behaviour. The eight that pass on both are the other-direction guards, the cases a
+fix could break: writing hype yourself still fails, genuinely flat prose still
+fires, a real unfilled trailer still gates, real indented code is still masked, and
+a document wholly in another script is still skipped.
+
+### Defects reported and not yet fixed
+
+From the same audit, reproduced but left for now, with the reason:
+
+- `PASSIVE` charges a copula followed by any word ending in `-en`, so "the port is
+  open", "the build is green" and "he is often late" are charged. The `-ed` half is
+  sound. The fix is to replace the open-ended pattern with the irregular-participle
+  list the regex already carries.
+- `"..."` quotations lose their exemption when hard-wrapped across a line, because
+  the pattern excludes newlines.
+- `QUESTION_HEAD` flags any heading whose first word collides with an auxiliary, so
+  "CAN bus wiring" and "Do not use in production" read as questions.
+- A possessive escapes all lexical cost: "paradigm" costs 1.95 and "paradigm's"
+  costs 0.
+- The em-dash rule charges correct en-dash typography in "Oslo-Bergen" and
+  "May-June" ranges when written with an en dash.
+- A UTF-8 BOM defeats heading detection, so the skill's own canonical example
+  heading escapes the rule when the file carries one.
+- The `of course,` branch of `needless-to-say` is unreachable: it ends in `\b`
+  after a comma, which cannot match before a space.
+
+Lazy and full lexicon loading were checked for divergence and found identical:
+same score, rate and findings on eight real documents, and 0 mismatches on a
+4,000-word lookup sweep. That mattered because the hook uses one and the evals use
+the other.

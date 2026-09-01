@@ -133,6 +133,11 @@ pl explain draft.md        # where every point of cost went
 echo "$BODY" | pl check -  # read from stdin
 ```
 
+`pl` is the optional launcher that `install.sh` puts on your PATH. Nothing else
+needs it: the same scorer runs as
+`PYTHONPATH=tool/src python3 -m plainlang.cli check -`, and that is how the hook
+runs it.
+
 It reports a list of findings and a score out of 100. The gate fails when the score
 falls below the minimum in `data/weights.json`, or on a **defect**: chatbot citation
 markup, a tracking parameter, chat-assistant boilerplate, or an unfilled `[NAME]`
@@ -235,10 +240,17 @@ penalty in the literature and need a parser this tool does not have.
 
 Put terms that should cost nothing in `<repo>/.plainlang/glossary.txt`, one per line.
 The scorer walks up from the working directory to find it. 444 general technical terms
-ship with the skill; this repo adds 6,891 of its own. Adding a domain glossary improves
+ship with the skill; this repo adds 6,938 of its own. Adding a domain glossary improves
 the tool rather than weakening it: on the eval corpus it cuts false alarms on real repo
 prose from 23.3% to 15.1% and raises judge agreement from 0.688 to 0.705, because domain
 vocabulary is noise for the distinction that matters.
+
+Adding or growing a glossary changes the score and the findings for the same
+text. That is intended, not the tool going soft. The scorer finds
+`.plainlang/glossary.txt` by walking up from the working directory (or from
+`PLAINLANG_PROJECT` when set), so the same document scores higher inside a repo
+that has a glossary than outside one. Domain terms stop being charged; nothing
+else relaxes.
 
 To regenerate one for a repo:
 
@@ -251,7 +263,8 @@ frequency is below 3.3.
 
 ## What the hook covers
 
-A hook runs the gate on anything about to reach a person: writes to `.md` and `.txt`,
+A hook runs the gate on anything about to reach a person: writes to prose files
+(`.md`, `.txt`, `.rst`, `.adoc`),
 commit messages, pull request bodies, Jira and Confluence text, Slack messages and
 canvases, Zendesk support replies, email (through the Gmail tools or the `gog` CLI),
 artifacts and artifact comment replies, and the reply you are about to send in chat.
@@ -260,13 +273,38 @@ A failing gate hands back the findings; fix them and try again.
 The hook skips code, config, generated files, localisation and resource files, and
 product strings. Text that is not English is detected and skipped, so translated
 documentation is never charged for not being English. Below 40 words the score means
-nothing, so short text is judged on the hard rules alone: an em dash is an em dash in
-ten words. Off switches, in order:
+nothing, so short text passes unless it carries one of the four defects: a
+fourteen-word commit message with an em dash goes through. Off switches, in order:
 
 - `PLAINLANG_OFF=1` turns everything off.
 - `PLAINLANG_MODE=warn` reports without blocking.
 - A `plainlang: skip` line in the text itself, for material that is genuinely out of
   scope. Say why when you use it.
+
+### How the gate runs
+
+There is no install step, no virtualenv, no pip, no network. The scorer imports
+only the Python standard library, so the hook runs it with bare `python3`
+(3.12 or newer) and a `PYTHONPATH`. `selftest.sh` checks this by importing the
+scorer with bare python3, outside any virtualenv. It works on a fresh clone.
+The earlier design needed an installed launcher, which meant the gate silently
+did nothing on any machine where nobody ran the installer, and a guard that
+quietly stops working is worse than no guard.
+
+The gate is wired in two places at once: `~/.claude/settings.json` and the host
+repository's `.claude/settings.json`. Both point, through one-line forwarder
+scripts, at the same `hooks/plain-language-guard.sh`. When both fire on the same
+text, a short-lived decision cache keyed on the payload replays the first result
+instead of scoring twice.
+
+`plain-language-guard.sh` only finds a python3 and the skill; all the logic is
+in `plain-language-detect.py`, and `plain-language-guard.test.py` holds its 32
+cases. A SessionStart hook, `plain-language-health.sh`, proves once per session
+that the gate can refuse bad text and pass good text, and prints a warning when
+it cannot. That check exists because the gate fails open on error, and a guard
+that fails open silently looks exactly like a guard that is working.
+
+`bash selftest.sh` proves the whole thing works on the current machine.
 
 ## What the tool cannot do
 
@@ -276,14 +314,16 @@ whether the argument holds, or whether the reader has the background to follow i
 A passage can score 95 and still be useless. The register rules above are the job; the
 scorer is a check on the part of the job that a machine can see.
 
-The measured limits. On the eval set it separates plain from inflated writing at 0.999
-AUC and agrees with blind judges at Spearman 0.71, but treat that as a ceiling: the
+The measured limits. On the eval set it separates plain from inflated writing at 0.997
+AUC and agrees with blind judges at Spearman 0.697, but treat that as a ceiling: the
 inflated variants were written to order. The honest figure is real repo prose against
 real unprompted assistant prose, which separates at 0.784. On outside data the reading
-cost tracks human difficulty ratings at Spearman 0.55, ahead of every classic
+cost tracks human difficulty ratings at Spearman 0.53, ahead of every classic
 readability formula, and it puts editor-graded texts in the right order for 186 of 189
-articles. All 43 pattern rules reach precision 1.00 on 738 hand-built cases, 300 of
-them written to make the rules misfire. Method and numbers in `evals/RESULTS.md`.
+articles. The 43 pattern rules with hand-built cases all reach precision 1.00 on them:
+308 positives, 430 near-misses, and 407 adversarial passages written to make the rules
+misfire. Five of the 48 rules have no cases yet. Method and numbers in
+`evals/RESULTS.md`.
 
 ## Procedure
 
@@ -324,11 +364,15 @@ Do not compensate for a plain title by making the body flowery.
 
 | Path | What it is |
 |---|---|
-| `tool/` | the scorer, a uv project with no runtime dependencies |
-| `data/lexicon.tsv.gz` | 131,793 words with Zipf, age of acquisition, concreteness and prevalence |
-| `data/simpler.tsv` | hard word to plain replacement, for the unearned-difficulty multiplier |
-| `data/glossary.txt` | terms that cost nothing |
+| `tool/` | the scorer; scoring imports only the standard library |
+| `data/lexicon.tsv.gz` | 126,777 words with Zipf frequency, age of acquisition and concreteness |
+| `data/norms/` | the sources the lexicon is baked from; nothing here is read at scoring time |
+| `data/simpler.tsv` | hard word to plain replacement, shown as suggestions |
+| `data/glossary.txt` | 444 terms that cost nothing |
 | `data/weights.json` | the fitted cost model and the gate threshold |
 | `evals/` | the corpora, the metrics, the tuner and the rule tests |
-| `hooks/` | the gate and the settings snippet that wires it in |
-| `install.sh` | builds the virtualenv, installs `pl`, runs a self test |
+| `hooks/` | the guard wrapper, the detector holding the logic, the SessionStart health check, 32 hook tests, and the settings snippet |
+| `selftest.sh` | proves the gate works on this machine; safe to run any time |
+| `install.sh` | optional: puts a `pl` launcher on your PATH and runs the self test. The gate does not need it |
+| `sync-to-monorepo.sh` | dotfiles copy only: pushes the skill into a repository that carries its own copy |
+| `stage-in-repo.sh` | dotfiles copy only: stages the computed file list in a repo that gitignores `.claude`, because `git add -f` on the directory also stages the virtualenv and caches |

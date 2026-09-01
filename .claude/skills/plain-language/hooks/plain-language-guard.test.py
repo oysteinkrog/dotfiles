@@ -1,9 +1,15 @@
-"""Tests for the hook that runs the gate on anything about to reach a person.
+"""Test matrix for the plain-language hook.
 
-    python3 hooks/test_guard.py
+    python3 hooks/plain-language-guard.test.py
 
-Each case is a real hook payload. Exit 2 means the gate refused the call and the
+Each case is a real hook payload, run through plain-language-guard.sh, which is
+what Claude Code actually invokes. Exit 2 means the gate refused the call and the
 model gets the findings; exit 0 means the call goes through.
+
+Run this after any change to plain-language-guard.sh or plain-language-detect.py.
+Several cases exist because a real bug got past review: `awk -F,` crashing the
+guard, CMakeLists.txt scored as prose, and a `git commit` mentioned inside an
+unrelated heredoc read as a commit message.
 """
 
 from __future__ import annotations
@@ -14,7 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-GUARD = os.environ.get("PLAINLANG_GUARD", str(Path.home() / ".claude/hooks/plain-language-guard.py"))
+HERE = Path(__file__).resolve().parent
+# Test what Claude Code runs: the wrapper, not the detector underneath it.
+GUARD = os.environ.get("PLAINLANG_GUARD", str(HERE / "plain-language-guard.sh"))
 
 SLOP = ("In today's fast-paced world, our journey to remote capture is not just a feature, it is a "
         "testament to the evolving landscape of mobile motion analysis. It is worth noting that "
@@ -81,8 +89,10 @@ CASES = [
 
 def run(payload: dict, env: dict | None = None) -> int:
     e = dict(os.environ)
+    e.setdefault("PLAINLANG_HOME", str(HERE.parent))
     e.update(env or {})
-    return subprocess.run([sys.executable, GUARD], input=json.dumps(payload),
+    cmd = ["bash", GUARD] if GUARD.endswith(".sh") else [sys.executable, GUARD]
+    return subprocess.run(cmd, input=json.dumps(payload),
                           capture_output=True, text=True, env=e).returncode
 
 

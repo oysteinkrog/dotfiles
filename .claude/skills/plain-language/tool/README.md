@@ -10,6 +10,11 @@ pl json draft.md         # the full report
 echo "$BODY" | pl check -
 ```
 
+`pl` is the optional launcher `../install.sh` puts on your PATH. Nothing needs
+it: scoring imports only the standard library, so the equivalent with no
+install is `PYTHONPATH=src python3 -m plainlang.cli check -`, which is how the
+hook calls it.
+
 ## What it measures
 
 Three things, added together as a cost per 100 words, then mapped to a score out
@@ -22,10 +27,14 @@ numbers come from published norms, baked into `data/lexicon.tsv.gz`:
 
 | Source | What it gives | Coverage |
 |---|---|---|
-| SUBTLEX-US via `wordfreq` | Zipf frequency | 131,793 words |
-| Kuperman, Stadthagen-Gonzalez & Brysbaert (2012) | age of acquisition, in years | 51,694 |
-| Brysbaert, Warriner & Kuperman (2014) | concreteness, 1 to 5 | 37,057 |
-| Brysbaert, Mandera, McCormick & Keuleers (2019) | prevalence, share who know the word | 61,852 |
+| SUBTLEX-US via `wordfreq` | Zipf frequency | 126,777 words |
+| Kuperman, Stadthagen-Gonzalez & Brysbaert (2012) | age of acquisition, in years | 51,693 |
+| Brysbaert, Warriner & Kuperman (2014) | concreteness, 1 to 5 | 37,055 |
+
+The lexicon has a `prev` (word prevalence) column and it ships empty: both
+prevalence norms were measured and made the tool worse. The data and the
+numbers are in `../data/norms/README.md` and `../evals/RESULTS.md` sections 13
+and 16.
 
 Nothing is banned. A hard word is expensive, never impossible, so you can spend
 budget on a word that earns it.
@@ -33,8 +42,10 @@ budget on a word that earns it.
 Precision is free. A word costs nothing if it is in a glossary, an acronym, a
 proper noun, a number, or inside code, a path, a URL, or a quotation.
 
-What costs extra is unearned difficulty. If a hard word has a plain synonym that
-means the same thing, it gets a multiplier, from `data/simpler.tsv`.
+A hard word with a plain synonym gets that synonym shown as a suggested fix,
+from `data/simpler.tsv`. It is a suggestion, not an extra charge: the cost
+multiplier it used to carry was measured and removed (`../evals/RESULTS.md`
+section 15).
 
 **Sentence cost.** Length above about twenty words, agentless passives, and
 sentences that never change length.
@@ -50,11 +61,11 @@ because their evidence lives inside URLs and code-ish spans.
 src/plainlang/
   segment.py   markdown-aware splitting; blanks code, links, paths, front matter
   lexicon.py   the baked norm table, loaded lazily so a hook pays ~40 ms
-  rules.py     the pattern rules, in four groups
+  rules.py     the pattern rules, in five groups
   model.py     the cost model and the document scorer
   cli.py       the pl command
   bake.py      rebuilds data/lexicon.tsv.gz from data/norms/
-tests/         39 tests: segmentation, word cost, every rule group, gate behaviour
+tests/         44 tests: segmentation, word cost, every rule group, gate behaviour
 ```
 
 ## Rebuilding the lexicon
@@ -62,11 +73,13 @@ tests/         39 tests: segmentation, word cost, every rule group, gate behavio
 Only needed when a norm file changes.
 
 ```sh
-uv run --with wordfreq python -m plainlang.bake \
+uv run --extra bake python -m plainlang.bake \
   --norms ../data/norms --out ../data/lexicon.tsv.gz
 ```
 
-`wordfreq` is a build-time dependency only. Scoring uses the standard library.
+`wordfreq` lives in the optional `bake` extra and is a build-time dependency
+only. Scoring uses the standard library; `../selftest.sh` checks this by
+importing the scorer with bare python3, outside any virtualenv.
 
 ## Retuning
 

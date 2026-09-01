@@ -1,5 +1,5 @@
 {
-  "_comment": "Add these entries to the matching arrays in ~/.claude/settings.json. They run the plain-language gate on anything about to reach a person. Set PLAINLANG_MODE=warn to report without blocking, or PLAINLANG_OFF=1 to switch it off.",
+  "_comment": "Add these entries to the matching arrays in a repository's .claude/settings.json. They run the plain-language gate on anything about to reach a person, plus a once-per-session health check that says when the gate cannot run. For ~/.claude/settings.json use the same entries with the command path ~/.claude/skills/plain-language/hooks/<script>. Both may be wired at once: the guard caches its decision per payload, so the second hook replays the first result instead of scoring twice. The deployed settings actually point at one-line forwarder scripts in .claude/hooks/ that exec these; either form works. Set PLAINLANG_MODE=warn to report without blocking, or PLAINLANG_OFF=1 to switch it off.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/skills/plain-language/hooks/plain-language-guard.sh"
           }
         ]
       },
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/skills/plain-language/hooks/plain-language-guard.sh"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/skills/plain-language/hooks/plain-language-guard.sh"
           }
         ]
       }
@@ -38,7 +38,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/plain-language-guard.py"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/skills/plain-language/hooks/plain-language-guard.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/skills/plain-language/hooks/plain-language-health.sh"
           }
         ]
       }

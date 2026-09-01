@@ -24,6 +24,15 @@ DIR="$REPO/$REL"
 [ -d "$DIR" ] || { echo "$DIR does not exist; run sync-to-monorepo.sh first" >&2; exit 1; }
 
 # Everything except build output, caches, and corpora the host repo should not hold.
+#
+# evals/data/ is excluded wholesale, with one exception. Every file in there is
+# either rebuildable (build_corpus.py, fetch_external.sh) or a byproduct of a
+# workflow run, and human_writing.json and backtest_blocked.json additionally
+# hold the text of real commits, documents and messages. rule_cases.json is the
+# exception: it is the 738-case corpus that rulecheck.py scores the pattern rules
+# against, so without it nobody in this repo can check the precision claim in
+# SKILL.md. It stays private to this repo and is NOT shipped to the public
+# dotfiles repo, because its cases are written in this repo's domain vocabulary.
 mapfile -t FILES < <(
   cd "$REPO" && find "$REL" -type f \
     -not -path "*/.venv/*" \
@@ -32,9 +41,7 @@ mapfile -t FILES < <(
     -not -name "*.pyc" \
     -not -name "*.cache" \
     -not -name "uv.lock" \
-    -not -path "*/evals/data/external/*" \
-    -not -name "human_writing.json" \
-    -not -name "backtest_blocked.json" \
+    \( -not -path "*/evals/data/*" -o -name "rule_cases.json" -o -name ".gitkeep" \) \
     | sort
 )
 
