@@ -44,6 +44,23 @@ if(MSVC)
   target_compile_options(bertec_ftdi_shim PRIVATE /MT /wd4100)
 endif()"""
 
+# --- fixtures for the 2026-09-01 hook audit ---------------------------------
+# A release note written with `*` bullets. Six lines was the threshold: at six or
+# more, every line matched the code heuristic and the whole document skipped the
+# gate, while the identical text with `-` bullets was refused.
+STAR_BULLETS = "\n".join([
+    "* In todays fast-paced world our journey to remote capture is a testament",
+    "* It is worth noting that experts agree this marks a pivotal moment",
+    "* The evolving landscape of mobile motion analysis is not just a feature",
+    "* This delivers a seamless and robust experience for the whole team",
+    "* At its core the solution empowers users to unlock their full potential",
+    "* Needless to say the journey ahead is a testament to our shared vision",
+])
+DASH_BULLETS = STAR_BULLETS.replace("* ", "- ")
+# The commit shape git's own documentation teaches: title, blank line, body.
+MULTILINE_COMMIT = f'git commit -m "video: rebuild index\n\n{SLOP}"'
+
+
 CASES = [
     # name, tool_name, tool_input, expected exit
     ("write .md, inflated", "Write", {"file_path": "/tmp/a.md", "content": SLOP}, 2),
@@ -84,6 +101,48 @@ CASES = [
     # read as markdown headings.
     ("CMakeLists.txt is not prose", "Write", {"file_path": "/x/CMakeLists.txt", "content": CMAKE}, 0),
     ("code saved as .txt is not prose", "Write", {"file_path": "/x/notes.txt", "content": CMAKE}, 0),
+    # --- 2026-09-01 hook audit. Each of these went through unchecked. ---------
+    #
+    # The worst was the commit shape git documents: title, blank line, body. The
+    # message pattern excluded newlines, so it read the title alone, found fewer
+    # than eight words and gave up. Any agent writing a conventional commit
+    # message bypassed the gate completely.
+    ("multi-line -m, body after a blank line", "Bash", {"command": MULTILINE_COMMIT}, 2),
+    ("second -m carries the body", "Bash",
+     {"command": f'git commit -m "fix: rebuild index" -m "{SLOP}"'}, 2),
+    ("--message= spelling", "Bash", {"command": f'git commit --message="{SLOP}"'}, 2),
+    ("--message with a space", "Bash", {"command": f'git commit --message "{SLOP}"'}, 2),
+    ("git -C dir commit", "Bash", {"command": f'git -C /repo commit -m "{SLOP}"'}, 2),
+    ("git --no-pager commit", "Bash", {"command": f'git --no-pager commit -m "{SLOP}"'}, 2),
+    ("--body= spelling", "Bash", {"command": f'gh pr edit 1 --body="{SLOP}"'}, 2),
+    ("-b short flag for the body", "Bash", {"command": f'gh pr edit 1 -b "{SLOP}"'}, 2),
+    ("--field body=", "Bash",
+     {"command": f'gh api repos/x/y/pulls/1 --field body="{SLOP}"'}, 2),
+    ("ANSI-C quoting", "Bash", {"command": "git commit -m $'" + SLOP.replace("'", "") + "'"}, 2),
+    # A `*` bullet matched the code heuristic, so the same text passed or failed
+    # depending on which bullet character the writer used.
+    ("release note in * bullets", "Write", {"file_path": "/tmp/rel.md", "content": STAR_BULLETS}, 2),
+    ("release note in - bullets", "Write", {"file_path": "/tmp/rel.md", "content": DASH_BULLETS}, 2),
+    # The directory names in SKIP_PATH were unbounded and matched case-insensitively,
+    # so any path component merely starting with obj, bin, dist, vendor or build was
+    # exempt. All five of these are plausible real documents.
+    ("docs/build-instructions.md", "Write",
+     {"file_path": "/docs/build-instructions.md", "content": SLOP}, 2),
+    ("object-model.md", "Write", {"file_path": "/tmp/object-model.md", "content": SLOP}, 2),
+    ("dist-plan.md", "Write", {"file_path": "/tmp/dist-plan.md", "content": SLOP}, 2),
+    ("binder-notes.md", "Write", {"file_path": "/tmp/binder-notes.md", "content": SLOP}, 2),
+    ("vendor-selection.md", "Write", {"file_path": "/tmp/vendor-selection.md", "content": SLOP}, 2),
+    # The other direction: the real build and resource directories must stay out.
+    ("BUILD/ is still skipped", "Write", {"file_path": "/repo/BUILD/notes.md", "content": SLOP}, 0),
+    ("obj/ is still skipped", "Write", {"file_path": "/repo/obj/notes.md", "content": SLOP}, 0),
+    ("bin/ is still skipped", "Write", {"file_path": "/repo/bin/notes.md", "content": SLOP}, 0),
+    ("dist/ is still skipped", "Write", {"file_path": "/repo/dist/notes.md", "content": SLOP}, 0),
+    ("vendor/ is still skipped", "Write", {"file_path": "/repo/vendor/lib/README.md", "content": SLOP}, 0),
+    ("node_modules/ is still skipped", "Write",
+     {"file_path": "/repo/node_modules/pkg/README.md", "content": SLOP}, 0),
+    ("localisation/ is still skipped", "Write",
+     {"file_path": "/repo/localisation/strings.md", "content": SLOP}, 0),
+    ("CHANGELOG.md is still skipped", "Write", {"file_path": "/repo/CHANGELOG.md", "content": SLOP}, 0),
 ]
 
 

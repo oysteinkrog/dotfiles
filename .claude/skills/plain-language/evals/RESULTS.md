@@ -1098,3 +1098,117 @@ Lazy and full lexicon loading were checked for divergence and found identical:
 same score, rate and findings on eight real documents, and 0 mismatches on a
 4,000-word lookup sweep. That mattered because the hook uses one and the evals use
 the other.
+
+## 21. Adversarial audit of the hook, and four fixes
+
+The scorer audit in section 20 had a companion: a second agent was given the hook
+layer and told to find every input that makes the gate do nothing. That mattered
+more than it sounds, because the guard fails open by design. A guard that fails
+open silently is indistinguishable from a guard that works.
+
+I reproduced each finding before acting on it. One was overstated and needed its
+threshold pinned down before it was real.
+
+### The commit shape git documents was never scored
+
+This was the worst of the four. The message pattern used `[^\n]*`, so
+`git commit -m "title<newline><newline>body"` was read as the title alone, found
+fewer than eight words, and gave up. The body was invisible.
+
+That is the shape git's own documentation teaches, so any agent writing a
+conventional commit message bypassed the gate completely.
+
+```
+git commit -m "<inflated paragraph>"                    -> exit 2
+git commit -m "video: rebuild index\n\n<same text>"     -> exit 0
+```
+
+The newline exclusion was there for a reason: an unbounded pattern could run past
+its own closing quote into a later heredoc. The fix is to match the closing quote
+properly, with a negative lookbehind so an escaped quote stays inside the body.
+A correctly paired quote cannot overrun, which is what makes `re.DOTALL` safe.
+
+### Nine more ways to write the same command
+
+Each of these was reproduced, and each returned exit 0 where the same text in the
+covered spelling returned exit 2:
+
+| Command shape | why it was missed |
+|---|---|
+| `git commit -m "title" -m "<body>"` | only the first match was read |
+| `git commit --message="<body>"` | only `-m` was covered |
+| `git commit --message "<body>"` | same |
+| `git -C /repo commit -m "<body>"` | the pattern required git and commit to be adjacent |
+| `git --no-pager commit -m "<body>"` | same |
+| `gh pr edit 1 --body="<body>"` | only `--body ` with a space was covered |
+| `gh pr edit 1 -b "<body>"` | the documented short flag was not covered |
+| `gh api ... --field body="<body>"` | only `-f body=` was covered |
+| `gh pr ... -F file` | the documented short form of `--body-file` |
+| `git commit -m $'<body>'` | ANSI-C quoting |
+
+All ten now collect every quoted region for every flag that carries text and score
+the longest one. The four cases that must still pass do: `awk -F,`, `grep -F`, a
+short clean commit message, and a command that merely mentions the commit flag
+inside a string.
+
+### A `*` bullet counted as code
+
+`_CODE_LINE` carried a bare `* ` pattern, meant for the interior of a C block
+comment. It also matches a markdown bullet. `looks_like_code` calls a document
+source when a quarter of its substantive lines look like code and there are at
+least six of them, so a release note of six or more `*` bullets scored 100% code
+and skipped the gate, while the identical text written with `-` bullets was
+refused.
+
+The audit reported this as "whole prose documents skip the gate". True, but only
+at six lines or more: my first attempt with five bullets did not reproduce it,
+because of the line-count floor. Worth pinning down, because "any document with
+`*` bullets" and "a document with six or more" are different risks.
+
+`/*` and `*/` still match, which is what actually identifies a comment block, and
+markdown list lines are now left out of both halves of the ratio rather than
+counted against the text.
+
+### Any path starting with obj, bin, dist, vendor or build was exempt
+
+`SKIP_PATH` had no trailing boundary on its directory names, and `re.I` made
+`BUILD` match `build-` too. So all of these were silently out of scope:
+
+```
+/docs/build-instructions.md    /tmp/object-model.md      /tmp/dist-plan.md
+/tmp/binder-notes.md           /tmp/vendor-selection.md  /tmp/distribution.md
+```
+
+Every one is a plausible real document. The names are bounded now, and the eight
+directories that should be skipped still are: `BUILD/`, `obj/`, `bin/`, `dist/`,
+`vendor/`, `node_modules/`, `localisation/` and `CHANGELOG.md`.
+
+### What it costs on real history
+
+Replaying the same 84,340 tool calls, before and after the hook fixes:
+
+| | before | after |
+|---|---|---|
+| calls carrying text the gate looks at | 2,361 | 2,744 |
+| refused | 517 | 557 |
+| block rate on that text | 21.9% | 20.3% |
+| share of all tool calls | 0.61% | 0.66% |
+| chat replies sent back | 2,940 | 2,937 |
+
+383 more payloads are checked and only 40 more are refused, so the text that was
+bypassing was about 90% clean. The block rate falls, which is the right shape: the
+holes were not where the bad writing was concentrated, they were just holes.
+
+The Bash lane now shows an 11.6% block rate on 1,097 extracted payloads, where
+before the multi-line fix most commit bodies were never extracted at all.
+
+### Regression tests
+
+The hook suite goes from 32 cases to 57. Sixteen of the 24 new cases fail against
+the previous detector. The other eight are the direction a fix could break: the
+five build and resource directories that must stay skipped, `CHANGELOG.md`, and
+the `-` bullet control that always worked.
+
+Both audits together: 16 defects reproduced, 12 fixed, 51 regression tests added
+across the two suites, and every fix measured against the committed code on the
+same corpora before it was kept.
