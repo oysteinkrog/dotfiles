@@ -24,6 +24,29 @@ from metrics import Scorecard, auc, bootstrap_ci, sign_test, spearman  # noqa: E
 from plainlang.lexicon import Lexicon  # noqa: E402
 from plainlang.model import Scorer, Weights  # noqa: E402
 
+
+def print_config(scorer, weights, label=""):
+    """Say which glossary is in effect, before reporting any number.
+
+    Every number in this file depends on the working directory. `_discover_glossary`
+    walks up from it looking for `.plainlang/glossary.txt`, so the same corpus and
+    the same weights give different figures depending on where you invoke the
+    script. On 2026-09-01 that produced two contradictory-looking readings of the
+    same measurement one command apart: run from the monorepo, M3 was 3.4% and
+    CLEAR 0.628; run from the skill directory, 8.0% and 0.637. Neither is wrong.
+    An eval number that moves with the working directory and does not say so is
+    unreviewable.
+    """
+    from pathlib import Path as _P
+    from plainlang.model import _discover_glossary
+    project = _discover_glossary()
+    print(f"cwd {_P.cwd()}")
+    print(f"glossary: {len(scorer.glossary)} terms total, "
+          f"{len(project)} from a project .plainlang/glossary.txt")
+    print(f"weights: min_score {weights.min_score}, max_errors {weights.max_errors}"
+          + (f"  [{label}]" if label else ""))
+    print()
+
 REGISTERS = ("plain", "wild", "slop")
 
 
@@ -298,6 +321,7 @@ def main() -> int:
         base = best
 
     scorer = Scorer(base, Lexicon(mode="full"))
+    print_config(scorer, base, "scorecard")
     card = build_scorecard(score_all(scorer, variants, human), variants, base.min_score)
     if args.json:
         print(json.dumps(asdict(card), indent=2))

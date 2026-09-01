@@ -7,9 +7,14 @@ authors = [
     { name = "Øystein Krog", email = "oystein.krog@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = [
-    "wordfreq>=3.1.1",
-]
+# Scoring uses the standard library only, on purpose. That is what lets a hook
+# call this with bare `python3` and a PYTHONPATH, with no virtualenv, no install
+# step and no network. wordfreq is needed only to rebuild data/lexicon.tsv.gz,
+# which happens when a norm source changes, so it lives in an optional group.
+dependencies = []
+
+[project.optional-dependencies]
+bake = ["wordfreq>=3.1.1"]
 
 [build-system]
 requires = ["hatchling"]

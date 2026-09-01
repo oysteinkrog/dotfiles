@@ -43,7 +43,14 @@ def print_findings(name: str, rep: Report, *, color: bool, limit: int, min_sev: 
     order = {"info": 0, "warn": 1, "error": 2}
     floor = order[min_sev]
     shown = [f for f in rep.findings if order[f.severity] >= floor]
-    head = f"{name}: {rep.score:.0f}/100 ({rep.grade})  {rep.words} words, cost {rep.rate:.1f}/100w"
+    if not rep.scorable:
+        # Say it rather than printing a grade nothing acts on. A score on 21 words
+        # reads as an F because the rate is cost per 100 words, and the gate
+        # correctly ignores it, so showing the letter alone misleads the reader.
+        head = (f"{name}: too short to score, {rep.words} words of 40 needed. "
+                f"Findings below still stand.")
+    else:
+        head = f"{name}: {rep.score:.0f}/100 ({rep.grade})  {rep.words} words, cost {rep.rate:.1f}/100w"
     print(head)
     if rep.stats.get("errors"):
         print(f"  {int(rep.stats['errors'])} hard-rule violation(s)")
@@ -62,6 +69,8 @@ def print_findings(name: str, rep: Report, *, color: bool, limit: int, min_sev: 
 def gate_fails(rep: Report, w: Weights) -> tuple[bool, str]:
     if rep.stats.get("errors", 0) > w.max_errors:
         return True, f"{int(rep.stats['errors'])} hard-rule violation(s)"
+    if not rep.scorable:
+        return False, ""
     if rep.score < w.min_score:
         return True, f"score {rep.score:.0f} is below {w.min_score:.0f}"
     return False, ""

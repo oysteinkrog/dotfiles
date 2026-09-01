@@ -259,3 +259,222 @@ def test_machine_residue_in_prose_still_fires(scorer):
 def test_report_serialises(scorer):
     import json
     json.loads(scorer.score(PLAIN).to_json())
+
+
+# --- regressions from the 2026-09-01 audit ----------------------------------
+# Each of these pins one defect that shipped and was found by running the tool
+# against text nobody had written for it. Both directions are asserted wherever
+# a fix could go too far: the case that used to be wrong, and the case the rule
+# still has to catch.
+
+_SLOP = (
+    "In todays fast-paced world, our journey to remote capture is not just a "
+    "feature, it is a testament to the evolving landscape of mobile motion "
+    "analysis. It is worth noting that experts agree this marks a pivotal "
+    "moment for the whole team and the product overall."
+)
+_CJK = (
+    "用户手册说明了如何在移动设备上使用远程捕获功能。请参阅第三章了解详细的配置步骤和注意事项。"
+    "系统要求包括最新版本的操作系统和至少四百兆的可用存储空间。如果连接失败请检查网络设置。"
+)
+_NORWEGIAN = (
+    "Telefonen eier sine egne innstillinger og skrivebordet viser dem. Naar du "
+    "endrer en verdi sender skrivebordet den tilbake over den eksisterende "
+    "protokollen, og telefonen bruker den og rapporterer resultatet tilbake."
+)
+
+
+def test_terse_english_is_not_mistaken_for_another_language(scorer):
+    """Bullets carry no function words, which used to read as not English.
+
+    A changelog of eight `- Fixed ...` lines scored 0.000 on the function-word
+    share, exactly like Norwegian prose, so it was declared not English and
+    scored not at all. Real repo prose was bypassing the gate.
+    """
+    changelog = "\n".join(["- Fixed force plate reconnect crash after USB unplug"] * 8)
+    rep = scorer.score(changelog)
+    assert rep.language == "en"
+    assert rep.stats["known_share"] > 0.85
+
+
+def test_latin_script_other_languages_are_still_skipped(scorer):
+    """The other direction: the fix must not start scoring Norwegian as English."""
+    rep = scorer.score(_NORWEGIAN)
+    assert rep.language == "not-english"
+    assert rep.stats["known_share"] < 0.85
+
+
+def test_a_quoted_non_latin_paragraph_does_not_exempt_the_document(scorer):
+    """One paragraph of Chinese used to take the whole file out of scope.
+
+    The not-English test measured the share of Latin characters over the whole
+    document, so appending a Chinese quotation to an inflated English passage
+    took it from a failed gate to a score of 100 with no findings.
+    """
+    rep = scorer.score(_SLOP + "\n\n" + _CJK)
+    assert rep.language == "en"
+    assert rep.score < 34.5
+    assert rep.findings
+
+
+def test_a_document_entirely_in_another_script_is_still_skipped(scorer):
+    rep = scorer.score(_CJK + "\n\n" + _CJK)
+    assert rep.language == "not-english"
+
+
+def test_a_single_non_latin_symbol_stays_prose(scorer):
+    """A micro sign in a tolerance is prose, not a foreign-language quotation."""
+    spec = (
+        "The plate reads 812 N at 1000 Hz and the tolerance is 5 μm across the "
+        "whole range, which is inside what the datasheet promises for this "
+        "amplifier at normal room temperature."
+    )
+    rep = scorer.score(spec)
+    assert rep.language == "en"
+    assert rep.stats["latin_share"] > 0.9
+    assert rep.score > 34.5
+
+
+def test_a_markdown_blockquote_is_quoted_material(scorer):
+    """Quoting someone else's hype must not be charged to the person quoting it."""
+    hype = (
+        "> Our seamless and robust platform delivers a comprehensive, "
+        "best-in-class experience that empowers teams to unlock their full "
+        "potential and drive transformative outcomes.\n"
+    )
+    report = (
+        "The vendor replied on 2026-08-20. Their answer is below, unedited. I "
+        "have not changed a word of it.\n\n" + hype +
+        "\nI do not think it answers the question we asked about frame timing."
+    )
+    from_quote = {"robust-hype", "promo-adjectives", "ai-vocab", "heavy-sentence"}
+    fired = {f.rule for f in scorer.score(report).findings}
+    assert not (fired & from_quote), f"charged for the quotation: {fired & from_quote}"
+
+
+def test_writing_the_same_hype_yourself_still_fails(scorer):
+    """The other direction: the exemption is for the `>` block, not the words."""
+    own = (
+        "The vendor replied on 2026-08-20. Our seamless and robust platform "
+        "delivers a comprehensive, best-in-class experience that empowers teams "
+        "to unlock their full potential and drive transformative outcomes."
+    )
+    assert scorer.score(own).findings
+
+
+def test_a_bullet_list_is_not_flat_writing(scorer):
+    """Bullets are parallel by design, so their length variance proves nothing.
+
+    A ten-item release note of two-word bullets was charged for uniform rhythm.
+    """
+    items = ["Import take", "Trim clip", "Export overlay", "Sync cameras",
+             "Rebuild index", "Clear cache", "Reset plate offsets",
+             "Recalibrate pads", "Reload profile", "Verify sync"]
+    rep = scorer.score("\n".join(f"- {i}" for i in items))
+    assert not [f for f in rep.findings if f.rule == "uniform-rhythm"]
+
+
+def test_prose_that_really_is_flat_still_fires(scorer):
+    """The other direction: paragraphs of one length are still charged."""
+    flat = " ".join(["The plate reads a value now."] * 8)
+    assert [f for f in scorer.score(flat).findings if f.rule == "uniform-rhythm"]
+
+
+def test_short_text_is_not_scored(scorer):
+    """The rate is cost per 100 words, so a score on 21 words is not evidence.
+
+    The hook has always applied this floor. It lives in the scorer now so that
+    `pl check` agrees with the hook instead of failing what the hook allows.
+    """
+    rep = scorer.score("- Import take\n- Trim clip\n- Export overlay\n- Sync cameras")
+    assert not rep.scorable
+    assert scorer.score(_SLOP).scorable
+
+
+def test_slop_inside_a_nested_bullet_is_scored(scorer):
+    """Four-space indentation is legal list nesting, not an indented code block.
+
+    Masking it meant a whole nested list was invisible, so writing an inflated
+    paragraph as a sub-bullet passed the gate.
+    """
+    doc = "Notes on the release.\n\n- Top level item\n    - " + _SLOP + "\n"
+    rep = scorer.score(doc)
+    assert rep.score < 34.5
+    assert rep.findings
+
+
+def test_real_indented_code_is_still_masked(scorer):
+    """The other direction: an indented block that is not a list item is code."""
+    doc = ("Run the loop below and watch the counter.\n\n"
+           "    for i in range(10):\n        print(paradigm, synergy, leverage)\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" not in joined
+
+
+def test_a_longer_fence_masks_its_contents(scorer):
+    """Four backticks are how you quote a block that itself contains three.
+
+    Matching exactly three let the inner code leak out and be scored as writing.
+    """
+    doc = ("The nested fence below is the markdown to paste into the issue.\n\n"
+           "````\n```\nparadigm synergy leverage utilise commence\n```\n````\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" not in joined
+
+
+def test_an_unclosed_fence_runs_to_the_end_of_the_file(scorer):
+    """CommonMark says an unclosed fence closes at end of input."""
+    doc = ("Run this to reproduce the crash.\n\n"
+           "```\nparadigm synergy leverage utilise commence\nmore paradigm synergy\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" not in joined
+
+
+def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
+    """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
+
+    Unanchored, the rule hard-blocked every sentence that described it, and a
+    hard rule blocks at any length and any score.
+    """
+    describing = (
+        "Commit bodies use the form Fixes: DESKTOP-XXXX so Jira links the issue. "
+        "That is the convention this repository documents in CLAUDE.md, and every "
+        "commit that closes an issue carries it in the body, never in the title."
+    )
+    assert not [f for f in scorer.score(describing).findings
+                if f.rule == "unfilled-placeholder"]
+
+
+@pytest.mark.parametrize("body", [
+    "Fixes: DESKTOP-XXXX",
+    "- Fixes: DESKTOP-XXXX",
+    "> Fixes: DESKTOP-XXXX",
+])
+def test_a_real_unfilled_trailer_still_gates(scorer, body):
+    """The other direction: a trailer nobody filled in is still a defect."""
+    msg = ("video: rebuild the frame index on import\n\nThe first scrub after an "
+           "import was slow because the index was built lazily.\n\n" + body + "\n")
+    assert [f for f in scorer.score(msg).findings if f.rule == "unfilled-placeholder"]
+
+
+@pytest.mark.parametrize("heading,fires", [
+    ("## Why The Capture Lifecycle Needs A Second Pass", True),
+    ("### What Costs Real Money", True),
+    ("## The Phone Stays Mounted", True),
+    ("### What it costs on real history", False),
+    ("### Defects reported and not yet fixed", False),
+    ("## Rebuild the frame index on import", False),
+    ("# API CLI SDK", False),
+    ("## Force plate calibration", False),
+])
+def test_title_case_heading_reads_capitals_not_word_count(heading, fires):
+    """The rule was compiled case-insensitively, so it matched any three words.
+
+    `_r` defaults to `re.I`, which made `[A-Z][a-z]+` match lowercase too, so
+    every ordinary sentence-case heading of three or more plain words was
+    reported as Title Case. It is case-sensitive now, and `[a-z]*` lets a
+    one-letter word sit inside the run without ending the match.
+    """
+    from plainlang.rules import ALL_RULES
+    rule = next(r for r in ALL_RULES if r.id == "title-case-heading")
+    assert bool(rule.pattern.search(heading)) is fires
