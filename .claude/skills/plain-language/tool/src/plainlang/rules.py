@@ -38,7 +38,16 @@ def _r(pat: str, flags: int = re.I) -> re.Pattern[str]:
 HARD: list[Rule] = [
     Rule(
         "em-dash", "warn",
-        _r(r"(?<![0-9\s])[—–](?![0-9])|(?<=\s)[—–](?![0-9])|(?<=\w) -- (?=\w)"),
+                # The em dash is charged everywhere. The en dash is charged only where it
+        # stands in for punctuation, because it has real mechanical jobs that a
+        # character-level ban would corrupt: a range (2024–2026, May–June), a
+        # paired name (Oslo–Bergen), a minus sign on a number (–5 %). Those are
+        # values and compounds, not writing, and in a compounding language the
+        # minus-sign case collides directly with keeping every number as written.
+        # An en dash with a word character on both sides, or in front of a digit,
+        # is doing one of those jobs.
+        _r(r"(?<![0-9\s])—(?![0-9])|(?<=\s)—|(?<=\w) -- (?=\w)"
+           r"|(?<![\w\s])–(?![\w])|(?<=\s)–(?=\s)"),
         "Em dash or en dash used as punctuation.",
         "Use a period, comma, colon, or parentheses.",
         # Priced level with the other strong tells (in-todays, testament,
