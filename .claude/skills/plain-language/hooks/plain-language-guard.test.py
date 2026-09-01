@@ -14,6 +14,7 @@ unrelated heredoc read as a commit message.
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures as cf
 import json
 import os
@@ -61,6 +62,14 @@ DASH_BULLETS = STAR_BULLETS.replace("* ", "- ")
 # The commit shape git's own documentation teaches: title, blank line, body.
 MULTILINE_COMMIT = f'git commit -m "video: rebuild index\n\n{SLOP}"'
 
+
+B64_SLOP = base64.b64encode(SLOP.encode()).decode()
+NORWEGIAN = (
+    "Telefonen eier sine egne innstillinger og skrivebordet viser dem. Naar du "
+    "endrer en verdi sender skrivebordet den tilbake over den eksisterende "
+    "protokollen, og telefonen bruker den og rapporterer resultatet tilbake til "
+    "brukeren igjen uten at noen trenger aa ta paa telefonen."
+)
 
 CASES = [
     # name, tool_name, tool_input, expected exit
@@ -165,6 +174,40 @@ CASES = [
      {"notebook_path": "/tmp/a.ipynb", "cell_type": "markdown", "new_source": SLOP}, 2),
     ("notebook code cell is out of scope", "NotebookEdit",
      {"notebook_path": "/tmp/a.ipynb", "cell_type": "code", "new_source": SLOP}, 0),
+    # --- surfaces the second audit found still open ---------------------------
+    ("slack_schedule_message", "mcp__claude_ai_Slack__slack_schedule_message",
+     {"text": SLOP}, 2),
+    ("MultiEdit replacement text", "MultiEdit",
+     {"file_path": "/tmp/a.md", "edits": [{"old_string": "x", "new_string": SLOP}]}, 2),
+    # A commit message into the knowledge base repository. Commit messages are
+    # explicitly in scope, and this one publishes to a repo colleagues read.
+    ("kb__commit message", "mcp__claude_ai_Atlas_KB__kb__commit", {"message": SLOP}, 2),
+    # A curated knowledge base holds documents, so a suffix-less path is a page.
+    # Requiring a prose suffix made it bypass in silence.
+    ("KB page with no suffix", "mcp__claude_ai_Atlas_KB__kb__write",
+     {"path": "company/identity", "content": SLOP}, 2),
+    # This one needed the path-token boundary fix first: "distribution" starts
+    # with "dist", which the old unbounded SKIP_PATH treated as a build directory.
+    ("KB path company/distribution.md", "mcp__claude_ai_Atlas_KB__kb__write",
+     {"path": "company/distribution.md", "content": SLOP}, 2),
+    # contentMimeType is optional in the schema, so skipping when it is absent
+    # turned an omitted field into a bypass.
+    ("Drive with no mime type", "mcp__claude_ai_Google_Drive__create_file",
+     {"title": "Plan", "textContent": SLOP}, 2),
+    ("Drive base64 text", "mcp__claude_ai_Google_Drive__create_file",
+     {"title": "Plan", "base64Content": B64_SLOP, "contentMimeType": "text/plain"}, 2),
+    ("Drive text/csv is out of scope", "mcp__claude_ai_Google_Drive__create_file",
+     {"title": "d", "textContent": SLOP, "contentMimeType": "text/csv"}, 0),
+    # A calendar description is read by everyone invited.
+    ("calendar invitation", "mcp__claude_ai_Google_Calendar__create_event",
+     {"summary": "Sync", "description": SLOP}, 2),
+    ("Drive read is out of scope", "mcp__claude_ai_Google_Drive__read_file_content",
+     {"fileId": "x"}, 0),
+    ("KB read is out of scope", "mcp__claude_ai_Atlas_KB__kb__read_file",
+     {"path": "company/identity.md"}, 0),
+    # Not English, and it must stay that way: this pins the fix that stopped
+    # terse English being called Norwegian, without starting to score Norwegian.
+    ("Norwegian prose to .md", "Write", {"file_path": "/tmp/no.md", "content": NORWEGIAN}, 0),
 ]
 
 

@@ -306,6 +306,24 @@ def from_bash(cmd: str) -> tuple[str, str] | None:
 
 def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
     n = name.lower()
+    # MultiEdit is named in the repository matcher and was handled by nothing, so
+    # the tool matched the hook and then fell through. Score the replacement text
+    # from every edit, joined, which is the same choice the Edit branch makes.
+    if name == "MultiEdit":
+        path = ti.get("file_path") or ""
+        if SKIP_PATH.search(path) or SKIP_SUFFIX.search(path):
+            return None
+        if SKIP_NAME.match(Path(path).name):
+            return None
+        if Path(path).suffix.lower() not in PROSE_SUFFIXES:
+            return None
+        parts = [e.get("new_string") or "" for e in (ti.get("edits") or [])
+                 if isinstance(e, dict)]
+        text = "\n\n".join(x for x in parts if x)
+        if not text or looks_like_code(text):
+            return None
+        return text, f"your replacement text in {Path(path).name}"
+
     if name in {"Write", "Edit"}:
         path = ti.get("file_path") or ""
         if SKIP_PATH.search(path) or SKIP_SUFFIX.search(path):
@@ -347,7 +365,10 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
         html = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.S | re.I)
         html = re.sub(r"<[^>]+>", " ", html)
         return (html, f"artifact {Path(path).name}")
-    if "slack" in n and any(k in n for k in ("send", "draft", "canvas", "reply")):
+    # "schedule" belongs here: a scheduled message reaches people exactly like a
+    # sent one, and leaving it out meant slack_schedule_message went unchecked
+    # while slack_send_message with the identical text was refused.
+    if "slack" in n and any(k in n for k in ("send", "draft", "canvas", "reply", "schedule")):
         for key in ("text", "message", "markdown", "content", "document_content"):
             v = ti.get(key)
             if isinstance(v, str) and v:
@@ -373,29 +394,86 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
     # prose a colleague reads and nothing else owns its wording, so it is in
     # scope. An edit carries only the replacement text; that is still the right
     # thing to score, because the rest of the page was gated when it was written.
+    # A commit message into the knowledge base repository. Commit messages are
+    # explicitly in scope, and this one is a person-facing record like any other.
+    if "kb__commit" in n:
+        text = ti.get("message") or ""
+        if not text or looks_like_code(text):
+            return None
+        return text, "knowledge base commit message"
+
     if "kb__write" in n or "kb__edit" in n:
         path = ti.get("path") or ""
+        # A prose suffix OR no suffix at all. A curated knowledge base holds
+        # documents, so `company/identity` with no extension is a page and
+        # requiring a prose suffix would make it bypass in silence. A page with a
+        # code or data suffix is still out of scope: a `.py` in the knowledge base
+        # is source, whatever it happens to contain.
+        suffix = Path(path).suffix.lower()
+        if suffix and suffix not in PROSE_SUFFIXES:
+            return None
         if SKIP_PATH.search(path) or SKIP_SUFFIX.search(path):
             return None
-        if Path(path).suffix.lower() not in PROSE_SUFFIXES:
+        if SKIP_NAME.match(Path(path).name):
             return None
         text = ti.get("content") or ti.get("new_string") or ""
         if not text or looks_like_code(text):
             return None
-        return text, f"knowledge base {Path(path).name}"
+        # An edit carries only the replacement, so say so: the line and column are
+        # relative to what you wrote, not to the page.
+        what = "your replacement text in" if ti.get("new_string") else "knowledge base"
+        return text, f"{what} {Path(path).name}".strip()
 
     # A text document uploaded to Drive. Only textContent is prose: base64Content
     # is by definition not something this can read, and update_file changes the
     # title and the parent folder, never the body.
     if "drive" in n and "create_file" in n:
+        # contentMimeType is optional in the schema, so an absent one must not
+        # read as permission to skip: that would turn an omitted field into a
+        # bypass. Skip only when a mime is present AND is not text or a Google
+        # document. Spreadsheet-shaped text is machine data, not prose.
+        mime = (ti.get("contentMimeType") or "").lower().split(";")[0].strip()
+        if mime and not (mime.startswith("text/")
+                         or mime.startswith("application/vnd.google-apps.document")):
+            return None
+        if mime in ("text/csv", "text/tab-separated-values"):
+            return None
         text = ti.get("textContent") or ""
-        mime = (ti.get("contentMimeType") or "").lower()
+        if not text:
+            # base64Content carries the same prose, encoded. One line of encoding
+            # should not defeat the gate, and decoding is cheap.
+            blob = ti.get("base64Content") or ti.get("content") or ""
+            if blob:
+                try:
+                    import base64
+                    text = base64.b64decode(blob, validate=False).decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    return None
+        if not text:
+            return None
+        if mime.startswith("text/html"):
+            text = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.S | re.I)
+            text = re.sub(r"<[^>]+>", " ", text)
+        if looks_like_code(text):
+            return None
+        # The title goes in front of the body. Titles are what this rule polices
+        # hardest, and a title alone is under the word floor.
+        title = (ti.get("title") or "").strip()
+        text = f"{title}\n\n{text}" if title else text
+        return text, f"Drive document {title}".strip()
+
+    # A calendar invitation. The description and the summary are read by everyone
+    # invited, and nothing else owns their wording, so they are in scope on the
+    # same reasoning as an email body.
+    if "calendar" in n and ("create_event" in n or "update_event" in n):
+        body = ti.get("description") or ""
+        if body and "<" in body and ">" in body:
+            body = re.sub(r"<[^>]+>", " ", body)
+        summary = (ti.get("summary") or "").strip()
+        text = f"{summary}\n\n{body}".strip() if summary else body
         if not text or looks_like_code(text):
             return None
-        if mime and not mime.startswith(("text/", "application/vnd.google-apps.document")):
-            return None
-        title = ti.get("title") or ""
-        return text, f"Drive document {title}".strip()
+        return text, "calendar invitation"
 
     if "jira" in n or "confluence" in n:
         for key in ("body", "commentBody", "description", "bodyMarkdown"):
@@ -507,18 +585,65 @@ def _decision_cache(event: str, payload: str) -> tuple[Path | None, int | None]:
         STATE.mkdir(parents=True, exist_ok=True)
         marker = STATE / f"d-{key}"
         if marker.exists() and (time.time() - marker.stat().st_mtime) < 10:
-            return marker, int(marker.read_text().strip() or 0)
+            # Only the two codes this cache ever writes count as a hit. `int(x or 0)`
+            # turned an empty marker into 0, which is an allow: the one path in the
+            # whole cache that could turn a refusal into a pass. An empty marker is
+            # reachable, because `write_text` truncates before it writes and the
+            # double wiring means two runs overlap by design. Now it is a miss, and
+            # a miss only costs a rescore.
+            raw = marker.read_text(errors="replace").strip()
+            if raw in ("0", "2"):
+                return marker, int(raw)
         return marker, None
     except Exception:  # noqa: BLE001 - a cache must never be the thing that fails
         return None, None
 
 
+_FILE_ARG = re.compile(r"(?:--body-file|--file|(?<![\w-])-F)[= ]\s*\S")
+
+
+def _reads_a_file(ev: dict) -> bool:
+    """True when the text this event carries lives on disk rather than in the event.
+
+    Three shapes: a Bash command naming a body file, an Artifact publish naming an
+    HTML file, and a Bash heredoc redirected from a file. The event JSON is stable
+    while the file changes, which is exactly what makes the decision uncacheable.
+    """
+    ti = ev.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        return False
+    if ev.get("tool_name") == "Artifact" and ti.get("file_path"):
+        return True
+    cmd = ti.get("command")
+    return bool(isinstance(cmd, str) and _FILE_ARG.search(cmd))
+
+
 def _remember(marker: Path | None, code: int) -> int:
-    if marker is not None:
-        try:
-            marker.write_text(str(code))
-        except OSError:
-            pass
+    """Record the decision, atomically, and prune what has expired.
+
+    Atomically because `write_text` truncates first, so a concurrent reader can
+    see an empty file, and the two wirings run concurrently by design. `os.replace`
+    is atomic on the same filesystem, so a reader sees either the old marker or the
+    new one and never an empty one.
+    """
+    if marker is None:
+        return code
+    try:
+        tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+        tmp.write_text(str(code))
+        os.replace(tmp, marker)
+    except OSError:
+        pass
+    # One marker per decision with a 10-second life adds up: 215 had accumulated
+    # in a day. Prune opportunistically rather than with a scheduled job, and
+    # never let a failure here affect the decision.
+    try:
+        cutoff = time.time() - 300
+        for old_marker in marker.parent.glob("d-*"):
+            if old_marker.stat().st_mtime < cutoff:
+                old_marker.unlink()
+    except OSError:
+        pass
     return code
 
 
@@ -534,7 +659,16 @@ def main() -> int:
     mode = os.environ.get("PLAINLANG_MODE", "block")
     ev = read_event()
     hook = ev.get("hook_event_name") or ""
-    marker, cached = _decision_cache(hook, RAW_EVENT)
+    # Do not cache a decision whose text came from a file. The key hashes the
+    # event JSON, which is byte-identical before and after the file is fixed, so
+    # the refusal was replayed for ten seconds with a message asserting the text
+    # had not changed. It had. An agent that gets refused again after fixing the
+    # file can reasonably conclude the fix failed and take a worse path.
+    #
+    # A miss only costs a rescore, and the payloads this skips are rare, so this
+    # is cheaper than keying on file content: that would mean reading every named
+    # file just to build a cache key.
+    marker, cached = (None, None) if _reads_a_file(ev) else _decision_cache(hook, RAW_EVENT)
     if cached is not None:
         # Same payload, same event, seconds ago. Replay without rescoring; the
         # first run already printed the reason the model needs.
@@ -603,7 +737,20 @@ def main() -> int:
         rep = gate(text)
         if not rep or rep["language"] != "en" or not rep.get("_failed"):
             return 0
-        if mode == "warn" or blocked_recently(ev.get("session_id") or "default"):
+        # Warn mode means report without blocking, so report. This returned 0
+        # before printing anything, which made warn mode silent on the reply path
+        # while it still reported on the tool paths. Nothing said so, so warn mode
+        # looked like off.
+        if mode == "warn":
+            print(summarise(rep, "your reply"), file=sys.stderr)
+            return 0
+        if blocked_recently(ev.get("session_id") or "default"):
+            # One send-back per session is the backstop against a loop. Say that
+            # a reply was held rather than nothing at all, so a silent pass is
+            # never mistaken for a clean one.
+            print("plain-language gate: this reply also fails, and one was already "
+                  "sent back this session, so it goes through. Fix the findings "
+                  "from the earlier one.", file=sys.stderr)
             return 0
         print(summarise(rep, "your reply"), file=sys.stderr)
         return _remember(marker, 2)
