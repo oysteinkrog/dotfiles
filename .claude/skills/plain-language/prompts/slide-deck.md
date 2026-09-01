@@ -11,9 +11,7 @@ Rules for every piece of text on every slide:
 - Lead with the point. State the conclusion, then support it. Never build to a reveal.
 - Prefer the everyday word over the formal or learned one. Every language has this
   split: an ordinary register people speak in, and a bureaucratic or academic
-  register that sounds more serious and reads worse. Use the first. Tell me which
-  split you applied, by its local name where it has one (Norwegian kansellistil,
-  Portuguese burocratês), and list the swaps you made, so I can check them.
+  register that sounds more serious and reads worse. Use the first.
 - Never trade precision for simplicity. Keep every number, unit, date, version,
   name, price and stated limit exactly as written. Keep a technical term when it is
   the most precise word, and define it once if my audience may not know it. If a
@@ -42,18 +40,22 @@ Never use these shapes, in a title, a bullet, an opening line or a closing line:
 - "It is not X, it is Y."
 - Three-item lists used for rhythm rather than because there are three things.
 - "Not only X, but also Y."
-- Vague attribution: "experts agree", "studies show", "it is widely believed". When
-  you cut one, do not leave the claim standing as a plain fact. Name the real source
-  if the deck gives it anywhere, otherwise say the claim has no source, and list
-  every one of these for me.
+- Vague attribution: "experts agree", "studies show", "it is widely believed". Keep
+  the claim, and do not restate it as our own fact. Name the source if the deck
+  names one anywhere. Otherwise keep the claim with the gap marked, as in "according
+  to [which study?]", and list every one of these for me.
 - A title that opens with a verb form instead of naming the thing.
 - Drama or stakes framing, journey framing, and metaphor used as a label.
 
 Slide titles matter most, because a title is read alone. It must say what the slide
-shows. Name it, do not pitch it: a noun phrase, usually two to six words in the
-deck's language. As a shape, "Q3 revenue by region" rather than "The Momentum
-Continues". Naming the document type helps rather than pads: results, plan, risks,
-options.
+shows: the subject, and what kind of content it is (numbers, plan, risks, status,
+decision). Run this test on every title. Would it fit the other slides in this deck
+just as well? A title naming the project's activity or ambition, such as
+"Optimalisering av kundereisen", fits them all and so says nothing; retitle it with
+that slide's own content, such as "Onboarding: forslag til forbedringer". Name it,
+do not pitch it: a noun phrase naming the slide's content, usually two to six words
+in the deck's language. As a shape, "Q3 revenue by region" rather than "The
+Momentum Continues".
 
 Do not cut content, merge slides, or drop a bullet to make a slide shorter. If a
 slide is genuinely overloaded, say so and suggest a split, but do not do it without
@@ -61,13 +63,20 @@ asking me first. An everyday word is sometimes longer than the formal one,
 especially in languages that build compounds. If a rewritten line no longer fits
 the space it had, name that line and leave the decision to me.
 
-Output a table with three columns: slide number, the original text, your rewrite.
-Then tell me:
+A line that carries no fact at all, a slogan or a pure hype line, has nothing to
+preserve. Do not invent a fact to stand in for it. Put "[no content: slogan]" in
+the rewrite column, list the line for me, and I will decide what goes there.
 
-- which language the deck is in, and which register split you applied
+Output a table with three columns: slide number, the original text, your rewrite.
+Use one row per piece of text, so a title and each bullet get their own row, not
+one row per slide. Then tell me:
+
+- which language the deck is in, and which register split you applied, by the
+  register's local name where it has one (Norwegian kansellistil, Portuguese
+  burocratês)
 - the word swaps you made, as a short list
 - anything you deliberately left alone, and why
 - any place where you could not keep both the exact meaning and the plain wording
 
-If you need to know who the audience is before you can judge whether a term needs
-defining, ask me first rather than guessing.
+If whether a term needs defining depends on who the audience is, say which audience
+you assumed and carry on. Do not stop to ask me.
