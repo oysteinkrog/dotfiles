@@ -318,6 +318,19 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
         if not text or looks_like_code(text):
             return None
         return (text, f"write {Path(path).name}")
+    # A notebook markdown cell is prose a person reads. This branch also closes a
+    # silent no-op: the PreToolUse matcher is `Write|Edit|MultiEdit|Artifact`, and
+    # "Edit" is a substring of "NotebookEdit", so the tool already matched the hook
+    # and then fell through to `return None` because only the literal names Write
+    # and Edit were handled. A code cell stays out of scope.
+    if name == "NotebookEdit":
+        if (ti.get("cell_type") or "markdown") != "markdown":
+            return None
+        text = ti.get("new_source") or ""
+        if not text or looks_like_code(text):
+            return None
+        return text, f"notebook cell in {Path(ti.get('notebook_path') or '').name}"
+
     if name == "Bash":
         return from_bash(ti.get("command") or "")
     if name == "Artifact":
@@ -356,6 +369,34 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
         if isinstance(comment, dict) and isinstance(comment.get("body"), str):
             return (comment["body"], "support reply")
         return None
+    # The company knowledge base, through the Atlas MCP. A page written there is
+    # prose a colleague reads and nothing else owns its wording, so it is in
+    # scope. An edit carries only the replacement text; that is still the right
+    # thing to score, because the rest of the page was gated when it was written.
+    if "kb__write" in n or "kb__edit" in n:
+        path = ti.get("path") or ""
+        if SKIP_PATH.search(path) or SKIP_SUFFIX.search(path):
+            return None
+        if Path(path).suffix.lower() not in PROSE_SUFFIXES:
+            return None
+        text = ti.get("content") or ti.get("new_string") or ""
+        if not text or looks_like_code(text):
+            return None
+        return text, f"knowledge base {Path(path).name}"
+
+    # A text document uploaded to Drive. Only textContent is prose: base64Content
+    # is by definition not something this can read, and update_file changes the
+    # title and the parent folder, never the body.
+    if "drive" in n and "create_file" in n:
+        text = ti.get("textContent") or ""
+        mime = (ti.get("contentMimeType") or "").lower()
+        if not text or looks_like_code(text):
+            return None
+        if mime and not mime.startswith(("text/", "application/vnd.google-apps.document")):
+            return None
+        title = ti.get("title") or ""
+        return text, f"Drive document {title}".strip()
+
     if "jira" in n or "confluence" in n:
         for key in ("body", "commentBody", "description", "bodyMarkdown"):
             v = ti.get(key)
