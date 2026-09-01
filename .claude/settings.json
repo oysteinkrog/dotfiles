@@ -337,7 +337,7 @@
         ]
       },
       {
-        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence).*",
+        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence|kb__(?:write|edit)|[Dd]rive__create_file).*",
         "hooks": [
           {
             "type": "command",
