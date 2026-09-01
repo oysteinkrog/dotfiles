@@ -328,7 +328,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|Bash|Artifact",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Artifact",
         "hooks": [
           {
             "type": "command",
@@ -337,7 +337,16 @@
         ]
       },
       {
-        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence|kb__(?:write|edit)|[Dd]rive__create_file).*",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/plain-language-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence|kb__(?:write|edit|commit)|[Dd]rive__create_file|[Cc]alendar__(?:create|update)_event).*",
         "hooks": [
           {
             "type": "command",
