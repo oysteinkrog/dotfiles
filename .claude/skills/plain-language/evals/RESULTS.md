@@ -1212,3 +1212,55 @@ the `-` bullet control that always worked.
 Both audits together: 16 defects reproduced, 12 fixed, 51 regression tests added
 across the two suites, and every fix measured against the committed code on the
 same corpora before it was kept.
+
+## 22. Four surfaces the gate never covered
+
+The audits looked at what the gate does with the text it sees. This is the other
+question: what text does it never see. I ran the PreToolUse matchers from both
+settings files against every tool name available in the session.
+
+The MCP matcher was:
+
+```
+mcp__.*(?:[Ss]lack|[Gg]mail|Atlassian|[Zz]endesk|[Cc]onfluence).*
+```
+
+Four tools that publish prose to a person matched nothing, and `from_tool` had no
+branch for any of them, so widening the matcher alone would have matched and then
+extracted nothing:
+
+| Tool | What it writes | Field |
+|---|---|---|
+| `mcp__claude_ai_Atlas_KB__kb__write` | a company knowledge base page | `content` |
+| `mcp__claude_ai_Atlas_KB__kb__edit` | a replacement inside one | `new_string` |
+| `mcp__claude_ai_Google_Drive__create_file` | a document | `textContent` |
+| `NotebookEdit` | a notebook markdown cell | `new_source` |
+
+The Atlas KB is this company's own knowledge base, named in the organisation-level
+instructions, so a page written there is the target case rather than an edge case.
+
+`NotebookEdit` is the more interesting one, because it looked covered. The matcher
+is `Write|Edit|MultiEdit|Artifact`, and "Edit" is a substring of "NotebookEdit", so
+the tool matched the hook, reached `from_tool`, found neither of the two literal
+names it handled, and returned None. A silent no-op that reads as coverage from
+either end: the settings file names it, and the detector never says it declined.
+
+All four are covered now, with the scope kept narrow. A KB path must have a prose
+suffix. A Drive upload is scored only when `contentMimeType` is text or a Google
+document, so a PDF or an image is not. A notebook code cell is out of scope and a
+markdown cell is in.
+
+Left out deliberately: `mcp__claude_ai_HubSpot__manage_blog_post`, because
+marketing copy plausibly belongs to a spec rather than to this rule, and I would
+rather be asked than assume. Figma file creation and `mcp__pal__chat` are correctly
+out of scope, one because it is design content and the other because the reader is
+a model.
+
+Seven hook cases cover the four surfaces, three of them the out-of-scope direction.
+The hook suite is 64 cases.
+
+**The suite got slow enough to stop being run, so it now runs in parallel.** Every
+case is a real subprocess, which is the point, but each loads the word-norm table
+from scratch: 64 cases took 25 seconds serially, and `selftest.sh` around 70. The
+runner uses a thread pool of 8 and prints in case order regardless of finish order.
+The suite is 3.9 seconds now and `selftest.sh` is 11.

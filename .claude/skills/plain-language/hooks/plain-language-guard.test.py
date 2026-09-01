@@ -14,6 +14,7 @@ unrelated heredoc read as a commit message.
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import os
 import subprocess
@@ -143,6 +144,27 @@ CASES = [
     ("localisation/ is still skipped", "Write",
      {"file_path": "/repo/localisation/strings.md", "content": SLOP}, 0),
     ("CHANGELOG.md is still skipped", "Write", {"file_path": "/repo/CHANGELOG.md", "content": SLOP}, 0),
+    # --- surfaces that were not covered at all --------------------------------
+    # I ran the PreToolUse matchers against every tool name available in the
+    # session and found four that publish prose to a person and matched nothing.
+    # The Atlas KB is this company's own knowledge base, so a page written there
+    # is exactly the target case.
+    ("Atlas KB write, inflated", "mcp__claude_ai_Atlas_KB__kb__write",
+     {"path": "company/identity.md", "content": SLOP}, 2),
+    ("Atlas KB edit, inflated", "mcp__claude_ai_Atlas_KB__kb__edit",
+     {"path": "company/identity.md", "old_string": "x", "new_string": SLOP}, 2),
+    ("Atlas KB write to a .py path is out of scope", "mcp__claude_ai_Atlas_KB__kb__write",
+     {"path": "tools/x.py", "content": SLOP}, 0),
+    ("Drive create_file, inflated", "mcp__claude_ai_Google_Drive__create_file",
+     {"title": "Plan", "textContent": SLOP, "contentMimeType": "text/plain"}, 2),
+    ("Drive create_file of a PDF is out of scope", "mcp__claude_ai_Google_Drive__create_file",
+     {"title": "P", "base64Content": "eA==", "contentMimeType": "application/pdf"}, 0),
+    # NotebookEdit matched the hook by accident, because "Edit" is a substring of
+    # it, and then extracted nothing: a silent no-op that looked like coverage.
+    ("notebook markdown cell, inflated", "NotebookEdit",
+     {"notebook_path": "/tmp/a.ipynb", "cell_type": "markdown", "new_source": SLOP}, 2),
+    ("notebook code cell is out of scope", "NotebookEdit",
+     {"notebook_path": "/tmp/a.ipynb", "cell_type": "code", "new_source": SLOP}, 0),
 ]
 
 
@@ -157,8 +179,18 @@ def run(payload: dict, env: dict | None = None) -> int:
 
 def main() -> int:
     failures = 0
-    for name, tool, ti, want in CASES:
-        got = run({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": ti})
+    # Run the cases concurrently. Each one is a real subprocess, which is the
+    # point (this tests the wrapper Claude Code invokes, not the detector
+    # underneath it), but each also loads the word-norm table from scratch. At 64
+    # cases that was 25 seconds serially, which is long enough that people stop
+    # running it. Results are printed in case order regardless of finish order.
+    workers = min(8, (os.cpu_count() or 4))
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(run, {"hook_event_name": "PreToolUse",
+                                     "tool_name": tool, "tool_input": ti})
+                   for _name, tool, ti, _want in CASES]
+        results = [f.result() for f in futures]
+    for (name, _tool, _ti, want), got in zip(CASES, results):
         ok = got == want
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name:<40} exit={got} want={want}")
