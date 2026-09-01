@@ -370,6 +370,7 @@ Do not compensate for a plain title by making the body flowery.
 | `data/simpler.tsv` | hard word to plain replacement, shown as suggestions |
 | `data/glossary.txt` | 444 terms that cost nothing |
 | `data/weights.json` | the fitted cost model and the gate threshold |
+| `prompts/` | paste-anywhere versions of this rule, for the chat app where none of the tooling exists |
 | `evals/` | the corpora, the metrics, the tuner and the rule tests |
 | `hooks/` | the guard wrapper, the detector holding the logic, the SessionStart health check, 32 hook tests, and the settings snippet |
 | `selftest.sh` | proves the gate works on this machine; safe to run any time |
