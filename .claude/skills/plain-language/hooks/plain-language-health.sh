@@ -32,8 +32,13 @@ good=$(cat <<'EOF'
 EOF
 )
 
-err=$(printf '%s' "$bad" | bash "$guard" 2>&1 >/dev/null); bad_rc=$?
-printf '%s' "$good" | bash "$guard" >/dev/null 2>&1; good_rc=$?
+# Force blocking mode for the two probes. A session running PLAINLANG_MODE=warn
+# is deliberately not blocking, so the must-refuse probe returns 0 and this check
+# used to announce "the gate is NOT working, it let inflated text through" at
+# every session start. The gate was working; the session had asked it not to
+# block. The probes ask a different question, so they set their own mode.
+err=$(printf '%s' "$bad" | PLAINLANG_MODE=block bash "$guard" 2>&1 >/dev/null); bad_rc=$?
+printf '%s' "$good" | PLAINLANG_MODE=block bash "$guard" >/dev/null 2>&1; good_rc=$?
 
 # Third check: is it fully loaded, or running degraded? A missing word-norm table
 # leaves the pattern rules working, so the two checks above would both pass while

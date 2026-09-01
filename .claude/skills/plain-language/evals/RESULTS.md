@@ -1264,3 +1264,121 @@ case is a real subprocess, which is the point, but each loads the word-norm tabl
 from scratch: 64 cases took 25 seconds serially, and `selftest.sh` around 70. The
 runner uses a thread pool of 8 and prints in case order regardless of finish order.
 The suite is 3.9 seconds now and `selftest.sh` is 11.
+
+## 23. The rest of the hook audit, and nine more fixes
+
+The hook audit's report arrived truncated and was resent in three parts. This is
+what the rest of it found, all reproduced before acting.
+
+### The one hole that turned a refusal into a pass
+
+The decision cache stores a marker file per decision and reads it back with
+`int(marker.read_text().strip() or 0)`. An empty marker becomes 0, and 0 is an
+allow. So a truncated marker replayed as a pass:
+
+```
+block once, marker holds "2"        -> exit 2
+truncate the marker, rerun within 10s -> exit 0
+```
+
+An empty marker is reachable rather than theoretical: `write_text` truncates
+before it writes, and the double wiring means two runs overlap by design. Only
+the two codes the cache ever writes count as a hit now, and the write goes through
+a temporary file and `os.replace`, which is atomic on one filesystem, so a reader
+sees the old marker or the new one and never an empty one.
+
+The auditor also checked the other direction properly and reported that it does
+not exist: allows are never written to a marker, so the ordinary cache cannot let
+bad text through. That was the question worth asking first, and the answer was
+the reassuring one.
+
+### A refusal replayed with a false explanation
+
+The cache key hashes the event JSON. For a payload whose text lives on disk, a
+`--body-file`, a `git commit -F`, or an artifact publish, the JSON is byte-identical
+before and after the file is fixed, so fixing the file and retrying inside ten
+seconds got the refusal back with the message "same text refused a moment ago".
+The text had changed. An agent can reasonably read that as the fix having failed
+and take a worse path.
+
+File-backed decisions are simply not cached now. A miss costs a rescore, and
+keying on file content would mean reading every named file just to build a key.
+
+### Six more surfaces that were never scored
+
+| Surface | Why it was missed |
+|---|---|
+| `slack_schedule_message` | the Slack verb list was send, draft, canvas, reply |
+| `MultiEdit` | named in the repository matcher, handled by no branch |
+| `kb__commit` | a commit message into the knowledge base repository |
+| a knowledge base page with no file extension | the branch required a prose suffix |
+| `Drive create_file` with no `contentMimeType` | the field is optional in the schema, so skipping on a non-text mime turned an omitted field into a bypass |
+| `Drive create_file` with `base64Content` | one line of encoding defeated the branch |
+
+Calendar invitations are covered too, `create_event` and `update_event`: the
+description and the summary are read by everyone invited and nothing else owns
+their wording, which is the same reasoning that puts an email body in scope.
+
+HubSpot blog posts and landing pages stay out. That is marketing copy, which the
+skill's own scope rules hand to a spec, and the fields are structured HTML the
+scorer would mis-charge. If that changes it should be a decision somebody makes,
+not a side effect of widening a matcher.
+
+### Two ways the gate lied about its own state
+
+`PLAINLANG_MODE=warn` means report without blocking. The health check did not know
+that, so it ran its must-refuse probe, got a pass, and announced at every session
+start that "the gate is NOT working, it let inflated text through". The gate was
+working; the session had asked it not to block. The probes force blocking mode now,
+because they are asking a different question than the session is.
+
+On the reply path, warn mode returned 0 **before** printing the findings, so it
+neither blocked nor reported, while the tool paths did report. Warn mode looked
+like off. It prints first now.
+
+The same path holds one more silence worth naming: after one reply has been sent
+back in a session, the next failing reply passes as a loop backstop. It now says
+so instead of passing silently, because a silent pass is indistinguishable from a
+clean one.
+
+### An unset `$HOME` disabled the whole gate
+
+`plain-language-guard.sh` runs under `set -u` and listed `"$HOME/.claude/skills/..."`
+among its candidate paths, so with `HOME` unset the wrapper aborted with an unbound
+variable and exit 1. Exit 1 is a non-blocking hook error, so the tool call went
+through unchecked. `${HOME:-}` fixes it, and the case is now a test.
+
+### The dead predecessor is gone
+
+`hooks/plain-language-guard.py`, the 428-line file that `plain-language-detect.py`
+replaced, is deleted. Both the audit and an independent check of every live
+reference confirmed nothing used it: both settings files invoke the `.sh` wrapper,
+and `evals/backtest_hook.py` had already been repointed. The only remaining
+mentions are in this file, as history.
+
+The audit also flagged the settings snippet as still wiring the dead file. It was
+not, by the time I read it, but its matchers had drifted from the deployed ones.
+All three, the snippet and both settings files, now carry the same two matchers.
+
+### One regression I introduced and caught
+
+Aligning the matchers, I replaced the user-level `Write|Edit|Bash|Artifact` with
+`Write|Edit|MultiEdit|NotebookEdit|Artifact` and dropped Bash coverage at the user
+level, which is where commit messages and pull request bodies are gated. Caught by
+running the coverage check again after the edit rather than before it. Both files
+now carry a separate `Bash` entry, and the check asserts every covered tool name
+and every read-only tool that must stay out.
+
+### Regression tests
+
+The hook suite goes from 64 cases to 76. Twelve new cases, three of them the
+out-of-scope direction: a Drive CSV, a Drive read, a knowledge base read. One
+pins the language fix from both sides by asserting a Norwegian paragraph still
+passes.
+
+The scorer metrics are untouched by any of this, and were re-measured to confirm
+it: 0.998 separation, 0.709 judge agreement, 3.4% false alarm on real repo prose,
+93.2% caught, all 43 rules with cases at precision 1.00.
+
+Across all three audits: 25 defects reproduced, 21 fixed, 146 tests in the two
+suites where there were 76 at the start of the day.

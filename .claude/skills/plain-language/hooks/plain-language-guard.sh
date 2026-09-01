@@ -31,7 +31,7 @@ for candidate in \
   "${PLAINLANG_HOME:-}" \
   "$here/.." \
   "${CLAUDE_PROJECT_DIR:-}/.claude/skills/plain-language" \
-  "$HOME/.claude/skills/plain-language"
+  "${HOME:-}/.claude/skills/plain-language"
 do
   [ -n "$candidate" ] || continue
   if [ -f "$candidate/tool/src/plainlang/cli.py" ]; then
