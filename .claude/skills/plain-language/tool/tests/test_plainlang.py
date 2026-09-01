@@ -478,3 +478,27 @@ def test_title_case_heading_reads_capitals_not_word_count(heading, fires):
     from plainlang.rules import ALL_RULES
     rule = next(r for r in ALL_RULES if r.id == "title-case-heading")
     assert bool(rule.pattern.search(heading)) is fires
+
+
+@pytest.mark.parametrize("text,fires,why", [
+    ("The seek path rebuilds the index — that is why it is slow.", True, "em dash as punctuation"),
+    ("The seek path rebuilds the index – that is why it is slow.", True, "en dash as punctuation"),
+    ("Deteksjon mislyktes – platesignal er i konflikt.", True, "Norwegian pause tankestrek"),
+    ("Use pages 3 – 5 for the figures.", True, "spaced dash between digits"),
+    ("The Oslo–Bergen route takes seven hours.", False, "paired name"),
+    ("The window is 2024–2026 for this plan.", False, "date range"),
+    ("The May–June window is when it lands.", False, "month range"),
+    ("Growth was –5 % in the quarter.", False, "minus sign on a number"),
+    ("kost–nytte-analyse viser det samme.", False, "Norwegian paired compound"),
+])
+def test_en_dash_is_charged_only_as_punctuation(text, fires, why):
+    """The en dash has mechanical jobs a character-level ban would corrupt.
+
+    A range, a paired name and a minus sign are values and compounds, not writing.
+    The minus-sign case matters most: charging it pushes a rewrite toward changing
+    a number, which contradicts the rule that every number survives as written.
+    The em dash stays charged everywhere.
+    """
+    from plainlang.rules import ALL_RULES
+    rule = next(r for r in ALL_RULES if r.id == "em-dash")
+    assert bool(rule.pattern.search(text)) is fires, why
