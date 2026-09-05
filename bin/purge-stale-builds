@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# purge-stale-builds — delete regenerable MotionCatalyst BUILD output that has
+# not been written to recently. Scope is hard-coded to exactly
+#   <checkout>/src/motioncatalyst/BUILD[_*]
+# for checkouts under /c/work/desktop, /c/work/scratch-lanes, and directly
+# under /c/work (scope widened 2026-08-14 with Oystein's approval);
+# the tree itself (source, .git, settings) is never touched.
+#
+# Usage: purge-stale-builds [AGE_HOURS] [--dry-run]
+#   AGE_HOURS  a BUILD dir is purged only if NO file inside changed within
+#              this window (default 48)
+set -u
+
+ROOT=/c/work/desktop
+AGE_HOURS=48
+DRY=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY=1 ;;
+    ''|*[!0-9]*) echo "unknown arg: $arg" >&2; exit 2 ;;
+    *) AGE_HOURS=$arg ;;
+  esac
+done
+
+freed=0
+for b in "$ROOT"/*/src/motioncatalyst/BUILD "$ROOT"/*/src/motioncatalyst/BUILD_* \
+         /c/work/scratch-lanes/*/src/motioncatalyst/BUILD /c/work/scratch-lanes/*/src/motioncatalyst/BUILD_* \
+         /c/work/*/src/motioncatalyst/BUILD /c/work/*/src/motioncatalyst/BUILD_*; do
+  [ -d "$b" ] || continue
+  if find "$b" -type f -newermt "-${AGE_HOURS} hours" -print -quit 2>/dev/null | grep -q .; then
+    echo "SKIP  (built <${AGE_HOURS}h ago)  $b"
+    continue
+  fi
+  mb=$(du -sm "$b" 2>/dev/null | cut -f1)
+  if [ "$DRY" = 1 ]; then
+    echo "WOULD PURGE  ${mb:-?} MB  $b"
+    freed=$((freed + ${mb:-0}))
+    continue
+  fi
+  if rm -rf -- "$b" 2>/dev/null; then
+    echo "PURGED  ${mb:-?} MB  $b"
+    freed=$((freed + ${mb:-0}))
+  else
+    echo "PARTIAL (locked files?)  $b"
+  fi
+done
+echo "TOTAL: ~$((freed / 1024)) GB $([ "$DRY" = 1 ] && echo would be freed || echo freed)"
