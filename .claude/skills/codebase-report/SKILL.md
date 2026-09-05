@@ -161,7 +161,7 @@ Auto-generate report stub on new project:
 |----------------|-------------|
 | codebase-archaeology | Producing this report to persist findings |
 | multi-pass-bug-hunting | Adding "Known Issues" section |
-| cross-project-pattern-extraction | Noting patterns in "Notes & Gotchas" |
+| codebase-pattern-extraction | Noting patterns in "Notes & Gotchas" |
 
 ---
 

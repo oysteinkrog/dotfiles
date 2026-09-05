@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# emit-agents-md-section.sh — generate an AGENTS.md § Doctor section.
+#
+# Other agents in the user's swarm need to know what `<tool> doctor` does
+# and doesn't do. This script reads `<tool> doctor capabilities --json`
+# and emits a markdown section suitable for appending to the project's
+# AGENTS.md. Phase 8 integration-wirer calls this to update the target
+# repo's AGENTS.md.
+#
+# Usage: emit-agents-md-section.sh <tool> [<tool-binary-path>]
+#
+# Args:
+#   <tool>              binary name (also the section heading anchor)
+#   <tool-binary-path>  optional override; default: $(command -v <tool>)
+#                       or ./target/release/<tool> or ./target/debug/<tool>
+#
+# Output: markdown section to stdout. Caller appends to AGENTS.md.
+# Exit: 0 success, 64 usage, 66 capabilities query failed.
+
+set -euo pipefail
+
+usage() {
+    echo "usage: emit-agents-md-section.sh <tool> [<tool-binary-path>]" >&2
+}
+
+tool="${1:-}"
+[ -n "$tool" ] || { usage; exit 64; }
+
+bin_path="${2:-}"
+if [ -z "$bin_path" ]; then
+    if command -v "$tool" >/dev/null 2>&1; then
+        bin_path="$tool"
+    elif [ -x "./target/release/$tool" ]; then
+        bin_path="./target/release/$tool"
+    elif [ -x "./target/debug/$tool" ]; then
+        bin_path="./target/debug/$tool"
+    else
+        echo "emit-agents-md-section: $tool not found (PATH or target/)" >&2
+        exit 66
+    fi
+fi
+
+caps=$("$bin_path" doctor capabilities --json 2>/dev/null) \
+    || { echo "emit-agents-md-section: '$bin_path doctor capabilities --json' failed" >&2; exit 66; }
+
+# Validate JSON.
+echo "$caps" | jq empty 2>/dev/null \
+    || { echo "emit-agents-md-section: capabilities output is not valid JSON" >&2; exit 66; }
+
+# Build the section. We read out: subcommands, exit codes, env vars,
+# manual_remediations, allowed_ops. Each becomes a sub-section.
+cat <<EOF
+## $tool doctor — Self-Healing Diagnostics
+
+\`$tool\` ships with a \`$tool doctor\` subcommand built per the
+[world-class-doctor-mode-for-cli-tools](https://github.com/Dicklesworthstone/jeffreys-skills-md)
+skill. Other agents working in this repo can invoke it for read-only
+diagnosis or (with explicit consent) auto-repair.
+
+### Quick reference
+
+\`\`\`bash
+$tool doctor                # diagnose (read-only); exit 0 healthy, 1 findings
+$tool doctor --fix          # apply fixers; backs up before every mutation
+$tool doctor --json         # JSON output for agent parsing
+$tool doctor health         # one-line liveness check (< 200ms target)
+$tool doctor capabilities --json   # machine-readable contract
+$tool doctor robot-docs     # full agent handbook (markdown)
+$tool doctor undo <run-id>  # restore from a prior run's backups
+$tool doctor diff           # what --fix WOULD change (read-only)
+\`\`\`
+
+### What this doctor will NEVER do
+
+- Delete files during diagnose/fix/undo; fixers move unsafe files to quarantine via \`Op::Rename\`. \`gc\` is the only retention-cleanup and is gated on \`--yes --before <date>\`.
+- Issue any \`rm\` with \`-rf\` flags. (Recursive deletion is forbidden; quarantine via Op::Rename is the only allowed deletion-equivalent.)
+- Probe the network without \`--online\`.
+- Mutate when another instance holds the lock.
+- Write outside its declared \`write_scopes\`.
+
+### Exit codes
+
+EOF
+
+echo "$caps" | jq -r '.exit_codes // {} | to_entries[] | "- \`\(.key)\` — \(.value)"'
+
+echo ""
+echo "### Detectors ($(echo "$caps" | jq '.detectors | length' 2>/dev/null || echo 0) total)"
+echo ""
+echo "$caps" | jq -r '
+    .detectors // [] | .[]
+    | "- **\(.id)** (\(.severity), \(.subsystem)): \(.description // "")"
+' 2>/dev/null | head -20
+
+n_detectors=$(echo "$caps" | jq '.detectors | length' 2>/dev/null || echo 0)
+if [ "$n_detectors" -gt 20 ]; then
+    echo ""
+    echo "_(... $((n_detectors - 20)) more; run \`$tool doctor capabilities --json\` for the full list.)_"
+fi
+
+echo ""
+echo "### Fixers ($(echo "$caps" | jq '.fixers | length' 2>/dev/null || echo 0) total, all reversible via \`undo\`)"
+echo ""
+echo "$caps" | jq -r '
+    .fixers // [] | .[]
+    | "- **\(.id)**: writes_to=\(.writes_to | tostring), ops=\(.ops | tostring)"
+' 2>/dev/null | head -20
+
+# Manual remediations.
+n_manual=$(echo "$caps" | jq '.manual_remediations | length' 2>/dev/null || echo 0)
+if [ "$n_manual" -gt 0 ]; then
+    echo ""
+    echo "### Manual remediations (no auto-fix)"
+    echo ""
+    echo "$caps" | jq -r '
+        .manual_remediations // [] | .[]
+        | "- **\(.id)**: \(.instruction)\n  - _Reason: \(.reason)_"
+    '
+fi
+
+cat <<EOF
+
+### When to invoke from another agent
+
+- **Before a commit/PR**: \`$tool doctor --quick\`. Fast (<200ms target).
+- **Before a release**: \`$tool doctor --json\` and inspect output.
+- **After a crash / unexpected exit**: \`$tool doctor\` then (if findings) \`$tool doctor --fix\`.
+- **Never invoke \`--fix\` without first running plain \`$tool doctor\`** to see what would change.
+
+### Auto-generated note
+
+This section was generated by \`scripts/emit-agents-md-section.sh\` from
+\`$tool doctor capabilities --json\`. To refresh, re-run the script.
+EOF

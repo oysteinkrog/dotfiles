@@ -1,6 +1,6 @@
 # Incident Narratives
 
-Real concurrency incidents across projects in this repo. Each narrative: what broke, what we tried, what we learned. Sourced from CASS mining of past agent sessions (see [`CASS_SEARCHES_RELATED_TO_CONCURRENCY.md`](../../../CASS_SEARCHES_RELATED_TO_CONCURRENCY.md) at the repo root).
+Real concurrency incidents across projects in this repo. Each narrative: what broke, what we tried, what we learned. Sourced from CASS mining of past agent sessions (`CASS_SEARCHES_RELATED_TO_CONCURRENCY.md` — private corpus, not bundled with this skill).
 
 ---
 

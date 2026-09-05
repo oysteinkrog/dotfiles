@@ -1,0 +1,310 @@
+schema_version: "2.0"
+name: gauntlet-phase-14-fresh-eyes
+description: >-
+  Phase 14 fresh-eyes review. Dispatches three reviewer panes (each running
+  one of the three verbatim prompts) in parallel per round. For T3+ runs,
+  additionally dispatches a triangulator (multi-model: Codex / Gemini /
+  Grok / Claude) and a red-team-attacker pane. After each round, a fixer pane
+  serially applies findings. Loop until two consecutive rounds produce zero
+  NEW findings from all reviewers. Then run ubs + clippy + fmt + test + miri.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name
+    required: true
+    type: string
+  tier:
+    description: T1|T2|T3|T4|T5 — gates triangulation + red-team
+    required: true
+    type: string
+  max_rounds:
+    description: Hard ceiling on review rounds
+    default: 6
+    type: number
+
+settings:
+  timeout: 48h
+  on_error: continue
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail, desktop]
+
+steps:
+  - id: precheck
+    name: Verify Phase 13 (beads handoff) is complete
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify:
+        ${vars.workspace_path}/.gauntlet/phase13_complete.flag exists
+        bv --robot-insights | jq '(.Cycles // []) | length == 0'
+        br dep cycles --json | jq '(.cycles // []) | length == 0'
+
+      If any check fails, exit non-zero. Otherwise reply
+      "Phase 14 review ready".
+    wait: completion
+    timeout: 10m
+    on_error: fail
+
+  - id: review_rounds
+    name: Loop review rounds until two consecutive clean rounds
+    depends_on: [precheck]
+    loop:
+      while: "${review.clean_streak < 2 && review.round < vars.max_rounds}"
+      as: review_iter
+      max_iterations: 7
+      delay: 3m
+      collect: round_review_results
+      steps:
+        - id: start_review_round
+          agent: claude
+          pane: 2
+          prompt: |
+            Compute next review round N (start at 1; read prior
+            ${vars.workspace_path}/phase14_review_status.json if it exists).
+
+            Mkdir ${vars.workspace_path}/phase14_round_${N}/.
+            Acknowledge: "Phase 14 review round ${N} starting".
+          wait: completion
+          timeout: 5m
+          output_var: review_round_init
+
+        - id: three_reviewers
+          depends_on: [start_review_round]
+          parallel:
+            - id: reviewer_a
+              agent: claude
+              route: least-loaded
+              prompt: |
+                You are fresh-eyes-reviewer-a for round ${ROUND}.
+
+                Read the marching order template:
+                  ~/.claude/skills/running-the-gauntlet-on-your-rust-port/assets/ntm-marching-orders/MO-fresh-eyes-pass.md
+
+                Substitute:
+                  PANE_N            = your pane index
+                  WORKSPACE_PATH    = ${vars.workspace_path}
+                  PORT_PATH         = ${vars.port_path}
+                  ROLE              = fresh-eyes-reviewer-a
+                  MODEL             = claude-opus
+                  COORDINATION_MODE = agent-mail
+                  SESSION_ID        = ${vars.run_id}
+                  PARAM_PROMPT_VARIANT = a
+                  THREAD_ID         = gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-a
+                  OUTPUT_PATH       = ${vars.workspace_path}/phase14_round_${ROUND}/review_a.md
+                  ROUND             = ${ROUND}
+
+                The verbatim prompt for variant=a comes from
+                references/methodology/FRESH-EYES-PROMPTS.md (do NOT improvise).
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-a` when review_a.md is committed.
+              wait: completion
+              timeout: 4h
+              on_error: retry
+              retry_count: 1
+
+            - id: reviewer_b
+              agent: claude
+              route: least-loaded
+              prompt: |
+                You are fresh-eyes-reviewer-b for round ${ROUND}.
+
+                Read MO-fresh-eyes-pass.md and substitute as for reviewer_a,
+                EXCEPT:
+                  ROLE                  = fresh-eyes-reviewer-b
+                  PARAM_PROMPT_VARIANT  = b   (random-walk + AGENTS.md compliance)
+                  THREAD_ID             = gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-b
+                  OUTPUT_PATH           = ${vars.workspace_path}/phase14_round_${ROUND}/review_b.md
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-b`.
+              wait: completion
+              timeout: 4h
+              on_error: retry
+              retry_count: 1
+
+            - id: reviewer_c
+              agent: codex
+              route: least-loaded
+              prompt: |
+                You are fresh-eyes-reviewer-c for round ${ROUND}.
+
+                Read MO-fresh-eyes-pass.md and substitute as for reviewer_a,
+                EXCEPT:
+                  ROLE                  = fresh-eyes-reviewer-c
+                  MODEL                 = codex-gpt-5
+                  PARAM_PROMPT_VARIANT  = c   (fellow-agent code review)
+                  THREAD_ID             = gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-c
+                  OUTPUT_PATH           = ${vars.workspace_path}/phase14_round_${ROUND}/review_c.md
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-c`.
+              wait: completion
+              timeout: 4h
+              on_error: retry
+              retry_count: 1
+
+        - id: triangulator
+          depends_on: [start_review_round]
+          when: "${vars.tier == 'T3' || vars.tier == 'T4' || vars.tier == 'T5'}"
+          agent: gemini
+          route: least-loaded
+          prompt: |
+            You are the multi-model triangulator for round ${ROUND}. Per
+            references/methodology/TRIANGULATION.md, dispatch the same
+            review prompt to Codex / Gemini / Grok / Claude lenses
+            (correctness / cross-pillar-coupling / agent-honesty-bias).
+
+            Aggregate into ${vars.workspace_path}/phase14_round_${ROUND}/triangulation.md
+            with a CONSENSUS section per the consensus-rule matrix.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-triangulator`.
+          wait: completion
+          timeout: 3h
+          on_error: continue
+
+        - id: red_team_attacker
+          depends_on: [start_review_round]
+          when: "${vars.tier == 'T3' || vars.tier == 'T4' || vars.tier == 'T5'}"
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are the red-team-attacker for round ${ROUND}. Holistic
+            attacker across the 6 lenses (agent-honesty-bias,
+            cross-pillar-coupling, oracle-self-comparison, ratchet-bypass,
+            ledger-poisoning, harness-determinism-break).
+
+            For each lens, attempt to construct an adversarial input or
+            sequence that the gauntlet's gates would let through. Write
+            findings to ${vars.workspace_path}/phase14_round_${ROUND}/red_team.md
+            with severity tags [CRITICAL]/[HIGH]/[MEDIUM]/[LOW].
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-red-team`.
+          wait: completion
+          timeout: 3h
+          on_error: continue
+
+        - id: wait_review_acks
+          depends_on: [three_reviewers, triangulator, red_team_attacker]
+          agent: claude
+          pane: 2
+          prompt: |
+            Verify acks for at least the three core reviewers (a, b, c) on
+            `gauntlet-${vars.run_id}-phase14-round-${ROUND}-reviewer-*`. The
+            triangulator and red-team are best-effort (T3+ only). If any
+            core reviewer is missing, post CRITICAL and exit non-zero.
+
+            Acknowledge: "Round ${ROUND} reviewer acks present".
+          wait: completion
+          timeout: 30m
+          on_error: fail
+
+        - id: apply_fixes
+          depends_on: [wait_review_acks]
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are the fixer for round ${ROUND}. Read every
+            ${vars.workspace_path}/phase14_round_${ROUND}/review_{a,b,c}.md
+            (and triangulation.md + red_team.md if present).
+
+            Fixes run SERIALLY because they can interact. For each finding:
+              1. Classify as: NEW | DUP_OF_PRIOR | FIX_APPLIED | DISPUTED.
+              2. If NEW: apply the fix or file a remediation bead (br create).
+                 NEVER skip "pre-existing" or "not mine" errors — fix all
+                 errors regardless of source.
+              3. Commit incrementally with messages naming the finding.
+
+            Write ${vars.workspace_path}/phase14_round_${ROUND}/fixes.md and
+            ${vars.workspace_path}/phase14_round_${ROUND}/findings_tally.json
+            with counts {NEW, DUP_OF_PRIOR, FIX_APPLIED, DISPUTED}.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase14-round-${ROUND}-fixer`.
+          wait: completion
+          timeout: 6h
+          on_error: retry
+          retry_count: 1
+
+        - id: tally_round
+          depends_on: [apply_fixes]
+          agent: claude
+          pane: 2
+          prompt: |
+            Read ${vars.workspace_path}/phase14_round_${ROUND}/findings_tally.json.
+            Compare with the prior round (read
+            ${vars.workspace_path}/phase14_review_status.json if present;
+            initialize it with {clean_streak: 0, round: 0} if not).
+
+            A "clean" round = NEW count == 0 across all reviewers AND no
+            CRITICAL severity in red_team.md.
+
+            Update phase14_review_status.json:
+              round = ${ROUND}
+              clean_streak = (NEW == 0) ? prior.clean_streak + 1 : 0
+
+            Set output var `review` = the JSON object so the loop predicate
+            can read it.
+          wait: completion
+          timeout: 10m
+          output_var: review
+
+  - id: tool_pass
+    name: ubs + clippy + fmt + test + miri after two consecutive clean rounds
+    depends_on: [review_rounds]
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify review.clean_streak >= 2. Otherwise exit non-zero (loop
+      terminated on max_rounds, not convergence).
+
+      Run the tool pass:
+        cd ${vars.port_path} && \
+          cargo check --all-targets > ${vars.workspace_path}/phase14_check.log 2>&1 && \
+          cargo clippy --all-targets -- -D warnings > ${vars.workspace_path}/phase14_clippy.log 2>&1 && \
+          cargo clippy --all-targets -- -D warnings -W clippy::pedantic > ${vars.workspace_path}/phase14_clippy_pedantic.log 2>&1 && \
+          cargo fmt --check && \
+          cargo test --workspace > ${vars.workspace_path}/phase14_test.log 2>&1 && \
+          cargo +nightly miri test -p <port>-harness > ${vars.workspace_path}/phase14_miri.log 2>&1
+
+      All must exit 0. Fix everything regardless of source (per the
+      "Fix all errors" rule). Pedantic clippy lints may be `#[allow]`'d
+      with rationale comments but never bulk-allowed.
+
+      Run UBS:
+        /ubs (or the operator's ubs invocation) > ${vars.workspace_path}/phase14_ubs_report.md
+
+      Write ${vars.workspace_path}/phase14_ubs_report.md summarizing zero
+      unresolved UBS findings.
+
+      Acknowledge: "Phase 14 tool pass complete".
+    wait: completion
+    timeout: 4h
+    on_error: fail
+
+  - id: close_phase
+    name: Commit and emit phase-complete signal
+    depends_on: [tool_pass]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.workspace_path} && \
+          git add phase14_*.md phase14_*.log phase14_*.json && \
+          git commit -m "phase14: fresh-eyes converged after ${review.round} rounds; tool pass green" && \
+          touch .gauntlet/phase14_complete.flag
+
+      Acknowledge: "Phase 14 FRESH-EYES complete — proceed to Phase 15".
+    wait: completion
+    timeout: 10m
+    on_error: fail

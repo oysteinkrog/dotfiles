@@ -178,10 +178,10 @@ Use ultrathink.
 
 | Model | Command/Config |
 |-------|----------------|
-| Claude Code + Opus 4.5 | Add "Use ultrathink" to prompt |
-| Codex + GPT 5.2 | Set reasoning effort to "High" or "Extra-High" |
-| Claude Code + Sonnet 4 | Good for focused single-file migrations |
-| Codex + GPT 5 | Good for straightforward migrations |
+| Claude Code + Opus 4.7 | Add "Use ultrathink" to prompt |
+| Codex + GPT 5.5 | Set reasoning effort to "High" or "Extra-High" |
+| Claude Code + Sonnet 4.6 | Good for focused single-file migrations |
+| Codex + GPT 5.5 | Good for straightforward migrations |
 
 ---
 

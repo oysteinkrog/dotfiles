@@ -37,7 +37,7 @@ Anchors: [Citation requirements, e.g., "prefer §n; otherwise mark [inference]"]
 
 **Transcript Anchors**: §[n] (context), §[m] (example), §[p] (warning)
 
-**Sources**: [Which model distillation(s) extracted this—e.g., "GPT-5.2, Opus 4.5"]
+**Sources**: [Which model distillation(s) extracted this—e.g., "GPT-5.5, Opus 4.7"]
 
 ---
 
@@ -116,4 +116,4 @@ Anchors: prefer §n; mark [inference] when extrapolating.
 
 **Transcript Anchors**: §69 (elimination logic), §103 (example), §147 (potency check)
 
-**Sources**: GPT-5.2, Opus 4.5, Gemini 3 (3/3 consensus)
+**Sources**: GPT-5.5, Opus 4.7, Gemini 3.1 Pro (3/3 consensus)

@@ -68,7 +68,7 @@ def find_kernel(specs_path: Path) -> Optional[Tuple[Path, str, str, str]]:
     Returns:
         Tuple of (file_path, full_content, kernel_content, version) or None
     """
-    candidates = [specs_path] if specs_path.is_file() else list(specs_path.glob("**/*.md"))
+    candidates = [specs_path] if specs_path.is_file() else sorted(specs_path.glob("**/*.md"))
     for spec_file in candidates:
         result = find_kernel_in_file(spec_file)
         if result:
@@ -163,6 +163,7 @@ def main():
 
     if args.output:
         output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(full_content)
         if not args.quiet:
             print(f"\nKernel written to: {output_path}")

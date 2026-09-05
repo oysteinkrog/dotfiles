@@ -3,6 +3,7 @@ set -euo pipefail
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 assets_dir="$skill_dir/assets"
+scripts_dir="$skill_dir/scripts"
 
 target_dir="."
 force="false"
@@ -23,6 +24,7 @@ for arg in "$@"; do
 done
 
 mkdir -p "$target_dir"
+target_dir="$(cd "$target_dir" && pwd)"
 
 copy_if_needed() {
   local src="$1"
@@ -57,9 +59,9 @@ Bootstrapped changelog workspace in: $target_dir
 
 Suggested next steps:
   1. Read AGENTS.md and README.md
-  2. Run: scripts/build-version-spine.py --repo "$target_dir"
-  3. Run: scripts/extract-tracker-workstreams.py --repo "$target_dir" --format markdown
+  2. Run: "$scripts_dir/build-version-spine.py" --repo "$target_dir"
+  3. Run: "$scripts_dir/extract-tracker-workstreams.py" --repo "$target_dir" --format markdown
   4. Start chunked research and update CHANGELOG.md after each chunk
-  5. Optionally cluster commits with: scripts/cluster-history.py --repo "$target_dir"
-  6. Audit with: scripts/validate-changelog-md.py "$target_dir/CHANGELOG.md"
+  5. Optionally cluster commits with: "$scripts_dir/cluster-history.py" --repo "$target_dir"
+  6. Audit with: "$scripts_dir/validate-changelog-md.py" "$target_dir/CHANGELOG.md"
 EOF

@@ -360,11 +360,54 @@ Questions to answer:
 
 ---
 
+## Automated Integrity Verification via dsr
+
+Some issues are symptoms of automated drift rather than code bugs. Before investigating manually, check automated integrity first.
+
+### ACFS Manifest Drift (Most Common)
+
+The #1 recurring issue across all repos. The `curl | bash` installer breaks when `manifest_index.sh` has a stale SHA256.
+
+```bash
+# Quick check (exit 0 = ok, exit 1 = drift)
+/data/projects/agentic_coding_flywheel_setup/scripts/check-manifest-drift.sh --json
+
+# Auto-fix if drifted
+/data/projects/agentic_coding_flywheel_setup/scripts/check-manifest-drift.sh --fix
+
+# Check if systemd timer is running
+systemctl --user status acfs-manifest-drift.timer
+journalctl --user -u acfs-manifest-drift.service --since "24h ago"
+
+# dsr quality check (validates all registered checks for ACFS)
+dsr quality --tool agentic_coding_flywheel_setup
+```
+
+**Root cause pattern:** Any agent or human editing `acfs.manifest.yaml` without running `cd packages/manifest && bun run generate` afterwards causes drift. The systemd timer catches and fixes this automatically every 2 hours.
+
+**If an issue reports "install fails" or "bootstrap mismatch":**
+1. Run the drift check first
+2. If drift was present AND the timer already fixed it, close with: "Fixed automatically by manifest integrity monitor"
+3. If timer isn't running, fix manually and investigate why the timer stopped
+
+### General dsr Quality Gates
+
+```bash
+# Run all quality checks for any registered tool
+dsr quality --tool <tool_name>
+
+# List registered tools and their checks
+cat ~/.config/dsr/repos.yaml
+```
+
+---
+
 ## Verification Checklist
 
 Before taking action on any issue:
 
 - [ ] Read the full issue including comments
+- [ ] **Checked automated integrity** (manifest drift, dsr quality gates)
 - [ ] Searched commits since issue date
 - [ ] Found relevant code in codebase
 - [ ] Understood intended behavior (docs, --help)

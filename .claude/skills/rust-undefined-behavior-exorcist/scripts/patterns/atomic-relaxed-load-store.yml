@@ -1,0 +1,12 @@
+id: rust-ub-atomic-relaxed-suspect
+language: rust
+severity: warning
+message: >-
+  Ordering::Relaxed does not establish happens-before. If this load/store is part
+  of a synchronization protocol, audit whether Acquire/Release is needed.
+rule:
+  any:
+    - pattern: '$ATOMIC.load(std::sync::atomic::Ordering::Relaxed)'
+    - pattern: '$ATOMIC.load(Ordering::Relaxed)'
+    - pattern: '$ATOMIC.store($VAL, Ordering::Relaxed)'
+    - pattern: '$ATOMIC.store($VAL, std::sync::atomic::Ordering::Relaxed)'

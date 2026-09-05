@@ -28,4 +28,4 @@
 - "Golden file testing" → Activate if golden files come from a reference implementation; otherwise /testing-golden-artifacts
 - "Differential testing" → Activate (primary pattern for conformance)
 - "Round-trip" → Activate if testing format interop; use /testing-metamorphic if testing internal consistency only
-- "Porting to Rust" → Activate alongside /porting-to-rust (conformance is PART of porting)
+- "Porting a library to a different language" → Activate (conformance harness is the differential gate against the reference implementation)

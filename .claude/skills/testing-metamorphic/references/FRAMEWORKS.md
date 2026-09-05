@@ -8,8 +8,7 @@
 2. [Python: Hypothesis + GeMTest](#python-hypothesis--gemtest)
 3. [TypeScript: fast-check](#typescript-fast-check)
 4. [Go: rapid](#go-rapid)
-5. [Java/Kotlin: jqwik](#javakotlin-jqwik)
-6. [Framework Comparison](#framework-comparison)
+5. [Framework Comparison](#framework-comparison)
 
 ---
 

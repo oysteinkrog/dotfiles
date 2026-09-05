@@ -1,0 +1,13 @@
+id: rust-ub-alignment-repr-packed-field-ref
+language: rust
+severity: error
+message: >-
+  Taking a reference to a #[repr(packed)] field is UB when the field is not
+  naturally aligned. Use addr_of!/addr_of_mut! and copy by value.
+rule:
+  any:
+    - pattern: '&$EXPR.$FIELD'
+    - pattern: '&mut $EXPR.$FIELD'
+note: >-
+  Static check; sweep with rustc -W unaligned_references for confirmation.
+  Pattern is intentionally broad — the rule is a starting filter, not a verdict.

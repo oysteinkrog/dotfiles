@@ -252,7 +252,7 @@ your-archive/
     "chat_id": "grok-chat-789",
     "sender": "user",
     "grok_mode": "regular",
-    "model_version": "grok-2"
+    "model_version": "grok-4"
   }
 }
 ```

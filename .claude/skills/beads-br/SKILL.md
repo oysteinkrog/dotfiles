@@ -1,8 +1,8 @@
 ---
 name: beads-br
 description: >-
-  Beads Rust issue tracker (br). Use when tracking tasks, managing dependencies,
-  finding ready work, or syncing issues to git via JSONL.
+  Local-first issue tracker (beads_rust) for AI agents. Use when tracking tasks,
+  managing dependencies, finding ready work, or syncing issues to git via JSONL.
 ---
 
 <!-- TOC: Critical Rules | Quick Workflow | Essential Commands | bv Integration | References -->
@@ -27,21 +27,17 @@ description: >-
 # 1. Find work
 br ready --json
 
-# NOTE (br 0.1.8): `br ready` is currently broken in some workspaces due to an
-# internal SQL bug. Workaround: use `bv --recipe actionable --robot-plan` (or
-# `bv --robot-triage`) + `br list --json`.
-
 # 2. Claim it
-br update <id> --status in_progress
+br update bd-abc123 --status in_progress
 
 # 3. Do work...
 
 # 4. Complete
-br close <id> --reason "Implemented X"
+br close bd-abc123 --reason "Implemented X"
 
 # 5. Sync to git (EXPLICIT!)
 br sync --flush-only
-git add .beads/ && git commit -m "feat: X (<id>)"
+git add .beads/ && git commit -m "feat: X (bd-abc123)"
 ```
 
 ## Essential Commands
@@ -70,13 +66,9 @@ br dep tree <id>                     # Visualize dependencies
 br sync --flush-only                 # DB → JSONL (before git commit)
 br sync --import-only                # JSONL → DB (after git pull)
 
-# Skills sync status (canonical vs global skills)
-br skills sync-status --json         # JSON summary of drift
-br skills sync-status --verbose      # Per-skill details
-
 # System
 br doctor                            # Health check
-br config list                       # Show configuration
+br config --list                     # Show configuration
 ```
 
 ## Priority Scale
@@ -106,10 +98,10 @@ bv --robot-insights | jq '.Cycles'   # Check graph health
 Use bead ID as thread_id for multi-agent coordination:
 
 ```python
-file_reservation_paths(..., reason="br-123")
-send_message(..., thread_id="br-123", subject="[br-123] Starting...")
+file_reservation_paths(..., reason="bd-123")
+send_message(..., thread_id="bd-123", subject="[bd-123] Starting...")
 # Work...
-br close br-123 --reason "Completed"
+br close bd-123 --reason "Completed"
 release_file_reservations(...)
 ```
 
@@ -145,13 +137,13 @@ git status  # Verify clean
 ```bash
 br doctor                    # Full diagnostics
 br dep cycles                # Must be empty
-br config list               # Check settings
+br config --list             # Check settings
 ```
 
 **Worktree error** (`'main' is already checked out`):
 ```bash
 git branch beads-sync main
-br config set sync-branch beads-sync
+br config set sync.branch beads-sync
 ```
 
 ---

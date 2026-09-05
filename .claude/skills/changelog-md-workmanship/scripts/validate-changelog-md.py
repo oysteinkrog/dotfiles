@@ -18,6 +18,8 @@ GENERIC_PHRASES = [
     "several updates",
 ]
 
+GIT_COMMAND_TIMEOUT_SECONDS = 10
+
 
 class Report:
     def __init__(self) -> None:
@@ -38,8 +40,9 @@ def in_git_repo(path: Path) -> bool:
             cwd=path.parent,
             capture_output=True,
             text=True,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0 and result.stdout.strip() == "true"
 
@@ -51,8 +54,9 @@ def git_tags(path: Path) -> list[str]:
             cwd=path.parent,
             capture_output=True,
             text=True,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0:
         return []

@@ -21,24 +21,24 @@ Phase 3 touches real admin-plane secrets. Handle with care.
 
 | Credential | Stored in | Rotation | Rotation trigger |
 |------------|-----------|----------|------------------|
-| Mattermost admin PAT | `config.env.MATTERMOST_ADMIN_TOKEN` + password manager | 90 days | quarterly `rotate-credentials` |
-| `mmuser` Postgres password | `config.env.POSTGRES_DSN` + password manager | 180 days | twice-yearly `rotate-credentials` |
-| SSH private key | `~/.ssh/id_ed25519` + Keychain / password manager | 365 days or on operator change | annual `rotate-credentials` |
-| `OFFSITE_REMOTE` token | rclone config + password manager | 365 days | annual `rotate-credentials` |
-| Cloudflare API token | rclone / password manager | 365 days | annual `rotate-credentials` |
-| Postmark server token | Phase 2 config.env + password manager | 365 days | annual `rotate-credentials` |
+| Mattermost admin PAT | `config.env.MATTERMOST_ADMIN_TOKEN` + password manager | 90 days | quarterly `rotate-tokens` |
+| `mmuser` Postgres password | `config.env.POSTGRES_DSN` + password manager | 180 days | twice-yearly `rotate-tokens` |
+| SSH private key | `~/.ssh/id_ed25519` + Keychain / password manager | 365 days or on operator change | annual `rotate-tokens` |
+| `OFFSITE_REMOTE` token | rclone config + password manager | 365 days | annual `rotate-tokens` |
+| Cloudflare API token | rclone / password manager | 365 days | annual `rotate-tokens` |
+| Postmark server token | Phase 2 config.env + password manager | 365 days | annual `rotate-tokens` |
 | Mattermost admin password | password manager (almost never used; PAT preferred) | 365 days | annual |
 
 ## Rotation procedure (per credential, high-level)
 
-The agent-driven `rotate-credentials` stage wraps this; the manual flow is:
+The agent-driven `rotate-tokens` stage wraps this; the manual flow is:
 
 1. **Create new credential.** Generate via the provider UI (Mattermost
    System Console for PAT, Cloudflare dashboard for API token, `ssh-keygen`
    for a fresh SSH keypair).
 2. **Test new credential independently.** For PAT: `curl -H "Authorization:
    Bearer $NEW_TOKEN" "$MATTERMOST_URL/api/v4/users/me"` returns 200.
-3. **Update `config.env`.** The `rotate-credentials` stage has a
+3. **Update `config.env`.** The `rotate-tokens` stage has a
    `--update-config` flag that does this via an atomic rewrite (old file
    backed up with `.bak.<ts>` suffix).
 4. **Run `doctor.sh --require-remote --require-mcp`.** All green before
@@ -48,7 +48,7 @@ The agent-driven `rotate-credentials` stage wraps this; the manual flow is:
 6. **Verify old credential revoked.** Rerun the independent test; should
    now 401/403.
 7. **Log in audit trail.** Append to
-   `workdir-phase3/rotate-credentials-audit.json`.
+   `workdir-phase3/rotate-tokens-audit.json`.
 
 ## Emergency revocation (compromise suspected)
 

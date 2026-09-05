@@ -1,0 +1,123 @@
+# eprocess-calibration-template.toml — per-invariant e-process parameters.
+#
+# Copied by eprocess-modeler at Phase 6 to docs/contracts/.
+# Per references/patterns/70-E-PROCESSES.md.
+
+schema_version = "gauntlet.eprocess_calibration.v1"
+
+# ---------------------------------------------------------------------------
+# [defaults] — hardware vs software enforcement
+# ---------------------------------------------------------------------------
+
+[defaults.hardware_enforced]
+# Use for invariants backed by hardware atomics / CAS / fences.
+# Evidence accumulates fast on violation → aggressive parameters.
+p_null = 1e-9
+lambda = 0.999
+alpha  = 1e-6
+
+[defaults.software_enforced]
+# Use for invariants enforced only by application logic.
+# Evidence accumulates slower → moderate parameters.
+p_null = 1e-6
+lambda = 0.9
+alpha  = 0.001
+
+# Global aggregation: arithmetic mean (conservative under arbitrary dependence).
+[aggregator]
+kind   = "arithmetic_mean"
+note   = "Product would double-count correlated violations; arithmetic mean is conservative under arbitrary dependence (per pattern:70-E-PROCESSES.md)."
+
+# ---------------------------------------------------------------------------
+# [[invariants]] — one entry per monitored invariant
+# ---------------------------------------------------------------------------
+# REQUIRED: id, statement, enforcement, calibration (hardware|software|custom),
+#           reject_action, evidence_artifact_ref.
+#
+# Per project class, populate from references/taxonomy/PROJECT-CLASSES.md.
+
+# ---- SQL-class example (from FrankenSQLite) ----
+
+[[invariants]]
+id         = "INV-1-Monotonicity"
+statement  = "TxnId monotone across all commits"
+enforcement = "hardware"
+calibration = "hardware"
+reject_action = "block_release"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv1_monotone.jsonl"
+
+[[invariants]]
+id         = "INV-2-LockExclusivity"
+statement  = "At most one txn holds a page lock at a time"
+enforcement = "hardware"
+calibration = "hardware"
+reject_action = "block_release"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv2_lock_exclusive.jsonl"
+
+[[invariants]]
+id         = "INV-3-VersionChainOrder"
+statement  = "Version chains descending by commit_seq"
+enforcement = "software"
+calibration = "software"
+reject_action = "alert"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv3_chain_order.jsonl"
+
+[[invariants]]
+id         = "INV-4-WriteSetConsistency"
+statement  = "write_set ⊆ page_lock_table"
+enforcement = "software"
+calibration = "software"
+reject_action = "alert"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv4_write_set.jsonl"
+
+[[invariants]]
+id         = "INV-5-SnapshotStability"
+statement  = "Snapshot immutable after first read"
+enforcement = "software"
+calibration = "software"
+reject_action = "alert"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv5_snapshot_stable.jsonl"
+
+[[invariants]]
+id         = "INV-6-CommitAtomicity"
+statement  = "Committed txns all-or-nothing visible"
+enforcement = "software"
+calibration = "software"
+reject_action = "alert"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv6_commit_atomic.jsonl"
+
+[[invariants]]
+id         = "INV-7-SerializedModeExclusivity"
+statement  = "At most one serialized-mode writer at any time"
+enforcement = "hardware"
+calibration = "hardware"
+reject_action = "block_release"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv7_serial_excl.jsonl"
+
+[[invariants]]
+id         = "INV-SSI-FP"
+statement  = "False-positive rate of SSI conflict detection stays below threshold"
+enforcement = "software"
+calibration = "custom"
+# Custom calibration: looser α because this is a quality metric, not a correctness invariant.
+custom_params = { p_null = 1e-4, lambda = 0.85, alpha = 0.05 }
+reject_action = "warn"
+evidence_artifact_ref = "tests/artifacts/eprocess/inv_ssi_fp.jsonl"
+
+# ---- Per-class instantiation (uncomment + populate the appropriate set) ----
+
+# # RESP-class:
+# [[invariants]]
+# id = "INV-RESP-1-FrameWellFormed"
+# statement = "Every emitted RESP3 frame is parseable by the reference parser"
+# enforcement = "hardware"
+# calibration = "hardware"
+# ...
+
+# # ML-class:
+# [[invariants]]
+# id = "INV-TORCH-1-AutogradJVP"
+# statement = "autograd gradient matches forward-mode JVP within per-op ULP tolerance"
+# enforcement = "software"
+# calibration = "software"
+# ...

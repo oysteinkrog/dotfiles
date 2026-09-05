@@ -65,7 +65,7 @@ ok and your next best 10 and why
 Before creating beads, compare against existing:
 
 ```bash
-br list --json | jq '.[].title'
+br list --json | jq '.issues[]?.title'
 ```
 
 | Overlap Type | Action |

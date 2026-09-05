@@ -10,7 +10,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="${CONFIG_PATH:-${SCRIPT_DIR}/../config.env}"
 
-set -a; source "${CONFIG_PATH}"; set +a
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+    echo "ERROR: config.env not found at ${CONFIG_PATH}" >&2
+    exit 2
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "${CONFIG_PATH}"
+set +a
 
 : "${MATTERMOST_URL:?MATTERMOST_URL required}"
 : "${TARGET_HOST:?TARGET_HOST required}"
@@ -31,10 +39,44 @@ add_check() {
     checks+=("$1|$2|$3|$4")
 }
 
+json_string() {
+    local value="${1:-}"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "${value}" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+        return 0
+    fi
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\b'/\\b}"
+    value="${value//$'\f'/\\f}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "${value}"
+}
+
+http_status() {
+    local code
+    if code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null); then
+        if [[ "${code}" =~ ^[0-9][0-9][0-9]$ ]]; then
+            printf '%s' "${code}"
+        else
+            printf '000'
+        fi
+    else
+        printf '000'
+    fi
+}
+
 # --- HTTPS ping ----------------------------------------------------------
 
-ping_code=$(curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' \
-    "${MATTERMOST_URL}/api/v4/system/ping" || echo "000")
+ping_code=$(http_status "${MATTERMOST_URL}/api/v4/system/ping")
 if [[ "${ping_code}" == "200" ]]; then
     add_check "mattermost_ping" "ok" "200" "/api/v4/system/ping"
 else
@@ -43,12 +85,12 @@ fi
 
 # --- WebSocket upgrade --------------------------------------------------
 
-ws_code=$(curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' \
+ws_code=$(http_status \
     -H "Connection: Upgrade" \
     -H "Upgrade: websocket" \
     -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
     -H "Sec-WebSocket-Version: 13" \
-    "${MATTERMOST_URL}/api/v4/websocket" 2>/dev/null || echo "000")
+    "${MATTERMOST_URL}/api/v4/websocket")
 if [[ "${ws_code}" == "101" ]]; then
     add_check "websocket_upgrade" "ok" "101" "WebSocket upgrade accepted"
 elif [[ "${ws_code}" == "401" ]]; then
@@ -59,10 +101,12 @@ fi
 
 # --- SMTP reachability (best-effort) -----------------------------------
 
+# shellcheck disable=SC2016
 if [[ -n "${SMTP_SERVER:-}" && -n "${SMTP_PORT:-}" ]]; then
-    if timeout 8 bash -c "exec 3<>/dev/tcp/${SMTP_SERVER}/${SMTP_PORT}" 2>/dev/null; then
+    if [[ ! "${SMTP_PORT}" =~ ^[0-9]+$ ]]; then
+        add_check "smtp_tcp" "red" "${SMTP_SERVER}:${SMTP_PORT}" "invalid SMTP_PORT"
+    elif timeout 8 bash -c 'exec 3<>/dev/tcp/"$1"/"$2"' _ "${SMTP_SERVER}" "${SMTP_PORT}" 2>/dev/null; then
         add_check "smtp_tcp" "ok" "${SMTP_SERVER}:${SMTP_PORT}" "TCP open"
-        exec 3>&- 2>/dev/null || true
     else
         add_check "smtp_tcp" "red" "${SMTP_SERVER}:${SMTP_PORT}" "TCP closed or blocked"
     fi
@@ -72,8 +116,9 @@ fi
 
 # --- SSH-side checks in one round trip ----------------------------------
 
+remote_status="ok"
 # shellcheck disable=SC2086
-remote_out=$(ssh ${SSH_OPTS} "${TARGET_SSH_USER}@${TARGET_HOST}" bash <<'REMOTE' 2>/dev/null || true
+if ! remote_out=$(ssh ${SSH_OPTS} "${TARGET_SSH_USER}@${TARGET_HOST}" bash <<'REMOTE' 2>/dev/null
 set -u
 # Disk % on root and /opt/mattermost
 root_pct=$(df -P / | awk 'NR==2 {sub("%","",$5); print $5}')
@@ -97,10 +142,19 @@ nginx_active=$(systemctl is-active nginx 2>/dev/null || echo "unknown")
 printf 'root_pct=%s\nmm_pct=%s\npg_usage=%s\nerr_count=%s\nfail2ban=%s\nufw=%s\nmm=%s\nnginx=%s\n' \
   "$root_pct" "$mm_pct" "$pg_usage" "$err_count" "$fail2ban_active" "$ufw_active" "$mm_active" "$nginx_active"
 REMOTE
-)
+); then
+    remote_status="failed"
+    remote_out=""
+fi
+
+if [[ "${remote_status}" == "ok" ]]; then
+    add_check "ssh_target" "ok" "${TARGET_SSH_USER}@${TARGET_HOST}" "remote probes completed"
+else
+    add_check "ssh_target" "red" "${TARGET_SSH_USER}@${TARGET_HOST}" "SSH remote probes failed"
+fi
 
 parse_field() {
-    echo "${remote_out}" | awk -F= -v k="$1" '$1==k {print $2}'
+    printf '%s\n' "${remote_out}" | awk -F= -v k="$1" '$1==k {print $2}'
 }
 
 root_pct=$(parse_field root_pct)
@@ -132,18 +186,27 @@ classify_pct "disk_root" "${root_pct}" "${HEALTH_DISK_PCT_RED}" "${HEALTH_DISK_P
 
 # Error-rate: lines-per-minute approx = err_count / 5
 if [[ -n "${err_count}" ]]; then
-    err_per_min=$(( err_count / 5 ))
-    if (( err_per_min >= HEALTH_LOG_ERR_PER_MIN_RED )); then
-        add_check "mattermost_errors" "red" "${err_per_min}/min" "level=error in last 5 min"
-    elif (( err_per_min >= HEALTH_LOG_ERR_PER_MIN_YELLOW )); then
-        add_check "mattermost_errors" "yellow" "${err_per_min}/min" "level=error in last 5 min"
+    if [[ "${err_count}" =~ ^[0-9]+$ ]]; then
+        err_per_min=$(( err_count / 5 ))
+        if (( err_per_min >= HEALTH_LOG_ERR_PER_MIN_RED )); then
+            add_check "mattermost_errors" "red" "${err_per_min}/min" "level=error in last 5 min"
+        elif (( err_per_min >= HEALTH_LOG_ERR_PER_MIN_YELLOW )); then
+            add_check "mattermost_errors" "yellow" "${err_per_min}/min" "level=error in last 5 min"
+        else
+            add_check "mattermost_errors" "ok" "${err_per_min}/min" "level=error in last 5 min"
+        fi
     else
-        add_check "mattermost_errors" "ok" "${err_per_min}/min" "level=error in last 5 min"
+        add_check "mattermost_errors" "red" "${err_count}" "invalid error count from remote probe"
     fi
 fi
 
 for svc in fail2ban ufw mm nginx; do
-    val="${!svc}"
+    case "${svc}" in
+        fail2ban) val="${fail2ban}" ;;
+        ufw) val="${ufw}" ;;
+        mm) val="${mm}" ;;
+        nginx) val="${nginx}" ;;
+    esac
     name="service_${svc}"
     [[ "${svc}" == "mm" ]] && name="service_mattermost"
     if [[ "${val}" == "active" ]]; then
@@ -174,10 +237,10 @@ overall="ok"
 mkdir -p "$(dirname "${OUT_JSON}")"
 {
     printf '{\n'
-    printf '  "generated_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf '  "mattermost_url": "%s",\n' "${MATTERMOST_URL}"
-    printf '  "target_host": "%s",\n' "${TARGET_HOST}"
-    printf '  "overall": "%s",\n' "${overall}"
+    printf '  "generated_at": %s,\n' "$(json_string "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    printf '  "mattermost_url": %s,\n' "$(json_string "${MATTERMOST_URL}")"
+    printf '  "target_host": %s,\n' "$(json_string "${TARGET_HOST}")"
+    printf '  "overall": %s,\n' "$(json_string "${overall}")"
     printf '  "red_count": %d,\n' "${red_count}"
     printf '  "yellow_count": %d,\n' "${yellow_count}"
     printf '  "checks": [\n'
@@ -186,8 +249,9 @@ mkdir -p "$(dirname "${OUT_JSON}")"
         IFS='|' read -r name status value detail <<< "${c}"
         [[ "${first}" == "1" ]] || printf ',\n'
         first=0
-        printf '    {"name": "%s", "status": "%s", "value": "%s", "detail": "%s"}' \
-            "${name}" "${status}" "${value//\"/\\\"}" "${detail//\"/\\\"}"
+        printf '    {"name": %s, "status": %s, "value": %s, "detail": %s}' \
+            "$(json_string "${name}")" "$(json_string "${status}")" \
+            "$(json_string "${value}")" "$(json_string "${detail}")"
     done
     printf '\n  ]\n}\n'
 } > "${OUT_JSON}"
@@ -205,8 +269,9 @@ echo "JSON: ${OUT_JSON}"
 
 # Optional webhook alert on red
 if [[ "${overall}" == "red" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
+    alert_text="[phase-3] health RED for ${MATTERMOST_URL}; red_count=${red_count}"
     curl -fsS -X POST -H 'Content-Type: application/json' \
-        -d "$(printf '{"text":"[phase-3] health RED for %s; red_count=%d"}' "${MATTERMOST_URL}" "${red_count}")" \
+        -d "$(printf '{"text":%s}' "$(json_string "${alert_text}")")" \
         "${ALERT_WEBHOOK_URL}" >/dev/null 2>&1 || true
 fi
 

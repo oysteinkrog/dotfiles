@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "tool": "br",
+  "tool_version": "0.4.7",
+  "doctor_version": "1.0.0",
+  "run_id": "2026-05-06T14-23-07Z__a3f9b2",
+  "run_dir": ".doctor/runs/2026-05-06T14-23-07Z__a3f9b2",
+  "started_at": "2026-05-06T14:23:07Z",
+  "finished_at": "2026-05-06T14:23:07.412Z",
+  "duration_ms": 412,
+  "target_sha": "deadbeef0123456789abcdef0123456789abcdef",
+  "ok": false,
+  "state": "DONE_FINDINGS",
+  "summary": {
+    "total_findings": 3,
+    "by_severity": { "P0": 1, "P1": 0, "P2": 2, "P3": 0 },
+    "auto_fixable": 3,
+    "online_required": 0
+  },
+  "findings": [
+    {
+      "id": "fm-schemas-db-schema-version-mismatch",
+      "severity": "P0",
+      "subsystem": "schemas",
+      "title": "On-disk schema_version=7; binary compiled against 8",
+      "confidence": 1.0,
+      "evidence": {
+        "file": ".beads/beads.db",
+        "query": "SELECT version FROM schema_meta",
+        "observed": 7,
+        "expected": 8,
+        "hash": "sha256:1c2b..."
+      },
+      "remediation": {
+        "command": "br doctor --fix --only fm-schemas-db-schema-version-mismatch",
+        "explain_command": "br doctor explain fm-schemas-db-schema-version-mismatch",
+        "auto_fixable": true,
+        "estimated_actions": 1
+      }
+    },
+    {
+      "id": "fm-state-files-jsonl-tombstone-drift",
+      "severity": "P2",
+      "subsystem": "state_files",
+      "title": "Two issues tombstoned in DB but still present in issues.jsonl",
+      "confidence": 1.0,
+      "evidence": {
+        "file": ".beads/issues.jsonl",
+        "lines": [142, 187],
+        "query": "SELECT issue_id FROM tombstones",
+        "hash": "sha256:8a31..."
+      },
+      "remediation": {
+        "command": "br doctor --fix --only fm-state-files-jsonl-tombstone-drift",
+        "explain_command": "br doctor explain fm-state-files-jsonl-tombstone-drift",
+        "auto_fixable": true,
+        "estimated_actions": 2
+      }
+    },
+    {
+      "id": "fm-concurrency-primitives-lockfile-orphaned",
+      "severity": "P2",
+      "subsystem": "concurrency_primitives",
+      "title": "Stale lockfile: holder PID 99999 is not alive",
+      "confidence": 0.9,
+      "evidence": {
+        "file": ".beads/beads.lock",
+        "query": "ps -p 99999",
+        "observed": "no such process",
+        "hash": "sha256:9f0c..."
+      },
+      "remediation": {
+        "command": "br doctor --fix --only fm-concurrency-primitives-lockfile-orphaned",
+        "explain_command": "br doctor explain fm-concurrency-primitives-lockfile-orphaned",
+        "auto_fixable": true,
+        "estimated_actions": 1
+      }
+    }
+  ],
+  "exit_code": 1,
+  "next_steps": [
+    "Run: br doctor --fix",
+    "Or scope: br doctor --fix --only fm-schemas-db-schema-version-mismatch",
+    "Inspect: br doctor explain fm-schemas-db-schema-version-mismatch"
+  ]
+}

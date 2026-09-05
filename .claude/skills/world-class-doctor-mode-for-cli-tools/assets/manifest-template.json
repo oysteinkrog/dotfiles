@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "run_started_at": "2026-05-06T14:23:07Z",
+  "target_repo": "/data/projects/beads_rust",
+  "target_sha": "deadbeef0123456789abcdef0123456789abcdef",
+  "target_default_branch": "main",
+  "binary_names": ["br", "bv"],
+  "language": "rust",
+  "build_system": "cargo",
+  "mode": "upgrade",
+  "pass": 1,
+  "worktree_path": "/data/projects/beads_rust__doctor_workspace/worktree",
+  "branch_name": "doctor-mode-pass-1",
+  "triangulation_appetite": "multi-model",
+  "online_appetite": "offline-only",
+  "cass_mining_appetite": "quick",
+  "jsm_state": "authenticated",
+  "helper_skills_inventory_path": "phase0_skill_inventory.json",
+  "phases_completed": [],
+  "artifacts": {
+    "baseline": "baseline/",
+    "failure_modes": "analysis/failure_modes/",
+    "repair_specs": "analysis/repair_specs/",
+    "taxonomy": "analysis/taxonomy.md",
+    "dependency_graph": "analysis/dependency_graph.json",
+    "conflict_matrix": "analysis/conflict_matrix.md",
+    "safety_envelope": "analysis/safety_envelope.md",
+    "playbook": "playbook.md",
+    "applied_changes": "applied_changes.jsonl",
+    "scorecard": "scorecard.md",
+    "heatmap": "heatmap.svg",
+    "uplift_diff": "uplift_diff.md",
+    "regression_alerts": "regression_alerts.md",
+    "agent_simulations": "agent_simulations/",
+    "handoff": "HANDOFF.md"
+  },
+  "must_not_touch": [
+    "src/legacy_compat.rs",
+    "config/v1_schema.json"
+  ],
+  "aggregate_score": null,
+  "previous_aggregate_score": null
+}

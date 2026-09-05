@@ -1,0 +1,241 @@
+# .github/workflows/bead-graph-validator.yml
+#
+# Wires CI gate 1.10 from PARITY_RUNBOOK.md: bead-graph validator.
+#
+# Runs on every PR (and on push to main). Asserts:
+#   - `br dep cycles` returns empty
+#   - `bv --robot-insights | jq '(.Cycles // []) | length == 0'` passes
+#   - every remediation bead has test + bench + doc dependencies
+#
+# Catches the "shipped without dep" class of bead-graph-discipline drift.
+
+name: Bead Graph Validator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.beads/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.beads/**'
+  workflow_dispatch:
+
+concurrency:
+  group: bead-graph-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-bead-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install br + bv (beads CLIs)
+        run: |
+          # Prefer cargo-install from the published crate; fall back to a local
+          # workspace copy if the repo vendors them.
+          if command -v br >/dev/null 2>&1; then
+            echo "br already installed: $(br --version)"
+          elif [[ -x "$PORT/tools/br/target/release/br" ]]; then
+            echo "$PORT/tools/br/target/release" >> "$GITHUB_PATH"
+          else
+            cargo install --locked beads_rust
+          fi
+
+          if ! command -v bv >/dev/null 2>&1; then
+            cargo install --locked beads_visualizer
+          fi
+
+          command -v br >/dev/null 2>&1 || { echo "::error::br is required for bead graph validation"; exit 1; }
+          command -v bv >/dev/null 2>&1 || { echo "::error::bv is required for bead graph validation"; exit 1; }
+
+      - name: Restore beads DB from JSONL store
+        run: |
+          # Beads' source of truth is the JSONL store committed under .beads/;
+          # rebuild the DB so the validator reads consistent state regardless
+          # of what the contributor committed.
+          if command -v br >/dev/null 2>&1; then
+            (cd "$PORT" && br sync --import-only --rebuild)
+          fi
+
+      - name: Cycle check (br dep cycles)
+        id: cycles
+        run: |
+          if ! command -v br >/dev/null 2>&1; then
+            echo "::error::br not available; cannot validate dependency cycles"
+            exit 1
+          fi
+          CYCLE_JSON=$(cd "$PORT" && RUST_LOG=error br dep cycles --json)
+          CYCLES=$(jq -r '(.cycles // []) | length' <<<"$CYCLE_JSON")
+          echo "cycle_count=$CYCLES" >> "$GITHUB_OUTPUT"
+          if [[ "$CYCLES" -gt 0 ]]; then
+            jq . <<<"$CYCLE_JSON"
+          fi
+
+      - name: Cycle check (bv --robot-insights)
+        id: bv_cycles
+        run: |
+          if ! command -v bv >/dev/null 2>&1; then
+            echo "::error::bv not available; cannot validate graph cycles"
+            exit 1
+          fi
+          INSIGHTS_JSON=$(cd "$PORT" && RUST_LOG=error bv --robot-insights)
+          CYCLES=$(jq -r '(.Cycles // []) | length' <<<"$INSIGHTS_JSON")
+          echo "cycle_count=$CYCLES" >> "$GITHUB_OUTPUT"
+          if [[ "$CYCLES" -gt 0 ]]; then
+            jq '(.Cycles // [])' <<<"$INSIGHTS_JSON"
+          fi
+
+      - name: Remediation-bead dep check (test + bench + doc)
+        id: deps
+        run: |
+          if ! command -v br >/dev/null 2>&1; then
+            echo "::error::br not available; cannot validate remediation dependencies"
+            exit 1
+          fi
+
+          # For every remediation bead, ensure it has at least one dep of each
+          # class: test, bench, doc. Current br JSON is {issues:[...]}; older
+          # builds emitted a top-level array. Check both the label and the
+          # generated-ID prefix because imported bead graphs are not always
+          # consistently labelled.
+          dep_text() {
+            local dep="$1"
+            local meta
+            meta=$(cd "$PORT" && RUST_LOG=error br show --json "$dep" 2>/dev/null \
+              | jq -r '[.id // "", .title // "", .type // "", ((.labels // []) | join(" "))] | join(" ")' 2>/dev/null || true)
+            printf '%s %s\n' "$dep" "$meta" | tr '[:upper:]' '[:lower:]'
+          }
+
+          MISSING=""
+          while IFS= read -r BID; do
+            [[ -z "$BID" ]] && continue
+            ISSUE_JSON=$(cd "$PORT" && RUST_LOG=error br show --json "$BID")
+            NEED_TEST=1
+            NEED_BENCH=1
+            NEED_DOC=1
+            while IFS= read -r DEP; do
+              [[ -z "$DEP" ]] && continue
+              DEP_TEXT=$(dep_text "$DEP")
+              [[ "$DEP_TEXT" =~ (test|oracle|metamorphic|sanitizer|fuzz|property|golden) ]] && NEED_TEST=0
+              [[ "$DEP_TEXT" =~ (bench|benchmark|criterion|hyperfine|comprehensive-bench) ]] && NEED_BENCH=0
+              [[ "$DEP_TEXT" =~ (doc|docs|documentation|safety|contract|agents\.md) ]] && NEED_DOC=0
+            done < <(jq -r '.dependencies[]?.id // .dependencies[]? // empty' <<<"$ISSUE_JSON")
+            if [[ "${NEED_TEST:-0}" -eq 1 || "${NEED_BENCH:-0}" -eq 1 || "${NEED_DOC:-0}" -eq 1 ]]; then
+              MISSING="${MISSING}${BID}"$'\n'
+            fi
+            unset NEED_TEST NEED_BENCH NEED_DOC
+          done < <(
+            {
+              cd "$PORT" && RUST_LOG=error br list --label kind:remediation --json --limit 0 \
+                | jq -r '(.issues // .)[]?.id'
+              cd "$PORT" && RUST_LOG=error br list --json --limit 0 \
+                | jq -r '(.issues // .)[]? | select(.id | startswith("bd-rem-")) | .id'
+            } | sort -u
+          )
+
+          if [[ -n "$MISSING" ]]; then
+            COUNT=$(printf '%s\n' "$MISSING" | wc -l)
+            echo "missing_ids<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$MISSING" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "missing_count=$COUNT" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing_count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run workspace bead-graph-validator if present
+        id: ws_validator
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          if [[ -x "$WORKSPACE/scripts/bead-graph-validator.sh" ]]; then
+            "$WORKSPACE/scripts/bead-graph-validator.sh" "$PORT" --output-root "$WORKSPACE" 2>&1 | tee bead_validator.log
+            WS_EXIT=$?
+          else
+            echo "workspace bead-graph-validator.sh not present; relying on inline checks" | tee bead_validator.log
+            WS_EXIT=0
+          fi
+          echo "exit_code=$WS_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload validator artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bead-graph-validator-${{ github.run_id }}
+          path: |
+            bead_validator.log
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Annotate
+        if: always()
+        run: |
+          CYCLES="${{ steps.cycles.outputs.cycle_count }}"
+          BV_CYCLES="${{ steps.bv_cycles.outputs.cycle_count }}"
+          MISSING="${{ steps.deps.outputs.missing_count }}"
+          WS_EXIT="${{ steps.ws_validator.outputs.exit_code || '0' }}"
+
+          if [[ "$CYCLES" -gt 0 ]]; then
+            echo "::error title=Bead Graph::br dep cycles non-empty ($CYCLES)."
+          fi
+          if [[ "$BV_CYCLES" -gt 0 ]]; then
+            echo "::error title=Bead Graph::bv --robot-insights Cycles non-empty ($BV_CYCLES)."
+          fi
+          if [[ "$MISSING" -gt 0 ]]; then
+            echo "::error title=Bead Graph::$MISSING remediation bead(s) missing test/bench/doc dep."
+            echo "Missing: ${{ steps.deps.outputs.missing_ids }}"
+          fi
+          if [[ "$WS_EXIT" != "0" ]]; then
+            echo "::error title=Bead Graph::workspace bead-graph-validator.sh exit $WS_EXIT."
+          fi
+
+          if [[ "$CYCLES" -eq 0 && "$BV_CYCLES" -eq 0 && "$MISSING" -eq 0 && "$WS_EXIT" == "0" ]]; then
+            echo "::notice title=Bead Graph::clean."
+          fi
+
+      - name: Fail on validator red
+        if: >
+          (steps.cycles.outputs.cycle_count != '' && steps.cycles.outputs.cycle_count != '0') ||
+          (steps.bv_cycles.outputs.cycle_count != '' && steps.bv_cycles.outputs.cycle_count != '0') ||
+          (steps.deps.outputs.missing_count != '' && steps.deps.outputs.missing_count != '0') ||
+          (steps.ws_validator.outputs.exit_code != '' && steps.ws_validator.outputs.exit_code != '0')
+        run: exit 1

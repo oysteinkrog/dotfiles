@@ -79,5 +79,5 @@ When Phase 3 rotates credentials (PAT, SSH key, off-site token), Phase 2's
 config becomes stale. If a future Phase 2 re-run is ever needed (e.g. to
 re-import a delta batch), the operator must update Phase 2's config.env
 to match the current Phase 3 state. This is handled by the
-`rotate-credentials` stage writing an "also update Phase 2 config.env"
+`rotate-tokens` stage writing an "also update Phase 2 config.env"
 reminder in its audit trail.

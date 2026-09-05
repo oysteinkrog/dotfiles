@@ -2,6 +2,13 @@
 
 <!-- TOC: When To Use | Architecture | Spawn | Mixed Swarms | Phase 1 Dispatch | Phase 2 Monitoring | Phase 3 Kill+Relaunch | Quality Rubric | File Conventions | Severity Tagging | Termination | Mode Switch | Anti-Patterns | vs Gemini Skill | Quick Reference -->
 
+## Contents
+
+- When to run reviewer panes instead of implementers
+- Spawn patterns, dispatch sequence, and monitoring cadence
+- Quality rubric, severity tags, and output conventions
+- Termination and mixed-swarm mode switching
+
 A specialized operational shape of `vibing-with-ntm` in which agents are pure auditors: they explore, find bugs, fix them, and cross-review each other's work. They do NOT pick beads, claim ready work, or do feature implementation.
 
 This mode generalizes the pattern originally battle-tested with Gemini 3.1 Pro (see `/code-review-gemini-swarm-with-ntm` for model-specific tuning and Flash-fallback detection) — but works equally well with `cc`, `cod`, `gmi`, or any mix.

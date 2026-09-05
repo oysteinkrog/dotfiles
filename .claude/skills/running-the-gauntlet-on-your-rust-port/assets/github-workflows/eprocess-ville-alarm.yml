@@ -1,0 +1,157 @@
+# .github/workflows/eprocess-ville-alarm.yml
+#
+# Wires CI gate 1.5 from PARITY_RUNBOOK.md: e-process Ville-threshold alarm.
+#
+# Runs nightly. For every monitored invariant, computes the running e-value
+# and checks against `1/α`. Crossings fail the build and attach the
+# FailureBundle that drove the rejection.
+
+name: E-Process Ville Alarm
+
+on:
+  schedule:
+    - cron: "0 5 * * *"  # nightly 05:00 UTC
+  workflow_dispatch:
+    inputs:
+      invariant_filter:
+        description: "Substring filter on invariant IDs (default: all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: eprocess-${{ github.ref }}
+  cancel-in-progress: false  # don't cancel in-flight statistical runs
+
+permissions:
+  contents: read
+  issues: write  # for filing an auto-issue on rejection
+
+jobs:
+  eprocess:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240  # e-process runs can be long
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+      RUST_BACKTRACE: 1
+      INVARIANT_FILTER: ${{ inputs.invariant_filter || '' }}
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq + python deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq python3-pip
+          python3 -m pip install --user numpy scipy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-eproc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (release-perf profile)
+        run: cargo build --profile release-perf --all-features --tests
+
+      - name: Run e-process invariant smoke
+        id: smoke
+        continue-on-error: true
+        run: |
+          # The integration test loads <port>/docs/contracts/eprocess_calibration.toml,
+          # iterates every invariant, runs its harness, and emits per-invariant
+          # JSON envelopes under <workspace>/round_ci/eprocess/.
+          if [[ -n "$INVARIANT_FILTER" ]]; then
+            cargo test --profile release-perf --test eprocess_smoke -- "$INVARIANT_FILTER" --nocapture
+          else
+            cargo test --profile release-perf --test eprocess_smoke -- --nocapture
+          fi
+
+      - name: Check Ville rejections
+        id: check
+        run: |
+          ENV_DIR="$WORKSPACE/round_ci/eprocess"
+          mkdir -p "$ENV_DIR"
+
+          REJECTED=$(find "$ENV_DIR" -name '*.json' -type f -exec jq -r \
+            'select(.e_value > .reject_threshold) | .invariant_id' {} \; 2>/dev/null | sort -u)
+
+          if [[ -n "$REJECTED" ]]; then
+            COUNT=$(printf '%s\n' "$REJECTED" | wc -l)
+            echo "rejected_count=$COUNT" >> "$GITHUB_OUTPUT"
+            echo "rejected_ids<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$REJECTED" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "rejected_count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload e-process envelopes + FailureBundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eprocess-envelopes-${{ github.run_id }}
+          path: |
+            ${{ env.WORKSPACE }}/round_ci/eprocess/
+          retention-days: 180  # statistical evidence is long-lived
+          if-no-files-found: ignore
+
+      - name: File auto-issue on rejection
+        if: steps.check.outputs.rejected_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const rejected = `${{ steps.check.outputs.rejected_ids }}`.trim().split('\n');
+            for (const inv of rejected) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[eprocess] Ville rejection: ${inv}`,
+                body: [
+                  `The e-process for invariant **${inv}** crossed 1/α.`,
+                  ``,
+                  `Run: ${context.runId} (${context.sha})`,
+                  ``,
+                  `Triage via references/cookbook/e-process-rejection.md.`,
+                  ``,
+                  `FailureBundle attached to the workflow run artifacts.`,
+                ].join('\n'),
+                labels: ['eprocess-rejection', 'priority-0'],
+              });
+            }
+
+      - name: Annotate
+        if: always()
+        run: |
+          REJECTED_COUNT="${{ steps.check.outputs.rejected_count }}"
+          if [[ "$REJECTED_COUNT" -gt 0 ]]; then
+            echo "::error title=E-Process Ville Alarm::$REJECTED_COUNT invariant(s) rejected. Route through e-process-rejection.md."
+          else
+            echo "::notice title=E-Process::All invariants below threshold."
+          fi
+
+      - name: Fail on smoke failure
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error title=E-Process Smoke::eprocess_smoke failed before Ville threshold evaluation."
+          exit 1
+
+      - name: Fail on rejection
+        if: steps.check.outputs.rejected_count != '0'
+        run: exit 1

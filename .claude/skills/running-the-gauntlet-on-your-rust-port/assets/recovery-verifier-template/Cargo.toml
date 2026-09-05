@@ -1,0 +1,41 @@
+# Cargo.toml — recovery-verifier crate skeleton.
+#
+# Copy this directory into `crates/<port>-recovery-verifier/` of your
+# workspace and rename `package.name` accordingly. The crate is intended to
+# be consumed by per-class integration tests AND by the soak/crash-boundary
+# harnesses in references/methodology/SOAK-PROTOCOL.md.
+#
+# Per-class implementations live under `src/per_class/` — pick the module
+# matching your project class (sql.rs, resp.rs, ml.rs, or add a new file
+# per a new class).
+#
+# Cross-link: references/patterns/65-CRASH-BOUNDARIES.md is the spec this
+# crate implements; references/taxonomy/PROJECT-CLASSES.md § Crash Boundaries
+# enumerates the named boundaries per class.
+
+[package]
+name        = "recovery-verifier"
+version     = "0.1.0"
+edition     = "2021"
+description = "Crash-recovery consistency verifier for gauntlet-adopted ports"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2       = "0.10"
+thiserror  = "1"
+
+[dev-dependencies]
+# Tests in this crate are pure-Rust shape checks; per-class adopters add
+# their own dev-deps (e.g. rusqlite for SQL, pyo3 for ML).
+
+[features]
+default = []
+# Opt-in per-class modules so adopters compile only what they need.
+sql_class  = []
+resp_class = []
+ml_class   = []

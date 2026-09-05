@@ -1,0 +1,13 @@
+id: rust-ub-aliasing-deref-while-borrowed
+language: rust
+severity: warning
+message: >-
+  Dereference of *mut T after taking &T to the same place. Verify the shared
+  borrow has been dropped before this deref.
+rule:
+  any:
+    - pattern: '*($PTR as *mut $T)'
+    - pattern: '(*$PTR).$FIELD = $VAL'
+constraints:
+  PTR:
+    kind: type_cast_expression

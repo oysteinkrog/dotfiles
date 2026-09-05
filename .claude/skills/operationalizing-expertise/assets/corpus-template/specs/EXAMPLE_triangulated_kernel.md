@@ -3,7 +3,7 @@
 Expert: [Name]
 Version: v0.1
 Date: [YYYY-MM-DD]
-Models Used: GPT-5.2, Claude Opus 4.5, Gemini 3
+Models Used: GPT-5.5, Claude Opus 4.7, Gemini 3.1 Pro
 
 ---
 

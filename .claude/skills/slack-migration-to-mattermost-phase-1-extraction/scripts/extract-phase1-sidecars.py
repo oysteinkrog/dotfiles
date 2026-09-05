@@ -3,7 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import zipfile
@@ -30,6 +30,13 @@ def bucket_for_path(path: Path) -> str:
     if any(marker in lowered_parts for marker in SIDECAR_MARKERS):
         return "sidecars"
     return ""
+
+
+def safe_zip_member_path(name: str) -> Path:
+    rel = PurePosixPath(name.replace("\\", "/"))
+    if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
+        raise ValueError(f"unsafe archive member path: {name}")
+    return Path(*rel.parts)
 
 
 def copy_tree(source: Path, destination_root: Path, source_label: str, records: list[dict]) -> None:
@@ -70,10 +77,11 @@ def extract_from_zip(archive_path: Path, output_dir: Path, records: list[dict]) 
         for name in archive.namelist():
             if name.endswith("/"):
                 continue
-            bucket = bucket_for_path(Path(name))
+            safe_name = safe_zip_member_path(name)
+            bucket = bucket_for_path(safe_name)
             if not bucket:
                 continue
-            destination = output_dir / bucket / name
+            destination = output_dir / bucket / safe_name
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(name) as source_handle:
                 destination.write_bytes(source_handle.read())
@@ -111,6 +119,9 @@ def main() -> int:
             extract_from_zip(raw_archive, output_dir, records)
         except zipfile.BadZipFile:
             print(f"error: invalid raw archive: {raw_archive}", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 1
 
     for raw_path in args.sidecar_input:

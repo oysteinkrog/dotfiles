@@ -14,7 +14,7 @@ Skills to run BEFORE launching a duel. Better input context produces sharper ide
 | `reality-check-for-project` | Gap analysis between README vision and actual implementation status | When you want ideas grounded in what actually exists vs. what's aspirational | 10-20 min |
 | `modes-of-reasoning-project-analysis` | Multi-perspective findings with contested conclusions | When you want the duel to focus on areas where analytical modes already disagree | 30-60 min |
 | `bv --robot-triage` | Current work graph, blocked items, dependency bottlenecks | When ideation should account for existing commitments and priorities | 2-5 min |
-| `comprehensive-codebase-report` | Technical architecture document the duel agents can reference | For large/complex codebases where the study phase alone is insufficient | 20-40 min |
+| `codebase-report` | Technical architecture document the duel agents can reference | For large/complex codebases where the study phase alone is insufficient | 20-40 min |
 
 ### Feeding Pre-Duel Output into the Duel
 
@@ -153,7 +153,7 @@ Using patterns from one project to generate ideas for another.
 ### The Pattern Extraction Flow
 
 ```
-Project A: cross-project-pattern-extraction
+Project A: codebase-pattern-extraction
         |
         v
 Extracted patterns (e.g., "caching strategy", "error recovery pattern", "CLI plugin system")
@@ -166,7 +166,7 @@ Project B: dueling-idea-wizards --focus="Apply pattern X from Project A to this 
 
 ```bash
 # In Project A (a Rust CLI tool with excellent error handling)
-/cross-project-pattern-extraction --pattern="error recovery and user-facing error messages"
+/codebase-pattern-extraction --pattern="error recovery and user-facing error messages"
 
 # In Project B (a different Rust CLI tool with poor error handling)
 /dueling-idea-wizards --mode=ux --focus="Apply error recovery patterns extracted from [Project A]: structured error types, contextual help text, recovery suggestions"
@@ -260,5 +260,5 @@ Quick reference for common multi-skill workflows involving the duel.
 | Security hardening | `codebase-audit --domain=security` -> `duel --mode=security` -> `multi-pass-bug-hunting` | Pre-launch security review |
 | UX overhaul | `ux-audit` -> `duel --mode=ux` -> `ux-audit` (post-implementation) | CLI/UI improvement cycles |
 | Performance sprint | `extreme-software-optimization` (profile) -> `duel --mode=performance` -> `extreme-software-optimization` (implement) | Latency reduction work |
-| Cross-project learning | `cross-project-pattern-extraction` (Project A) -> `duel` (Project B) | Applying proven patterns |
+| Cross-project learning | `codebase-pattern-extraction` (Project A) -> `duel` (Project B) | Applying proven patterns |
 | Deep exploration | `modes-of-reasoning` -> `duel` -> `repeatedly-apply-skill` (recursive duel) | Strategic planning, annual review |

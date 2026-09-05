@@ -64,7 +64,7 @@ Expects `mcp:any_agent=ok`. If it fails:
 ## PAT lifecycle
 
 The PAT in MCP config is the same as in `config.env`. On
-`rotate-credentials`:
+`rotate-tokens`:
 
 1. Rotate PAT via System Console.
 2. Update `config.env.MATTERMOST_ADMIN_TOKEN`.
@@ -86,7 +86,7 @@ register a second MCP instance. Not required for v1 of this skill.
 If `mattermost-mcp-server` doesn't meet your needs:
 
 - **`mattermost-mcp`** (another community fork) — similar feature set.
-- **Custom MCP** via `designing-mcp-servers` skill — build one that only
+- **Custom MCP** via `mcp-server-design` skill — build one that only
   exposes the tools you need.
 - **Fallback to shell**: every MCP tool has a `mmctl` or `curl`
   equivalent; Phase 3 scripts use those forms as the base.

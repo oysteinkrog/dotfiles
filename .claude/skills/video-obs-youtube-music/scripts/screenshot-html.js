@@ -7,8 +7,17 @@
  *   Video:      ./screenshot-html.js <html-file> <output.webm> [width] [height] [duration_ms]
  */
 
-const { chromium } = require('playwright');
+const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
+
+let chromium;
+try {
+    ({ chromium } = require('playwright'));
+} catch (error) {
+    console.error('Error: playwright is required. Run `npm install` in .claude/skills/obs-youtube-music first.');
+    process.exit(1);
+}
 
 async function main() {
     const args = process.argv.slice(2);
@@ -26,61 +35,70 @@ async function main() {
 
     const isVideo = outputFile.endsWith('.webm');
 
-    const browser = await chromium.launch();
-    const context = await browser.newContext({
-        viewport: { width, height },
-        // Required for video recording
-        recordVideo: isVideo ? {
-            dir: path.dirname(outputFile),
-            size: { width, height }
-        } : undefined
-    });
+    if (!fs.existsSync(htmlFile)) {
+        throw new Error(`HTML file not found: ${htmlFile}`);
+    }
 
-    const page = await context.newPage();
-    await page.goto(`file://${htmlFile}`);
+    fs.mkdirSync(path.dirname(outputFile), { recursive: true });
 
-    // Wait for any images to load
-    await page.waitForLoadState('networkidle');
+    let browser;
+    let context;
 
-    if (isVideo) {
-        // Get video reference BEFORE closing the page
-        const video = page.video();
+    try {
+        browser = await chromium.launch();
+        context = await browser.newContext({
+            viewport: { width, height },
+            // Required for video recording
+            recordVideo: isVideo ? {
+                dir: path.dirname(outputFile),
+                size: { width, height }
+            } : undefined
+        });
 
-        // Wait for animation to complete
-        await page.waitForTimeout(durationMs);
+        const page = await context.newPage();
+        await page.goto(pathToFileURL(htmlFile).href, { waitUntil: 'networkidle' });
 
-        // Close page to finalize video
-        await page.close();
+        if (isVideo) {
+            // Get video reference BEFORE closing the page
+            const video = page.video();
 
-        // Now get the video path and move to desired output
-        if (video) {
+            // Wait for animation to complete
+            await page.waitForTimeout(durationMs);
+
+            // Close page to finalize video
+            await page.close();
+
+            // Now get the video path and move to desired output
+            if (!video) {
+                throw new Error('No video was recorded');
+            }
+
             const videoPath = await video.path();
-            const fs = require('fs');
-            // Playwright saves to a temp file, move it to our desired location
-            // Use try/catch for rename in case of cross-filesystem move
             try {
                 fs.renameSync(videoPath, outputFile);
             } catch (e) {
-                // Fallback to copy + delete for cross-filesystem
                 fs.copyFileSync(videoPath, outputFile);
                 fs.unlinkSync(videoPath);
             }
             console.log(`Video saved: ${outputFile}`);
         } else {
-            console.error('Warning: No video was recorded');
+            await page.screenshot({
+                path: outputFile,
+                omitBackground: true  // Preserve transparency
+            });
+            console.log(`Screenshot saved: ${outputFile}`);
         }
-    } else {
-        await page.screenshot({
-            path: outputFile,
-            omitBackground: true  // Preserve transparency
-        });
-        console.log(`Screenshot saved: ${outputFile}`);
+    } finally {
+        if (context) {
+            await context.close().catch(() => {});
+        }
+        if (browser) {
+            await browser.close().catch(() => {});
+        }
     }
-
-    await browser.close();
 }
 
 main().catch(err => {
-    console.error(err);
+    console.error(err.message || err);
     process.exit(1);
 });

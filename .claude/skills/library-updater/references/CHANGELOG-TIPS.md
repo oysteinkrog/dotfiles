@@ -1,6 +1,6 @@
 # Changelog Tips
 
-Patterns for finding and parsing changelogs. Use alongside software-research.
+Patterns for finding and parsing changelogs. Use alongside research-software.
 
 ---
 

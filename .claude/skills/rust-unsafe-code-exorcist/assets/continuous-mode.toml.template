@@ -1,0 +1,101 @@
+# continuous-mode.toml — per-project continuous-mode configuration
+#
+# Copy to <audit-dir>/continuous-mode.toml after baseline audit completes.
+# Edit policy fields to match the project. The cron script currently reads
+# enabled=false directly and records computed drift; CI/report wrappers may use
+# the remaining fields.
+
+[continuous]
+# Enable / disable the cron-driven drift checker.
+enabled = true
+
+# How often to run (informational; the actual cadence is set in crontab).
+# One of: "nightly", "weekly", "on-push", "on-pr".
+cadence = "nightly"
+
+
+[continuous.thresholds]
+# Policy threshold for reports/CI. The cron script currently reports any
+# positive geiger delta.
+geiger_increase_alarm = 1
+
+# Decreases are logged but don't fire alarms.
+geiger_decrease_log_only = true
+
+# Policy threshold for soundness-surface analysis; the cron script does not
+# compute this signal directly.
+soundness_surface_expanded_alarm = 1
+
+# Policy threshold for periodic full audits; the cron script does not inspect
+# toolchain pins directly.
+toolchain_pin_movement_alarm = true
+
+# Harness regressions are always P0 alarms.
+harness_regression_alarm = true
+
+# Existing unsafe sites whose source excerpt changes are always drift.
+modified_unsafe_site_alarm = true
+
+
+[continuous.notifications]
+# Preferred channel for wrapper/integration reporting. The cron script itself
+# writes stdout plus drift/<date>/summary.md.
+channel = "stdout"
+
+# For "github-issue": apply this label to filed issues.
+gh_label = "soundness:drift"
+
+# For "github-issue": optional reviewer assignment.
+# gh_assignees = ["user1", "user2"]
+
+# For "mail": recipient.
+mail_to = ""
+
+# For "slack": webhook URL.
+slack_webhook = ""
+
+
+[continuous.gates]
+# CI fails when geiger count regresses on a PR.
+fail_on_geiger_regression = true
+
+# CI fails when a new unsafe block lands without a SAFETY comment.
+fail_on_new_unsafe_without_safety_comment = true
+
+# CI fails when soundness surface expands (new pub→unsafe path).
+# Some projects intentionally expand; default = false (log only).
+fail_on_soundness_surface_expansion = false
+
+# CI fails when verify.sh fails.
+fail_on_harness_regression = true
+
+
+[continuous.budget]
+# Policy budget for reports/CI. The current drift cron does not gate on this value.
+max_unsafe_sites = 250
+
+# safe-only feature build must remain unsafe-free.
+max_unsafe_in_safe_only_path = 0
+
+# Maximum allowable pre-existing-ub beads (informational; doesn't gate).
+max_pre_existing_ub_beads = 10
+
+
+[continuous.reports]
+# Auto-generate the weekly report on this day-of-week.
+weekly_dow = "monday"
+
+# Auto-generate the monthly report on this day-of-month.
+monthly_dom = 1
+
+# Where to write reports.
+output_dir = "drift"
+
+
+[continuous.audit_revision]
+# How often to run a FULL audit (not just drift). The drift cron only catches drift;
+# periodic full audits revisit classifications.
+quarterly = true
+
+# Calendar months when a full audit is recommended (e.g., before each minor release).
+recommended_months = ["jan", "apr", "jul", "oct"]

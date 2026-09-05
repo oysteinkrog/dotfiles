@@ -164,7 +164,7 @@ docs: migrate AGENTS.md from bd to br (beads_rust)
 
 Affected: ~74 AGENTS.md files
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
 )"
 ```

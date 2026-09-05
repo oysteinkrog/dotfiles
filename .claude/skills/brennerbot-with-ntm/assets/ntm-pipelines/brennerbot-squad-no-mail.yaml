@@ -1,0 +1,228 @@
+schema_version: "2.0"
+name: brennerbot-squad-no-mail
+description: Same as brennerbot-squad but with Agent Mail unavailable. Coordination falls back to ntm-inbox + bead assignees per references/AGENT-MAIL-FALLBACKS.md.
+
+inputs:
+  - workspace_path
+  - session_id
+  - question_of_record_path
+  - mode
+
+defaults:
+  model_mix: "cc:3,cod:1,gmi:1"
+  coordination_substrate: ntm-inbox
+
+steps:
+  - id: register_assignees
+    command: ./scripts/register-assignees.sh --session=${session_id} --workspace=${workspace_path}
+    description: "Soft-lock per pane via br update --assignee= instead of MCP register_agent"
+
+  - id: dispatch_onboarding
+    after: register_assignees
+    foreach_pane:
+      template: assets/marching-orders/MO-02-onboarding.md
+      params:
+        PANE_N: ${pane.index}
+        WORKSPACE_PATH: ${workspace_path}
+        QUESTION_OF_RECORD_PATH: ${question_of_record_path}
+        SESSION_ID: ${session_id}
+        ROLE: ${pane.role}
+        MODEL: ${pane.model}
+        PEER_LIST: "session roster for ${session_id}; run ntm list ${session_id}"
+        PRODUCTIVE_IGNORANCE: ${pane.productive_ignorance}
+        DOMAIN: ${pane.domain}
+        COORDINATION_MODE: ntm-inbox   # IMPORTANT: tells the pane Agent Mail is unavailable
+    parallel: true
+
+  - id: wait_for_acks
+    after: dispatch_onboarding
+    command: ./scripts/wait-for-onboard-acks.sh --session=${session_id} --via=ntm-inbox
+    timeout: 300s
+
+  # Remaining steps mirror brennerbot-squad.yaml but every "send_message" is replaced
+  # by ntm --robot-send and every file_reservation is replaced by br update --assignee=
+
+  # ... (remaining steps elided for brevity; identical flow to brennerbot-squad.yaml
+  #      except coordination via ntm send + bead assignee, no MCP macros)
+
+  - id: phase_3_propose
+    after: wait_for_acks
+    foreach_pane:
+      filter: role==proposer
+      template: assets/marching-orders/MO-03a-propose.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: ${session_id}
+        COUNT: 5
+        WORKSPACE_PATH: ${workspace_path}
+        COORDINATION_MODE: ntm-inbox
+    parallel: true
+
+  - id: phase_3_triage
+    after: phase_3_propose
+    pane: 1
+    template: assets/marching-orders/MO-03b-triage.md
+    params:
+      PANE_N: 1
+      SESSION_ID: ${session_id}
+      COORDINATION_MODE: ntm-inbox
+
+  - id: phase_3_third_alt_check
+    after: phase_3_triage
+    command: ./scripts/audit-bead-invariants.sh --check=third_alternative_present --workspace=${workspace_path}
+    on_failure:
+      pane: 1
+      template: assets/marching-orders/MO-03c-third-alternative.md
+      params:
+        PANE_N: 1
+        SESSION_ID: ${session_id}
+
+  - id: phase_3_complete_flag
+    after: phase_3_third_alt_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_3_complete.flag
+
+  - id: phase_4_loop
+    after: phase_3_complete_flag
+    loop:
+      max_iterations: 6
+      until: ./scripts/convergence-check.sh --phase=4 --workspace=${workspace_path}
+      body:
+        - id: phase_4_investigate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '.issues[]? | select((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04a-investigate.md
+            pane_assignment_strategy: round_robin_by_domain
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+              COORDINATION_MODE: ntm-inbox
+          parallel: true
+        - id: phase_4_devils_advocate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '[.issues[]? | select(((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) and (((.description // "") | contains("confidence: high")) or ((.description // "") | contains("confidence: medium"))))][:2][] | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04b-devils-advocate.md
+            pane_assignment_strategy: by_model_family_difference
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+              COORDINATION_MODE: ntm-inbox
+          parallel: true
+
+  - id: phase_4_complete_flag
+    after: phase_4_loop
+    command: touch ${workspace_path}/.brenner_workspace/phase_4_complete.flag
+
+  - id: phase_5_debate_pairs
+    after: phase_4_complete_flag
+    command: ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=1
+
+  - id: phase_5_rounds_gate
+    after: phase_5_debate_pairs
+    command: |
+      test -f ${workspace_path}/.brenner_workspace/phase_5_debate_rounds_complete.flag || {
+        echo "Phase 5 Round 1 was dispatched and debate-pairs.pairs is frozen. Run ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=2, then --round=3 when ready; round 3 marks .brenner_workspace/phase_5_debate_rounds_complete.flag before adjudication."
+        exit 1
+      }
+
+  - id: phase_5_adjudicate
+    after: phase_5_rounds_gate
+    foreach:
+      pairs: $(cat "${workspace_path}/.brenner_workspace/debate-pairs.resolved.pairs" 2>/dev/null || true)
+      template: assets/marching-orders/MO-05b-adjudicate.md
+      pane_assignment_strategy: rotate_adjudicator
+      params:
+        PANE_N: ${pane.index}
+        DEBATE_ID: ${item.debate_id}
+        SESSION_ID: ${session_id}
+    parallel: true
+
+  - id: phase_5_complete_flag
+    after: phase_5_adjudicate
+    command: touch ${workspace_path}/.brenner_workspace/phase_5_complete.flag
+
+  - id: phase_6_distill
+    after: phase_5_complete_flag
+    foreach:
+      models: $(./scripts/list-distinct-model-families.sh)
+      template: assets/marching-orders/MO-06a-distill.md
+      pane_assignment_strategy: by_model_family
+      params:
+        PANE_N: ${pane.index}
+        MODEL_FAMILY: ${item}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_6_meta
+    after: phase_6_distill
+    pane: 5
+    template: assets/marching-orders/MO-06b-meta-synthesize.md
+    params:
+      PANE_N: 5
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+
+  - id: phase_6_disagreement_lint
+    after: phase_6_meta
+    command: ./scripts/disagreement-register-lint.sh --workspace=${workspace_path}
+
+  - id: phase_6_convergence_check
+    after: phase_6_disagreement_lint
+    command: ./scripts/convergence-check.sh --phase=6 --workspace=${workspace_path}
+    on_failure:
+      pane: 5
+      template: assets/marching-orders/MO-06b-meta-synthesize.md
+      params:
+        PANE_N: 5
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+      reason: "Phase 6 has not produced two consecutive trivial meta-synthesis passes"
+
+  - id: phase_6_complete_flag
+    after: phase_6_convergence_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_6_complete.flag
+
+  - id: phase_7_audit_loop
+    after: phase_6_complete_flag
+    loop:
+      max_iterations: 4
+      until: ./scripts/convergence-check.sh --phase=7 --workspace=${workspace_path}
+      body:
+        - id: phase_7_trio
+          foreach_pane:
+            template: assets/marching-orders/MO-07a-fresh-eyes.md
+            params:
+              PANE_N: ${pane.index}
+              SESSION_ID: ${session_id}
+          parallel: true
+
+  - id: phase_7_ubs
+    after: phase_7_audit_loop
+    command: ./scripts/run-ubs-on-deliverables.sh --workspace=${workspace_path}
+    on_failure: abort
+
+  - id: phase_7_complete_flag
+    after: phase_7_ubs
+    command: touch ${workspace_path}/.brenner_workspace/phase_7_complete.flag
+
+  - id: phase_8_freeze
+    after: phase_7_complete_flag
+    pane: 0
+    template: assets/marching-orders/MO-08-freeze.md
+    params:
+      PANE_N: 0
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+      SKILL_SCRIPTS: ./scripts
+
+outputs:
+  - resume_md: ${workspace_path}/deliverables/RESUME.md
+
+notes:
+  - "Coordination via ntm-inbox + bead assignees per references/AGENT-MAIL-FALLBACKS.md"
+  - "File reservations: not enforced; rely on convention + git surface conflicts"
+  - "Pre-commit guard: not installed (no MCP); operator manually checks for collisions"

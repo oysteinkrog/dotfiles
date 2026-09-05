@@ -285,7 +285,7 @@ reproducibility and to avoid silent prompt injection regressions when providers
 update models.
 
 ```typescript
-const MODEL = "claude-opus-4-6-20260401"; // Pinned version
+const MODEL = "claude-opus-4-7"; // Pinned version
 ```
 
 ---

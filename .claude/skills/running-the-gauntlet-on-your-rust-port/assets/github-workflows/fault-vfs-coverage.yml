@@ -1,0 +1,170 @@
+# .github/workflows/fault-vfs-coverage.yml
+#
+# Wires CI gate 1.7 + 1.8 from PARITY_RUNBOOK.md: fault-VFS budget +
+# crash-boundary coverage.
+#
+# Asserts that every named FaultKind is exercised at least once per
+# release-candidate run, AND every named CrashBoundary is armed at least
+# once per release. Catches the silent-coverage-loss class of regression
+# where a refactor drops a fault path or a boundary stops being reachable.
+
+name: Fault-VFS + Crash-Boundary Coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/conformance/src/fault_vfs/**'
+      - 'crates/conformance/src/crash_boundary/**'
+      - 'tests/fault_*.rs'
+      - 'tests/crash_*.rs'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/conformance/src/fault_vfs/**'
+      - 'crates/conformance/src/crash_boundary/**'
+      - 'tests/fault_*.rs'
+      - 'tests/crash_*.rs'
+  release:
+    types: [created]
+  workflow_dispatch:
+
+concurrency:
+  group: fault-vfs-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-faultvfs-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (release-perf profile)
+        run: cargo build --profile release-perf --all-features --tests
+
+      - name: Run fault-VFS matrix
+        id: fault
+        run: |
+          set +e
+          # The injection matrix script enumerates every FaultKind and asserts
+          # at least one iteration per kind succeeds (with recovery).
+          "$WORKSPACE/scripts/run-fault-injection-matrix.sh" "$PORT" "$WORKSPACE" \
+            --emit-coverage "$WORKSPACE/round_ci/fault_vfs/coverage.json"
+          MATRIX_EXIT=$?
+          set -e
+          echo "matrix_exit=$MATRIX_EXIT" >> "$GITHUB_OUTPUT"
+
+          MISSING=$(jq -r '.uncovered_fault_kinds[]' \
+            "$WORKSPACE/round_ci/fault_vfs/coverage.json" 2>/dev/null || true)
+
+          if [[ -n "$MISSING" ]]; then
+            COUNT=$(printf '%s\n' "$MISSING" | wc -l)
+            echo "missing_kinds<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$MISSING" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "missing_count=$COUNT" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing_count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run crash-boundary coverage smoke
+        id: boundary
+        run: |
+          set +e
+          set -o pipefail
+          # The smoke test enumerates every named CrashBoundary
+          # (BeforeWalHeaderWrite, AfterFsync, AfterCheckpoint, etc.)
+          # and asserts at least one fault iteration armed each.
+          cargo test --profile release-perf --test crash_boundary_coverage_smoke -- --nocapture \
+            2>&1 | tee crash_boundary_smoke.log
+          SMOKE_EXIT=$?
+          set -e
+          echo "smoke_exit=$SMOKE_EXIT" >> "$GITHUB_OUTPUT"
+
+          UNARMED=$(grep -oE 'UNARMED: [A-Za-z]+' crash_boundary_smoke.log \
+            | sed 's/^UNARMED: //' | sort -u || true)
+
+          if [[ -n "$UNARMED" ]]; then
+            COUNT=$(printf '%s\n' "$UNARMED" | wc -l)
+            echo "unarmed_boundaries<<EOF" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$UNARMED" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "unarmed_count=$COUNT" >> "$GITHUB_OUTPUT"
+          else
+            echo "unarmed_count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fault-vfs-coverage-${{ github.run_id }}
+          path: |
+            ${{ env.WORKSPACE }}/round_ci/fault_vfs/
+            crash_boundary_smoke.log
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Annotate
+        if: always()
+        run: |
+          MISSING="${{ steps.fault.outputs.missing_count }}"
+          UNARMED="${{ steps.boundary.outputs.unarmed_count }}"
+
+          if [[ "$MISSING" -gt 0 ]]; then
+            echo "::error title=Fault-VFS Coverage::$MISSING FaultKind(s) not exercised this run."
+            echo "Missing: ${{ steps.fault.outputs.missing_kinds }}"
+            echo "Route via new-fault-class-discovered.md or recover the dropped path."
+          fi
+
+          if [[ "$UNARMED" -gt 0 ]]; then
+            echo "::error title=Crash-Boundary Coverage::$UNARMED CrashBoundary not armed."
+            echo "Unarmed: ${{ steps.boundary.outputs.unarmed_boundaries }}"
+          fi
+
+          if [[ "$MISSING" -eq 0 && "$UNARMED" -eq 0 ]]; then
+            echo "::notice title=Fault Coverage::All FaultKinds exercised, all CrashBoundaries armed."
+          fi
+
+      - name: Fail on missing coverage
+        if: >
+          (steps.fault.outputs.matrix_exit != '' && steps.fault.outputs.matrix_exit != '0') ||
+          (steps.boundary.outputs.smoke_exit != '' && steps.boundary.outputs.smoke_exit != '0') ||
+          (steps.fault.outputs.missing_count != '' && steps.fault.outputs.missing_count != '0') ||
+          (steps.boundary.outputs.unarmed_count != '' && steps.boundary.outputs.unarmed_count != '0')
+        run: exit 1

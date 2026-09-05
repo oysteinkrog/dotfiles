@@ -1,0 +1,191 @@
+schema_version: "2.0"
+name: gauntlet-phase-01-recon
+description: >-
+  Phase 1 RECON fan-out per crate. Spawns one surface-archaeologist pane per
+  crate in the port, dispatches the per-crate marching order in parallel, waits
+  for per-pane acks, collects per-crate recon outputs, then runs a single
+  synthesizer pane to produce the unified recon document.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace (sibling of the port)
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id (e.g. r20260522-1830-3a8c1d2)
+    required: true
+    type: string
+  crate_list:
+    description: >-
+      Array of crate basenames under port_path/crates/. If empty, the
+      ensure_workspace step populates ${vars.workspace_path}/phase1_crate_list.txt
+      from `ls ${vars.port_path}/crates/` and the iterate step reads from
+      that file via ${steps.ensure_workspace.output} parsing.
+    default: []
+    type: array
+  session_name:
+    description: NTM session name (must equal NTM_PROJECTS_BASE/<basename>)
+    required: true
+    type: string
+  reference_version:
+    description: Pinned reference version label for recon attribution
+    required: true
+    type: string
+
+settings:
+  timeout: 4h
+  on_error: continue
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail]
+
+steps:
+  - id: ensure_workspace
+    name: Verify workspace exists and Phase 0 outputs are present
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify ${vars.workspace_path}/phase0_project_class.json exists.
+      Verify ${vars.workspace_path}/phase0_oracle_preflight.json has aggregate_outcome == "green".
+      Verify ${vars.workspace_path}/AGENTS.md mandate paragraph is present.
+      If crate_list is empty, list directories under ${vars.port_path}/crates/ and echo them comma-separated to ${vars.workspace_path}/phase1_crate_list.txt.
+      Confirm by writing ${vars.workspace_path}/phase1_dispatch_ready.flag and acknowledge with: "Phase 1 dispatch ready".
+    wait: completion
+    timeout: 5m
+    output_var: dispatch_ready
+
+  - id: dispatch_archaeology
+    name: Per-crate surface-archaeology dispatch (parallel fan-out)
+    depends_on: [ensure_workspace]
+    loop:
+      items: "${vars.crate_list}"
+      as: crate
+      max_iterations: 64
+      delay: 5s
+      collect: per_crate_dispatches
+      steps:
+        - id: dispatch_one_crate
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are dispatched to perform Phase 1 RECON archaeology for crate "${crate}" of port ${vars.port_path}.
+
+            Read the per-crate marching order template at:
+              ~/.claude/skills/running-the-gauntlet-on-your-rust-port/assets/ntm-marching-orders/MO-recon-archaeology.md
+
+            Substitute:
+              PANE_N         = your pane index
+              WORKSPACE_PATH = ${vars.workspace_path}
+              ROLE           = surface-archaeologist
+              MODEL          = claude-opus
+              COORDINATION_MODE = agent-mail
+              SESSION_ID     = ${vars.run_id}
+              CRATE          = ${crate}
+              PORT_PATH      = ${vars.port_path}
+              REFERENCE_VERSION = ${vars.reference_version}
+              OUTPUT_PATH    = ${vars.workspace_path}/phase1_recon_${crate}.md
+              THREAD_ID      = gauntlet-${vars.run_id}-phase1-recon-${crate}
+
+            Acknowledge on Agent Mail thread `gauntlet-${vars.run_id}-phase1-recon-${crate}` with subject:
+              "[${vars.run_id}] Phase 1 recon dispatch ack — crate=${crate}"
+
+            Then execute the marching order. On completion, write the OUTPUT_PATH file
+            and post a "done" message on the same thread.
+          wait: completion
+          timeout: 90m
+          on_error: retry
+          retry_count: 1
+          retry_delay: 60s
+          output_var: "recon_${crate}_result"
+
+  - id: wait_for_acks
+    name: Wait for all per-crate recon panes to ack onboarding
+    depends_on: [dispatch_archaeology]
+    agent: claude
+    pane: 2
+    prompt: |
+      For each crate in ${vars.crate_list}, verify the Agent Mail thread
+      `gauntlet-${vars.run_id}-phase1-recon-<crate>` has at least one ack message
+      AND that ${vars.workspace_path}/phase1_recon_<crate>.md exists with the
+      four required sections (public surface, perf surface, conformance
+      surface, reference-mapping). Use:
+
+        ntm mail inbox ${vars.session_name} --json | jq '.threads[] | select(.id | startswith("gauntlet-${vars.run_id}-phase1-recon-"))'
+
+      Write a tally to ${vars.workspace_path}/phase1_recon_ack_tally.json with shape
+      {"acked": [...], "missing": [...], "incomplete": [...]}.
+
+      If any are missing or incomplete after 5 minutes of polling, post a
+      "BLOCKED" message on `gauntlet-${vars.run_id}-phase1-synthesis` and exit
+      non-zero. Otherwise reply "All N crates recon-ack-complete".
+    wait: completion
+    timeout: 30m
+    on_error: fail
+
+  - id: collect_outputs
+    name: Verify every per-crate recon file is non-empty and committed
+    depends_on: [wait_for_acks]
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify every ${vars.workspace_path}/phase1_recon_<crate>.md is non-empty,
+      contains the four required section headers, and has been git-added.
+
+      Run:
+        cd ${vars.workspace_path} && git add phase1_recon_*.md && git diff --cached --stat
+
+      Output the file list and total line count. Write
+      ${vars.workspace_path}/phase1_collected.json with the manifest. Acknowledge:
+      "Phase 1 outputs collected — N files, M total lines".
+    wait: completion
+    timeout: 10m
+    on_error: fail
+
+  - id: synthesize
+    name: Single synthesizer pane writes the unified recon document
+    depends_on: [collect_outputs]
+    agent: claude
+    route: least-loaded
+    prompt: |
+      You are the Phase 1 synthesizer. Read every ${vars.workspace_path}/phase1_recon_*.md
+      and write ${vars.workspace_path}/phase1_unified_recon.md containing:
+
+        1. Cross-crate public-surface index (every `pub` item with its origin crate).
+        2. Reference-mapping coverage table (per reference symbol → crate location → status).
+        3. Duplicated-surface callouts.
+        4. Orphaned-export callouts.
+        5. Surface-gap summary (every reference symbol with no port equivalent).
+
+      The reference-mapping coverage MUST be >= 90% (every reference public
+      symbol appears with a status: present|partial|missing).
+
+      Post on Agent Mail thread `gauntlet-${vars.run_id}-phase1-synthesis` with the
+      coverage percentage and the list of crates that produced gaps.
+    wait: completion
+    timeout: 45m
+    on_error: retry
+    retry_count: 1
+    retry_delay: 30s
+    output_var: synthesis_result
+
+  - id: close_phase
+    name: Commit phase 1 outputs and emit phase-complete signal
+    depends_on: [synthesize]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.workspace_path} && \
+        git add phase1_*.md phase1_*.json && \
+        git commit -m "phase1: recon complete — $(jq -r '.crate_count' phase1_collected.json) crates" && \
+        touch ${vars.workspace_path}/.gauntlet/phase1_complete.flag
+
+      Acknowledge: "Phase 1 RECON complete — proceed to Phase 2".
+    wait: completion
+    timeout: 5m
+    on_error: fail

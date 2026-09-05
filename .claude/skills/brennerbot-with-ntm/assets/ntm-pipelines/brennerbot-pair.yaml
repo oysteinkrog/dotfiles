@@ -1,0 +1,202 @@
+schema_version: "2.0"
+name: brennerbot-pair
+description: 2-role brennerbot session (cc + cod). Pair tier — minimal triangulation. Devil's-Advocate role rotates with Investigator via mode-flip.
+
+inputs:
+  - workspace_path
+  - session_id
+  - question_of_record_path
+  - mode
+
+defaults:
+  model_mix: "cc:1,cod:1"
+  productive_ignorance_pane: 1
+  triage_pane: 1
+  meta_synthesizer_pane: 2
+
+steps:
+  - id: register_mail
+    command: ./scripts/register-mail-identities.sh --project-key=${workspace_path} --session=${session_id}
+    on_failure: fallback_to_ntm_inbox
+
+  - id: dispatch_onboarding
+    after: register_mail
+    foreach_pane:
+      template: assets/marching-orders/MO-02-onboarding.md
+      params:
+        PANE_N: ${pane.index}
+        WORKSPACE_PATH: ${workspace_path}
+        QUESTION_OF_RECORD_PATH: ${question_of_record_path}
+        SESSION_ID: ${session_id}
+        ROLE: ${pane.role}
+        MODEL: ${pane.model}
+        PEER_LIST: "session roster for ${session_id}; run ntm list ${session_id}"
+        COORDINATION_MODE: agent-mail
+        PRODUCTIVE_IGNORANCE: ${pane.productive_ignorance}
+        DOMAIN: ${pane.domain}
+    parallel: true
+
+  - id: wait_for_acks
+    after: dispatch_onboarding
+    command: ./scripts/wait-for-onboard-acks.sh --session=${session_id}
+    timeout: 300s
+
+  - id: phase_3
+    after: wait_for_acks
+    foreach_pane:
+      template: assets/marching-orders/MO-03a-propose.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: ${session_id}
+        COUNT: 4   # smaller pool for Pair tier
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_3_triage
+    after: phase_3
+    pane: ${defaults.triage_pane}
+    template: assets/marching-orders/MO-03b-triage.md
+    params:
+      PANE_N: ${defaults.triage_pane}
+      SESSION_ID: ${session_id}
+
+  - id: phase_3_third_alt_check
+    after: phase_3_triage
+    command: ./scripts/audit-bead-invariants.sh --check=third_alternative_present --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.triage_pane}
+      template: assets/marching-orders/MO-03c-third-alternative.md
+      params:
+        PANE_N: ${defaults.triage_pane}
+        SESSION_ID: ${session_id}
+
+  - id: phase_3_complete_flag
+    after: phase_3_third_alt_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_3_complete.flag
+
+  - id: phase_4_loop
+    after: phase_3_complete_flag
+    loop:
+      max_iterations: 4   # smaller cap for Pair
+      until: ./scripts/convergence-check.sh --phase=4 --workspace=${workspace_path}
+      body:
+        - id: phase_4_investigate
+          foreach_pane:
+            template: assets/marching-orders/MO-04a-investigate.md
+            params:
+              PANE_N: ${pane.index}
+              SESSION_ID: ${session_id}
+              H_ID: ${pane.domain}
+          parallel: true
+        # Pair: alternate panes wear devil's-advocate hat round-robin via mode-flip
+        - id: phase_4_devils_advocate_via_mode_flip
+          foreach_pane:
+            template: assets/marching-orders/MO-mode-flip-investigator-to-advocate.md
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${pane.domain}
+              SESSION_ID: ${session_id}
+              WORKSPACE_PATH: ${workspace_path}
+          parallel: true
+
+  - id: phase_4_complete_flag
+    after: phase_4_loop
+    command: touch ${workspace_path}/.brenner_workspace/phase_4_complete.flag
+
+  - id: phase_5_debate
+    after: phase_4_complete_flag
+    command: ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=1
+
+  - id: phase_5_rounds_gate
+    after: phase_5_debate
+    command: |
+      test -f ${workspace_path}/.brenner_workspace/phase_5_debate_rounds_complete.flag || {
+        echo "Phase 5 Round 1 was dispatched and debate-pairs.pairs is frozen. Run ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=2, then --round=3 when ready; round 3 marks .brenner_workspace/phase_5_debate_rounds_complete.flag before adjudication."
+        exit 1
+      }
+
+  - id: phase_5_adjudicate
+    after: phase_5_rounds_gate
+    foreach:
+      pairs: $(cat "${workspace_path}/.brenner_workspace/debate-pairs.resolved.pairs" 2>/dev/null || true)
+      template: assets/marching-orders/MO-05b-adjudicate.md
+      pane_assignment_strategy: rotate_adjudicator
+      params:
+        PANE_N: ${pane.index}
+        DEBATE_ID: ${item.debate_id}
+        SESSION_ID: ${session_id}
+
+  - id: phase_5_complete_flag
+    after: phase_5_adjudicate
+    command: touch ${workspace_path}/.brenner_workspace/phase_5_complete.flag
+
+  - id: phase_6_distill
+    after: phase_5_complete_flag
+    foreach:
+      models: ["cc", "cod"]
+      template: assets/marching-orders/MO-06a-distill.md
+      pane_assignment_strategy: by_model_family
+      params:
+        PANE_N: ${pane.index}
+        MODEL_FAMILY: ${item}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_6_meta
+    after: phase_6_distill
+    pane: ${defaults.meta_synthesizer_pane}
+    template: assets/marching-orders/MO-06b-meta-synthesize.md
+    params:
+      PANE_N: ${defaults.meta_synthesizer_pane}
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+
+  # Note: with only 2 model families, disagreement_register has only (2 choose 2)=1 entry
+  # That's a known Pair-tier limitation; flag in phase_0_scope_decision.md
+  - id: phase_6_disagreement_lint
+    after: phase_6_meta
+    command: ./scripts/disagreement-register-lint.sh --workspace=${workspace_path} --min-entries=1
+
+  - id: phase_6_convergence_check
+    after: phase_6_disagreement_lint
+    command: ./scripts/convergence-check.sh --phase=6 --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.meta_synthesizer_pane}
+      template: assets/marching-orders/MO-06b-meta-synthesize.md
+      params:
+        PANE_N: ${defaults.meta_synthesizer_pane}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+      reason: "Phase 6 has not produced two consecutive trivial meta-synthesis passes"
+
+  - id: phase_6_complete_flag
+    after: phase_6_convergence_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_6_complete.flag
+
+  - id: phase_7_audit
+    after: phase_6_complete_flag
+    # Single trio-round may be enough for Pair tier
+    foreach_pane:
+      template: assets/marching-orders/MO-07a-fresh-eyes.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: ${session_id}
+    parallel: true
+
+  - id: phase_7_complete_flag
+    after: phase_7_audit
+    command: touch ${workspace_path}/.brenner_workspace/phase_7_complete.flag
+
+  - id: phase_8_freeze
+    after: phase_7_complete_flag
+    pane: 0
+    template: assets/marching-orders/MO-08-freeze.md
+    params:
+      PANE_N: 0
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+      SKILL_SCRIPTS: ./scripts
+
+outputs:
+  - resume_md: ${workspace_path}/deliverables/RESUME.md

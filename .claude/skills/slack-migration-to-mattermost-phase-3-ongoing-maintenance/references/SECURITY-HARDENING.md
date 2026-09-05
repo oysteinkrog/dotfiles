@@ -25,7 +25,7 @@ non-root `deploy` user). Phase 3 keeps it from drifting.
   - HSTS header present
   - Security headers: `X-Content-Type-Options nosniff`, `X-Frame-Options SAMEORIGIN`
 
-## Quarterly (`rotate-credentials`)
+## Quarterly (`rotate-tokens`)
 
 - Rotate Mattermost admin PAT.
 - Review Mattermost System Console → Reporting → Audits for the last 90
@@ -33,7 +33,7 @@ non-root `deploy` user). Phase 3 keeps it from drifting.
 - Review Mattermost System Console → User Management → Users, filter
   for `system_admin` role. Remove admins who no longer need it.
 
-## Annually (`rotate-credentials` + manual)
+## Annually (`rotate-tokens` + manual)
 
 - Rotate SSH keypairs.
 - Rotate Postmark server token.

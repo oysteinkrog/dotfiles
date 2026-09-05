@@ -31,24 +31,24 @@ Use bead IDs as coordination threads for multi-agent work:
 
 | Concept | Value |
 |---------|-------|
-| Mail `thread_id` | `br-###` |
-| Mail subject | `[br-###] ...` |
-| File reservation `reason` | `br-###` |
-| Commit messages | Include `br-###` for traceability |
+| Mail `thread_id` | `bd-###` |
+| Mail subject | `[bd-###] ...` |
+| File reservation `reason` | `bd-###` |
+| Commit messages | Include `bd-###` for traceability |
 
 ### Agent Mail Workflow
 
 ```python
 # 1. Reserve files for bead
-file_reservation_paths(..., reason="br-123")
+file_reservation_paths(..., reason="bd-123")
 
 # 2. Announce work in thread
-send_message(..., thread_id="br-123", subject="[br-123] Starting...")
+send_message(..., thread_id="bd-123", subject="[bd-123] Starting...")
 
 # 3. Do work...
 
 # 4. Close bead when done
-br close br-123 --reason "Completed"
+br close bd-123 --reason "Completed"
 
 # 5. Release reservations
 release_file_reservations(...)
@@ -62,7 +62,7 @@ When multiple agents work on the same project:
 
 1. **Use Agent Mail file reservations** to avoid conflicts
 2. **Use bead ID as thread_id** for communication
-3. **Check `br ready --json`** to see unblocked work (if it fails in your br version, use `bv --recipe actionable --robot-plan`)
+3. **Check `br ready --json`** to see unblocked work
 4. **Close beads when done** to unblock dependents
 
 ### Finding Parallel Work
@@ -87,17 +87,17 @@ br init
 br ready --json
 
 # 3. Claim work
-br update <id> --status in_progress --assignee "$(git config user.email)"
+br update bd-abc123 --status in_progress --assignee "$(git config user.email)"
 
 # 4. Do work...
 
 # 5. Complete
-br close <id> --reason "Implemented feature X"
+br close bd-abc123 --reason "Implemented feature X"
 
 # 6. Sync to git
 br sync --flush-only
 git add .beads/
-git commit -m "feat: implement X (<id>)"
+git commit -m "feat: implement X (bd-abc123)"
 ```
 
 ---

@@ -1,0 +1,146 @@
+# .github/workflows/beads-pre-merge-audit.yml
+#
+# Pre-merge gate: when a PR claims to close one or more beads, run a
+# single-bead audit and block the merge if any closed bead scores below
+# threshold.
+#
+# Trigger:  PR opened / synchronize / reopened.
+# Detect closed beads from PR title / body using the `beads-###` pattern,
+# then run scripts/single-bead-audit.sh per bead. Aggregate results into a
+# Markdown PR comment + a check status.
+#
+# Setup:
+#   1. Copy to .github/workflows/beads-pre-merge-audit.yml.
+#   2. Configure required-status-check on the protected branch.
+#   3. Same toolchain prereqs as tripwire workflow.
+#
+name: beads-pre-merge-audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  THRESHOLD: '700'
+  # The local audit directory is `<project>/beads_compliance_audit/` (inside
+  # the repo, .gitignore'd by bootstrap-audit.sh). For long-lived audit
+  # history we recommend a SEPARATE GitHub repo dedicated to the audit
+  # artifacts, conventionally named `<repo>-beads-audit`. Below we check it
+  # out INTO the project tree at the canonical local audit dir path.
+  AUDIT_REPO: '${{ github.repository_owner }}/${{ github.event.repository.name }}-beads-audit'
+
+jobs:
+  pre-merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Checkout audit dir
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AUDIT_REPO }}
+          path: beads_compliance_audit
+          ssh-key: ${{ secrets.AUDIT_REPO_KEY }}
+
+      - name: Install audit toolchain
+        run: |
+          sudo apt-get install -y -qq jq ripgrep python3-yaml
+          # Same br + skill install as tripwire workflow.
+          curl -fsSL https://github.com/Dicklesworthstone/beads_rust/releases/latest/download/br-linux-x86_64 \
+            -o /usr/local/bin/br
+          chmod +x /usr/local/bin/br
+
+      - name: Extract bead IDs from PR
+        id: beads
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # Strip backticks first so `bd-foo` and bd-foo both flow through.
+          # The trailing `|| true` handles the no-match case (grep exits 1)
+          # without crashing under set -e + pipefail.
+          #
+          # Bead-ID regex matches the canonical form per references/JARGON.md:
+          #   <prefix>-<seg>(-<seg>)*(.<digits>)?  e.g. bd-foo, bd-foo-bar,
+          #   bd-foo.1 (child bead). The trailing `(?:\.\d+)?` MUST be in the
+          #   pattern (was missing before — child-bead IDs got truncated and
+          #   the wrong bead was audited).
+          #
+          # `tr A-Z a-z` lowercases the OUTPUT — `grep -i` matches mixed-case
+          # but the captured text preserves the source casing, so `Closes BD-1`
+          # used to flow downstream as `BD-1` and `single-bead-audit.sh` did
+          # an exact-string compare against the lowercase inventory id `bd-1`,
+          # silently failing to find the bead. Lowercasing here matches what
+          # br itself does internally for ID comparison.
+          IDS="$(printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" \
+            | tr -d '`' \
+            | grep -oiE '(closes|closing|fixes|resolves|completes)[[:space:]]+[a-z][a-z0-9_-]+(-[a-z0-9_-]+)*(\.[0-9]+)?' \
+            | grep -oiE '[a-z][a-z0-9_-]+(-[a-z0-9_-]+)*(\.[0-9]+)?$' \
+            | tr 'A-Z' 'a-z' \
+            | sort -u || true)"
+          if [ -z "$IDS" ]; then
+            echo "No bead IDs detected in PR; skipping audit." >> "$GITHUB_STEP_SUMMARY"
+            echo "ids=" >> "$GITHUB_OUTPUT"
+          else
+            echo "ids<<EOF" >> "$GITHUB_OUTPUT"; echo "$IDS" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run single-bead audit per detected bead
+        if: steps.beads.outputs.ids != ''
+        id: audit
+        run: |
+          set -euo pipefail
+          REPORT="pre_merge_report.md"
+          : > "$REPORT"
+          FAIL=0
+          while IFS= read -r BID; do
+            [ -z "$BID" ] && continue
+            echo "## Bead \`$BID\`" >> "$REPORT"
+            set +e
+            .claude/skills/beads-compliance-and-completion-verification/scripts/single-bead-audit.sh \
+              "$PWD" "$BID" --threshold "$THRESHOLD" --policy report-only \
+              --audit-dir beads_compliance_audit \
+              | tail -50 >> "$REPORT"
+            RC=$?
+            set -e
+            if [ $RC -ne 0 ]; then FAIL=1; fi
+            echo "" >> "$REPORT"
+          done <<< "${{ steps.beads.outputs.ids }}"
+          echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment audit verdict on PR
+        if: steps.beads.outputs.ids != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('pre_merge_report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const marker = '<!-- beads-pre-merge-audit -->';
+            const comments = await github.rest.issues.listComments({owner, repo, issue_number});
+            const existing = comments.data.find(c => c.body.includes(marker));
+            const out = `${marker}\n# Beads Pre-Merge Audit\n\n${body}`;
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body: out});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body: out});
+            }
+
+      - name: Block merge if any bead failed
+        if: steps.audit.outputs.fail == '1'
+        run: |
+          echo "::error::One or more beads referenced in this PR failed the pre-merge audit."
+          exit 1

@@ -406,4 +406,4 @@ Before an incident happens, ensure:
 - **[OBSERVABILITY.md](OBSERVABILITY.md)** — What to monitor and alert on
 - **[AUDIT-LOGGING.md](AUDIT-LOGGING.md)** — How to make logs queryable
 - **[KEY-MANAGEMENT.md](KEY-MANAGEMENT.md)** — How to prevent secret leakage in the first place
-- **[reporting-sensitive-encrypted-gh-issues](../../reporting-sensitive-encrypted-gh-issues/)** — How to report vulns encrypted
+- **`/reporting-sensitive-encrypted-gh-issues`** — How to report vulns encrypted

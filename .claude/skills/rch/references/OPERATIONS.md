@@ -1,5 +1,16 @@
 # RCH Operations
 
+## Contents
+
+- [Baseline Runbook](#baseline-runbook)
+- [Worker Fleet Lifecycle](#worker-fleet-lifecycle)
+- [Fleet Deploy/Rollback](#fleet-deployrollback)
+- [Path-Dependency and Multi-Repo Notes](#path-dependency-and-multi-repo-notes)
+- [Transfer Stability (Rsync/Artifact Churn)](#transfer-stability-rsyncartifact-churn)
+- [Queue and Cancellation Operations](#queue-and-cancellation-operations)
+- [Anti-Patterns](#anti-patterns)
+- [Debug Command Pack](#debug-command-pack)
+
 ## Baseline Runbook
 
 Use this sequence for most production incidents.

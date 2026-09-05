@@ -1,0 +1,181 @@
+# audit-policy.yaml — Project-specific overrides for the beads compliance audit.
+#
+# Drop this file at <project>/beads_compliance_audit/audit-policy.yaml to
+# override defaults from references/AUDIT-AS-CODE.md. Every field is optional;
+# defaults shown commented out.
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ IMPLEMENTATION STATUS (precedence: hardcoded < this YAML < CLI flags) │
+# │                                                                         │
+# │ AUTO-LOADED by `scripts/_load-policy.sh` (sourced from run-pass.sh,    │
+# │ single-bead-audit.sh, bisect-regression.sh, diff-passes.sh,            │
+# │ spec-quality-gate.sh):                                                  │
+# │    threshold              → THRESHOLD shell var                        │
+# │    remediation_policy     → POLICY  shell var                          │
+# │                                                                         │
+# │ AUTO-COPIED by `scripts/bootstrap-audit.sh` on first audit-dir         │
+# │ creation, in this priority order:                                       │
+# │    <project>/audit-policy.yaml (project-local override)                 │
+# │    <project>/.beads/audit-policy.yaml (alongside bead store)           │
+# │    skill template (this file) — fallback                               │
+# │ Once seeded into <audit-dir>/audit-policy.yaml it's the canonical copy.│
+# │                                                                         │
+# │ READ DIRECTLY by the owning subagent / orchestrator (no shell helper): │
+# │    parallelism            (orchestrator chooses subagent fan-out)      │
+# │    weights_by_type / weights_by_label  (scorer.md applies overrides)   │
+# │    project_theater_patterns  (theater-detector.md augments scan)       │
+# │    release_gate            (release-gate-keeper.md applies policy)     │
+# │    subagents               (orchestrator enables/disables specialists) │
+# │    phase_4_environment     (compliance-verifier.md sandboxes tests)    │
+# │    attribution             (trauma-guard.md / next pass priors)        │
+# │                                                                         │
+# │ Each owning subagent's `## When done` (or equivalent) section says      │
+# │ exactly which YAML key it consumes and how. Wiring more sections into  │
+# │ shell scripts is tracked as future work — see references/AUDIT-AS-CODE.│
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ----------------------------------------------------------------------------
+# Threshold + remediation policy
+# ----------------------------------------------------------------------------
+threshold: 700                   # default 700; closed bead with score < this = false-closed
+remediation_policy: completion-debt  # completion-debt | reopen | report-only
+
+# ----------------------------------------------------------------------------
+# Per-bead-type rubric weight overrides
+# Sum of weights must equal 1000 per type.
+# ----------------------------------------------------------------------------
+weights_by_type:
+  bug:
+    implementation: 200
+    tests:           400          # bug fixes stand or fall on regression tests
+    anti_theater:    150
+    test_depth:      150
+    docs:             50
+    integration:      50
+
+  perf:
+    implementation: 200
+    tests:           150
+    anti_theater:    100
+    test_depth:      350          # perf bead = the benchmarks ARE the proof
+    docs:             50
+    integration:     150          # the budget often interacts with siblings
+
+  security:
+    implementation: 250
+    tests:           300          # negative tests dominate
+    anti_theater:    250          # mocks-where-forbidden is fatal here
+    test_depth:      100
+    docs:             50
+    integration:      50
+
+  migration:
+    implementation: 250
+    tests:           200          # rehearsal + rollback drill weight here
+    anti_theater:    100
+    test_depth:      150
+    docs:            150          # runbook + post-migration validation procedure
+    integration:     150          # who else depends on the schema
+
+  docs:
+    implementation:  500          # the doc IS the implementation
+    tests:           100          # link-checker, fidelity tests
+    anti_theater:    100          # no "TODO: write this section" passes
+    test_depth:      100
+    docs:            150
+    integration:      50
+
+# ----------------------------------------------------------------------------
+# Per-label rubric overrides (apply ON TOP of per-type overrides)
+# Useful for "this team's auth beads always demand revocation tests"
+# ----------------------------------------------------------------------------
+weights_by_label:
+  critical-path:
+    implementation: 350           # bump core; we don't tolerate weak impl on the spine
+  needs-runbook:
+    docs:           250
+
+# ----------------------------------------------------------------------------
+# Project-specific theater patterns (mined from /cass; expand by hand too)
+# Each pattern: signature regex + severity. Grepped over evidence files only.
+# ----------------------------------------------------------------------------
+project_theater_patterns:
+  - id: P-sleep-as-fake
+    signature: 'tokio::time::sleep|asyncio\.sleep|setTimeout'
+    file_glob: ['**/*.rs', '**/*.py', '**/*.ts']
+    in_test_files: false           # only flag in production paths
+    severity: BLOCKING
+    rationale: 'this codebase has 6 prior false-closed beads with sleep-as-fake (mined from /cass 2026-04-12)'
+
+  - id: P-hardcoded-stripe-id
+    signature: 'cus_test_|sub_test_|price_test_'
+    file_glob: ['**/*.ts', '**/*.tsx']
+    in_test_files: false
+    severity: MAJOR
+    rationale: 'hardcoded Stripe test IDs in production paths indicate stub-not-real'
+
+# ----------------------------------------------------------------------------
+# Per-agent attribution priors (consumed by subagents/trauma-guard.md and the
+# Phase 7 attribution computation; see references/AGENT-ATTRIBUTION.md).
+#
+# After ≥ N closes per agent in the rolling window, if the agent's false-closed
+# rate exceeds prior_penalty_threshold, every bead they newly close starts with
+# `prior_penalty_amount` subtracted from its expected score. The agent earns the
+# prior back after `reset_after_clean_passes` consecutive clean passes.
+#
+# Attribution is feedback, not blame — see AGENT-ATTRIBUTION.md "Honest framing".
+# ----------------------------------------------------------------------------
+attribution:
+  enabled: true
+  min_closes_for_eligibility: 30        # below this, sample size too small to penalize
+  prior_window_days: 30                 # rolling window for the rate calculation
+  prior_penalty_threshold: 0.10         # > 10 % false-closed rate triggers the penalty
+  prior_penalty_amount: -25             # subtract from each new bead's expected score
+  reset_after_clean_passes: 3           # earn the prior back after N clean passes
+
+# ----------------------------------------------------------------------------
+# Release gate policy (consumed by subagents/release-gate-keeper.md)
+# ----------------------------------------------------------------------------
+release_gate:
+  max_false_closed: 0
+  min_score_median: 850
+  max_pagerank_weighted_false_closed: 0
+  require_convergence: true
+  critical_path_minimum_score: 700
+  blocked_bead_types_below_threshold: ['security', 'auth', 'data-integrity']
+  max_regression_pct: 5
+
+# ----------------------------------------------------------------------------
+# Subagent enable / disable (Squad+ tier; only meaningful in parallel mode)
+# ----------------------------------------------------------------------------
+subagents:
+  security-auditor:        true
+  performance-auditor:     true
+  migration-safety-reviewer: true
+  api-contract-checker:    true
+  cass-pattern-miner:      onboarding_only
+  red-team-adversary:      comprehensive_only
+  spec-quality-reviewer:   pre_claim_only
+
+# ----------------------------------------------------------------------------
+# Phase 4 environment (sandbox the test re-runs)
+# See references/PHASE-4-ENVIRONMENTS.md for tradeoffs.
+# ----------------------------------------------------------------------------
+phase_4_environment:
+  kind: native           # native | docker | nix | testcontainers
+  network_policy: allow  # allow | deny | localhost-only
+  allow_real_services:   # explicit allowlist; sandbox if unset
+    - postgres
+    - redis
+    - localhost
+  capture_strace: false  # heavy; only for debugging "test passes locally fails in CI"
+
+# ----------------------------------------------------------------------------
+# Cost / parallelism cap (Squad+ tier)
+# ----------------------------------------------------------------------------
+parallelism:
+  per_phase: 6
+  per_resource:
+    db_port: 1            # serialize tests that need port 5432
+    gpu:     1
+    network: 4

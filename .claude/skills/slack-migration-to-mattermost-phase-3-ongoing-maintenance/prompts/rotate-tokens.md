@@ -19,7 +19,7 @@ Procedure:
 5. Run `./scripts/doctor.sh --require-remote --require-mcp`. All green.
 6. Revoke old credential in provider UI. Pause for me to complete.
 7. Verify old credential is dead (same test should now 401/403).
-8. Append to `workdir-phase3/rotate-credentials-audit.json` with my name,
+8. Append to `workdir-phase3/rotate-tokens-audit.json` with my name,
    timestamp, reason, and confirmation that old was revoked.
 
 If any step fails: STOP. Don't proceed to revoke the old credential with

@@ -12,7 +12,7 @@
 #   db-health            Postgres health snapshot
 #   restore-drill        Restore the latest backup into SCRATCH_DB_URL
 #   schedule-reboot      Schedule a reboot in the next off-hours window
-#   rotate-credentials   Rotate PAT / SSH / offsite / etc. (pass --scope <name>)
+#   rotate-tokens   Rotate PAT / SSH / offsite / etc. (pass --scope <name>)
 #   disaster-recovery    Open the DR playbook (manual stage)
 #   weekly-sweep         Combo: health + update-os + backup + db-health
 #
@@ -30,8 +30,8 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
     exit 2
 fi
 
-# shellcheck source=/dev/null
 set -a
+# shellcheck disable=SC1090
 source "${CONFIG_PATH}"
 set +a
 
@@ -58,7 +58,7 @@ Stages:
   db-health            Postgres health snapshot
   restore-drill        Restore latest backup into SCRATCH_DB_URL
   schedule-reboot      Reboot in next off-hours window
-  rotate-credentials   Rotate credentials (pass --scope <name>)
+  rotate-tokens   Rotate credentials (pass --scope <name>)
   disaster-recovery    Open DR playbook (manual)
   weekly-sweep         Combo: health + update-os + backup + db-health
 USAGE
@@ -128,8 +128,8 @@ case "${STAGE}" in
     schedule-reboot)
         run_stage_script schedule-reboot schedule-reboot.sh "$@"
         ;;
-    rotate-credentials)
-        run_stage_script rotate-credentials rotate-credentials.sh "$@"
+    rotate-tokens)
+        run_stage_script rotate-tokens rotate-tokens.sh "$@"
         ;;
     disaster-recovery)
         DR_PATH="${SCRIPT_DIR}/references/DISASTER-RECOVERY.md"

@@ -1,0 +1,190 @@
+name: brennerbot-post-mortem
+description: |
+  Post-mortem-formalization mode pipeline — deep companion to
+  incident-investigation mode. Runs all 10 phases over 4-6 hours.
+
+  Per EXTENDED-OPERATING-MODES.md `post-mortem-formalization` mode
+  and assets/marching-orders/MO-post-mortem-formalization.md.
+
+  Use AFTER incident-investigation has produced an INCIDENT-VERDICT.md.
+  This pipeline formalizes the learning loop.
+
+inputs:
+  incident_verdict_path: required  # Path to deliverables/INCIDENT-VERDICT.md from incident-investigation mode
+  incident_name: required          # Short identifier (e.g., "INC-2026-05-12-billing-outage")
+  workspace: required              # Workspace path for the post-mortem session
+  hours_after_incident: optional   # Default 24; how long after incident to run post-mortem
+
+phases:
+  - name: phase_pre_check
+    type: automated
+    description: |
+      Verify INCIDENT-VERDICT.md exists. Verify hours_after_incident
+      threshold is met (don't run post-mortem same day).
+
+    checks:
+      - file_exists: ${incident_verdict_path}
+      - time_since_incident: ">= ${hours_after_incident:24}h"
+
+  - name: phase_1_framing
+    type: manual
+    description: |
+      Question of record format per MO-post-mortem-formalization.md Step 2.
+      Includes 5-whys preliminary draft.
+      Pin incident logs / dashboards / timeline as corpus sources S-001+.
+
+    deliverable: intake/question_of_record.md
+
+  - name: phase_2_bootstrap
+    type: automated
+    description: |
+      Squad tier (cc:3, cod:1, gmi:1).
+      Domain assignments per MO-post-mortem-formalization.md Step 3.
+
+    dispatch:
+      - MO-02-onboarding.md (per pane)
+
+    domain_assignments:
+      - investigator-1: timeline reconstruction
+      - investigator-2: monitoring/alerting gaps
+      - investigator-3: code paths
+      - devils-advocate: process/communication
+      - synthesizer: cross-domain coordination
+
+  - name: phase_3_hypotheses
+    type: manual
+    description: |
+      Each contributing-factor candidate is an H.
+      Mandatory third-alternative ("issue was unique and won't recur").
+
+    dispatch:
+      - MO-03a-propose.md
+      - MO-03b-triage.md
+      - MO-03c-third-alternative.md (mandatory)
+
+  - name: phase_4_investigate
+    type: manual
+    description: |
+      Per MO-04a-investigate.md per H. Specifically for post-mortems:
+      - Cite incident logs verbatim (line:timestamp)
+      - Cite specific code paths (file:line + commit SHA)
+      - Cite process documents / runbooks
+      - Cite communication channels (slack thread links)
+
+      Quickie pilots highly valuable — many H can be quickly tested
+      against logs.
+
+    dispatch:
+      - MO-04a-investigate.md (per H, per investigator)
+      - MO-04b-devils-advocate.md
+      - MO-quickie-pilot.md (preferred for log-based H tests)
+
+    convergence_check: convergence-check.sh --phase=4 --workspace=${workspace}
+
+  - name: phase_5_adjudicate
+    type: manual
+    description: |
+      Each H independently adjudicated. Some primary, some secondary.
+      The 5-whys layer at which each contributing factor sits matters.
+
+    dispatch:
+      - MO-05a-cross-exam.md
+      - MO-05b-adjudicate.md
+
+  - name: phase_6_distill
+    type: manual
+    description: |
+      Catalog ALL contributing factors. Disagreement register surfaces
+      methodology disagreements (code vs process; severity calibration).
+
+    dispatch:
+      - MO-06a-distill.md (per family)
+      - MO-06b-meta-synthesize.md
+
+  - name: phase_7_audit
+    type: manual
+    description: |
+      Standard fresh-eyes trio. Plus post-mortem-specific checks:
+      - Did the post-mortem identify ALL contributing factors?
+      - Are action items SMART (Specific, Measurable, Assigned, Realistic, Time-bound)?
+      - Are process improvements tied to specific 5-whys layers?
+
+    dispatch:
+      - MO-07a-fresh-eyes.md (trio)
+      - subagents/red-team.md (if SEV-1+)
+
+    convergence_check: convergence-check.sh --phase=7 --workspace=${workspace}
+
+  - name: phase_8_freeze
+    type: manual
+    description: |
+      Standard. Plus update CROSS-SESSION-DRIFT-CATALOG.md with
+      cross-incident patterns.
+
+    sub_steps:
+      - cross_incident_pattern_check: scripts/cross-incident-pattern.sh
+      - six_layer_validation: scripts/check-six-layer-validation.sh
+
+  - name: phase_9_handback
+    type: manual
+    description: |
+      Use assets/templates/post-mortem-template.md.
+      Save to deliverables/POST-MORTEM-REPORT.md.
+
+    deliverable: deliverables/POST-MORTEM-REPORT.md
+
+    mandatory_sections:
+      - executive_summary
+      - timeline
+      - root_cause
+      - 5_whys_analysis
+      - contributing_factors_table
+      - what_went_well
+      - action_items_table
+      - process_improvements
+      - methodology_lessons
+      - sign_off
+
+  - name: phase_10_drift_and_pattern
+    type: manual
+    description: |
+      Standard fresh-agent drift check.
+      Plus cross-incident pattern detection.
+
+    dispatch:
+      - subagents/drift-auditor.md (FRESH agent, NOT swarm pane)
+
+    sub_steps:
+      - update_pattern_catalog: references/INCIDENT-PATTERN-CATALOG.md
+      - commit_methodology_lessons: per CROSS-SESSION-LEARNING.md
+
+  - name: phase_action_item_commitment
+    type: post_session
+    description: |
+      Each action item gets a tracking ticket. Owner + deadline non-negotiable.
+      Schedule 4-week follow-up review.
+
+    deliverables:
+      - tickets in org tracker
+      - 4-week follow-up scheduled (cron / calendar)
+
+outputs:
+  - deliverables/POST-MORTEM-REPORT.md
+  - deliverables/HANDBACK.md
+  - deliverables/DRIFT-CHECK.md
+  - Updated references/INCIDENT-PATTERN-CATALOG.md (if pattern surfaced)
+  - Updated CROSS-SESSION-DRIFT-CATALOG.md
+  - Tracking tickets per action item
+
+wall_time_estimate:
+  T2: 4-5h
+  T3: 5-7h
+  T4: 8-12h (SEV-1 incidents)
+
+anti_patterns:
+  - Run post-mortem same day as incident
+  - Skip 5-whys (stops at surface)
+  - Action items without owners
+  - Skip cross-incident pattern check
+  - Blame-driven (anti-Brenner; toxic)
+  - Solo (multi-perspective is critical)

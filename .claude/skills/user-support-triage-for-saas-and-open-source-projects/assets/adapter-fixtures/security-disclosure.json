@@ -1,0 +1,60 @@
+[
+  {
+    "adapter_version": "support-adapter-v1",
+    "surface": "email",
+    "provider": "fixture",
+    "id": "fixture-security-001",
+    "stable_url": "https://example.invalid/admin/support/tickets/fixture-security-001",
+    "public_url": null,
+    "subject": "Possible account takeover issue",
+    "category": "security",
+    "status": "open",
+    "priority": "p0",
+    "created_at": "2026-04-27T12:00:00Z",
+    "updated_at": "2026-04-27T12:03:00Z",
+    "last_customer_message_at": "2026-04-27T12:03:00Z",
+    "last_support_message_at": null,
+    "age_hours": 0.05,
+    "customer": {
+      "id": "researcher-fixture",
+      "display": "Security Researcher",
+      "email": "researcher@example.invalid",
+      "handle": "@researcher",
+      "tier": "unknown",
+      "org": null
+    },
+    "sla": {
+      "status": "at_risk",
+      "deadline": "2026-04-27T13:00:00Z",
+      "breached_at": null,
+      "paused": false
+    },
+    "messages": [
+      {
+        "id": "fixture-security-message-1",
+        "author_type": "customer",
+        "author_display": "Security Researcher",
+        "created_at": "2026-04-27T12:03:00Z",
+        "body_preview": "I can sometimes see another user's email address after switching accounts. I have a screenshot and repro steps. Please confirm a private disclosure path."
+      }
+    ],
+    "labels": ["security", "private-disclosure"],
+    "attachments": [
+      {
+        "kind": "screenshot",
+        "name": "redacted-proof.png",
+        "available": false,
+        "note": "Fixture only; real drills should test attachment handling."
+      }
+    ],
+    "safe_actions": ["post_internal_note", "file_bead"],
+    "unsafe_actions": ["send_customer_reply", "public_close_with_comment"],
+    "evidence": [
+      {
+        "kind": "fixture",
+        "source": "assets/adapter-fixtures/security-disclosure.json",
+        "checked_at": "2026-04-27T12:10:00Z"
+      }
+    ]
+  }
+]

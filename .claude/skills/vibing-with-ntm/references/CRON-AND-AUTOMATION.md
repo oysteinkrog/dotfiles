@@ -8,17 +8,17 @@ Once you're orchestrating a swarm for ≥30 min, the cadence should be automated
 
 | Surface | Ownership | Best For |
 | --- | --- | --- |
-| `/loop <interval> <prompt>` | In-session (Claude Code skill) | Short-lived orchestration; dynamic pacing; re-plan on each tick |
+| `/loop <interval> <prompt>` | Optional in-session slash tool, when available | Short-lived orchestration; dynamic pacing; re-plan on each tick |
 | `CronCreate` | Remote scheduled agent (separate context) | Long-running (hours/days), off-context, survives your session ending |
 | Shell `cron` (`crontab -e`) | OS-level | Pure-tooling ticks (no LLM needed): metrics, backups, cleanups |
-| `schedule` skill | Skill-level wrapper | Multi-step cron with skill invocations |
+| `/schedule` | Optional scheduling slash tool, when available | Multi-step cron with skill invocations |
 
 ## When To Use Each
 
-- **Trying a pattern for the first time** → `/loop 10m "<prompt>"` — cheap, interruptible, you can watch it.
+- **Trying a pattern for the first time** → `/loop 10m "<prompt>"` if available — cheap, interruptible, you can watch it.
 - **Steady-state 1-3 project swarm you'll tend for a day** → `CronCreate` with 15-min ticks, off your main context.
 - **Metrics gathering (commits/hour, rate-limit events, disk use)** → shell cron every 5-15 min.
-- **Multi-phase workflows** (gemini review → close beads → push) → `schedule` skill with named phases.
+- **Multi-phase workflows** (gemini review → close beads → push) → `/schedule` if available, otherwise use CronCreate or shell cron with explicit phase prompts.
 
 ## `/loop` Pattern
 
@@ -32,7 +32,7 @@ Once you're orchestrating a swarm for ≥30 min, the cadence should be automated
   6. If convergence triple-check holds (see OC-016), stop the loop
 ```
 
-Dynamic `/loop` (no interval — lets the model self-pace) is ideal for deep-work phases where 30+ minute waits are natural.
+When `/loop` is available, dynamic mode (no interval) is ideal for deep-work phases where 30+ minute waits are natural.
 
 ## `CronCreate` Pattern
 

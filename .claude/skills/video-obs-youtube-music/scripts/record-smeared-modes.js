@@ -7,15 +7,30 @@
  * Starts a local server, records each mode, then stops.
  */
 
-const { chromium } = require('playwright');
 const { spawn } = require('child_process');
+const os = require('os');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
 
-const HOME = process.env.HOME || '';
-const SMEARED_LIFE_DIR = process.env.SMEARED_LIFE_DIR || path.join(HOME, 'projects', 'smeared_life');
-const DEFAULT_OUTPUT_DIR = path.join(HOME, 'Movies');
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch (error) {
+  console.error('Error: playwright is required. Run `npm install` in .claude/skills/obs-youtube-music first.');
+  process.exit(1);
+}
+
+const HTML_FILE = 'test-mode-capture.html';
+const PROJECT_DIR_CANDIDATES = [
+  process.env.OBS_PROJECT_DIR,
+  process.env.SMEARED_LIFE_DIR,
+  process.cwd(),
+  '/Users/jemanuel/projects/smeared_life'
+].filter(Boolean);
+const SMEARED_LIFE_DIR = PROJECT_DIR_CANDIDATES.find((candidate) =>
+  fs.existsSync(path.join(candidate, HTML_FILE))
+) || PROJECT_DIR_CANDIDATES[0];
 
 // Modes to test
 const MODES = [
@@ -41,7 +56,7 @@ function createServer(dir, port) {
     '.svg': 'image/svg+xml'
   };
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       let filePath = path.join(dir, req.url.split('?')[0]);
       if (filePath.endsWith('/')) filePath += 'index.html';
@@ -60,9 +75,12 @@ function createServer(dir, port) {
       });
     });
 
+    server.once('error', reject);
     server.listen(port, () => {
-      console.log(`Server running at http://localhost:${port}/`);
-      resolve(server);
+      const address = server.address();
+      const actualPort = typeof address === 'object' && address ? address.port : port;
+      console.log(`Server running at http://localhost:${actualPort}/`);
+      resolve({ server, port: actualPort });
     });
   });
 }
@@ -152,6 +170,7 @@ async function recordMode(modeName, outputFile, browser, port, width, height, fp
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited with ${code}`));
     });
+    ffmpeg.on('error', reject);
   });
 
   await context.close();
@@ -163,52 +182,72 @@ async function recordMode(modeName, outputFile, browser, port, width, height, fp
 }
 
 async function main() {
-  const outputDir = process.argv[2] || process.env.OUTPUT_DIR || DEFAULT_OUTPUT_DIR;
+  const outputDir = path.resolve(
+    process.argv[2] ||
+    process.env.OBS_OUTPUT_DIR ||
+    path.join(os.homedir(), 'Movies')
+  );
   const width = 854;
   const height = 480;
   const fps = 30;
   const durationMs = 5000;
-  const port = 8765;
+  const port = Number(process.env.OBS_PORT || 0);
 
   console.log(`Output directory: ${outputDir}`);
   console.log(`Resolution: ${width}x${height} @ ${fps}fps`);
   console.log(`Duration: ${durationMs/1000}s per mode`);
   console.log(`Modes to record: ${MODES.join(', ')}`);
 
-  // Start server
-  const server = await createServer(SMEARED_LIFE_DIR, port);
-
-  // Launch browser
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--disable-web-security',
-      '--use-gl=swiftshader',
-      '--enable-webgl',
-      '--enable-webgl2',
-      '--ignore-gpu-blocklist',
-      '--disable-gpu-sandbox'
-    ]
-  });
-
-  const results = [];
-
-  for (let i = 0; i < MODES.length; i++) {
-    const modeName = MODES[i];
-    const num = String(i + 1).padStart(2, '0');
-    const outputFile = path.join(outputDir, `intro_test_${num}_${modeName}.mp4`);
-
-    try {
-      const success = await recordMode(modeName, outputFile, browser, port, width, height, fps, durationMs);
-      results.push({ mode: modeName, file: outputFile, success });
-    } catch (err) {
-      console.error(`Error recording ${modeName}:`, err.message);
-      results.push({ mode: modeName, error: err.message, success: false });
-    }
+  const htmlPath = path.join(SMEARED_LIFE_DIR, HTML_FILE);
+  if (!fs.existsSync(htmlPath)) {
+    throw new Error(`Could not find ${HTML_FILE}. Set OBS_PROJECT_DIR or SMEARED_LIFE_DIR.`);
   }
 
-  await browser.close();
-  server.close();
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  // Start server
+  let server;
+  let listeningPort;
+  let browser;
+  const results = [];
+
+  try {
+    ({ server, port: listeningPort } = await createServer(SMEARED_LIFE_DIR, port));
+
+    // Launch browser
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-web-security',
+        '--use-gl=swiftshader',
+        '--enable-webgl',
+        '--enable-webgl2',
+        '--ignore-gpu-blocklist',
+        '--disable-gpu-sandbox'
+      ]
+    });
+
+    for (let i = 0; i < MODES.length; i++) {
+      const modeName = MODES[i];
+      const num = String(i + 1).padStart(2, '0');
+      const outputFile = path.join(outputDir, `intro_test_${num}_${modeName}.mp4`);
+
+      try {
+        const success = await recordMode(modeName, outputFile, browser, listeningPort, width, height, fps, durationMs);
+        results.push({ mode: modeName, file: outputFile, success });
+      } catch (err) {
+        console.error(`Error recording ${modeName}:`, err.message);
+        results.push({ mode: modeName, error: err.message, success: false });
+      }
+    }
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
 
   console.log('\n=== Summary ===');
   results.forEach((r, i) => {

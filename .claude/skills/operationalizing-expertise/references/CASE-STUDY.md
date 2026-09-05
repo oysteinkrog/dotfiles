@@ -8,7 +8,7 @@ brenner_bot operationalized Sydney Brenner's scientific methodology into a multi
 |-----------|----------------|
 | **Expert** | Sydney Brenner (Nobel laureate, molecular biology) |
 | **Corpus** | 236-segment Web of Stories interview transcript |
-| **Models** | GPT-5.2, Claude Opus 4.5, Gemini 3 |
+| **Models** | GPT-5.5, Claude Opus 4.7, Gemini 3.1 Pro |
 | **Output** | Next.js 16 web app + CLI coordination system |
 
 ## Corpus Structure
@@ -80,7 +80,7 @@ For each operator:
 
 ## Distillation Results
 
-### GPT-5.2 Analysis
+### GPT-5.5 Analysis
 
 **Lens**: Systematic, optimization-focused
 
@@ -90,7 +90,7 @@ For each operator:
 
 **Unique emphasis**: Decision theory framing, explicit algorithms
 
-### Claude Opus 4.5 Analysis
+### Claude Opus 4.7 Analysis
 
 **Lens**: Philosophical, epistemic
 
@@ -101,7 +101,7 @@ For each operator:
 
 **Unique emphasis**: Deep epistemology, historical context
 
-### Gemini 3 Analysis
+### Gemini 3.1 Pro Analysis
 
 **Lens**: Minimal, operational
 

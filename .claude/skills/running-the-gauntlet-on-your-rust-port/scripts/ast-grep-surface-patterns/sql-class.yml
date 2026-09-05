@@ -1,0 +1,87 @@
+# sql-class.yml — ast-grep rules for SQL-class port surface (SQLite-like)
+#
+# Use with common.yml for the cross-class basics. This file adds SQL-class
+# specific surface patterns: PRAGMA names, VDBE opcodes, dispatch-table entries.
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml \
+#                  -r scripts/ast-grep-surface-patterns/sql-class.yml \
+#                  <port-src>
+
+id: vdbe-opcode-variant
+language: Rust
+rule:
+  kind: enum_variant
+  pattern:
+    context: pub enum Opcode { $NAME = $VAL }
+    selector: enum_variant
+  inside:
+    pattern: pub enum Opcode { $$$ }
+message: "VDBE opcode: $NAME"
+severity: info
+
+---
+
+id: vdbe-opcode-match-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match opcode { Opcode::$NAME => $BODY }
+    selector: match_arm
+message: "VDBE opcode dispatch: $NAME"
+severity: info
+
+---
+
+id: pragma-name-literal
+language: Rust
+rule:
+  kind: binary_expression
+  pattern: pragma_name == "$NAME"
+message: "PRAGMA handler: $NAME (literal match)"
+severity: info
+
+---
+
+id: pragma-dispatch-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match pragma_name { "$NAME" => $BODY }
+    selector: match_arm
+  inside:
+    pattern: match pragma_name { $$$ }
+message: "PRAGMA dispatch arm: $NAME"
+severity: info
+
+---
+
+id: sql-builtin-fn
+language: Rust
+rule:
+  kind: call_expression
+  pattern: register_function($CTX, "$NAME", $$$ARGS)
+message: "Registered SQL builtin: $NAME"
+severity: info
+
+---
+
+id: collation-register
+language: Rust
+rule:
+  kind: call_expression
+  pattern: register_collation($CTX, "$NAME", $$$)
+message: "Registered collation: $NAME"
+severity: info
+
+---
+
+id: virtual-table-module
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl VirtualTableModule for $TY { $$$ }
+message: "Virtual table module impl: $TY"
+severity: info

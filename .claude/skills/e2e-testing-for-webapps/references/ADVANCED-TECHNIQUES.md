@@ -13,7 +13,7 @@ Patterns discovered from the Playwright + AI testing ecosystem. These complement
 - [Agent-Driven CI QA](#agent-driven-ci-qa)
 - [Dynamic Script Generation](#dynamic-script-generation)
 - [Structured Verification Types](#structured-verification-types)
-- [Image Compression for LLM Submission](#image-compression-for-llm-submission)
+- [Image Compression for Agent Context](#image-compression-for-agent-context)
 - [Design-to-Implementation Diff](#design-to-implementation-diff)
 - [Docker Deterministic Rendering](#docker-deterministic-rendering)
 - [Dev Server Auto-Detection](#dev-server-auto-detection)

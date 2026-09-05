@@ -10,12 +10,13 @@ import imaplib
 import json
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 from typing import Iterable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -132,12 +133,15 @@ def trigger_export(session: requests.Session, args, evidence_dir: Path) -> dict:
         )
 
     if args.trigger_command:
+        command_argv = shlex.split(args.trigger_command)
+        if not command_argv:
+            raise ValueError("--trigger-command parsed to an empty command")
         proc = subprocess.run(
-            args.trigger_command,
-            shell=True,
+            command_argv,
             capture_output=True,
             text=True,
             check=False,
+            timeout=max(args.trigger_command_timeout_seconds, 1),
         )
         stdout_path = evidence_dir / "trigger.stdout.log"
         stderr_path = evidence_dir / "trigger.stderr.log"
@@ -145,6 +149,7 @@ def trigger_export(session: requests.Session, args, evidence_dir: Path) -> dict:
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
         trigger_info["command"] = {
             "command": args.trigger_command,
+            "argv": command_argv,
             "returncode": proc.returncode,
             "stdout_path": str(stdout_path.resolve()),
             "stderr_path": str(stderr_path.resolve()),
@@ -190,9 +195,28 @@ def save_attachment(part: email.message.EmailMessage, destination: Path) -> None
     destination.write_bytes(payload)
 
 
+def safe_attachment_filename(filename: str) -> str:
+    safe_name = Path(filename.replace("\\", "/")).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise ValueError(f"unsafe attachment filename: {filename}")
+    return safe_name
+
+
 def mailbox_messages_from_dir(mailbox_dir: Path) -> Iterable[tuple[Path, email.message.EmailMessage]]:
     for candidate in sorted(mailbox_dir.glob("*.eml")):
         yield candidate, BytesParser(policy=default_policy).parsebytes(candidate.read_bytes())
+
+
+def message_datetime(message: email.message.EmailMessage) -> datetime | None:
+    try:
+        parsed_date = email.utils.parsedate_to_datetime(message.get("Date"))
+    except Exception:
+        return None
+    if parsed_date is None:
+        return None
+    if parsed_date.tzinfo is None:
+        parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+    return parsed_date
 
 
 def message_matches(message: email.message.EmailMessage, args, started_at: datetime) -> bool:
@@ -204,13 +228,8 @@ def message_matches(message: email.message.EmailMessage, args, started_at: datet
         return False
     if args.ready_subject and args.ready_subject.lower() not in lowered_subject:
         return False
-    try:
-        parsed_date = email.utils.parsedate_to_datetime(message.get("Date"))
-    except Exception:
-        parsed_date = None
+    parsed_date = message_datetime(message)
     if parsed_date is not None:
-        if parsed_date.tzinfo is None:
-            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
         if parsed_date < started_at - timedelta(days=1):
             return False
     return True
@@ -227,12 +246,21 @@ def find_ready_message(args, started_at: datetime, evidence_dir: Path) -> dict:
         mailbox_dir = Path(args.mailbox_dir)
         if not mailbox_dir.exists():
             raise FileNotFoundError(f"mailbox dir not found: {mailbox_dir}")
+        matched_candidates: list[tuple[datetime, str, Path, email.message.EmailMessage]] = []
         for source_path, message in mailbox_messages_from_dir(mailbox_dir):
             if not message_matches(message, args, started_at):
                 continue
-            matched_message = message
+            matched_candidates.append(
+                (
+                    message_datetime(message) or datetime.min.replace(tzinfo=timezone.utc),
+                    str(source_path),
+                    source_path,
+                    message,
+                )
+            )
+        if matched_candidates:
+            _, _, source_path, matched_message = max(matched_candidates)
             matched_source = str(source_path.resolve())
-            break
     elif args.imap_host:
         mailbox = imaplib.IMAP4_SSL(args.imap_host, args.imap_port)
         try:
@@ -269,7 +297,7 @@ def find_ready_message(args, started_at: datetime, evidence_dir: Path) -> dict:
         filename = part.get_filename()
         if not filename:
             continue
-        decoded_filename = decode_mime_header(filename)
+        decoded_filename = safe_attachment_filename(decode_mime_header(filename))
         lowered = decoded_filename.lower()
         if lowered.endswith(".csv"):
             target = attachments_dir / decoded_filename
@@ -300,13 +328,13 @@ def mailbox_page_candidates(urls: list[str]) -> list[str]:
     ranked: list[tuple[int, str]] = []
     seen: set[str] = set()
     for url in urls:
-        normalized = url.strip().rstrip(").,")
+        normalized = normalize_mailbox_url(url)
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
         lowered = normalized.lower()
         score = 0
-        if lowered.endswith(".zip") or ".zip?" in lowered:
+        if is_archive_url(normalized):
             score -= 10
         if lowered.endswith(".csv") or ".csv?" in lowered:
             score -= 8
@@ -319,6 +347,15 @@ def mailbox_page_candidates(urls: list[str]) -> list[str]:
         ranked.append((score, normalized))
     ranked.sort(key=lambda item: (-item[0], item[1]))
     return [url for _, url in ranked]
+
+
+def normalize_mailbox_url(url: str) -> str:
+    return url.strip().rstrip(").,")
+
+
+def is_archive_url(url: str) -> bool:
+    parsed = urlparse(normalize_mailbox_url(url))
+    return parsed.path.lower().endswith(".zip")
 
 
 def classify_link(href: str, text: str) -> str:
@@ -390,7 +427,7 @@ def intake_official_export(args, archive_path: Path, channel_audit_path: Path | 
         cmd += ["--channel-audit-csv", str(channel_audit_path)]
     if member_csv_path is not None and member_csv_path.exists():
         cmd += ["--member-csv", str(member_csv_path)]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, timeout=max(args.intake_timeout_seconds, 1))
 
 
 def now_iso() -> str:
@@ -415,6 +452,8 @@ def main() -> int:
     parser.add_argument("--cookie-header", default="")
     parser.add_argument("--trigger-mode", choices=["auto", "http-form", "command-only", "skip"], default="auto")
     parser.add_argument("--trigger-command", default="")
+    parser.add_argument("--trigger-command-timeout-seconds", type=int, default=900)
+    parser.add_argument("--intake-timeout-seconds", type=int, default=900)
     parser.add_argument("--trigger-field", action="append", default=[])
     parser.add_argument("--start-date", default="")
     parser.add_argument("--end-date", default="")
@@ -476,8 +515,8 @@ def main() -> int:
             if mailbox_enabled and not mailbox_metadata:
                 mailbox_metadata = find_ready_message(args, started_at, evidence_dir / "mailbox")
                 for url in mailbox_metadata.get("urls", []):
-                    if url.endswith(".zip") and "archive" not in links:
-                        links["archive"] = url
+                    if is_archive_url(url) and "archive" not in links:
+                        links["archive"] = normalize_mailbox_url(url)
             page_url = args.export_page_url
             if not page_url and mailbox_metadata.get("urls"):
                 candidates = mailbox_page_candidates(list(mailbox_metadata["urls"]))
@@ -528,6 +567,9 @@ def main() -> int:
         intake_official_export(args, archive_path, channel_audit_path if channel_audit_path.exists() else None, member_csv_path if member_csv_path.exists() else None)
     except subprocess.CalledProcessError as exc:
         print(f"error: intake-official-export.py failed with exit code {exc.returncode}", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired as exc:
+        print(f"error: intake-official-export.py timed out after {exc.timeout} seconds", file=sys.stderr)
         return 1
 
     provenance = {

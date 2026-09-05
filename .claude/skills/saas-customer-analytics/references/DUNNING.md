@@ -186,7 +186,6 @@ Any cron that produces side effects (emails, status changes, notifications) MUST
 - Use `pg_try_advisory_lock` (non-blocking) at the cron level so a second instance skips immediately
 - Use `pg_advisory_xact_lock` (blocking, transaction-scoped) at the per-entity level for webhook handlers
 - Mixing these up causes either queue buildup (blocking at cron level) or missed work (non-blocking at entity level)
-```
 
 ### Email Deduplication
 

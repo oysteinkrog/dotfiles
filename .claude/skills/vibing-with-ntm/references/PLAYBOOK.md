@@ -1,6 +1,6 @@
 # Vibing With NTM Playbook
 
-<!-- TOC: Spawn and Monitor | Operator Tending | Reservations & Isolation | Monitoring & Output | Swarm Anti-Patterns | Agent Lifecycle | Troubleshooting | FAQ | Validation | Robot Health Cheatsheet | Orchestrator Cadence | Convergence Termination | Domain Assignment | Scope Discipline | Agent-Type Pool Awareness -->
+<!-- TOC: Spawn and Monitor | Operator Tending | Queue-Dry Protocol | Reservations & Isolation | Monitoring & Output | Swarm Anti-Patterns | Agent Lifecycle | Troubleshooting | FAQ | Validation | Robot Health Cheatsheet | Orchestrator Cadence | Convergence Termination | Domain Assignment | Scope Discipline | Agent-Type Pool Awareness -->
 
 Use this file when the main skill body is not enough and you want the denser
 operational playbook.
@@ -35,7 +35,7 @@ ntm view myproject
 
 ```bash
 ntm --robot-snapshot
-ntm --robot-attention --since-cursor=42
+ntm --robot-attention --attention-cursor=42
 ntm --robot-markdown --md-compact
 ntm --robot-terse
 ntm --robot-mail-check --mail-project=myproject --urgent-only
@@ -66,6 +66,25 @@ Useful wait conditions:
 - `file_conflict`
 
 If the cursor expires, re-run `ntm --robot-snapshot`.
+
+## Queue-Dry Protocol
+
+Use this when panes need work but the ready queue appears empty. The goal is to
+distinguish three states: ready work exists, the queue is genuinely dry, or the
+work graph is degraded/stale.
+
+```bash
+br ready --json
+bv --robot-triage | jq '.quick_ref'
+ntm work queue-dry --format=json | jq '{queue_dry, evidence, recommendations, warnings}'
+```
+
+Branching:
+
+- `queue_dry=false`: assign ready work; do not ideate.
+- `queue_dry=true` with clean warnings: stand down or preview future work.
+- degraded warnings: keep the flow non-mutating and fix/check the native source.
+- approved creation: `ntm work queue-dry --ideate --create-beads --yes --plan-version=<token>`, then `br dep cycles --json`, `bv --robot-triage`, and `br sync --flush-only`.
 
 ## Reservations and Isolation
 
@@ -226,6 +245,28 @@ ntm --robot-account-status                            # CAAM account state, incl
 ntm --robot-switch-account=claude:<account>           # explicit global CAAM account switch
 ntm rotate SESSION --all-limited                      # rotate all rate-limited panes at once via CAAM restart strategy
 ```
+
+## Pressure-Aware Assignment
+
+Before pushing work to many panes, ask whether the bottleneck is actually CPU,
+build hosts, provider quota, or reservations:
+
+```bash
+ntm --robot-agent-health=SESSION
+ntm --robot-rch-status
+ntm --robot-quota-status
+ntm locks list SESSION --all-agents
+```
+
+If any pool is hot, narrow the assignment:
+
+```bash
+ntm assign SESSION --auto --strategy=dependency --limit=2
+ntm --robot-send=SESSION --panes=N --msg="Take one blocker-clearing bead in your domain; no broad build sweeps until pressure drops."
+```
+
+Adding more agents is not the fix for a saturated shared bottleneck. Either wait,
+route to a different provider pool, or assign only blocker-clearing work.
 
 ## Orchestrator Cadence
 

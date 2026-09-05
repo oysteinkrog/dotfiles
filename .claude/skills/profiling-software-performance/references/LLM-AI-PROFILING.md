@@ -231,7 +231,7 @@ As of 2026-04:
 | Claude | Haiku 4.5 | 150-400ms | 5-10ms | Yes | Fastest Claude tier |
 | OpenAI GPT-5.x | Standard | 400-1000ms | 10-20ms | Yes (automatic, 50% of tokens) | Auto-cache at ≥ 1024 tokens |
 | OpenAI GPT-5 mini | Mini | 150-400ms | 5-10ms | Yes | |
-| Gemini 3 Pro | Standard | 300-800ms | 10-25ms | Yes (context caching) | Explicit cache API |
+| Gemini 3.1 Pro | Standard | 300-800ms | 10-25ms | Yes (context caching) | Explicit cache API |
 | Gemini Flash | Fast | 150-400ms | 5-12ms | Yes | |
 | Self-hosted llama.cpp | 70B quantized | 100-500ms | 30-80ms | Local; no network | GPU-dependent |
 | Self-hosted vLLM | 70B bf16, A100/H100 | 50-200ms | 15-35ms | Local | Good throughput |

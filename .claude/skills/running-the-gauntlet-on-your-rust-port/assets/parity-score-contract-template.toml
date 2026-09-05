@@ -1,0 +1,149 @@
+# parity_score_contract.toml — category weights + scoring math contract
+#
+# Copied by scope-decider in Phase 2 to docs/contracts/.
+# Loader-enforced: sum(weights) == 1.0 per category-group.
+#
+# Pairs with parity_taxonomy.rs (FeatureUniverse) and supported_surface_matrix.toml.
+
+schema_version = "gauntlet.parity_score_contract.v1"
+
+# ---------------------------------------------------------------------------
+# [meta]
+# ---------------------------------------------------------------------------
+[meta]
+project_class = "<sql|resp|numerical-python|ml-system|http-protocol>"
+created_at_utc = "<ISO_8601>"
+revision = 1
+
+# ---------------------------------------------------------------------------
+# [categories] — sum(weights) MUST == 1.0; loader rejects on drift
+# ---------------------------------------------------------------------------
+# Per-class FrankenSQLite-pinned reference values. Customize per project's
+# actual workload mix — but always preserve the sum-to-1.0 invariant.
+
+[categories.ReadSingle]
+weight = 0.35
+
+[categories.ReadAggregate]
+weight = 0.15
+
+[categories.WriteSingle]
+weight = 0.30
+
+[categories.WriteBulk]
+weight = 0.10
+
+[categories.ConcurrentWriters]
+weight = 0.05
+
+[categories.MixedOltp]
+weight = 0.05
+
+# Verify: 0.35 + 0.15 + 0.30 + 0.10 + 0.05 + 0.05 = 1.00 ✓
+
+# ---------------------------------------------------------------------------
+# [scoring] — Beta posterior + conformal band parameters
+# ---------------------------------------------------------------------------
+
+[scoring]
+# Beta prior (subjective; tune per project's risk appetite).
+# A weak prior (alpha=1, beta=1) is the default; strengthen if you have
+# prior cross-port evidence.
+alpha_prior = 1.0
+beta_prior = 1.0
+
+# Conformal band confidence level (Vovk-Gammerman-Shafer 2005).
+# Release decisions use the LOWER bound at this confidence.
+conformal_confidence = 0.95
+
+# truncate_score precision — see KERNEL.md K-5. 6 decimal places makes
+# x86/ARM/WASM byte-identical.
+truncate_decimals = 6
+
+# Pass-mapping: how Passing/Partial/Missing/Excluded contribute to the
+# Beta posterior's success/failure counts.
+[scoring.pass_mapping]
+passing_contribution = 1.0       # full success
+partial_contribution = 0.5       # half-success
+missing_contribution = 0.0       # full failure
+excluded_contribution = 0.0      # full failure (excluded is coverage debt, not free pass)
+na_contribution = "skip"         # n/a items removed from numerator AND denominator
+
+# ---------------------------------------------------------------------------
+# [perf_gates] — pass-over-pass regression thresholds (negative = regression)
+# ---------------------------------------------------------------------------
+# Mined verbatim from FrankenSQLite's `comprehensive-bench-ci-regression-gate.v2`.
+
+[perf_gates]
+primary_score_max_regression_pct = 0.03            # -3% on per-category-weighted score
+geomean_max_regression_pct = 0.05                  # -5% on raw geomean ratio
+category_geomean_max_regression_pct = 0.10         # -10% on any single category
+p90_max_regression_pct = 0.15                      # -15% on p90 latency
+pass_over_pass_throughput_max_drop_pct = 0.05      # -5% on throughput-ratio drop in mt-mvcc-bench
+
+# cv_pct floor — microbench results with cv_pct above this are flake-quarantined
+# rather than scored.
+cv_pct_flake_threshold = 5.0
+
+# MT8 attribution threshold — kept perf wins must cite a frame ≥ this share of
+# self-time (per the "micro-lever trap" rule).
+mt8_attribution_min_self_time_pct = 0.1
+
+# ---------------------------------------------------------------------------
+# [release_gates] — required-pass constants for strict-conformant-release.v1
+# ---------------------------------------------------------------------------
+# Mirror of references/methodology/CERTIFICATION.md.
+
+[release_gates]
+CERTIFICATION_MIN_VERIFICATION_PCT = 100.0
+CERTIFICATION_REQUIRED_SUITE_PASS_RATE_PCT = 100.0
+CERTIFICATION_MAX_HIGH_SEVERITY_COUNTEREXAMPLES = 0
+CERTIFICATION_MAX_EVIDENCE_AGE_HOURS = 24
+
+# ---------------------------------------------------------------------------
+# [eprocess] — anytime-valid invariant monitoring parameters
+# ---------------------------------------------------------------------------
+# Per K-6 in KERNEL.md (Howard-Ramdas-McAuliffe-Sekhon 2021).
+
+[eprocess.hardware_enforced]
+# Use for invariants backed by hardware atomics / CAS / fences.
+# Aggressive parameters because evidence accumulates fast on a violation.
+p_null = 1e-9
+lambda = 0.999
+alpha = 1e-6
+
+[eprocess.software_enforced]
+# Use for invariants enforced only by application logic.
+# Moderate parameters because evidence accumulates slower.
+p_null = 1e-6
+lambda = 0.9
+alpha = 0.001
+
+# Aggregator: arithmetic mean is conservative under arbitrary dependence.
+# Product would double-count correlated violations.
+aggregator = "arithmetic_mean"
+
+# ---------------------------------------------------------------------------
+# [bocpd] — Bayesian Online Change-Point Detection parameters
+# ---------------------------------------------------------------------------
+# Per K-6; Adams-MacKay 2007.
+
+[bocpd]
+hazard_rate = 0.004            # = 1/250 ≈ 1 change every 250 observations under H_0
+window_size = 50
+predictive_model_continuous = "normal_gamma"
+predictive_model_binary = "beta_binomial"
+
+# Terminal regime declaration: a release ships only when the trailing window's
+# terminal regime == "Stable" for at least:
+min_observations_before_terminal = 100
+
+# ---------------------------------------------------------------------------
+# [convergence] — Phase 11 loop exit conditions
+# ---------------------------------------------------------------------------
+
+[convergence]
+min_rounds = 10
+consecutive_clean_rounds_required = 2
+max_new_findings_per_clean_round = 3
+require_all_open_hypotheses_resolved = true

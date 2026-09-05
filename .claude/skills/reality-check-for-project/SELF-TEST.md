@@ -37,7 +37,7 @@
 |-------|--------------------------|
 | `mock-code-finder` | Finding stubs/mocks specifically, not assessing vision delivery |
 | `codebase-audit` | Auditing for a specific domain (security, perf, UX), not holistic vision check |
-| `comprehensive-codebase-report` | Producing architecture documentation, not gap analysis |
+| `codebase-report` | Producing architecture documentation, not gap analysis |
 | `bv` | Getting next work item or triage, not holistic assessment |
 | `multi-pass-bug-hunting` | Finding and fixing bugs, not vision alignment |
 | `planning-workflow` | Creating initial plans, not reality-checking existing implementation |

@@ -1,0 +1,256 @@
+# gh-actions-auditor.yml — GitHub Actions workflow for the rust-unsafe-code-exorcist
+#
+# Copy to <project>/.github/workflows/soundness.yml. Adjust matrix targets and
+# cache keys per the project's needs. Per CI-INTEGRATION.md.
+
+name: soundness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly nightly cron: Monday 06:00 UTC. Slow tools (mutants, fuzz-long).
+    - cron: '0 6 * * 1'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel-in-progress for the same PR/branch on new pushes.
+concurrency:
+  group: soundness-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Required gates
+  # ---------------------------------------------------------------------------
+
+  feature-matrix:
+    name: test (${{ matrix.os }}, ${{ matrix.rust }}, ${{ matrix.feature }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        rust: [stable, nightly]
+        feature: [all-features, safe-only]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: rustup toolchain install ${{ matrix.rust }}
+      - name: cargo test (${{ matrix.feature }})
+        run: |
+          if [ "${{ matrix.feature }}" = "safe-only" ]; then
+            cargo +${{ matrix.rust }} test --workspace --no-default-features --features safe-only
+          else
+            cargo +${{ matrix.rust }} test --workspace --all-features
+          fi
+
+  miri:
+    name: miri (default + strict-provenance + tree-borrows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+            ~/.cache/miri
+          key: ${{ runner.os }}-miri-${{ hashFiles('**/Cargo.lock') }}
+      - run: rustup toolchain install nightly
+      - run: rustup +nightly component add miri rust-src
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test --workspace --all-features
+      - run: MIRIFLAGS="-Zmiri-strict-provenance" cargo +nightly miri test --workspace --all-features
+      - run: MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --workspace --all-features
+
+  careful:
+    name: cargo-careful
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ runner.os }}-careful-${{ hashFiles('**/Cargo.lock') }}
+      - run: rustup toolchain install nightly
+      - run: cargo +nightly install --force cargo-careful
+      - run: cargo +nightly careful test --workspace --all-features
+
+  loom:
+    name: loom
+    runs-on: ubuntu-latest
+    if: |
+      contains(fromJSON('["push","pull_request"]'), github.event_name)
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable
+      - name: loom suite
+        run: |
+          if grep -q "loom_concurrency_tests" Cargo.toml */Cargo.toml 2>/dev/null; then
+            RUSTFLAGS="--cfg loom" cargo test --features loom_concurrency_tests --release
+          else
+            echo "no loom suites configured — skipping"
+          fi
+
+  fuzz-smoke:
+    name: fuzz smoke (60s/target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly
+      - run: cargo install --locked cargo-fuzz
+      - name: fuzz
+        run: |
+          if [ -d fuzz ]; then
+            for target in $(cargo fuzz list); do
+              cargo +nightly fuzz run "$target" -- -max_total_time=60
+            done
+          else
+            echo "no fuzz/ — skipping"
+          fi
+
+  geiger-delta:
+    name: cargo-geiger delta vs main
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: rustup toolchain install nightly
+      - run: cargo install --locked cargo-geiger
+      - name: compute PR geiger
+        run: cargo +nightly geiger --output-format Json > geiger-pr.json
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: geiger-main-checkout
+      - name: compute deltas
+        id: deltas
+        run: |
+          (cd geiger-main-checkout && cargo +nightly geiger --output-format Json) > geiger-main.json
+          PR=$(jq '[.packages[]?.package.metrics.counters | objects | .[] | numbers] | add // 0' geiger-pr.json)
+          MAIN=$(jq '[.packages[]?.package.metrics.counters | objects | .[] | numbers] | add // 0' geiger-main.json)
+          echo "pr_count=$PR" >> "$GITHUB_OUTPUT"
+          echo "main_count=$MAIN" >> "$GITHUB_OUTPUT"
+          echo "delta=$((PR - MAIN))" >> "$GITHUB_OUTPUT"
+      - name: gate
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'soundness:opt-in-geiger-up') }}
+        run: |
+          if [ "${{ steps.deltas.outputs.delta }}" -gt 0 ]; then
+            echo "::error::geiger regression: main=${{ steps.deltas.outputs.main_count }} → PR=${{ steps.deltas.outputs.pr_count }} (delta=+${{ steps.deltas.outputs.delta }}). Add the 'soundness:opt-in-geiger-up' label if intentional."
+            exit 1
+          fi
+          echo "geiger ok (delta=${{ steps.deltas.outputs.delta }})"
+      - name: comment on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: always()
+        with:
+          header: soundness-geiger
+          message: |
+            🔍 Geiger delta:
+            - main: ${{ steps.deltas.outputs.main_count }}
+            - PR:   ${{ steps.deltas.outputs.pr_count }}
+            - delta: ${{ steps.deltas.outputs.delta }}
+
+  drift-report:
+    name: drift report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: rustup toolchain install nightly
+      - run: cargo install ast-grep --locked
+      - name: enumerate PR
+        run: |
+          PR_AUDIT="$PWD/.unsafe-audit-ci-pr"
+          ./skills/rust-unsafe-code-exorcist/scripts/enumerate-unsafe.sh "$PWD" "$PR_AUDIT" 2>/dev/null || true
+          node ./skills/rust-unsafe-code-exorcist/scripts/generate-inventory.mjs "$PR_AUDIT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: main-checkout
+      - name: enumerate main
+        run: |
+          MAIN_CHECKOUT="$PWD/main-checkout"
+          MAIN_AUDIT="$MAIN_CHECKOUT/.unsafe-audit-ci-main"
+          ./skills/rust-unsafe-code-exorcist/scripts/enumerate-unsafe.sh "$MAIN_CHECKOUT" "$MAIN_AUDIT" 2>/dev/null || true
+          node ./skills/rust-unsafe-code-exorcist/scripts/generate-inventory.mjs "$MAIN_AUDIT"
+      - name: diff + comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: soundness-drift
+          message: |
+            🔍 Soundness drift summary:
+            - New sites: <see workflow logs>
+            - Modified sites: <see workflow logs>
+            - Removed sites: <see workflow logs>
+
+            See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for details.
+
+  # ---------------------------------------------------------------------------
+  # Advisory (non-gating)
+  # ---------------------------------------------------------------------------
+
+  mutants:
+    name: cargo-mutants (weekly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable
+      - run: cargo install --locked cargo-mutants
+      - run: cargo mutants --in-place=false --jobs 4 --output mutants-out/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-results
+          path: mutants-out/
+
+  # ---------------------------------------------------------------------------
+  # Meta-gate (the merge-gating job; collects required job results)
+  # ---------------------------------------------------------------------------
+
+  soundness-gate:
+    name: soundness gate (all required checks)
+    runs-on: ubuntu-latest
+    needs: [feature-matrix, miri, careful, loom, fuzz-smoke, geiger-delta]
+    if: always()
+    steps:
+      - name: check all required passed
+        run: |
+          echo "::notice::feature-matrix: ${{ needs.feature-matrix.result }}"
+          echo "::notice::miri: ${{ needs.miri.result }}"
+          echo "::notice::careful: ${{ needs.careful.result }}"
+          echo "::notice::loom: ${{ needs.loom.result }}"
+          echo "::notice::fuzz-smoke: ${{ needs.fuzz-smoke.result }}"
+          echo "::notice::geiger-delta: ${{ needs.geiger-delta.result }}"
+          if [ "${{ needs.feature-matrix.result }}" != "success" ]; then echo "::error::feature-matrix failed"; exit 1; fi
+          if [ "${{ needs.miri.result }}" != "success" ]; then echo "::error::miri failed"; exit 1; fi
+          if [ "${{ needs.careful.result }}" != "success" ]; then echo "::error::careful failed"; exit 1; fi
+          if [ "${{ needs.loom.result }}" != "success" ]; then echo "::error::loom failed"; exit 1; fi
+          if [ "${{ needs.fuzz-smoke.result }}" != "success" ]; then echo "::error::fuzz failed"; exit 1; fi
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.geiger-delta.result }}" != "success" ]; then echo "::error::geiger regression"; exit 1; fi
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "::notice::geiger delta skipped outside pull_request"; fi
+          echo "all required soundness checks passed"

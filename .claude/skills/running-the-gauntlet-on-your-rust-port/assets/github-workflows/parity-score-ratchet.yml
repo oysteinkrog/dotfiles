@@ -1,0 +1,147 @@
+# .github/workflows/parity-score-ratchet.yml
+#
+# Wires CI gate 1.1 from PARITY_RUNBOOK.md: per-category-weighted score ratchet.
+#
+# Runs on every push to main and on PRs. Computes the parity score
+# (Beta posterior + conformal lower bound, per pillar + per category),
+# then applies the ratchet against the persisted floor. Fails the build
+# on `Block`; persists the new state on `Allow`.
+#
+# Copy this file to <port>/.github/workflows/parity-score-ratchet.yml
+# and replace <workspace-rel-path> with the workspace's path relative to
+# the repo root (e.g., ../<port>__gauntlet_workspace).
+
+name: Parity Score Ratchet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Avoid concurrent ratchet writes against the same branch.
+concurrency:
+  group: parity-score-ratchet-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write  # for the annotation comment
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history for bench-history diffing
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+          fetch-depth: 0
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install jq + python deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq python3-pip
+          python3 -m pip install --user numpy scipy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build (release-perf profile)
+        run: cargo build --profile release-perf --all-features
+
+      - name: Compute parity score
+        id: compute
+        run: |
+          "$WORKSPACE/scripts/compute-parity-score.sh" "$WORKSPACE"
+          echo "score=$WORKSPACE/reports/parity_score.json" >> "$GITHUB_OUTPUT"
+
+      - name: Apply ratchet
+        id: ratchet
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          "$WORKSPACE/scripts/apply-ratchet.sh" "$WORKSPACE" \
+            --score "${{ steps.compute.outputs.score }}" \
+            | tee ratchet_output.txt
+          RATCHET_EXIT=$?
+          if [[ -f "$WORKSPACE/reports/ratchet_decision.json" ]]; then
+            DECISION=$(jq -r '.decision' "$WORKSPACE/reports/ratchet_decision.json")
+          else
+            DECISION=Unknown
+          fi
+          echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$RATCHET_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload scorecards + decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-score-ratchet-${{ github.run_id }}
+          path: |
+            ${{ steps.compute.outputs.score }}
+            ${{ env.WORKSPACE }}/reports/ratchet_decision.json
+            ratchet_output.txt
+          retention-days: 90
+
+      - name: Persist ratchet state (main only, on Allow)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ratchet.outputs.decision == 'Allow'
+        run: |
+          cd "$WORKSPACE"
+          git add reports/parity_score.json reports/ratchet_decision.json reports/ratchet_state.json
+          if git diff --cached --quiet; then
+            echo "No ratchet state changes to persist."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${WORKSPACE_WRITE_TOKEN}@github.com/${{ github.repository }}-gauntlet-workspace.git"
+          git commit -m "ci: update parity ratchet state for ${{ github.sha }}"
+          git push origin HEAD:main
+        env:
+          WORKSPACE_WRITE_TOKEN: ${{ secrets.WORKSPACE_WRITE_TOKEN }}
+
+      - name: Annotate PR with decision
+        if: github.event_name == 'pull_request'
+        run: |
+          DECISION="${{ steps.ratchet.outputs.decision }}"
+          case "$DECISION" in
+            Allow)      echo "::notice title=Parity Ratchet::Allow — lower bound at or above floor." ;;
+            Quarantine) echo "::error title=Parity Ratchet::Quarantine — within quarantine band, but merge is blocked until waived or resolved." ;;
+            Waiver)     echo "::warning title=Parity Ratchet::Waiver active — see reports/waivers.jsonl." ;;
+            Block)      echo "::error title=Parity Ratchet::Block — lower bound below floor. Route through ratchet-block.md." ;;
+            *)          echo "::error title=Parity Ratchet::Unknown decision: $DECISION" ;;
+          esac
+
+      - name: Fail on blocking ratchet decision
+        if: steps.ratchet.outputs.decision == 'Block' || steps.ratchet.outputs.decision == 'Quarantine' || steps.ratchet.outputs.decision == 'Unknown'
+        run: |
+          echo "Parity ratchet returned ${{ steps.ratchet.outputs.decision }}. See uploaded artifacts and references/cookbook/ratchet-block.md."
+          exit 1

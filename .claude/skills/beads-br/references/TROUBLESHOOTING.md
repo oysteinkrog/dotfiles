@@ -31,7 +31,7 @@ br sync --status  # Safe read-only check
 
 ```bash
 # Check if issue exists
-br list --json | jq '.[] | select(.id == "<id>")'
+br list --json | jq '.issues[]? | select(.id == "bd-abc123")'
 
 # Check for similar IDs
 br list | grep -i "abc"
@@ -41,28 +41,10 @@ br list | grep -i "abc"
 
 ```bash
 # Check your prefix
-br config get issue-prefix
+br config --get id.prefix
 
-# Import after aligning prefix/config with your existing IDs
-br sync --import-only
-```
-
-### "`br ready` fails with blocked_issues_cache SQL error"
-
-Some versions (e.g. `br 0.1.8`) have a known bug in `br ready` that can throw:
-
-```
-no such column: blocked_issues_cache.issue_id
-```
-
-Workarounds:
-
-```bash
-# Use bv's actionable recipe
-bv --recipe actionable --robot-plan
-
-# Or fall back to list + manual filtering
-br list --json | jq '.[] | select(.status == "open" or .status == "in_progress")'
+# Import with validation skip (careful!)
+br sync --import-only --skip-prefix-validation
 ```
 
 ### Worktree Error
@@ -72,7 +54,7 @@ If you get `failed to create worktree: 'main' is already checked out`:
 ```bash
 git branch beads-sync main
 git push -u origin beads-sync
-br config set sync-branch beads-sync
+br config set sync.branch beads-sync
 ```
 
 Always use a dedicated sync branch that you never check out directly.
@@ -112,6 +94,6 @@ RUST_LOG=debug br list
 ```bash
 br doctor                    # Full diagnostics
 br dep cycles                # Must be empty
-br config list               # Check settings
+br config --list             # Check settings
 which br                     # Verify br is installed
 ```

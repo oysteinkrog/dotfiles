@@ -498,4 +498,3 @@ fn generate_compliance_report(results: &[TestResult]) -> String {
 | /testing-metamorphic | No spec exists (oracle problem) | MRs fill gaps where spec is ambiguous |
 | /testing-fuzzing | Finding crashes, not compliance | Fuzz-generated inputs feed conformance checks |
 | /extreme-software-optimization | Performance, not correctness | Conformance suite is the regression gate for optimizations |
-| /porting-to-rust | Need the full porting methodology | Conformance harness is PART of the porting workflow |

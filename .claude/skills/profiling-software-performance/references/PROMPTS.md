@@ -2,7 +2,7 @@
 
 > Copy-paste-ready prompts for every stage of the profiling loop. Each prompt encodes a workflow and includes commentary on why each prompt is shaped the way it is.
 
-The pattern is lifted from `sw/PROMPTS.md` — skills are instructions for YOU, and reusable prompts make that self-instruction concrete.
+The principle: skills are instructions for YOU, and reusable prompts make that self-instruction concrete.
 
 ## Contents
 
@@ -605,6 +605,6 @@ grep -n 'OPERATOR:' .claude/skills/profiling-software-performance/references/PRO
 
 ## Why prompts are first-class
 
-Borrowed from `sw/MINDSET.md`: skills are instructions to *you*. If the right prompt is this file away, the right prompt gets used. If it's in someone's head, it doesn't.
+Skills are instructions to *you*. If the right prompt is this file away, the right prompt gets used. If it's in someone's head, it doesn't.
 
 Every new workflow you catch yourself running twice → add a prompt here.

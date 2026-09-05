@@ -1,5 +1,15 @@
 # Worker Management
 
+## Contents
+
+- [Worker Lifecycle](#worker-lifecycle)
+- [Add a Worker Manually](#add-a-worker-manually)
+- [Drain / Disable / Enable](#drain--disable--enable)
+- [Toolchain and Binary Management](#toolchain-and-binary-management)
+- [Fleet-Level Rollout Commands](#fleet-level-rollout-commands)
+- [Worker Selection Notes](#worker-selection-notes)
+- [SSH Verification Shortcuts](#ssh-verification-shortcuts)
+
 ## Worker Lifecycle
 
 ### 1) Discover and add workers

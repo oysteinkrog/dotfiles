@@ -7,32 +7,84 @@ Performs quick analysis and generates a markdown template pre-filled
 with discovered information about the codebase.
 """
 
+import argparse
+from datetime import datetime
+import json
 import os
-import sys
-import subprocess
 from pathlib import Path
+import re
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None
 
 
-def run_cmd(cmd: str, cwd: str = ".") -> str:
-    """Run shell command and return output."""
-    try:
-        result = subprocess.run(
-            cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=30
-        )
-        return result.stdout.strip()
-    except Exception:
-        return ""
+IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "vendor",
+}
+
+
+def first_existing(path: str, candidates: list[str]) -> list[str]:
+    """Return candidate files that exist under path."""
+    root = Path(path)
+    return [candidate for candidate in candidates if (root / candidate).exists()]
+
+
+def source_files(path: str, extensions: list[str]):
+    """Yield source files under path while skipping generated/vendor trees."""
+    root = Path(path)
+    wanted = set(extensions)
+    for file_path in root.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix not in wanted:
+            continue
+        rel_path = file_path.relative_to(root)
+        if any(part in IGNORED_DIRS for part in rel_path.parts):
+            continue
+        yield file_path, str(rel_path)
+
+
+def find_files_matching(
+    path: str, extensions: list[str], pattern: str, limit: int = 5
+) -> list[str]:
+    """Find source files with at least one line matching pattern."""
+    matches: list[str] = []
+    matcher = re.compile(pattern)
+    for file_path, rel_path in source_files(path, extensions):
+        try:
+            with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                if any(matcher.search(line) for line in handle):
+                    matches.append(rel_path)
+        except OSError:
+            continue
+        if len(matches) >= limit:
+            break
+    return matches
 
 
 def count_lines(path: str, extensions: list[str]) -> int:
     """Count lines of code for given extensions."""
     total = 0
-    for ext in extensions:
-        output = run_cmd(f"find . -name '*{ext}' -exec wc -l {{}} + 2>/dev/null | tail -1", path)
-        if output:
-            parts = output.split()
-            if parts and parts[0].isdigit():
-                total += int(parts[0])
+    for file_path, _rel_path in source_files(path, extensions):
+        try:
+            with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                total += sum(1 for _ in handle)
+        except OSError:
+            continue
     return total
 
 
@@ -56,14 +108,31 @@ def find_entry_points(path: str, lang: str) -> list[str]:
     """Find likely entry points based on language."""
     entries = []
     if lang == "Rust":
-        output = run_cmd('rg -l "fn main" --type rust 2>/dev/null', path)
-        entries = output.split("\n") if output else []
+        entries = find_files_matching(path, [".rs"], r"\bfn\s+main\s*\(")
     elif lang == "Go":
-        output = run_cmd('rg -l "func main" --type go 2>/dev/null', path)
-        entries = output.split("\n") if output else []
+        entries = find_files_matching(path, [".go"], r"\bfunc\s+main\s*\(")
     elif "Python" in lang:
-        output = run_cmd('rg -l "if __name__" --type py 2>/dev/null', path)
-        entries = output.split("\n") if output else []
+        entries = find_files_matching(path, [".py"], r"if\s+__name__\s*==")
+    elif "TypeScript" in lang or "JavaScript" in lang:
+        entries = first_existing(
+            path,
+            [
+                "src/app/page.tsx",
+                "src/app/layout.tsx",
+                "app/page.tsx",
+                "app/layout.tsx",
+                "src/pages/index.tsx",
+                "src/pages/index.jsx",
+                "pages/index.tsx",
+                "pages/index.jsx",
+                "src/main.ts",
+                "src/main.tsx",
+                "src/index.ts",
+                "src/index.tsx",
+                "src/server.ts",
+                "src/server.js",
+            ],
+        )
     return [e for e in entries if e][:5]
 
 
@@ -71,25 +140,41 @@ def find_key_types(path: str, lang: str) -> list[str]:
     """Find major type definitions."""
     types = []
     if lang == "Rust":
-        output = run_cmd('rg "^pub struct " --type rust -l 2>/dev/null | head -5', path)
-        types = output.split("\n") if output else []
+        types = find_files_matching(path, [".rs"], r"^\s*pub\s+struct\s+")
     elif lang == "Go":
-        output = run_cmd('rg "^type .* struct" --type go -l 2>/dev/null | head -5', path)
-        types = output.split("\n") if output else []
-    return [t for t in types if t]
+        types = find_files_matching(path, [".go"], r"^\s*type\s+\w+\s+struct\b")
+    elif "TypeScript" in lang or "JavaScript" in lang:
+        types = find_files_matching(
+            path,
+            [".ts", ".tsx", ".js", ".jsx"],
+            r"^\s*(export\s+)?(default\s+)?(abstract\s+)?(type|interface|class)\s+",
+        )
+    return [t for t in types if t][:5]
 
 
 def get_dependencies(path: str, lang: str) -> list[str]:
     """Extract top dependencies."""
     deps = []
     if lang == "Rust":
-        output = run_cmd('grep "^[a-z]" Cargo.toml 2>/dev/null | head -10', path)
-        for line in output.split("\n"):
-            if "=" in line:
-                deps.append(line.split("=")[0].strip())
+        cargo_toml = Path(path) / "Cargo.toml"
+        if cargo_toml.exists() and tomllib is not None:
+            try:
+                cargo = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
+                dependencies = cargo.get("dependencies", {})
+                if isinstance(dependencies, dict):
+                    deps.extend(str(name) for name in dependencies.keys())
+            except (OSError, tomllib.TOMLDecodeError):
+                return deps
     elif "TypeScript" in lang or "JavaScript" in lang:
-        output = run_cmd('jq -r ".dependencies | keys[]" package.json 2>/dev/null | head -10', path)
-        deps = output.split("\n") if output else []
+        package_json = Path(path) / "package.json"
+        if package_json.exists():
+            try:
+                package = json.loads(package_json.read_text(encoding="utf-8"))
+                dependencies = package.get("dependencies", {})
+                if isinstance(dependencies, dict):
+                    deps.extend(str(name) for name in dependencies.keys())
+            except (OSError, json.JSONDecodeError):
+                return deps
     return [d for d in deps if d][:5]
 
 
@@ -182,7 +267,7 @@ def generate_report(path: str, output_file: str | None = None):
     if not deps:
         report += "| [dep] | [purpose] | Yes/No |\n"
 
-    report += """
+    report += f"""
 ---
 
 ## Configuration
@@ -190,7 +275,7 @@ def generate_report(path: str, output_file: str | None = None):
 | Source | Location/Example | Priority |
 |--------|------------------|----------|
 | Environment var | `APP_*` | 1 (highest) |
-| Config file | `~/.config/{project}/config.toml` | 2 |
+| Config file | `~/.config/{{project}}/config.toml` | 2 |
 | CLI flag | `--flag` | 3 |
 | Default | Hardcoded | 4 (lowest) |
 
@@ -224,14 +309,43 @@ def generate_report(path: str, output_file: str | None = None):
 """
 
     if output_file:
-        with open(output_file, "w") as f:
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
             f.write(report)
-        print(f"Report scaffold written to: {output_file}")
+        print(f"Report scaffold written to: {output_path}")
     else:
         print(report)
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate a starter technical architecture report scaffold"
+    )
+    parser.add_argument(
+        "project_path",
+        nargs="?",
+        default=".",
+        help="Path to the project to analyze (default: current directory)",
+    )
+    parser.add_argument(
+        "output_file",
+        nargs="?",
+        help="Optional output markdown file (default: stdout)",
+    )
+    args = parser.parse_args()
+
+    project_path = Path(args.project_path).resolve()
+    if not project_path.exists():
+        print(f"ERROR: project path not found: {project_path}", file=sys.stderr)
+        return 1
+    if not project_path.is_dir():
+        print(f"ERROR: project path is not a directory: {project_path}", file=sys.stderr)
+        return 1
+
+    generate_report(str(project_path), args.output_file)
+    return 0
+
+
 if __name__ == "__main__":
-    project_path = sys.argv[1] if len(sys.argv) > 1 else "."
-    output = sys.argv[2] if len(sys.argv) > 2 else None
-    generate_report(project_path, output)
+    sys.exit(main())

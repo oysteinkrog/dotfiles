@@ -1,0 +1,24 @@
+// actions.jsonl — one line per mutate() call. Append-only; fsync after each line.
+// Lines below are *examples*; the real file has no comments and no spaces inside the JSON
+// (each entry is single-line for streaming JSONL parsing).
+
+// ---------------------------------------------------------------------
+// Healthy mutation: a verbatim file write through mutate().
+// before_hash and after_hash differ; ok=true; rolled_back=false (default).
+{"path":".beads/issues.jsonl","op":"WriteFile","before_hash":"sha256:abc1234567890def","after_hash":"sha256:def0987654321abc","started_at_ns":12345678,"finished_at_ns":12399999,"run_id":"2026-05-06T14-23-07Z__a3f9b2","fixer_id":"fm-state-files-jsonl-tombstone-drift","ok":true}
+
+// ---------------------------------------------------------------------
+// Mutation that failed and was rolled back inside mutate().
+// ok=false, rolled_back=true, error names what went wrong.
+{"path":".beads/beads.db","op":"DbMigrate","before_hash":"sha256:1111222233334444","after_hash":"sha256:1111222233334444","started_at_ns":99000000,"finished_at_ns":99500000,"run_id":"2026-05-06T14-23-07Z__a3f9b2","fixer_id":"fm-schemas-db-schema-version-mismatch","ok":false,"rolled_back":true,"error":"migration script `from_v7_to_v8.sql` raised: column `tombstoned_at` already exists"}
+
+// ---------------------------------------------------------------------
+// Symlink update (e.g., .doctor/latest → runs/<new>).
+// Atomic via SymlinkAtomic op; before_hash is the hash of the previous
+// symlink target string (or the empty hash if first run).
+{"path":".doctor/latest","op":"SymlinkAtomic","before_hash":"sha256:0000000000000000","after_hash":"sha256:5555666677778888","started_at_ns":12200000,"finished_at_ns":12210000,"run_id":"2026-05-06T14-23-07Z__a3f9b2","fixer_id":"runtime","ok":true}
+
+// ---------------------------------------------------------------------
+// Quarantine via Op::Rename (the AGENTS.md no-delete pattern).
+// Stale lockfile moved to .doctor/runs/<run-id>/quarantine/locks/.
+{"path":".beads/beads.lock","op":"Rename","before_hash":"sha256:9999aaaabbbbccccdddd","after_hash":"sha256:9999aaaabbbbccccdddd","rename_to":".doctor/runs/2026-05-06T14-23-07Z__a3f9b2/quarantine/locks/beads.lock","started_at_ns":98000000,"finished_at_ns":98010000,"run_id":"2026-05-06T14-23-07Z__a3f9b2","fixer_id":"fm-concurrency-primitives-lockfile-orphaned","ok":true}

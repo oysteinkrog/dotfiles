@@ -1,0 +1,8 @@
+id: rust-ub-aliasing-cast-ref-to-mut
+language: rust
+severity: warning
+message: >-
+  Cast of `&T` to `&mut T` via `*const T → *mut T` violates aliasing model.
+  Use UnsafeCell or restructure ownership.
+rule:
+  pattern: '$EXPR as *const $T as *mut $T'

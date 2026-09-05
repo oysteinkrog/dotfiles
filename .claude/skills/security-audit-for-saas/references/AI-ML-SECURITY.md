@@ -92,7 +92,7 @@ LLM treats attacker content as ground truth
 Each LLM call costs money. Attacker:
 - Makes thousands of requests
 - Forces expensive completions (high max_tokens)
-- Uses expensive models (switches to gpt-4-turbo from gpt-3.5)
+- Uses expensive models (switches to gpt-5 from gpt-5-mini)
 
 **Defense:**
 - Per-user daily/monthly token limits
@@ -122,12 +122,12 @@ async function checkAndIncrement(userId: string, tokens: number) {
 ```typescript
 // BAD: client chooses model
 await openai.chat.completions.create({
-  model: req.body.model,  // attacker sets model: 'gpt-4-turbo'
+  model: req.body.model,  // attacker sets model: 'gpt-5'
   messages,
 });
 
 // GOOD: server chooses based on plan
-const model = user.plan === 'premium' ? 'gpt-4o' : 'gpt-4o-mini';
+const model = user.plan === 'premium' ? 'gpt-5' : 'gpt-5-mini';
 ```
 
 ---

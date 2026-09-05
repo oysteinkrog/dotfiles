@@ -2,6 +2,13 @@
 
 <!-- TOC: Generic Start-of-Session | NTM-Repo Marching Orders | Code Review | Move-to-Next-Bead | Post-Compaction | Self-Review | Cross-Review | Random Exploration | Commit-Only | Graceful Shutdown | Ship-or-Surface | Close the Backlog | Terse Steady-State | Post-Compaction Resume | Domain Assignment | Orchestrator Diagnosis | Review-Only (P1/P2/P3/P4 + variants) | Mode-Switch | Autonomous Unstick -->
 
+## Contents
+
+- Start, resume, domain, and marching-order prompts
+- Ship-or-surface, close-backlog, queue-dry, and build-drift prompts
+- Review-only and mode-switch prompts
+- Autonomous unstick operator prompts
+
 Use these prompts as building blocks. Adjust them to the repo's actual `AGENTS.md`
 instead of sending them blindly.
 
@@ -108,6 +115,23 @@ Backlog hygiene round. Do NOT file any new review beads until the total (open + 
 If a bead is genuinely blocked, update it with the specific blocker and move on — don't spawn a new review bead for it.
 ```
 
+## Queue-Dry Operator Prompt
+
+Use when ready work appears exhausted. This is for the **operator**, not worker panes.
+
+```text
+Queue-dry check. Do not invent work yet.
+
+1. Run `br ready --json` and `bv --robot-triage | jq '.quick_ref'`.
+2. Run `ntm work queue-dry --format=json` and inspect `queue_dry`, `evidence`, `recommendations`, and `warnings`.
+3. If `queue_dry=false`, assign the ready work and stop this flow.
+4. If `queue_dry=true` and warnings are clean, either stand down or preview `ntm work queue-dry --ideate --format=markdown`.
+5. Only create beads after reviewing the preview guard: `ntm work queue-dry --ideate --create-beads --yes --plan-version=<review-token>`.
+6. After creation, run `br dep cycles --json`, `bv --robot-triage | jq '.quick_ref'`, and `br sync --flush-only`.
+
+Report exactly which branch fired: ready-work, stand-down, preview-only, or beads-created.
+```
+
 ## Terse Steady-State Nudge (specific-terse, not generic-terse)
 
 Use for rapid ticks once agents are up and warm. Always include a specific verb and a specific target; never send bare "Next review." or "Keep going."
@@ -171,7 +195,7 @@ Log your decision and one-line reason. Never broadcast the same generic nudge to
 
 ## Review-Only Mode Prompts
 
-For the full mode definition (spawn, dispatch cadence, kill-relaunch cycle, mixed-swarm ratios, quality rubric) see [REVIEW-MODE.md](REVIEW-MODE.md). These are the canonical prompts. Agent-agnostic — works with cc, cod, gmi.
+For the full mode definition (spawn, dispatch cadence, kill-relaunch cycle, mixed-swarm ratios, quality rubric), load REVIEW-MODE.md from the skill reference index. These are the canonical prompts. Agent-agnostic — works with cc, cod, gmi.
 
 ### P1 — Study The Project (once per round, to every reviewer pane)
 
@@ -262,6 +286,96 @@ MODE SWITCH: You are now a REVIEWER (was implementer). Stop claiming beads. Do n
 
 ```text
 MODE SWITCH: You are now an IMPLEMENTER (was reviewer). Register with Agent Mail. Pick the top ready bead from bv --robot-triage. Claim it, reserve files, ship a commit within 60 min or surface a blocker. Sequence reference: /vibing-with-ntm SKILL.md Next-Bead Prompt.
+```
+
+## Depth-Gate Prompt (Before Accepting "Clean")
+
+Use on any reviewer / auditor pane that declares a domain "clean — rotate me" in under a few minutes. Forces evidence before the claim is accepted. See OC-034.
+
+```text
+Before declaring <domain> clean, produce the evidence:
+
+1. Counts: run `grep -rEn 'unwrap\(\)|todo!|unimplemented!|panic!' <scope> | wc -l` and separately for each of unwrap/todo/unimplemented/panic. Quote the 3 hottest files by match count.
+
+2. Read-through: open the top-3 hottest files end-to-end, then paste 3 specific function signatures with a one-sentence note each on what the function does and what its risk surface is.
+
+3. Test run: execute the repo's verify command on <scope> (e.g. `cargo test --lib --package <name>` / `go test ./...` / `bun test <dir>`). Paste the last 20 lines of output.
+
+Only after all three → I'll accept "clean" and rotate you to the next domain. Short-circuiting any step means rotation is denied.
+```
+
+## Session-Summary Prompt
+
+Use at natural convergence, at handoff, or before shutdown. Produces a durable handoff artifact (OC-035).
+
+```text
+Produce a ONE-PARAGRAPH session summary (≤8 lines) including:
+  - Bead IDs you closed this session (comma-separated list)
+  - Commit SHAs you authored (short hashes, comma-separated)
+  - One concrete thing still open and who/what should pick it up next
+  - Any gotcha the next pane on this scope needs to know (broken build, flaky test, stale lock, etc.)
+
+Then stop. Do not start new work.
+```
+
+## Ship-Don't-Hand-Off Prompt
+
+Use when a pane's tail shows handoff-failure language ("Ready for validation", "MISSION ACCOMPLISHED", "Awaiting review") without a matching `br close` / `git push`. See OC-036 and AP-43.
+
+```text
+Don't hand off. Validate your own work NOW:
+
+1. Run the repo's verify command (tests + lints + build) yourself.
+2. If anything fails: fix it, re-run, repeat until clean.
+3. `git add -A; git commit -m "<message>"; git push`.
+4. `br close <id> --reason "Verified and shipped in <commit_sha>"`.
+
+If you cannot close within 30 min, write a 3-line concrete blocker note on the bead (specific file, specific error, specific question) and mark it blocked. Do not park waiting for someone else to validate.
+```
+
+## Rotate-Into-New-Phase Prompt
+
+Use when a pane declares its domain "fully blocked by dependencies" or runs out of ready work. Keeps the pane productive via phase rotation (OC-039).
+
+```text
+Your primary domain is blocked. Do NOT idle. Rotate into your next phase now — pick the next one you haven't done this session:
+
+  A. Cross-review: `git log --since="2 hours ago" --oneline` → pick 3 commits outside your domain and review each deeply. File HIGH/CRITICAL review beads for real defects only.
+  B. Fresh-eyes pass on your own domain's recent commits (HEAD~20..HEAD). Different lens from your implementer pass.
+  C. Apply one of these cross-cutting skills to your domain scope: /testing-conformance-harnesses, /testing-fuzzing, /mock-code-finder, /reality-check-for-project. Pick one you haven't used recently.
+  D. Write the next missing fuzz target or metamorphic test for your domain.
+
+State which phase you chose and why. File at least one review bead or commit before declaring "phase done."
+```
+
+## Stale-In-Progress Self-Audit Prompt
+
+Use periodically (once a session, or when in-progress counts drift high) to close beads whose work already shipped.
+
+```text
+For every bead currently assigned to you with status=in_progress, run:
+  git log --all --grep='<bead_id>' --oneline
+
+If a commit references that bead → `br close <bead_id> --reason 'Shipped in <commit_sha>'`.
+If no commit references it → verify the work is genuinely in-flight; if not, `br update <bead_id> --status=open --reason 'Not actually shipped; releasing'`.
+
+Report the close-count and reopen-count. Do this before claiming anything new.
+```
+
+## Build-Drift Repair Prompt
+
+Use when another pane's tail contains build-fail language ("compile error", "build failed", "blocked by unrelated"). See AP-4 / broken-build-drift.
+
+```text
+Your primary work is paused. One of the other panes is blocked on a broken baseline. Route yourself to repair it:
+
+1. Fetch the latest: `git pull --rebase`.
+2. Run the repo's build command at HEAD. Capture the first error verbatim.
+3. Fix it with a minimal patch (no speculative refactoring).
+4. Verify the fix with the full verify command.
+5. Commit with message starting "fix(build): <one-line summary>" and push.
+
+When green, resume your previous work. If you can't fix it in 45 min, file a P0 bead with the exact error and escalate.
 ```
 
 ## Autonomous Unstick Playbook (for the orchestrator)

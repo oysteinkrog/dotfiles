@@ -1,0 +1,139 @@
+# supported_surface_matrix.toml — declared per-feature parity status
+#
+# Copied by feature-universe-builder in Phase 7 to docs/contracts/.
+# Every reference-side feature must appear here with one of:
+#   present | partial | missing | n/a | excluded
+#
+# This file pairs with parity_taxonomy.rs (FeatureUniverse). The Rust loader
+# enforces THREE invariants:
+#   1. sum(weights) == 1.0 per category   (loader rejects on drift)
+#   2. truncate_score on every reported value (cross-platform reproducibility)
+#   3. Iteration order is deterministic by FeatureId
+#
+# Coverage debt: Excluded items STILL count for a strict-100% claim. They are
+# debt, not silently dropped.
+
+schema_version = "gauntlet.supported_surface_matrix.v1"
+
+# ---------------------------------------------------------------------------
+# [meta]
+# ---------------------------------------------------------------------------
+[meta]
+project_class = "<sql|resp|numerical-python|ml-system|http-protocol>"
+reference_name = "<REFERENCE>"
+reference_version = "<X.Y.Z>"
+generated_at_utc = "<ISO_8601>"
+revision = 1
+
+# ---------------------------------------------------------------------------
+# [categories.<name>] — per-category weight (sum-per-class must equal 1.0)
+# ---------------------------------------------------------------------------
+# SQL-class FrankenSQLite-pinned reference weights:
+#   ReadSingle = 0.35
+#   ReadAggregate = 0.15
+#   WriteSingle = 0.30
+#   WriteBulk = 0.10
+#   ConcurrentWriters = 0.05
+#   MixedOltp = 0.05
+#
+# Customize per-class — see references/taxonomy/PROJECT-CLASSES.md.
+
+[categories.ReadSingle]
+weight = 0.35
+description = "Point lookups by rowid + indexed equality."
+
+[categories.ReadAggregate]
+weight = 0.15
+description = "GROUP BY + aggregate functions + window functions."
+
+[categories.WriteSingle]
+weight = 0.30
+description = "Per-statement INSERT / UPDATE / DELETE."
+
+[categories.WriteBulk]
+weight = 0.10
+description = "Bulk INSERT (batched + single-txn)."
+
+[categories.ConcurrentWriters]
+weight = 0.05
+description = "Multi-thread shared file-backed DB."
+
+[categories.MixedOltp]
+weight = 0.05
+description = "R + W mixed under contention."
+
+# Sum check: 0.35 + 0.15 + 0.30 + 0.10 + 0.05 + 0.05 = 1.00 ✓
+
+# ---------------------------------------------------------------------------
+# [[features]] — one entry per declared reference feature
+# ---------------------------------------------------------------------------
+# Required fields: id, title, category, weight, status.
+# Required-conditional: exclusion_rationale + retry_condition_predicate when
+#                       status = "excluded".
+#
+# Status semantics (see references/taxonomy/FEATURE-UNIVERSE.md):
+#   "present"   — fully implemented + oracle-tested + e-process monitored
+#   "partial"   — subset implemented; rationale required
+#   "missing"   — declared by reference, not implemented in port (gap)
+#   "n/a"       — declared but inapplicable to this port (e.g. platform-specific)
+#   "excluded"  — explicitly out-of-scope; counts as coverage debt
+
+[[features]]
+id = "F-SQL-001"
+title = "SELECT … FROM <table> WHERE <col> = <const>"
+category = "ReadSingle"
+weight = 0.04
+status = "present"
+proof_obligation_ids = ["INV-SQL-001"]
+
+[[features]]
+id = "F-SQL-002"
+title = "SELECT … FROM <table> ORDER BY <col> LIMIT <N>"
+category = "ReadSingle"
+weight = 0.03
+status = "partial"
+partial_rationale = "Implemented for INTEGER/REAL columns; TEXT collation handled only for BINARY collation, NOCASE pending bd-1234."
+proof_obligation_ids = ["INV-SQL-002"]
+
+[[features]]
+id = "F-SQL-003"
+title = "SELECT … WITH RECURSIVE <cte> AS (…)"
+category = "ReadAggregate"
+weight = 0.02
+status = "missing"
+proof_obligation_ids = []
+beads = ["bd-5678"]
+
+[[features]]
+id = "F-SQL-004"
+title = "PRAGMA fsqlite_capture_time_travel_snapshots"
+category = "ReadSingle"
+weight = 0.0
+status = "n/a"
+na_rationale = "Project-specific PRAGMA; no reference-side analogue."
+
+[[features]]
+id = "F-SQL-005"
+title = "JSON1 extension functions"
+category = "ReadAggregate"
+weight = 0.0
+status = "excluded"
+exclusion_rationale = "JSON1 deferred to v2.0; the parser-level work is large enough to warrant its own milestone, not a sub-bead of the core parity push."
+retry_condition_predicate = "Reconsider only inside the broader v2.0 release planning (track as bd-future-jsonl)."
+
+# ... continue for every reference-side feature ...
+
+# ---------------------------------------------------------------------------
+# [coverage_debt]
+# ---------------------------------------------------------------------------
+# Auto-computed by feature-universe-builder; emitted here as a sanity check.
+# coverage_debt_fraction = (sum(weight where status in [missing, excluded])) / sum(weight where status != n/a)
+
+[coverage_debt]
+# Filled in after first run:
+# fraction = 0.0  # 0.0 = strict-100% claim eligible
+# excluded_count = 0
+# missing_count = 0
+# partial_count = 0
+# present_count = 0
+# na_count = 0

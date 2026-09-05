@@ -1,0 +1,13 @@
+id: rust-ub-refcount-from-raw
+language: rust
+severity: warning
+message: >-
+  Arc/Box/Rc::from_raw reclaims ownership of a pointer. Verify it is paired
+  with into_raw / mem::forget elsewhere, never called twice on the same ptr.
+rule:
+  any:
+    - pattern: 'Arc::from_raw($EXPR)'
+    - pattern: 'std::sync::Arc::from_raw($EXPR)'
+    - pattern: 'Box::from_raw($EXPR)'
+    - pattern: 'Rc::from_raw($EXPR)'
+    - pattern: 'std::rc::Rc::from_raw($EXPR)'

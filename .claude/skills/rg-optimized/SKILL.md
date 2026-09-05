@@ -1,14 +1,37 @@
 ---
 name: rg-optimized
 description: >-
-  Build ripgrep (rg) from source with PCRE2 and max optimizations. Use when
-  "PCRE2 is not available", rg -P fails, need lookahead/lookbehind, or building
-  optimized rg from master.
+  Upgrade an already-installed ripgrep to a from-source build with PCRE2,
+  native CPU SIMD (AVX2 etc.), and fat LTO. Use when the user has stock rg
+  but needs PCRE2 features (lookahead, lookbehind, possessive quantifiers,
+  atomic groups via `rg -P`), sees "PCRE2 is not available", wants faster
+  ripgrep via target-cpu=native + release-lto, or is building ripgrep from
+  master with all features. NOT for installing rg from scratch.
 ---
 
-# rg-optimized — ripgrep Build Guide
+# Optimized ripgrep Build Guide
 
 > **Why:** Stock ripgrep lacks PCRE2. Build from master with all features for `-P` regex support, lookahead/lookbehind, and native CPU optimizations.
+
+## Outcome — When This Skill Has Delivered
+
+You're done when **all** of the following hold:
+
+- `rg --version` reports `features:+pcre2` (the line that lists compiled-in features explicitly includes `pcre2`). Absence of `+pcre2` means the rebuild silently dropped the feature.
+- `rg -P '(?=...)' .` (any lookahead pattern) returns a non-error exit — confirms PCRE2 is wired and not just compiled in.
+- The replaced binary is the one your shell resolves: `which rg` points to the new build, not the distro rg still on `$PATH`. A common foot-gun is installing to `~/.cargo/bin/rg` while `/usr/bin/rg` still wins via `$PATH` order.
+- (If you built with `target-cpu=native`) the binary runs on the machine it was built on. Native-CPU binaries will not run on older CPUs in the same family — do not copy to a different host without rebuilding.
+
+If `--version` shows `+pcre2` but `rg -P` still errors with "PCRE2 is not available," the binary is correct but `$PATH` is resolving the old one; fix the path before trying anything else.
+
+## When NOT to Use This Skill
+
+Reach for something else if:
+
+- **`rg` is not installed at all** → install it first (`brew install ripgrep`, `apt install ripgrep`, `cargo install ripgrep`, or `jsm install` for skills that need it). This skill is an **upgrade** for an existing install, not a fresh install path.
+- **You don't actually need PCRE2 features** (no lookahead, lookbehind, possessive quantifiers, atomic groups, or backreferences) → stock `rg` is fine and ~10-50 MB smaller. Don't carry the build complexity for features you don't use.
+- **You need a portable binary** to ship to other machines → drop `target-cpu=native` (it pins to your host CPU's instruction set); keep `--features pcre2` + `--profile release-lto`. Native-CPU is for personal-machine performance only.
+- **You're on Windows** without WSL → the build recipe here assumes a Unix toolchain (`apt-get`, `pkg-config`, `~/.cargo/bin/`). Adapt or use a prebuilt PCRE2-enabled ripgrep release from upstream.
 
 ## Quick Build (Copy-Paste)
 

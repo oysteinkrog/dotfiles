@@ -1,3 +1,7 @@
+---
+name: pr-checks
+description: Display PR check status in a beautiful, aligned, color-coded format.
+---
 # PR Checks — Beautiful PR Check Status
 
 Display PR check status in a beautiful, aligned, color-coded format.

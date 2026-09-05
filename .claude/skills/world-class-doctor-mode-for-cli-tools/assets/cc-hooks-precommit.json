@@ -1,0 +1,21 @@
+{
+  "_template_note": "Drop into ~/.claude/settings.local.json (merging with existing keys). Replace `<tool>` with the canonical binary name from phase0_cli.json::existing_doctor_binary (or .binaries[0] in `add` mode). Replace `<tool>-doctor-precommit` with a unique hook id if you have multiple doctored projects. The matchers here cover the common AI-driven commit paths; tune them per the target's git workflow.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "id": "<tool>-doctor-precommit",
+        "description": "Run `<tool> doctor --quick` before any commit-like Bash command. Aborts the tool call if the doctor reports findings.",
+        "command_patterns": [
+          "^\\s*git\\s+commit\\b",
+          "^\\s*git\\s+push\\b",
+          "^\\s*gh\\s+pr\\s+create\\b",
+          "^\\s*gh\\s+release\\s+create\\b"
+        ],
+        "command": "<tool> doctor --quick --json > /dev/null 2>&1 || { echo 'doctor blocked the commit; run `<tool> doctor` to investigate or `<tool> doctor --fix` to repair' >&2; exit 1; }",
+        "blocking": true,
+        "timeout_seconds": 5
+      }
+    ]
+  }
+}

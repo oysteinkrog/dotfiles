@@ -1,0 +1,114 @@
+# numerical-class.yml — ast-grep rules for Numerical-Python-class port surface
+# (NumPy / pandas / SciPy / NetworkX-like — PyO3-bridged)
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml \
+#                  -r scripts/ast-grep-surface-patterns/numerical-class.yml \
+#                  <port-src>
+
+id: pyfunction
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: pub fn $NAME($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        pattern: "#[pyfunction]"
+        stopBy: end
+message: "PyO3-exported function: $NAME"
+severity: info
+
+---
+
+id: pyfunction-named
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: pub fn $NAME($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        pattern: "#[pyfunction(name = \"$ALIAS\")]"
+        stopBy: end
+message: "PyO3-exported function (renamed): $NAME -> $ALIAS"
+severity: info
+
+---
+
+id: pyclass
+language: Rust
+rule:
+  kind: struct_item
+  all:
+    - pattern: pub struct $NAME { $$$ }
+    - has:
+        kind: attribute_item
+        pattern: "#[pyclass]"
+        stopBy: end
+message: "PyO3-exported class: $NAME"
+severity: info
+
+---
+
+id: pymethods
+language: Rust
+rule:
+  kind: impl_item
+  all:
+    - pattern: impl $TY { $$$ }
+    - has:
+        kind: attribute_item
+        pattern: "#[pymethods]"
+        stopBy: end
+message: "PyO3 methods impl: $TY"
+severity: info
+
+---
+
+id: pymodule
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: "fn $NAME(_py: Python<'_>, $$$) -> PyResult<()> { $$$ }"
+    - has:
+        kind: attribute_item
+        pattern: "#[pymodule]"
+        stopBy: end
+message: "PyO3 module entry: $NAME"
+severity: info
+
+---
+
+id: ufunc-register
+language: Rust
+rule:
+  kind: call_expression
+  pattern: register_ufunc($CTX, "$NAME", $$$)
+message: "Registered ufunc: $NAME"
+severity: info
+
+---
+
+id: dtype-promotion-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match dtypes { (DType::$LEFT, DType::$RIGHT) => DType::$RESULT }
+    selector: match_arm
+message: "DType promotion: $LEFT × $RIGHT -> $RESULT"
+severity: info
+
+---
+
+id: rng-seed-call
+language: Rust
+rule:
+  kind: call_expression
+  any:
+    - pattern: PCG64DXSM::seed_from_u64($SEED)
+    - pattern: rand::SeedableRng::seed_from_u64($SEED)
+message: "RNG seed call (bit-exact parity-relevant)"
+severity: warning

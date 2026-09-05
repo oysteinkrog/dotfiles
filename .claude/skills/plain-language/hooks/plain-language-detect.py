@@ -362,6 +362,14 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
             html = Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
+        # Test the skip marker on the raw file, before the tags come out. The
+        # marker regex already accepts an `<!--` prefix, but tag stripping is
+        # not selective and takes the whole comment with it, so a page that
+        # declared skip the documented way was scored anyway. Keeping the
+        # marker on its own line in the stripped text is what makes the
+        # declaration reach the check.
+        if SKIP_MARKER.search(html):
+            return ("plainlang: skip", f"artifact {Path(path).name}")
         html = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.S | re.I)
         html = re.sub(r"<[^>]+>", " ", html)
         return (html, f"artifact {Path(path).name}")

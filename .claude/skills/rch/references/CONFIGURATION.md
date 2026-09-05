@@ -1,5 +1,15 @@
 # RCH Configuration Reference
 
+## Contents
+
+- [Precedence and File Locations](#precedence-and-file-locations)
+- [Main Config (`~/.config/rch/config.toml`)](#main-config-configrchconfigtoml)
+- [Workers Config (`~/.config/rch/workers.toml`)](#workers-config-configrchworkerstoml)
+- [Environment Variables](#environment-variables)
+- [Hook Configuration (Claude Code)](#hook-configuration-claude-code)
+- [Validation and Diagnostics](#validation-and-diagnostics)
+- [Runtime Data Paths](#runtime-data-paths)
+
 ## Precedence and File Locations
 
 RCH resolves settings in this order (highest to lowest):

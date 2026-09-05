@@ -1,0 +1,58 @@
+# CODEOWNERS — gauntlet-adopted port.
+#
+# Lane assignments follow the cc_1 / cc_2 / cc_3 / cc_4 convention from
+# SKILL.md § Parallelism Model. Each lane has a primary maintainer; PRs
+# touching that lane require their review. Cross-lane PRs require two
+# maintainers (one from each affected lane).
+#
+# Replace @your-org/<team> placeholders with real GitHub handles or
+# org/team identifiers. Anyone listed here MUST be at trust tier T4 per
+# CONTRIBUTING.md § Trust tiers.
+
+# ---- Default ----
+*                                       @your-org/maintainers
+
+# ---- cc_1 — conformance / oracle / differential / metamorphic / fault / crash-boundary ----
+# Owners decide on EngineIdentity changes, oracle wiring, mismatch-minimizer,
+# metamorphic transforms, fault-VFS adoption, crash-boundary additions.
+crates/*-harness/src/oracle.rs                              @your-org/conformance-leads
+crates/*-harness/src/differential_v2.rs                     @your-org/conformance-leads
+crates/*-harness/src/metamorphic.rs                         @your-org/conformance-leads
+crates/*-harness/src/mismatch_minimizer.rs                  @your-org/conformance-leads
+crates/*-harness/src/fault_vfs.rs                           @your-org/conformance-leads
+crates/*-harness/src/failure_bundle.rs                      @your-org/conformance-leads
+crates/*-e2e/tests/*_oracle_e2e.rs                          @your-org/conformance-leads
+docs/contracts/*_version_contract.toml                      @your-org/conformance-leads
+docs/canonical_parity_contract.md                           @your-org/conformance-leads
+docs/progress/conformance-negative-results.md               @your-org/conformance-leads
+fuzz/fuzz_targets/fuzz_*_oracle.rs                          @your-org/conformance-leads
+
+# ---- cc_2 — performance / benches / profile-cards / hot-path counters / regression detector ----
+crates/*-e2e/src/bin/comprehensive_bench.rs                 @your-org/perf-leads
+crates/*-e2e/benches/                                       @your-org/perf-leads
+crates/*-core/src/hot_path_profile_snapshot.rs              @your-org/perf-leads
+.bench-history/                                             @your-org/perf-leads
+scripts/apply-ratchet.sh                                    @your-org/perf-leads
+scripts/run-bench-matrix.sh                                 @your-org/perf-leads
+scripts/run-narrow-benches.sh                               @your-org/perf-leads
+docs/progress/perf-negative-results.md                      @your-org/perf-leads
+
+# ---- cc_3 — surface parity / coverage / feature universe / invariant catalog ----
+docs/feature_universe.toml                                  @your-org/surface-leads
+docs/invariant_catalog.toml                                 @your-org/surface-leads
+docs/progress/surface-deferrals.md                          @your-org/surface-leads
+crates/*-harness/src/verification_contract.rs               @your-org/surface-leads
+
+# ---- cc_4 — fault / crash / soak / e-process / BOCPD / adversarial ----
+crates/*-harness/src/eprocess.rs                            @your-org/soak-leads
+crates/*-harness/src/replay_harness.rs                      @your-org/soak-leads
+crates/*-harness/src/score_engine.rs                        @your-org/soak-leads
+.github/workflows/soak.yml                                  @your-org/soak-leads
+scripts/run-soak-campaign.sh                                @your-org/soak-leads
+
+# ---- Release / certification ----
+docs/release/                                               @your-org/release-leads
+.github/workflows/verification-gates.yml                    @your-org/release-leads @your-org/conformance-leads
+AGENTS.md                                                   @your-org/release-leads @your-org/conformance-leads
+CONTRIBUTING.md                                             @your-org/release-leads
+CODEOWNERS                                                  @your-org/release-leads

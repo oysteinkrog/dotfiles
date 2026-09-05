@@ -1,0 +1,45 @@
+{
+  "audit_dir_version": "1.0.0",
+  "project_path": "<absolute path filled at bootstrap>",
+  "project_git_sha_at_pass_start": "<commit SHA filled at bootstrap>",
+  "skill_version": "1.0.0",
+  "rubric_version": "1.0.0",
+  "rubric_sha256": "<sha256 of rubric.md filled at bootstrap>",
+  "pass_id": "<ISO-8601 UTC>",
+  "pass_started_at": "<ISO-8601 UTC>",
+  "pass_completed_at": null,
+  "mode": "full-audit",
+  "score_threshold": 700,
+  "remediation_policy": "completion-debt",
+  "parallelism": 6,
+  "tools": {
+    "br": "<version>",
+    "bv": "<version or omitted>",
+    "ast_grep": "<version or omitted>",
+    "ripgrep": "<version>"
+  },
+  "bead_counts": {
+    "total": 0,
+    "open": 0,
+    "in_progress": 0,
+    "closed": 0,
+    "blocked": 0,
+    "deferred": 0,
+    "draft": 0,
+    "tombstone": 0,
+    "pinned": 0
+  },
+  "phase_status": {
+    "1": "pending",
+    "2": "pending",
+    "3": "pending",
+    "4": "pending",
+    "5": "pending",
+    "6": "pending",
+    "7": "pending",
+    "8": "pending",
+    "9": "pending",
+    "10": "pending"
+  },
+  "convergence": null
+}

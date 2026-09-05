@@ -225,7 +225,7 @@ ton of alpha for the specific problems we're trying to solve here, as efficientl
 REALLY RUMINATE ON THIS!!! DIG DEEP!!
 ```
 
-Or with skill references: `Use $alien-artifact-coding and $extreme-software-optimization. BE AMBITIOUS.`
+Or with skill references: `Use $alien-artifact-coding, $alien-graveyard (if available), and $extreme-software-optimization. BE AMBITIOUS.`
 
 Or the full hype-man version — sounds odd on paper but genuinely works as a counter-strategy against trained incrementalism:
 ```
@@ -453,7 +453,7 @@ Implementation (agents pick up beads via br ready)
 | "Audit for security/perf/UX issues" | codebase-audit | **reality-check** |
 | "Generate ideas for improvements" | idea-wizard | **reality-check** |
 | "What bead should I work on next?" | bv | **reality-check** |
-| "Create a comprehensive architecture doc" | comprehensive-codebase-report | **reality-check** |
+| "Create a comprehensive architecture doc" | codebase-report | **reality-check** |
 | "Find and fix all bugs" | multi-pass-bug-hunting | **reality-check** |
 
 **Overlap with idea-wizard:** Phases 4-5 of this skill (ambition rounds + refinement) are the idea-wizard workflow. If you've already done the reality check and just need the ambition→bead→refine cycle, use idea-wizard directly.

@@ -9,7 +9,7 @@
 3. [Compilers/Interpreters](#compilersinterpreters)
 4. [Search Engines](#search-engines)
 5. [Scientific Computing](#scientific-computing)
-6. [Graphics/Rendering](#graphicsrendering)
+6. [Graphics/Rendering](#graphicsrendering-graphicsfuzz)
 7. [Cryptography](#cryptography)
 8. [Web Applications](#web-applications)
 9. [Parsers/Serialization](#parsersserialization)

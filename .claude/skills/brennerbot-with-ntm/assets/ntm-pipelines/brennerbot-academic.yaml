@@ -1,0 +1,175 @@
+name: brennerbot-academic
+description: |
+  Academic-replication mode pipeline — A3-archetype methodology distillation
+  with replication discipline.
+
+  Per references/DOMAIN-RECIPE-LIBRARY.md R5 (ML/data-science methodology)
+  and references/EXTENDED-OPERATING-MODES.md `academic-replication` mode.
+
+  Use for: distilling published methods, validating cited claims, evaluating
+  whether a paper's results apply to our regime.
+
+inputs:
+  workspace: required
+  question: required           # which methodology / claim to investigate
+  papers: required             # list of paper sources to pin
+  load_bearing_claim: required # the specific claim being evaluated
+
+phases:
+  - name: phase_0_pre_check
+    type: automated
+    description: |
+      Pin papers + datasets + code with content hashes.
+      Compose with /lean-formal-feedback-loop if formal claims involved.
+      Compose with /alien-artifact-coding for calibrated bounds.
+
+    actions:
+      - dispatch subagents/corpus-curator.md (pin sources with hash)
+      - dispatch /cass search "<topic>" --robot
+      - if formal_claims: dispatch /lean-formal-feedback-loop
+
+  - name: phase_1_framing
+    type: manual
+    description: |
+      Per FRAMING-WORKBOOK.md F1-F9 with R5 emphasis:
+      - F4 paradox (per Brenner: what makes this method controversial?)
+      - F5 falsifier (which empirical observation refutes?)
+      - F7 corpus (peer-reviewed papers, replicated benchmarks)
+
+    deliverable: intake/question_of_record.md
+
+  - name: phase_2_bootstrap
+    type: automated
+    description: |
+      Squad tier roster:
+      - cc: 2 (Synthesizer-cc, Investigator-1)
+      - cod: 1 (Investigator-2 cross-domain framing)
+      - gmi: 1 (Synthesizer-gmi for formal/mathematical lens)
+
+  - name: phase_3_hypotheses
+    type: manual
+    description: |
+      Hypotheses about whether the cited claim:
+      - replicates (reproduces published result under same conditions)
+      - generalizes (holds in our regime)
+      - holds with caveats (regime-specific limits)
+      - is wrong (replication fails)
+
+    dispatch:
+      - MO-03a-propose.md
+      - MO-03b-triage.md
+      - MO-03c-third-alternative.md (mandatory)
+
+  - name: phase_4_investigate
+    type: manual
+    description: |
+      Per-H investigation with:
+      - 𝓛 Recode (re-state each paper's claim in own words; surfaces inconsistency)
+      - ≡ Invariant-Extract (what assumptions does the method require?)
+      - ⊞ Scale-Check (does the method work at our scale and distribution shift?)
+      - ⊙ Productive-Ignorance (one pane reads ONLY question; generates first-principles alternative)
+      - 🔧 DIY (replicate on our regime if feasible)
+
+    dispatch:
+      - MO-04a-investigate.md (per H)
+      - MO-04b-devils-advocate.md (cross-family)
+      - MO-academic-replication.md (mandatory for load-bearing claims)
+      - MO-evidence-verify.md (independent re-check of cited evidence)
+
+    convergence_check: convergence-check.sh --phase=4 --workspace=${workspace}
+
+  - name: phase_5_adjudicate
+    type: manual
+    description: |
+      Adjudication weighs:
+      - Original paper authority (W_source)
+      - Independent replication results (W_verification, W_independence)
+      - Domain fit to our regime (W_domain_fit)
+      - Recency (W_recency)
+
+    dispatch:
+      - MO-05a-cross-exam.md
+      - MO-05b-adjudicate.md
+      - subagents/evidence-grader.md (per Phase 5 grading)
+
+  - name: phase_6_distill
+    type: manual
+    description: |
+      Per-family distillation:
+      - cc: careful citation reading; spots paper misinterpretation
+      - cod: broad pattern matching; spots methodology analogues from adjacent fields
+      - gmi: formal/mathematical lens; spots scale-physics issues
+
+      Cross-family meta-synthesis surfaces:
+      - Where families read papers differently (D-NNN entries)
+      - Convergent kernel across families (per KERNEL.md)
+
+    dispatch:
+      - MO-06a-distill.md per family
+      - MO-06b-meta-synthesize.md
+      - /multi-model-triangulation for third reconciliation
+
+  - name: phase_7_audit
+    type: manual
+    description: |
+      Standard fresh-eyes + academic-specific:
+      - Did we replicate every load-bearing claim? (per OC-021)
+      - Did we surface citation cascades? (paper P cites Q cites R; did we read Q and R?)
+      - Did we cross-domain import? (did we miss methodology analogues?)
+      - Are scale-physics calculations independent?
+
+    dispatch:
+      - MO-07a-fresh-eyes.md
+      - subagents/red-team.md (T4+)
+      - subagents/falsifier-grader.md
+      - subagents/methodology-historian.md (for cross-session methodology lessons)
+
+    six_layer_check: check-six-layer-validation.sh
+
+  - name: phase_8_freeze
+    type: manual
+    description: |
+      Standard. Plus:
+      - export-reproducibility-package.sh for academic transparency
+      - Document replication artifacts in analyses/replication-attempts/
+
+  - name: phase_9_handback
+    type: manual
+    description: |
+      HANDBACK + extended REPLICATION-RECORD.md per
+      MO-academic-replication.md template.
+
+      For pre-publication: dispatch MO-pre-publication-review.md.
+      For dual-use concerns: dispatch MO-dual-use-review.md.
+
+    deliverables:
+      - deliverables/HANDBACK.md
+      - analyses/replication-attempts/REPLICATION-RECORD.md
+      - (optional) deliverables/PRE-PUBLICATION-REVIEW-AGGREGATE.md
+
+  - name: phase_10_drift
+    type: manual
+    description: |
+      Standard drift + academic-specific:
+      - Did we accept a paper without replication on the load-bearing claim?
+      - Did we make assumptions about generalization that the paper didn't support?
+      - Are our W_source values calibrated to the field?
+
+outputs:
+  - deliverables/HANDBACK.md
+  - analyses/replication-attempts/
+  - distillations/disagreement_register.md
+  - corpus/quote-bank.md (per QUOTE-BANK-METHODOLOGY.md)
+
+wall_time_estimate:
+  T3: 6-12h (no replication)
+  T4: 1-3 days (with replication of 1-2 claims)
+  T5: 1-2 weeks (with replication of all load-bearing claims + pre-publication review)
+
+anti_patterns:
+  - Treat the paper as authority (the paper might be wrong)
+  - Skip replication ("trust the citation count")
+  - Conflate "works in benchmark" with "works at our deployment"
+  - Skip dual-use-review for sensitive findings (per MO-dual-use-review)
+  - Cite cascade without reading intermediate sources
+  - Use single-paper kernel claim (need triangulation across ≥3 sources per KERNEL.md)

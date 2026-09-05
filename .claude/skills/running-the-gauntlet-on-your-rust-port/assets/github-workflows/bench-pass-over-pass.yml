@@ -1,0 +1,144 @@
+# .github/workflows/bench-pass-over-pass.yml
+#
+# Wires CI gate 1.2 from PARITY_RUNBOOK.md: pass-over-pass throughput gate.
+#
+# Runs comprehensive-bench, diffs against .bench-history/<bench>.latest.json,
+# gates at -5% on geomean ratio (and -10% per category, -15% on p90, -5% on
+# throughput, -3% on primary score — per parity_score_contract.toml).
+#
+# Heavy job; runs nightly on main + on-demand on PRs (label-gated to
+# avoid bench-spam on small PRs).
+
+name: Bench Pass-over-Pass
+
+on:
+  schedule:
+    - cron: "0 4 * * *"  # nightly 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Bench iterations (default 5; raise for tighter cv)"
+        required: false
+        default: "5"
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: bench-pass-over-pass-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    # Gate PR runs on the `run-bench` label; nightly + workflow_dispatch always run.
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-bench')
+    runs-on: ubuntu-latest-16cores  # use larger runner for lower cv_pct
+    timeout-minutes: 90
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+      ITERATIONS: ${{ inputs.iterations || '5' }}
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true  # .bench-history may contain LFS blobs
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install bench tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq linux-tools-common linux-tools-generic
+          cargo install --locked hyperfine || true
+
+      - name: Tune host for low-noise bench
+        run: |
+          # Pin CPU governor; disable turbo; pin THP.
+          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor || true
+          echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
+          echo always | sudo tee /sys/kernel/mm/transparent_hugepage/enabled || true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (release-perf profile, NOT --release)
+        run: cargo build --profile release-perf --all-features --benches
+
+      - name: Run comprehensive-bench matrix
+        run: |
+          "$WORKSPACE/scripts/run-bench-matrix.sh" "$PORT" "$WORKSPACE"
+
+      - name: Diff against bench history
+        id: diff
+        run: |
+          # Geomean delta gate at -5%
+          BASELINE="$WORKSPACE/.bench-history/comprehensive_bench.latest.json"
+          CANDIDATE="$WORKSPACE/artifacts/bench/comprehensive_bench/comprehensive_bench_report.json"
+
+          if [[ ! -f "$BASELINE" ]]; then
+            echo "::warning::no .bench-history baseline; this is the first bench. Skipping pass-over-pass."
+            echo "first_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DELTA_PCT=$(jq -n --slurpfile a "$BASELINE" --slurpfile b "$CANDIDATE" \
+            '($b[0].summary.geomean_ratio / $a[0].summary.geomean_ratio - 1) * 100')
+          echo "delta_pct=$DELTA_PCT" >> "$GITHUB_OUTPUT"
+          echo "Geomean delta vs baseline: ${DELTA_PCT}%"
+
+          # Gate per parity_score_contract.toml
+          THRESHOLD=-5
+          if awk -v d="$DELTA_PCT" -v t="$THRESHOLD" 'BEGIN { exit !(d < t) }'; then
+            echo "regression=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "regression=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-pass-over-pass-${{ github.run_id }}
+          path: |
+            ${{ env.WORKSPACE }}/artifacts/bench/
+            ${{ env.WORKSPACE }}/.bench-history/*.latest.json
+            benchmark_report_*.json
+            .bench-history/*.latest.json
+            target/criterion/**/*.json
+          retention-days: 90
+
+      - name: Annotate
+        if: steps.diff.outputs.first_run != 'true'
+        run: |
+          DELTA="${{ steps.diff.outputs.delta_pct }}"
+          if [[ "${{ steps.diff.outputs.regression }}" == "true" ]]; then
+            echo "::error title=Bench Regression::geomean delta ${DELTA}% exceeds -5% threshold. Route through perf-regression-triage.md."
+          else
+            echo "::notice title=Bench Pass-over-Pass::geomean delta ${DELTA}% within gate."
+          fi
+
+      - name: Fail on regression
+        if: steps.diff.outputs.regression == 'true'
+        run: exit 1

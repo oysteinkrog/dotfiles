@@ -90,7 +90,7 @@ Operators infer state from:
 
 - most recent `latest-*.json` reports and their status fields
 - `workdir-phase3/reports/dr/` for active DR runs
-- `workdir-phase3/rotate-credentials-audit.json` for in-progress rotations
+- `workdir-phase3/rotate-tokens-audit.json` for in-progress rotations
 
 If an explicit state file becomes useful, add `workdir-phase3/state.json`
 and have every stage mutate it. Not required in v1 of the skill.

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Run a command inside the Mac's own login session and wait for it to finish.
+#
+# Some commands cannot work over ssh at all. An ssh session has no GUI security
+# session, so anything that needs the keychain to hand over a private key fails
+# with errSecInternalComponent no matter how unlocked the keychain is. Code
+# signing is the one that bites: `security find-identity` lists the identity
+# happily, and `codesign` still cannot use it.
+#
+# This writes a script on the Mac, asks Terminal.app to run it, and polls for a
+# marker file holding the exit code. Terminal is a GUI process, so the command
+# gets the session it needs.
+#
+# The first run needs a person at the Mac: macOS asks whether ssh may control
+# Terminal, and only someone at the machine can allow it. After that it is
+# unattended.
+#
+# Usage:
+#   mac-gui-run 'cd /path && xcodebuild ... '
+#   mac-gui-run -t 1800 'a long build'
+#
+# Exit code is the remote command's own.
+
+set -uo pipefail
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAC_SSH="$HERE/mac-ssh"
+
+if [[ ! -r $CONFIG ]]; then
+    echo "mac-gui-run: no config at $CONFIG; see the mac-remote skill" >&2
+    exit 78
+fi
+
+deadline_s=1800
+while getopts ":t:" opt; do
+    case $opt in
+        t) deadline_s=$OPTARG ;;
+        *) echo "mac-gui-run: unknown option -$OPTARG" >&2; exit 64 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [[ $# -eq 0 ]]; then
+    echo "usage: mac-gui-run [-t seconds] <command>" >&2
+    exit 64
+fi
+
+tag="gui-$(date +%s)-$$"
+script="/tmp/$tag.sh"
+marker="/tmp/$tag.done"
+log="/tmp/$tag.log"
+
+# The command is delivered through a file rather than through the AppleScript
+# string. Quoting it twice, once for ssh and once for AppleScript, mangles
+# anything with a quote in it, and a mangled build command fails in a way that
+# looks like a build error.
+"$MAC_SSH" "cat > $script" <<EOF
+#!/bin/bash
+$*
+echo \$? > $marker
+EOF
+
+"$MAC_SSH" "chmod +x $script" >/dev/null || exit 69
+
+"$MAC_SSH" "osascript -e 'tell application \"Terminal\" to do script \"$script > $log 2>&1; exit\"' >/dev/null 2>&1; echo launched" >/dev/null
+
+waited=0
+while (( waited < deadline_s )); do
+    code=$("$MAC_SSH" -t 60 "cat $marker 2>/dev/null" 2>/dev/null)
+    if [[ -n ${code//[[:space:]]/} ]]; then
+        "$MAC_SSH" -t 90 "cat $log 2>/dev/null"
+        "$MAC_SSH" "rm -f $script $marker $log" >/dev/null 2>&1
+        exit "${code//[[:space:]]/}"
+    fi
+    sleep 10
+    waited=$((waited + 10))
+done
+
+echo "mac-gui-run: still running after ${deadline_s}s; log is $log on the Mac" >&2
+echo "mac-gui-run: if nothing happened at all, macOS is blocking ssh from" >&2
+echo "             driving Terminal. Allow it at the Mac, once." >&2
+exit 70

@@ -9,49 +9,6 @@ description: >-
 
 > **Core Insight:** Exclusion beats confirmation. Design experiments to kill hypotheses, not prove them. A theory that survives elimination is stronger than one with supporting evidence.
 
-## Install
-
-**Repo:** https://github.com/Dicklesworthstone/brenner_bot
-
-**Runtime:** Prebuilt TypeScript binary (compiled with Bun) — no Rust toolchain needed.
-
-### Quick install (Linux x64 / WSL)
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/brenner_bot/main/install.sh?$(date +%s)" \
-  | bash -s -- --easy-mode --verify
-```
-
-Downloads `brenner-linux-x64` (~93 MB) to `~/.local/bin/brenner` and verifies SHA256. Installer also pulls `ntm`, `cass`, `cm` from their upstream manifests.
-
-### Build from source
-
-```bash
-curl -fsSL https://bun.sh/install | bash      # if bun missing
-git clone https://github.com/Dicklesworthstone/brenner_bot.git
-cd brenner_bot
-bun build --compile ./brenner.ts --outfile brenner
-cp brenner ~/.local/bin/brenner
-```
-
-### Prerequisites
-
-| Requirement | Notes |
-|---|---|
-| Linux x64 or macOS | WSL1/WSL2 both supported (use Linux x64 binary) |
-| `~/.local/bin` in PATH | fish: `fish_add_path ~/.local/bin` |
-| Agent Mail server | `am` alias starts it; required for session commands |
-| `OPENAI_API_KEY` | Set in env or `.env` in project root |
-
-### Smoke test
-
-```bash
-brenner --version
-brenner doctor --skip-ntm --skip-cass --skip-cm --json | jq '.status'   # expect "healthy"
-```
-
----
-
 ## Table of Contents
 
 [THE EXACT PROMPT](#the-exact-prompt--research-session-workflow) | [When to Use What](#when-to-use-what) | [Critical Constraints](#critical-constraints) | [Artifact Schema](#7-section-artifact-schema) | [Heuristics](#heuristics) | [References](#references)
