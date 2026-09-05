@@ -2,9 +2,13 @@
   "sources": {
     "dzhng-skills": {
       "repo": "https://github.com/dzhng/skills",
-      "commit": "f7ace9d51c8300f45764492538ea15f038859ea7",
-      "synced_at": "2026-07-10T11:37:09Z",
+      "commit": "969b8da1a0a22be5b40b1f5f948d8e0cfb03f942",
+      "synced_at": "2026-08-07T13:58:16Z",
       "skills": {
+        "codex": {
+          "path": "skills/engineering/codex",
+          "hash": "24b251b282ed6cc57230789005816360c6cc54c49ca229a97798c952a351d833"
+        },
         "eval-skills": {
           "path": "skills/authoring/eval-skills",
           "hash": "b60dc590dccd337e45fbb8a1c2debdb3a0866d6832d0d91effcfa9bf366d1866"
@@ -13,37 +17,37 @@
           "path": "skills/authoring/write-skills",
           "hash": "4d78b9f8237c10fb657c277a0d64191730ff43535fecaafd7ad6bb6a3b4b3d28"
         },
+        "audit-choices": {
+          "path": "skills/engineering/audit-choices",
+          "hash": "cc90fb2a037c0e867e63ed836b75a0e1258cdf8b9d3f75efb1ecea3c2c5d09eb"
+        },
         "claude": {
           "path": "skills/engineering/claude",
           "hash": "e0a9b6e924d39be641cd253cbc6d0a5e4985032d148eff8070714cc478a9a323"
         },
         "close-spec": {
           "path": "skills/engineering/close-spec",
-          "hash": "29e3e1d2e1f20602bdfcbb4f020a9a0853a7894b42075103b320e897af2da116"
+          "hash": "4dc3bd2bea986ebadb2980cc90c6636eee3054739ff4923e5e907f8190a0d16d"
         },
         "code-review": {
           "path": "skills/engineering/code-review",
-          "hash": "432b2554dedf01243429954d1a4752d8c07b561905e71b190e2c7a0578d41209"
-        },
-        "codex": {
-          "path": "skills/engineering/codex",
-          "hash": "24b251b282ed6cc57230789005816360c6cc54c49ca229a97798c952a351d833"
+          "hash": "c17bb88a7b6e57f6c80b95449b6f2b62749d654c3114d69f4e16be32837aadd6"
         },
         "explore-unknowns": {
           "path": "skills/engineering/explore-unknowns",
-          "hash": "574c28614db8532426320bbd8411e14533565338c8ee84e3e5d3ec22f4d213aa"
+          "hash": "7adfe5d575e736391c8284c24fb0cf076f69c898efd534291140b1f6ccd92406"
         },
         "implement-spec": {
           "path": "skills/engineering/implement-spec",
-          "hash": "cf492fe1be38363faa36a54ab9d8975c2c08c22194aafd4d7749233658d0f07c"
+          "hash": "02a0f5a5daf1ad5e754cbb09b9d34ef8192f82171bf0525b9832107c8870a137"
         },
         "implement-spec-with-codex": {
           "path": "skills/engineering/implement-spec-with-codex",
-          "hash": "0cc1b21961b04229ee017ccdf55d14c09b299c88d423bb1151cc0454851ef781"
+          "hash": "f16d117578113fd76cbec8fe49d8d397e5ec4770db4c28c3ed63e1dadcee43fb"
         },
         "refactor-clean": {
           "path": "skills/engineering/refactor-clean",
-          "hash": "0379c4424c03a95358fe73fba4663a904950e4c83e5187db8216207e911c56c0"
+          "hash": "7dcc973af43969671c1a115983437f7d3a0d14dd82f90f16fbf7132d6d462a85"
         },
         "review": {
           "path": "skills/engineering/review",
@@ -55,7 +59,7 @@
         },
         "write-spec": {
           "path": "skills/engineering/write-spec",
-          "hash": "e6b3f825a90acc100a7ae974b5582bfb130f13b52438c9575d5bfab720a1f869"
+          "hash": "22c6a55735508f136bdef464ee3d0551ef8d4b14ebd89d5b3441dedb9736f872"
         },
         "write-tests": {
           "path": "skills/engineering/write-tests",
@@ -115,6 +119,129 @@
         "visual-design": {
           "path": "slidev/skills/visual-design",
           "hash": "efd1a5d45f32cf3e68ca0dddd21be927d570ee26a06fb0df95a7488c38b5710e"
+        }
+      }
+    },
+    "flywheel-skills": {
+      "repo": "https://github.com/Dicklesworthstone/agent_flywheel_clawdbot_skills_and_integrations",
+      "commit": "6bdac0a0c18c86b8d2545d5bf50baf4d44027467",
+      "synced_at": "2026-08-07T14:00:53Z",
+      "skills": {
+        "agent-fungibility": {
+          "path": "skills/agent-fungibility",
+          "hash": "411b1b71447bab961913010e9ba0e4ab5787cfdcd72ce2f26015c408d7ac635c"
+        },
+        "agent-mail": {
+          "path": "skills/agent-mail",
+          "hash": "21c61cb0d819dbd07a6662873de6cf94f0110e589c17cb4db6af8f58fbeaa2d9"
+        },
+        "agent-swarm-workflow": {
+          "path": "skills/agent-swarm-workflow",
+          "hash": "d3e36981ccba987a6b31ea04a7b68daf1033d05195e8d87e1c92ea6a97a10eba"
+        },
+        "beads-workflow": {
+          "path": "skills/beads-workflow",
+          "hash": "5552303ebbda76c42a73d04df4794a39b30a8f9d4fef69d53247767a1af56f24"
+        },
+        "bv": {
+          "path": "skills/bv",
+          "hash": "1c0b0e11eb3c5ff3e9a511993c0a89cfb17ce0c1aa604d21c53b2b7a0566b166"
+        },
+        "caam": {
+          "path": "skills/caam",
+          "hash": "9632293d7a8becb19e70040d1cb32c5b9ecdd67baf5e126814ea3f9c3667f107"
+        },
+        "cass": {
+          "path": "skills/cass",
+          "hash": "c6449cc6b242888567823a49fac572db6001e70eef65ef9a8f3a7c344298d01d"
+        },
+        "cm": {
+          "path": "skills/cm",
+          "hash": "8c6c0730bae67e48bc6aa7e2f03abf07494d5335a0f05f270e8baa1aaac73b26"
+        },
+        "csctf": {
+          "path": "skills/csctf",
+          "hash": "be2f1ff19de13343a80178dd0eb812bab8a94abadef688b77b8b2e3dd6e86409"
+        },
+        "cursor": {
+          "path": "skills/cursor",
+          "hash": "82b209bc1a5de24e5088b9261e28f511d090b74de27d8b26d534bdded02a5f47"
+        },
+        "dcg": {
+          "path": "skills/dcg",
+          "hash": "739265c917aa197ea96e6bb3a1a60f2afb0ed51bcd46f253adc5c220ba4b905c"
+        },
+        "de-slopify": {
+          "path": "skills/de-slopify",
+          "hash": "2079572753514e30000300a584df165a9c1699a681a6a20ea9b4c4aab30274ff"
+        },
+        "flywheel-discord": {
+          "path": "skills/flywheel-discord",
+          "hash": "ba6b9e1cc58652c39f082d2a81199a8a01cebe97b2faa0dc0e80cab9285fd3ef"
+        },
+        "gcloud": {
+          "path": "skills/gcloud",
+          "hash": "485e38617ae537f3e832e2ceb34c8ed111b034aa32b3987331e6ba5572fef52e"
+        },
+        "ghostty": {
+          "path": "skills/ghostty",
+          "hash": "458ffdf17d66772ea06bf4f3cc4bab6189b1742df0b34832f1b47cd7742db352"
+        },
+        "giil": {
+          "path": "skills/giil",
+          "hash": "9a792b57fc3c481a1dd04cb183e471e42d796d487e94efe68b4dd1110acdb67f"
+        },
+        "github": {
+          "path": "skills/github",
+          "hash": "57b86fe0ec205246af5837b70ccdc4a5bd5f215ae30fcc20fd9b94f24caadda8"
+        },
+        "ntm": {
+          "path": "skills/ntm",
+          "hash": "85d23ba08c420605de08e53ea33b82d89f13f0bd2d2d51a553315e54d2481dc0"
+        },
+        "planning-workflow": {
+          "path": "skills/planning-workflow",
+          "hash": "75ad7cc548511036f9d66c652c57eb5278a2c092796d8640772002de19a53aa8"
+        },
+        "ru": {
+          "path": "skills/ru",
+          "hash": "059b9100a557acb68849f2208bf6bbb0c4d623cc76035ca14b8b41132d41fd22"
+        },
+        "slb": {
+          "path": "skills/slb",
+          "hash": "a8a1f4bef4a63663edff3922e61d6f54578570ba466dd9aee793b36448f266b7"
+        },
+        "ssh": {
+          "path": "skills/ssh",
+          "hash": "319fdd152201571d620e896c093c03e8d30768c700e0fd805356e1dc69acce43"
+        },
+        "supabase": {
+          "path": "skills/supabase",
+          "hash": "d1464a6a314ad4bba534c303b5d560022d823210dc2b6527d3ef5ca1c4ef9a46"
+        },
+        "tanstack-integration": {
+          "path": "skills/tanstack-integration",
+          "hash": "18772fce8f82f3fcb57e1f2a72bcc5498b33b2e219fc4bc8d52e37e7bd5da7a5"
+        },
+        "ubs": {
+          "path": "skills/ubs",
+          "hash": "21ffcca016c7c0768a66706bd55e67e8f40094021128340d9739744fa39c8575"
+        },
+        "ui-ux-polish": {
+          "path": "skills/ui-ux-polish",
+          "hash": "4dc8fe25fbb301bdcfa30614c7934a336b8fa65b62afd79b58c841b3561433fe"
+        },
+        "vercel": {
+          "path": "skills/vercel",
+          "hash": "f92614a59ef4be76020a9959b60fc773e980cf87a8315ffaf1644e9ed9b966d5"
+        },
+        "wezterm": {
+          "path": "skills/wezterm",
+          "hash": "6501ac8c2547de0af727413d065e8565ecc23a1dd662958a5f94661c6b4b060f"
+        },
+        "wrangler": {
+          "path": "skills/wrangler",
+          "hash": "11cf61b0cce0f7fa976f6e21efd2bb8437a74538e28905c8cda0d9d87144b7a5"
         }
       }
     }

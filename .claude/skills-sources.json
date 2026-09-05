@@ -9,6 +9,11 @@
       "name": "cc-slidev",
       "repo": "https://github.com/rhuss/cc-slidev.git",
       "skills_dir": "slidev/skills"
+    },
+    {
+      "name": "flywheel-skills",
+      "repo": "https://github.com/Dicklesworthstone/agent_flywheel_clawdbot_skills_and_integrations",
+      "skills_dir": "skills"
     }
   ]
 }
