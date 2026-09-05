@@ -1,0 +1,7 @@
+{
+  "managed_by": "skills-sync",
+  "source": "flywheel-skills",
+  "repo": "https://github.com/Dicklesworthstone/agent_flywheel_clawdbot_skills_and_integrations",
+  "upstream_path": "skills/agent-swarm-workflow",
+  "commit": "6bdac0a0c18c86b8d2545d5bf50baf4d44027467"
+}

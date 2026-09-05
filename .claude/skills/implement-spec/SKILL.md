@@ -54,19 +54,34 @@ depends on prior work.
    deleted. A file you can't name the durable purpose of does not ship.
    Delegated agents leak these; the integrating reviewer re-checks the merged
    tree with the same eye.
-6. Run [refactor-clean](../refactor-clean/SKILL.md) at the end of every pass,
-   before reviewing: collapse any sediment this pass introduced — dev-only shims,
-   duplicated concepts, parallel abstractions, compatibility wrappers — into the
-   clean contract with one owner, so the code reads as designed today, not tacked
-   on. Then run a code-review pass. Apply the fixes from both, rerun the
-   affected checks, then commit only the focused changes from this pass.
+
+   Sizing the pass — measuring what it cost and reworking it when the line count
+   is out of proportion to the behaviour it delivers — belongs to the shape pass
+   in step 6, under [refactor-clean](../refactor-clean/SKILL.md).
+6. Run [review](../review/SKILL.md) at the end of every pass, before committing.
+   It sequences the three closeout lenses — refactor-clean on the shape,
+   code-review on the settled diff, write-docs on what the change touched — and
+   you apply the fixes from all three. Long specs are where sediment compounds,
+   so hold the shape pass to this pass's own output: dev-only shims, duplicated
+   concepts, parallel abstractions, and compatibility wrappers it introduced
+   collapse into the clean contract with one owner, so the code reads as designed
+   today, not tacked on. Last, run
+   [audit-choices](../audit-choices/SKILL.md) on the cleaned pass — a pure
+   audit that appends every decision made where the spec was silent (your own,
+   and each delegated subagent's when integrating) to the spec's choices
+   ledger (`specs/<feature>/choices.md`) with verdicts, changing no code
+   itself. You act on its findings: redo unsound choices from their corrected
+   decisions, adopt the recorded provisional call on any user-only entry — the
+   audit never blocks the run. Rerun the affected checks, then commit only the
+   focused changes from this pass.
 7. Update the spec README's "Next Agent Prompt": status, completed work, next
    pickup point, blockers, changed gates, and any architecture decision that
    changed the plan.
 8. Run a **maintenance checkpoint** as part of the loop, not as endgame cleanup.
    Trigger it after a red pass, after every two or three slice commits, after a
    rebase/resume/compaction, before changing feature areas, when evidence
-   invalidates the plan, when the handoff contradicts the TODO/graph, or when the
+   invalidates the plan, when the handoff contradicts the TODO/graph, when the
+   choices ledger's entries cluster around one slice, or when the
    active prompt grows hard to scan. Long specs bloat repeatedly; cleanup is a
    normal pass, not a cosmetic chore.
 
@@ -90,8 +105,29 @@ depends on prior work.
    and slice graph and choose the same next action without conversation history.
 9. **Continue.** If any slice or global TODO is still open, go straight back to
    step 1 for the next one — same session, no pause for acknowledgement. Keep
-   looping until every TODO is closed. When the last slice lands, close the spec
-   with [close-spec](../close-spec/SKILL.md).
+   looping until every TODO is closed.
+10. **Run [review](../review/SKILL.md) once more over the whole spec.** The
+   per-pass reviews each judged one slice against the code as it stood then; this
+   one judges the finished feature. Scope it to the spec's full diff, not the last
+   pass — that is the only scope where duplication spread across slices, a shape
+   that only reads wrong once every slice has landed, and docs that describe
+   increments instead of the feature are visible at all. Apply the fixes, rerun
+   the gates, commit.
+11. **Consolidate the choices ledger, then close.** When the last slice lands, the
+   `choices.md` you've been appending to per pass is build-order sediment: entries
+   banked early carry "provisional — revisit in slice N" verdicts that a later pass
+   silently resolved, entries a later pass reverted still sit there, and the same
+   choice may appear twice. The per-pass rule "banked is settled, never re-listed"
+   is what let that drift accumulate — so the final consolidation is its deliberate
+   exception. Before archiving, **rewrite `choices.md` from scratch** as the final
+   ledger: re-audit every banked choice against the **final shipped code** (not the
+   pass it landed in), collapse each provisional/needs-later entry to its actual
+   end state, drop anything a later pass superseded or reverted, and merge
+   duplicates. Keep it **choices only** — no gate results, e2e evidence, or
+   review-finding narration; those are reported elsewhere and are not decisions the
+   user now owns. Present it per [audit-choices](../audit-choices/SKILL.md): grouped
+   by verdict, ranked least-confident-first, every entry ELI5 and standalone.
+   *Then* close the spec with [close-spec](../close-spec/SKILL.md).
 
 ## Rules
 
@@ -103,7 +139,7 @@ depends on prior work.
   each subagent its own git worktree when they touch files in parallel so their
   diffs don't collide, and keep work that shares the same files or API seam on a
   single agent to avoid merge chaos. Each delegated unit still owns its full pass
-  — implement, verify, refactor-clean, review, focused commit — and you integrate
+  — implement, verify, review, focused commit — and you integrate
   the results, resolve conflicts, rerun the affected gates on the merged tree, and
   keep the Next Agent Prompt coherent. Only serialize what the graph says must be
   serial; never idle a lane waiting on an unrelated one.
@@ -147,11 +183,52 @@ depends on prior work.
 
 ## Done
 
-A **pass** is done when code, spec handoff, verification evidence, refactor-clean
-and review cleanup, and a focused commit all agree on the same current truth —
-then you start the next pass.
+A **pass** is done when code, spec handoff, verification evidence, review
+cleanup, and a focused commit all agree on the same current truth — then you
+start the next pass.
 
 The **spec** is done — and only then is this skill done — when every slice and
-global TODO is closed, all gates are green, the handoff shows nothing left to
-pick up, and the spec has been archived with [close-spec](../close-spec/SKILL.md).
+global TODO is closed, all gates are green, the whole-spec review has run and its
+fixes have landed, the handoff shows nothing left to pick up, and the spec has
+been archived with [close-spec](../close-spec/SKILL.md).
 Anything short of that is mid-implementation: keep going.
+
+The final handback presents the choices ledger, not the diff, per
+[audit-choices](../audit-choices/SKILL.md) — a days-long unsupervised run
+earns its merge through this ledger; it is the user's review surface for
+everything decided without them. Hand over the **consolidated** ledger from
+step 11 (final state, verified against shipped code, choices only), never the
+raw per-pass append — a ledger still carrying "will be done in a later slice"
+verdicts tells the user you never went back to confirm it was.
+
+**Close the handback with the size of what you added — always last, after the
+ledger.** The ledger says what was decided; this says what it cost. A short
+table over the whole run:
+
+| | added | deleted | net |
+| --- | --- | --- | --- |
+| Production code (excl. comments) | | | |
+| Comments | | | |
+| Tests / harness | | | |
+| Specs & docs | | | |
+
+Then one paragraph naming the **structural** surfaces the run added — a new
+cron, table column, index, endpoint, config flag, dependency — because those
+are what the user now owns and maintains, and a line count alone hides them.
+Exclude formatter churn from files the run did not otherwise touch, and say so
+if you excluded any.
+
+State the count plainly whatever it is. A large net addition for a small
+behavioural change is a finding to report, not a number to bury — and if you
+notice it here rather than at the pass that caused it, say which pass it was.
+
+
+**Slices are not the only unit of scope.** A spec also records *decisions* —
+ledger rows, decision-table entries, invariants — and a decision can be agreed
+in planning but never turned into a slice, especially when it's orthogonal to
+the slices' theme. "All slices closed" then reads as done while that decision is
+silently unbuilt. Before declaring the spec done, reconcile every recorded
+decision against the shipped code, not just the slice list: each one is either
+implemented, or explicitly marked "no code needed." A decision with no owning
+slice is the classic silent miss — the close-spec audit is the backstop for it,
+not the first line of defense.
