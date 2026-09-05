@@ -55,6 +55,7 @@ claude_items=(
   settings.json
   agents
   mcp-servers.json
+  hooks
   output
   skills
 )

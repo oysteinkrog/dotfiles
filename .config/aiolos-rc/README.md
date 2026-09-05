@@ -80,12 +80,29 @@ id all live outside this dir (`~/.config/secrets/…` and `settings.local.json`)
 # extra args pass through to claude (e.g. continue/resume):
 ~/.config/aiolos-rc/aiolos-rc --no-pin -c
 
+# register this machine as a device (remote-control daemon, no shim):
+~/.config/aiolos-rc/aiolos-rc --no-pin rc
+
 ~/.config/aiolos-rc/aiolos-rc --status
 ~/.config/aiolos-rc/aiolos-rc --stop
 ```
 
 `c` / `cc` / `cr` (fish) are wired to `aiolos-rc --no-pin [-c|-r]`, so every everyday
 session goes through aiolos (load-balanced) and exposes `/remote-control`.
+
+**`rc` bypasses the shim.** `aiolos-rc rc` (and `remote-control`) execs the Claude
+binary directly: no shim, no `--settings`, no `LD_PRELOAD`. The bridge owns every
+argument after the subcommand and rejects `--settings`, and it does not need it. The
+RC control channel authenticates against your stored main login even with
+`settings.local.json` pinning `ANTHROPIC_BASE_URL` at aiolos, and sessions the bridge
+spawns read that same pin, so inference still routes through aiolos. The subcommand
+also has to be the *first* argument: anything in front of it bypasses the CLI fast
+path, and the fallback it lands in feeds the subcommand name to the bridge as a stray
+argument (`Error: Unknown argument: rc`, see
+[claude-code#42485](https://github.com/anthropics/claude-code/issues/42485)).
+`--permission-mode bypassPermissions` is added for you unless you pass your own
+`--permission-mode`. The working directory must already be trusted, so run `claude`
+in it once first; the bridge refuses to start in an untrusted workspace.
 
 The aiolos URL for the inference leg is read from `ANTHROPIC_BASE_URL` in the current
 shell if set, otherwise from `~/.claude/settings.local.json`. Add the dir to PATH for
