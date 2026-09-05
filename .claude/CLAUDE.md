@@ -13,7 +13,7 @@ Write user-facing explanations in clear, concise language without reducing techn
 - **No editorial markup in documents.** Never use strikethrough or correction annotations — git history handles that. Documents reflect current correct state only.
 - **Verify implementation state before assuming.** Check `git log` and the file tree to confirm what is actually implemented vs only planned.
 - **Dev questions go to the user, not colleagues.** All clarifying questions go to Oystein, not to other employees via Slack/email.
-- **Ask the user to install missing tools.** Don't install packages yourself — ask the user to run `! sudo apt install <pkg>`.
+- **Ask before installing apt packages.** Passwordless sudo is configured for `apt`/`apt-get` only (`/etc/sudoers.d/oystein-apt`), so you CAN run `sudo apt install <pkg>` yourself — but always ask the user first (AskUserQuestion) naming the package(s), then install on approval. For anything needing broader sudo, ask the user to run it.
 - **Always use AskUserQuestion when you need user input.** Never ask a question in plain text and then wait — the chat surface doesn't reliably show it as a prompt. Use the `AskUserQuestion` tool for every yes/no, multiple-choice, or clarifying question. If the question is genuinely open-ended, still use the tool with an "Other" path so the user has a clear input affordance.
 
 ## Communicating with humans
