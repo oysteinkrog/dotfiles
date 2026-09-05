@@ -5,11 +5,14 @@
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000",
+    "MCP_TIMEOUT": "180000",
+    "MCP_TOOL_TIMEOUT": "120000"
   },
   "permissions": {
     "defaultMode": "auto"
   },
+  "model": "claude-fable-5-1[1m]",
   "skillOverrides": {
     "ab-testing": "off",
     "admin-page-for-nextjs-sites": "off",
@@ -403,10 +406,16 @@
   },
   "syntaxHighlightingDisabled": false,
   "effortLevel": "high",
+  "modelSettings": {
+    "claude-fable-5-1": {
+      "effortLevel": "medium"
+    }
+  },
   "autoUpdatesChannel": "latest",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
+  "theme": "dark",
   "editorMode": "normal",
   "autoCompactEnabled": true,
   "fileCheckpointingEnabled": false,
@@ -418,6 +427,5 @@
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/"
     }
-  },
-  "model": "claude-fable-5[1m]"
+  }
 }
