@@ -50,6 +50,41 @@ required_total=0
 required_ok=0
 entries=()
 
+json_string() {
+    local value="${1:-}"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "${value}" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+        return 0
+    fi
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\b'/\\b}"
+    value="${value//$'\f'/\\f}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "${value}"
+}
+
+http_status() {
+    local code
+    if code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null); then
+        if [[ "${code}" =~ ^[0-9][0-9][0-9]$ ]]; then
+            printf '%s' "${code}"
+        else
+            printf '000'
+        fi
+    else
+        printf '000'
+    fi
+}
+
 push_entry() {
     # $1 = required (1|0), $2 = name, $3 = status (ok|fail|skip|warn), $4 = detail
     local req="$1" name="$2" status="$3" detail="$4"
@@ -65,7 +100,11 @@ check_tool() {
     if command -v "${tool}" >/dev/null 2>&1; then
         push_entry "${required}" "${tool}" "ok" "$(command -v "${tool}")"
     else
-        push_entry "${required}" "${tool}" "fail" "not found on PATH"
+        if [[ "${required}" == "1" ]]; then
+            push_entry "${required}" "${tool}" "fail" "not found on PATH"
+        else
+            push_entry "${required}" "${tool}" "skip" "not found on PATH"
+        fi
     fi
 }
 
@@ -75,7 +114,11 @@ check_config_field() {
     if [[ -n "${value}" ]]; then
         push_entry "${required}" "config:${field}" "ok" "set (${#value} chars)"
     else
-        push_entry "${required}" "config:${field}" "fail" "empty"
+        if [[ "${required}" == "1" ]]; then
+            push_entry "${required}" "config:${field}" "fail" "empty"
+        else
+            push_entry "${required}" "config:${field}" "skip" "empty"
+        fi
     fi
 }
 
@@ -114,16 +157,17 @@ fi
 
 if [[ "${REQUIRE_REMOTE}" == "1" ]]; then
     if [[ "${CONFIG_LOADED}" == "1" ]] && [[ -n "${MATTERMOST_URL:-}" ]]; then
-        if curl -fsS --max-time 10 -o /dev/null "${MATTERMOST_URL}/api/v4/system/ping"; then
-            push_entry 1 "mattermost:ping" "ok" "${MATTERMOST_URL}"
+        http_code=$(http_status "${MATTERMOST_URL}/api/v4/system/ping")
+        if [[ "${http_code}" == "200" ]]; then
+            push_entry 1 "mattermost:ping" "ok" "${MATTERMOST_URL} (HTTP 200)"
         else
-            push_entry 1 "mattermost:ping" "fail" "${MATTERMOST_URL}/api/v4/system/ping not reachable"
+            push_entry 1 "mattermost:ping" "fail" "${MATTERMOST_URL}/api/v4/system/ping returned HTTP ${http_code}"
         fi
 
         if [[ -n "${MATTERMOST_ADMIN_TOKEN:-}" ]]; then
-            http_code=$(curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' \
+            http_code=$(http_status \
                 -H "Authorization: Bearer ${MATTERMOST_ADMIN_TOKEN}" \
-                "${MATTERMOST_URL}/api/v4/users/me" || true)
+                "${MATTERMOST_URL}/api/v4/users/me")
             if [[ "${http_code}" == "200" ]]; then
                 push_entry 1 "mattermost:pat" "ok" "PAT is valid (HTTP 200)"
             else
@@ -250,21 +294,22 @@ mkdir -p "$(dirname "${OUT_JSON}")"
 
 {
     printf '{\n'
-    printf '  "generated_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "generated_at": %s,\n' "$(json_string "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
     printf '  "require_remote": %s,\n' "${REQUIRE_REMOTE}"
     printf '  "require_mcp": %s,\n' "${REQUIRE_MCP}"
     printf '  "required_total": %d,\n' "${required_total}"
     printf '  "required_ok": %d,\n' "${required_ok}"
     printf '  "health_percent": %d,\n' "${pct}"
-    printf '  "verdict": "%s",\n' "${verdict}"
+    printf '  "verdict": %s,\n' "$(json_string "${verdict}")"
     printf '  "checks": [\n'
     first=1
     for entry in "${entries[@]}"; do
         IFS='|' read -r req name status detail <<< "${entry}"
         [[ "${first}" == "1" ]] || printf ',\n'
         first=0
-        printf '    {"name": "%s", "required": %s, "status": "%s", "detail": "%s"}' \
-            "${name}" "${req}" "${status}" "${detail//\"/\\\"}"
+        printf '    {"name": %s, "required": %s, "status": %s, "detail": %s}' \
+            "$(json_string "${name}")" "${req}" "$(json_string "${status}")" \
+            "$(json_string "${detail}")"
     done
     printf '\n  ]\n'
     printf '}\n'

@@ -8,17 +8,15 @@
 set -euo pipefail
 
 INSTALL_PATH="${1:-$HOME/.cargo/bin/rg}"
-BUILD_DIR="/tmp/rg-build-$$"
-CLEANUP=${CLEANUP:-1}  # Set CLEANUP=0 to keep build dir
+BUILD_DIR=$(mktemp -d /tmp/rg-build.XXXXXX)
 
 info() { echo -e "\033[1;34m==>\033[0m $1"; }
 success() { echo -e "\033[1;32m==>\033[0m $1"; }
 error() { echo -e "\033[1;31m==>\033[0m $1" >&2; exit 1; }
 
 cleanup() {
-    if [[ "$CLEANUP" == "1" && -d "$BUILD_DIR" ]]; then
-        info "Cleaning up $BUILD_DIR"
-        rm -rf "$BUILD_DIR"
+    if [[ -d "$BUILD_DIR" ]]; then
+        info "Build directory retained for diagnosis: $BUILD_DIR"
     fi
 }
 trap cleanup EXIT
@@ -72,29 +70,42 @@ fi
 info "Installing to $INSTALL_PATH..."
 mkdir -p "$(dirname "$INSTALL_PATH")"
 
-# Handle "Text file busy" error
+staged_install=$(mktemp "$(dirname "$INSTALL_PATH")/.rg-install.XXXXXX")
+cp "$RG_BIN" "$staged_install"
+# mktemp creates 0600 files. Set an explicit installed-binary mode so shared
+# locations such as /usr/local/bin do not end up with a private 0700 rg.
+chmod 755 "$staged_install"
+
+# Preserve the prior binary before swapping in the staged build. This avoids
+# deleting a working rg if the install path is busy or the final move fails.
+backup_path=""
 if [[ -f "$INSTALL_PATH" ]]; then
-    rm -f "$INSTALL_PATH" 2>/dev/null || {
-        info "Binary in use, using temporary rename..."
-        mv "$INSTALL_PATH" "${INSTALL_PATH}.old" 2>/dev/null || true
-    }
+    backup_path="${INSTALL_PATH}.old.$(date -u +%Y%m%dT%H%M%SZ)"
+    info "Preserving existing binary at $backup_path"
+    mv "$INSTALL_PATH" "$backup_path" || error "could not move existing binary to backup: $backup_path"
 fi
 
-cp "$RG_BIN" "$INSTALL_PATH"
-chmod +x "$INSTALL_PATH"
+if ! mv "$staged_install" "$INSTALL_PATH"; then
+    if [[ -n "$backup_path" && -f "$backup_path" && ! -e "$INSTALL_PATH" ]]; then
+        mv "$backup_path" "$INSTALL_PATH" || true
+    fi
+    error "could not install staged binary to: $INSTALL_PATH"
+fi
 
 # Verify
 info "Verifying installation..."
-"$INSTALL_PATH" --version
+version_out=$("$INSTALL_PATH" --version)
+printf '%s\n' "$version_out"
 
 # Check PCRE2
-if "$INSTALL_PATH" --version | grep -q "features:+pcre2"; then
+if grep -q "features:+pcre2" <<<"$version_out"; then
     success "PCRE2 support verified!"
 else
     error "PCRE2 support not enabled in build"
 fi
 
 # Test PCRE2 functionality
+# shellcheck disable=SC2016
 if echo '$100' | "$INSTALL_PATH" -Po '(?<=\$)\d+' | grep -q '100'; then
     success "PCRE2 lookbehind test passed!"
 else

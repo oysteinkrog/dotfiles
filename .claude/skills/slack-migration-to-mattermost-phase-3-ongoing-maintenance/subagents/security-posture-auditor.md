@@ -13,7 +13,7 @@ provisioning.
 
 ## Focus
 
-- `workdir-phase3/rotate-credentials-audit.json`: last rotation per credential
+- `workdir-phase3/rotate-tokens-audit.json`: last rotation per credential
 - `authorized_keys` on target: key count, suspicious patterns, any added since last audit
 - `fail2ban` active, `ufw` active, `unattended-upgrades` active (via latest `health`)
 - Mattermost PAT age (read `/api/v4/users/me/tokens` if MCP is registered)

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Install the built app on a real device, waiting for USB if it is on Wi-Fi.
+#
+# The single most common failure here is installing across the local-network
+# tunnel. It fails every time, with a message that names neither the network nor
+# the cable:
+#
+#   ERROR: A connection to this device could not be established. (error 4000)
+#          Could not allocate a resource. (com.apple.mobiledevice error
+#          -402653181 (0xE8000003))
+#
+# So the transport is checked first, and the script waits rather than retrying
+# something that cannot work. Plugging the cable in is the fix.
+#
+#   ios-install              wait up to 15 minutes for USB, then install
+#   ios-install -w 0         do not wait; fail now if the device is on Wi-Fi
+#   ios-install -d <udid>    a device other than the default
+
+set -uo pipefail
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+MAC_SSH="$HOME/.claude/skills/mac-remote/scripts/mac-ssh"
+
+if [[ ! -r $CONFIG ]]; then
+    echo "ios-install: no config at $CONFIG; see the mac-remote skill" >&2
+    exit 78
+fi
+# shellcheck disable=SC1090
+set -a; source "$CONFIG"; set +a
+
+device=$IOS_DEVICE_DEFAULT
+wait_s=900
+
+while getopts ":d:w:" opt; do
+    case $opt in
+        d) device=$OPTARG ;;
+        w) wait_s=$OPTARG ;;
+        *) echo "ios-install: unknown option -$OPTARG" >&2; exit 64 ;;
+    esac
+done
+
+app="$IOS_DD_DEVICE/Build/Products/Debug-iphoneos/$IOS_SCHEME.app"
+
+waited=0
+while :; do
+    info=$("$MAC_SSH" -t 120 "xcrun devicectl device info details --device $device 2>&1 | grep -iE 'transportType|bootState|developerModeStatus'")
+    printf '%s\n' "$info"
+
+    if grep -qiE 'transportType.*(wired|usb)' <<<"$info"; then
+        break
+    fi
+
+    if (( waited >= wait_s )); then
+        echo >&2
+        echo "ios-install: the device is on the network, not the cable." >&2
+        echo "             Plug it in and unlock the screen." >&2
+        exit 75
+    fi
+
+    echo "waiting for USB (${waited}s of ${wait_s}s); plug the device in and unlock it"
+    sleep 20
+    waited=$((waited + 20))
+done
+
+echo "installing $app"
+
+out=$("$MAC_SSH" -t 600 "xcrun devicectl device install app --device $device '$app' 2>&1 | tail -20")
+printf '%s\n' "$out"
+
+# devicectl has exited 0 on a failed install before, so the text is what counts,
+# never the exit code.
+if grep -qiE 'ERROR|error [0-9]|failed' <<<"$out"; then
+    echo >&2
+    case $out in
+        *0xE8000003*) echo "ios-install: still the transport. Check the cable." >&2 ;;
+        *0xE8000004*|*12040*|*12010*)
+            echo "ios-install: the developer disk image did not mount." >&2
+            echo "             Unlock the phone, replug it, and try again." >&2 ;;
+        *"Developer Mode"*)
+            echo "ios-install: turn Developer Mode on, in Settings, Privacy and Security." >&2 ;;
+    esac
+    exit 1
+fi
+
+echo "installed"

@@ -1,0 +1,10 @@
+id: rust-ub-const-mutation-cast
+language: rust
+severity: error
+message: >-
+  Mutating through a *const T cast to *mut T is UB. Use UnsafeCell or
+  restructure ownership.
+rule:
+  any:
+    - pattern: '*($EXPR as *mut $T) = $VAL'
+    - pattern: '($EXPR as *mut $T).write($VAL)'

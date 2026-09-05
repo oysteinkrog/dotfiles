@@ -1,0 +1,20 @@
+id: rust-ub-maybeuninit-write-after-assume-init
+language: rust
+severity: error
+message: >-
+  Writing to a MaybeUninit after assume_init has already taken ownership is UB
+  (the value has been moved). Either restructure to write before assume_init or
+  use MaybeUninit::replace.
+rule:
+  kind: function_item
+  has:
+    kind: let_declaration
+    pattern: 'let $VAR = $MU.assume_init();'
+    stopBy: end
+    precedes:
+      pattern: '$MU.write($VAL);'
+      stopBy: end
+note: >-
+  ast-grep cannot express "later in the same scope" precisely; this matches any
+  function that contains both a `.assume_init()` let-binding and a later `.write()`
+  on the same MaybeUninit metavar.

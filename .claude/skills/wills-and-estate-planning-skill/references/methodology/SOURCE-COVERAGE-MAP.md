@@ -1,7 +1,7 @@
 # Source Coverage Map
 
 This file maps the major content clusters in
-`/data/projects/je_private_skills_repo/multi_agent_wills_guide.md`
+`multi_agent_wills_guide.md` (from the source corpus, not shipped with this skill)
 to the current skill so that coverage is auditable instead of implicit.
 
 It is not a substitute for reading the guide. It is a proof-of-coverage index.

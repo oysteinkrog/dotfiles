@@ -1,0 +1,24 @@
+id: rust-ub-async-drop-block-on
+language: rust
+severity: error
+message: >-
+  Calling block_on from within Drop while inside a tokio runtime is a deadlock.
+  Use an explicit close() method or spawn_blocking before the drop.
+rule:
+  any:
+    - pattern: |
+        impl Drop for $T {
+            fn drop(&mut self) {
+                $$$_
+                tokio::runtime::Handle::current().block_on($_);
+                $$$_
+            }
+        }
+    - pattern: |
+        impl Drop for $T {
+            fn drop(&mut self) {
+                $$$_
+                futures::executor::block_on($_);
+                $$$_
+            }
+        }

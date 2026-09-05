@@ -1,0 +1,97 @@
+# resp-class.yml — ast-grep rules for RESP-class port surface (Redis-like)
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml \
+#                  -r scripts/ast-grep-surface-patterns/resp-class.yml \
+#                  <port-src>
+
+id: command-const
+language: Rust
+rule:
+  kind: const_item
+  pattern: "pub const $NAME: $TY = $VAL;"
+constraints:
+  NAME:
+    regex: "^COMMAND_"
+message: "Redis command constant: $NAME"
+severity: info
+
+---
+
+id: command-attr
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: pub fn $HANDLER($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        pattern: "#[command($$$)]"
+        stopBy: end
+message: "Redis command handler (attr): $HANDLER"
+severity: info
+
+---
+
+id: command-dispatch-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match command_name { "$CMD" => $BODY }
+    selector: match_arm
+  inside:
+    pattern: match command_name { $$$ }
+message: "Command dispatch arm: $CMD"
+severity: info
+
+---
+
+id: resp-value-variant
+language: Rust
+rule:
+  kind: enum_variant
+  pattern:
+    context: pub enum RespValue { $NAME($$$) }
+    selector: enum_variant
+  inside:
+    pattern: pub enum RespValue { $$$ }
+message: "RespValue variant: $NAME"
+severity: info
+
+---
+
+id: resp-value-unit-variant
+language: Rust
+rule:
+  kind: enum_variant
+  pattern:
+    context: pub enum RespValue { $NAME }
+    selector: enum_variant
+  inside:
+    pattern: pub enum RespValue { $$$ }
+message: "RespValue unit variant: $NAME"
+severity: info
+
+---
+
+id: pubsub-channel-op
+language: Rust
+rule:
+  kind: call_expression
+  pattern: register_pubsub_op($CTX, "$NAME", $$$)
+message: "Registered PUBSUB op: $NAME"
+severity: info
+
+---
+
+id: cluster-slot-handler
+language: Rust
+rule:
+  kind: function_item
+  pattern: pub fn $OP($$$) $$$
+constraints:
+  OP:
+    regex: "^handle_cluster_"
+message: "Cluster slot handler: $OP"
+severity: info

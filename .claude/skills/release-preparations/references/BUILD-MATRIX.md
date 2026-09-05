@@ -2,15 +2,11 @@
 
 ## Build Hosts
 
-Template for a typical three-host setup. Adapt hostnames and connection details to your environment.
-
-| Host Alias | Platform | Architecture | Connection | Toolchain |
-|------------|----------|--------------|------------|-----------|
-| linux-host | Linux | x86_64 | local | nightly rust, gcc |
-| mac-host | macOS | aarch64 (ARM) | SSH | nightly rust |
-| win-host | Windows | x86_64 | SSH | nightly rust, MSVC |
-
-> You may only have one or two of these. The matrix works with any subset.
+| Host | Alias | Platform | Architecture | Connection | Toolchain |
+|------|-------|----------|--------------|------------|-----------|
+| trj | local | Linux | x86_64 | local | nightly rust, gcc |
+| mmini | mac | macOS | aarch64 (ARM) | SSH via Tailscale | nightly rust |
+| wlap | win | Windows | x86_64 | SSH via Tailscale | nightly rust, MSVC |
 
 ## Target Triples
 
@@ -31,14 +27,14 @@ Template for a typical three-host setup. Adapt hostnames and connection details 
 
 Examples:
 ```
-mytool-v1.5.2-x86_64-unknown-linux-gnu.tar.gz
-mytool-v1.5.2-aarch64-apple-darwin.tar.gz
-mytool-v1.5.2-x86_64-pc-windows-msvc.zip
+ntm-v1.5.2-x86_64-unknown-linux-gnu.tar.gz
+ntm-v1.5.2-aarch64-apple-darwin.tar.gz
+ntm-v1.5.2-x86_64-pc-windows-msvc.zip
 ```
 
 ## Build Commands by Host
 
-### linux-host (Linux, local)
+### trj (Linux, local)
 
 ```bash
 # Standard build
@@ -52,30 +48,30 @@ cross build --release --target x86_64-unknown-linux-musl
 tar czf <tool>-v<ver>-x86_64-unknown-linux-gnu.tar.gz -C target/release <binary>
 ```
 
-### mac-host (macOS, SSH)
+### mmini (macOS, SSH)
 
 ```bash
 # Sync code first
-ssh mac-host "cd ~/projects/<project> && git pull"
+ssh mmini "cd /path/to/project && git pull"
 
 # Build
-ssh mac-host "cd ~/projects/<project> && cargo build --release"
+ssh mmini "cd /path/to/project && cargo build --release"
 
 # Copy artifact back
-scp mac-host:~/projects/<project>/target/release/<binary> ./artifacts/
+scp mmini:/path/to/project/target/release/<binary> ./artifacts/
 
 # Package
 tar czf <tool>-v<ver>-aarch64-apple-darwin.tar.gz -C artifacts <binary>
 ```
 
-### win-host (Windows, SSH)
+### wlap (Windows, SSH)
 
 ```bash
 # Sync and build
-ssh win-host "cd ~/projects/<project> && git pull && cargo build --release"
+ssh wlap "cd /path/to/project && git pull && cargo build --release"
 
 # Copy artifact
-scp win-host:~/projects/<project>/target/release/<binary>.exe ./artifacts/
+scp wlap:/path/to/project/target/release/<binary>.exe ./artifacts/
 
 # Package (zip)
 cd artifacts && zip <tool>-v<ver>-x86_64-pc-windows-msvc.zip <binary>.exe
@@ -83,25 +79,24 @@ cd artifacts && zip <tool>-v<ver>-x86_64-pc-windows-msvc.zip <binary>.exe
 
 ## Path Dependency Handling
 
-Many workspace projects use absolute path dependencies in `Cargo.toml`. These don't resolve on remote hosts unless:
+Many workspace projects use `/dp/` or `/data/projects/` path dependencies. These don't resolve on remote hosts unless:
 
 1. The dependency repos are synced to the remote host
 2. The paths match (or are remapped)
 
 ### macOS Path Remapping
 
-macOS home directories differ from Linux (e.g., `/Users/<you>/projects/` vs `/home/<you>/projects/`). Options:
-- Symlink to create a matching path on the remote host
-- Synthetic firmlink via `/etc/synthetic.conf` (macOS-specific, requires reboot)
-- Rsync the deps and sed-remap `Cargo.toml` paths
+macOS uses `/Users/jemanuel/dp/` instead of `/data/projects/`. Options:
+- Synthetic firmlink via `/etc/synthetic.conf` (requires reboot)
+- Rsync the deps and sed-remap Cargo.toml paths
 - Build locally if path deps exist
 
 ### When Path Deps Block Remote Builds
 
-If `Cargo.toml` has absolute `path = "/path/to/..."` dependencies:
+If `Cargo.toml` has `path = "/dp/..."` dependencies:
 
-1. Check if the dep exists on the remote: `ssh <host> 'ls /path/to/dep_name'`
-2. If not, sync it: `rsync -az /path/to/dep_name/ <host>:/path/to/dep_name/`
+1. Check if the dep exists on the remote: `ssh host 'ls /dp/dep_name'`
+2. If not, sync it: `rsync -az /dp/dep_name/ host:/dp/dep_name/`
 3. If paths differ, build locally with dsr instead
 
 ## dsr Build Orchestration

@@ -47,7 +47,7 @@ Reread AGENTS.md so it's still fresh in your mind. Check over each bead super ca
 
 ```bash
 br list --json && br list --status closed --json   # Phase 1: Research
-br list --json | jq '.[].title'                    # Phase 4: Check overlaps
+br list --json | jq '.issues[]?.title'             # Phase 4: Check overlaps
 br create "Title" -p 1 -t task --body "..."        # Phase 5: Create
 br dep add <child> <parent>                        # Phase 5: Dependencies
 bv --robot-insights | jq '.Cycles'                 # Validate: Must be empty!

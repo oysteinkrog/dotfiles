@@ -27,7 +27,10 @@ THEMES: dict[str, tuple[str, list[str]]] = {
 
 def git_log(repo: Path, extra: list[str]) -> list[dict[str, str]]:
     cmd = ["git", "log", "--date=short", "--pretty=format:%H\t%ad\t%s", "--no-merges", *extra]
-    result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("command not found: git") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git log failed")
 
@@ -102,6 +105,19 @@ def markdown(clusters: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def is_git_repo(repo: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", default=".")
@@ -114,6 +130,16 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"ERROR: repository path not found: {repo}", file=sys.stderr)
+        return 1
+    if not repo.is_dir():
+        print(f"ERROR: repository path is not a directory: {repo}", file=sys.stderr)
+        return 1
+    if not is_git_repo(repo):
+        print(f"ERROR: not a git repository: {repo}", file=sys.stderr)
+        return 1
+
     extra: list[str] = []
     if args.range:
         extra.append(args.range)
@@ -123,7 +149,11 @@ def main() -> int:
         extra.extend(["--until", args.until])
     extra.extend(["-n", str(args.max_commits)])
 
-    rows = git_log(repo, extra)
+    try:
+        rows = git_log(repo, extra)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     clusters = cluster(rows, args.window)
 
     if args.format == "json":

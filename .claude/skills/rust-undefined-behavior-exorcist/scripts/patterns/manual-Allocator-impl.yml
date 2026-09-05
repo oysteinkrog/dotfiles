@@ -1,0 +1,11 @@
+id: rust-ub-manual-allocator-impl
+language: rust
+severity: warning
+message: >-
+  Manual Allocator impl. Deallocate must be called with a layout matching the
+  allocate. Mismatches are UB.
+rule:
+  any:
+    - pattern: 'unsafe impl Allocator for $T { $$$_ }'
+    - pattern: 'unsafe impl<$P> Allocator for $T { $$$_ }'
+    - pattern: 'unsafe impl GlobalAlloc for $T { $$$_ }'

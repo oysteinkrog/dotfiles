@@ -322,7 +322,7 @@ Two agents in same directory = same project
 Discovery
 ---------
 To find existing threads: resource://threads/{project_key}
-Thread IDs are often task IDs: "TASK-123", "br-456"
+Thread IDs are often task IDs: "TASK-123", "bd-456"
 Create your own: Use consistent naming like ticket numbers
 ```
 
@@ -355,7 +355,7 @@ Examples
   "project_key": "/data/projects/smartedgar",
   "sender_name": "BlueLake",
   "to": ["GreenCastle"],
-  "subject": "[br-123] Schema migration complete",
+  "subject": "[bd-123] Schema migration complete",
   "body_md": "The user table migration is done. Ready for API updates."
 }
 ```
@@ -379,9 +379,9 @@ Examples
   "project_key": "/data/projects/smartedgar",
   "sender_name": "GreenCastle",
   "to": ["BlueLake"],
-  "subject": "Re: [br-123] Schema migration complete",
+  "subject": "Re: [bd-123] Schema migration complete",
   "body_md": "API updated to use new schema. Tests passing.",
-  "thread_id": "br-123"
+  "thread_id": "bd-123"
 }
 ```
 ```

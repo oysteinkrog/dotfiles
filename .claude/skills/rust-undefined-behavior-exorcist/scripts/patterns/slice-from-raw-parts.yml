@@ -1,0 +1,12 @@
+id: rust-ub-slice-from-raw-parts
+language: rust
+severity: warning
+message: >-
+  slice::from_raw_parts requires pointer + length to be valid for `T * len`
+  bytes, properly aligned, single-allocation, and not concurrently mutated.
+rule:
+  any:
+    - pattern: 'std::slice::from_raw_parts($PTR, $LEN)'
+    - pattern: 'std::slice::from_raw_parts_mut($PTR, $LEN)'
+    - pattern: 'slice::from_raw_parts($PTR, $LEN)'
+    - pattern: 'slice::from_raw_parts_mut($PTR, $LEN)'

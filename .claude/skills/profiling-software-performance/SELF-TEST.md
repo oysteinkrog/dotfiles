@@ -51,7 +51,7 @@ These may trigger but should probably defer to a closer skill:
 
 ## Test with Haiku
 
-`sw/SKILL.md` warns: a skill that works on Opus may fail on Haiku. After any trigger-description change, run a Haiku-model test:
+A skill that works on Opus may fail on Haiku. After any trigger-description change, run a Haiku-model test:
 - Trigger three positive cases
 - Trigger three negative cases
 - Confirm positive triggers activate, negative don't
@@ -60,11 +60,7 @@ If Haiku gets one wrong, the description needs more explicit trigger words.
 
 ## Running the self-test
 
-```bash
-# Use the writing-skills test-triggers harness:
-../sw/scripts/test-triggers.py SELF-TEST.md
-# Or manually: ask Claude each phrase in a fresh session and see if the skill loads.
-```
+Ask Claude each phrase in a fresh session and check whether the skill loads.
 
 ## Maintaining this file
 

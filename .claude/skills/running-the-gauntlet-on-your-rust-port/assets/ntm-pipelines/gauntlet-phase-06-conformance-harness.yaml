@@ -1,0 +1,381 @@
+schema_version: "2.0"
+name: gauntlet-phase-06-conformance-harness
+description: >-
+  Phase 6 conformance-harness build-out. Massively parallel fan-out:
+  oracle-test author per behavior class, metamorphic author per transform
+  family, mismatch-minimizer builder, fault-injector author per fault category,
+  crash-boundary wirer per protocol boundary, fuzz author per differential
+  target, and e-process modeler per invariant. All authoring runs in parallel
+  on cc_1 and cc_4 lanes; a final harness build step asserts the whole
+  conformance crate compiles + smokes.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name (must equal NTM_PROJECTS_BASE/<basename>)
+    required: true
+    type: string
+  project_class:
+    description: SQL-class|RESP-class|Numerical-Python-class|ML-System-class|HTTP-Protocol-class
+    required: true
+    type: string
+  behavior_classes:
+    description: >-
+      Comma-separated behavior classes for the project class
+      (e.g. for SQL: null-semantics,three-valued-logic,group-by-having,...)
+    required: true
+    type: string
+  metamorphic_families:
+    description: >-
+      Comma-separated transform families
+      (e.g. Predicate,Projection,Structural,Literal)
+    default: "Predicate,Projection,Structural,Literal"
+    type: string
+  fault_kinds:
+    description: >-
+      Comma-separated FaultKinds (e.g. TornWrite,PartialWrite,PowerCut,IoError,
+      ReadFailure,WriteFailure,Latency,DiskFull)
+    required: true
+    type: string
+  crash_boundaries:
+    description: Comma-separated crash boundaries per project class
+    required: true
+    type: string
+  fuzz_targets:
+    description: Comma-separated differential fuzz target names
+    required: true
+    type: string
+  invariants:
+    description: Comma-separated invariant IDs (e.g. INV-1,INV-2,INV-3,...)
+    required: true
+    type: string
+
+settings:
+  timeout: 8h
+  on_error: continue
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail]
+
+steps:
+  - id: precheck
+    name: Verify Phase 3 (oracle) and Phase 4 (golden) outputs are present
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify:
+        ${vars.workspace_path}/.gauntlet/phase3_complete.flag exists
+        ${vars.workspace_path}/.gauntlet/phase4_complete.flag exists
+        ${vars.workspace_path}/phase3_oracle_preflight.json shows aggregate_outcome=green
+
+      If any are missing, exit non-zero with a CRITICAL message on
+      `gauntlet-${vars.run_id}-phase6-precheck`. Otherwise reply
+      "Phase 6 precheck green — fanning out".
+    wait: completion
+    timeout: 5m
+    on_error: fail
+
+  - id: fan_oracle_tests
+    name: Per-behavior-class oracle-test-author dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.behavior_classes}"
+      as: behavior
+      max_iterations: 32
+      delay: 3s
+      collect: oracle_test_results
+      steps:
+        - id: author_oracle_test
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are an oracle-test-author for behavior class "${behavior}" in
+            ${vars.project_class}. Author crates/<port>-e2e/tests/${behavior}_oracle_e2e.rs
+            using the 30-line scenario() template from oracle.rs.
+
+            Per the project class, your scenarios must enumerate:
+              SQL-class : every relevant edge case for ${behavior} (e.g. NULL semantics)
+              RESP-class: every command + flag combination relevant to ${behavior}
+              Numerical : every shape/dtype/device permutation per the ULP table
+              ML        : ditto + gradcheck for autograd-relevant scenarios
+              HTTP      : every status code + header combo + body MIME
+
+            Each scenario MUST:
+              - run subject and oracle through the differential_v2 ExecutionEnvelope
+              - assert artifact_id equality OR a classified divergence
+              - emit FailureBundle on TrueDivergence
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-oracle-${behavior}` when
+            `cargo test -p <port>-e2e ${behavior}_oracle_e2e` compiles.
+          wait: completion
+          timeout: 60m
+          on_error: retry
+          retry_count: 1
+          retry_delay: 30s
+
+  - id: fan_metamorphic
+    name: Per-transform-family metamorphic-author dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.metamorphic_families}"
+      as: family
+      max_iterations: 16
+      delay: 3s
+      collect: metamorphic_results
+      steps:
+        - id: author_metamorphic
+          agent: codex
+          route: least-loaded
+          prompt: |
+            You are a metamorphic-author for TransformFamily "${family}".
+            Author crates/<port>-e2e/tests/metamorphic_${family}.rs.
+
+            Implement at least 5 transforms in the family that should
+            preserve oracle equivalence (e.g. for Predicate: WHERE-reorder,
+            DeMorgan, NOT-NOT, constant-folding, predicate-pushdown).
+
+            For each transform: assert subject(transformed) == subject(original)
+            AND oracle(transformed) == oracle(original) AND that the differential
+            envelope matches between subject and oracle on both pre- and
+            post-transform inputs.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-metamorphic-${family}` when
+            compiled.
+          wait: completion
+          timeout: 50m
+          on_error: retry
+          retry_count: 1
+
+  - id: build_mismatch_minimizer
+    name: Mismatch-minimizer (delta-debugging binary partition)
+    depends_on: [precheck]
+    agent: claude
+    route: least-loaded
+    prompt: |
+      Author crates/<port>-harness/src/mismatch_minimizer.rs implementing a
+      delta-debugging binary partition with project-class-specific
+      schema-preservation rule. The minimizer takes a FailureBundle and
+      reduces the input to the smallest divergence-preserving form.
+
+      For ${vars.project_class}:
+        SQL    : preserve schema, types, and FK relations
+        RESP   : preserve type tags and collection semantics
+        Numpy  : preserve shape + dtype + RNG seed
+        ML     : ditto + device + requires_grad
+        HTTP   : preserve method + URL structure + headers required by routing
+
+      Acknowledge on `gauntlet-${vars.run_id}-phase6-mismatch-minimizer` when
+      `cargo test -p <port>-harness mismatch_minimizer` is green.
+    wait: completion
+    timeout: 90m
+    on_error: retry
+    retry_count: 1
+    retry_delay: 60s
+
+  - id: fan_faults
+    name: Per-FaultKind fault-injector-author dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.fault_kinds}"
+      as: fault
+      max_iterations: 16
+      delay: 3s
+      collect: fault_results
+      steps:
+        - id: author_fault
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are a fault-injector-author for FaultKind "${fault}". Author
+            the fault VFS / fault-injection harness entry for "${fault}" so
+            that the conformance harness can inject "${fault}" at arbitrary
+            I/O boundaries during E2E tests.
+
+            For ${vars.project_class}, the boundary set is per
+            references/PHASES.md § Phase 6.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-fault-${fault}` when the
+            fault scenarios compile and a basic injection smoke test passes.
+          wait: completion
+          timeout: 45m
+          on_error: retry
+          retry_count: 1
+
+  - id: fan_crash_boundaries
+    name: Per-protocol-boundary crash-boundary-wirer dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.crash_boundaries}"
+      as: boundary
+      max_iterations: 16
+      delay: 3s
+      collect: crash_results
+      steps:
+        - id: wire_crash_boundary
+          agent: claude
+          route: least-loaded
+          prompt: |
+            You are a crash-boundary-wirer for boundary "${boundary}" in
+            ${vars.project_class}. Wire deterministic-fault-VFS-style crash
+            injection at "${boundary}" so the harness can:
+              1. Run a scenario to completion.
+              2. Inject a crash at "${boundary}".
+              3. Recover from durable state.
+              4. Run a RecoveryVerifier to assert post-recovery consistency.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-crash-${boundary}` when
+            the crash injection is wired and a recovery smoke test passes.
+          wait: completion
+          timeout: 60m
+          on_error: retry
+          retry_count: 1
+
+  - id: fan_fuzz
+    name: Per-target fuzz-author dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.fuzz_targets}"
+      as: target
+      max_iterations: 16
+      delay: 3s
+      collect: fuzz_results
+      steps:
+        - id: author_fuzz_target
+          agent: codex
+          route: least-loaded
+          prompt: |
+            You are a fuzz-author for differential-fuzz target "${target}" in
+            ${vars.project_class}. Author fuzz/fuzz_targets/${target}.rs as a
+            cargo-fuzz target that exercises a differential against the oracle.
+
+            For ${vars.project_class}, follow the per-class template at
+            ~/.claude/skills/running-the-gauntlet-on-your-rust-port/assets/fuzz-target-templates/
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-fuzz-${target}` when
+            `cargo +nightly fuzz build ${target}` succeeds AND a 60-second
+            smoke run produces no `TrueDivergence`.
+          wait: completion
+          timeout: 60m
+          on_error: retry
+          retry_count: 1
+
+  - id: fan_eprocess
+    name: Per-invariant eprocess-modeler dispatch (parallel)
+    depends_on: [precheck]
+    loop:
+      items: "${vars.invariants}"
+      as: invariant
+      max_iterations: 32
+      delay: 3s
+      collect: eprocess_results
+      steps:
+        - id: model_eprocess
+          agent: gemini
+          route: least-loaded
+          prompt: |
+            You are an eprocess-modeler for invariant "${invariant}". Wire an
+            e-process for "${invariant}" with parameters from
+            assets/eprocess-calibration-template.toml:
+              hardware-enforced : p0=1e-9, lambda=0.999, alpha=1e-6
+              software-enforced : p0=1e-6, lambda=0.9,   alpha=0.001
+
+            Pick the class of "${invariant}" by reading the invariant catalog
+            and citing the row.
+
+            Acknowledge on `gauntlet-${vars.run_id}-phase6-eprocess-${invariant}` when
+            the e-value time series is being emitted to artifacts/eprocess/${invariant}.jsonl
+            during the harness smoke run.
+          wait: completion
+          timeout: 45m
+          on_error: retry
+          retry_count: 1
+
+  - id: wait_for_all_acks
+    name: Block until every per-bucket sub-step has acked
+    depends_on:
+      - fan_oracle_tests
+      - fan_metamorphic
+      - build_mismatch_minimizer
+      - fan_faults
+      - fan_crash_boundaries
+      - fan_fuzz
+      - fan_eprocess
+    agent: claude
+    pane: 2
+    prompt: |
+      Tally acks across all per-bucket threads:
+        ntm mail inbox ${vars.session_name} --json | \
+          jq '.threads[] | select(.id | startswith("gauntlet-${vars.run_id}-phase6-"))
+              | {thread: .id, last_subject: (.messages[-1].subject // "")}'
+
+      Write the tally to ${vars.workspace_path}/phase6_ack_tally.json with shape:
+        {"oracle_tests": [...], "metamorphic": [...], "minimizer": [...],
+         "faults": [...], "crash_boundaries": [...], "fuzz": [...], "eprocess": [...]}
+
+      If any bucket is missing, post CRITICAL on `gauntlet-${vars.run_id}-phase6-coordinator`
+      with the missing list and exit non-zero. Otherwise reply
+      "All Phase 6 buckets acked".
+    wait: completion
+    timeout: 45m
+    on_error: fail
+
+  - id: build_full_harness
+    name: Final harness build + smoke
+    depends_on: [wait_for_all_acks]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.port_path} && \
+          cargo build --workspace --all-targets && \
+          cargo test --workspace --no-run && \
+          cargo run --release --bin oracle-runner -- --smoke --duration=60s \
+            > ${vars.workspace_path}/phase6_oracle_runner_smoke.log
+
+      Verify the smoke log shows zero TrueDivergence. If any divergence
+      appears, the harness is wired but the port has a real conformance
+      gap — log to CONFORMANCE_HYPOTHESIS_LEDGER.md and continue to Phase 7
+      (the gap will get its own Phase 11 round).
+
+      Write ${vars.workspace_path}/phase6_conformance_harness.md summarizing:
+        - behavior classes wired: N
+        - metamorphic families: M
+        - fault kinds: F
+        - crash boundaries: C
+        - fuzz targets: U
+        - eprocess invariants: I
+        - smoke divergences logged to ledger: D
+
+      Acknowledge: "Phase 6 CONFORMANCE HARNESS complete".
+    wait: completion
+    timeout: 60m
+    on_error: fail
+
+  - id: close_phase
+    name: Commit and emit phase-complete signal
+    depends_on: [build_full_harness]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.workspace_path} && \
+          git add phase6_*.md phase6_*.json phase6_*.log && \
+          git commit -m "phase6: conformance harness built and smoked" && \
+          touch ${vars.workspace_path}/.gauntlet/phase6_complete.flag
+
+      Acknowledge: "Phase 6 complete — proceed to Phase 7".
+    wait: completion
+    timeout: 5m
+    on_error: fail

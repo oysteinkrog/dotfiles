@@ -36,10 +36,10 @@ insiders with stale access, upstream-dependency drift, backup theater
 
 ## Adversarial Concerns
 
-- **Stale PAT** — operator left company, PAT still active; `rotate-credentials`
+- **Stale PAT** — operator left company, PAT still active; `rotate-tokens`
   on 90-day cadence bounds the window.
 - **SSH key sprawl** — multiple operators over time, authorized_keys
-  accumulates; `rotate-credentials` audits and prunes.
+  accumulates; `rotate-tokens` audits and prunes.
 - **Backup theater** — nightly backups exist but don't restore; quarterly
   `restore-drill` is the canary. If the drill fails the skill refuses
   `update-mattermost` until fixed.
@@ -73,7 +73,7 @@ insiders with stale access, upstream-dependency drift, backup theater
 - Use SSH `BatchMode=yes` and refuse on host-key change until acknowledged.
 - Encrypt the off-site remote at rest (or use a provider that does this
   transparently, like R2 with SSE).
-- Review `authorized_keys` on the target quarterly (`rotate-credentials`
+- Review `authorized_keys` on the target quarterly (`rotate-tokens`
   has a sub-step).
 
 ## Out of Scope

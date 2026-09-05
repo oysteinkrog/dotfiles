@@ -1,0 +1,14 @@
+id: rust-ub-float-from-int-bits
+language: rust
+severity: warning
+message: >-
+  f32::from_bits and f64::from_bits are safe (the resulting NaN is well-defined),
+  but if downstream code uses bit equality the value may not roundtrip. Confirm
+  the NaN payload is preserved.
+rule:
+  any:
+    - pattern: 'f32::from_bits($EXPR)'
+    - pattern: 'f64::from_bits($EXPR)'
+note: >-
+  Low-severity advisory; not strictly UB but a common source of "why is my hash
+  inconsistent" bugs in NaN-containing collections.

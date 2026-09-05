@@ -1,0 +1,14 @@
+id: rust-ub-repr-rust-transmute
+language: rust
+severity: error
+message: >-
+  Transmuting between two #[repr(Rust)] types is UB unless layout compatibility
+  is provable. Rust's default layout is unspecified and can change between
+  compiler versions. Use bytemuck/zerocopy or #[repr(C)].
+rule:
+  any:
+    - pattern: 'std::mem::transmute::<$T, $U>($EXPR)'
+    - pattern: 'core::mem::transmute::<$T, $U>($EXPR)'
+note: >-
+  Pattern flags every typed transmute; the audit must verify both T and U have
+  #[repr(C|transparent|packed|align)] or are primitive types.

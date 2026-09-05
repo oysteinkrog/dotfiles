@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# verify-forbid-soundness.sh — tailored for projects already at zero in-tree unsafe.
+#
+# Use this template when the project declares `#![forbid(unsafe_code)]` or
+# `[lints.rust] unsafe_code = "forbid"` and the audit's job is to KEEP it that
+# way. The generic `verify.sh.template` runs miri / loom / fuzz / mutants /
+# kani — most of which have nothing to verify on an unsafe-free crate. This
+# template ships a focused set of checks that actually catch regressions on
+# `forbid-soundness` mode projects.
+#
+# What it checks (in order):
+#   1. `#![forbid(unsafe_code)]` is still present in src/lib.rs or src/main.rs
+#   2. `[lints.rust] unsafe_code = "forbid"` is still in Cargo.toml
+#   3. Zero `#[allow(unsafe_code)]` overrides anywhere in src/, tests/, benches/, build.rs
+#   4. Zero `unsafe (fn|impl|trait|extern|{)` declarations at the source level
+#   5. `cargo check --all-features` passes (proves the forbid actually fires)
+#   6. `cargo clippy --all-targets -- -D warnings` passes (any clippy regression too)
+#   7. (optional, if cargo-geiger installed) `cargo geiger` reports the local
+#      crate at 0 used-unsafe, and the dep-side total hasn't drifted upward
+#      vs a saved baseline at <audit-dir>/phase1/geiger-baseline-total.txt
+#   8. (optional, if cargo-expand installed) `cargo expand --lib` is grepped for
+#      unsafe and broken into known categories:
+#        - `unsafe impl ::core::clone::TrivialClone` (compiler-emitted derive output
+#          in newer rustc; sound by construction)
+#        - `unsafe { ::core::intrinsics::unreachable() }` (compiler-emitted
+#          unreachability proof in derived match arms; sound by construction)
+#        - anything else — investigate (could be a new derive macro emitting unsafe)
+#   9. (optional, if there's a project-side `safe-only` feature) test under it
+#  10. The project's own test suite passes
+#
+# Customize the four CRATE-LEVEL VARS below before deploying. The defaults
+# below auto-detect for most single-crate projects — you usually don't need
+# to override anything.
+
+set -uo pipefail
+
+# -------- CUSTOMIZE THESE (or leave blank for auto-detect) --------
+# Path to the file that holds the crate-level forbid attribute. If empty,
+# auto-detected: src/lib.rs takes precedence (libraries), else src/main.rs
+# (binary-only crates). For workspaces or unusual layouts, set explicitly.
+CRATE_ROOT_FILE="${CRATE_ROOT_FILE:-}"
+# Where the geiger total baseline (a single integer) is stored. Empty string skips
+# the geiger drift check.
+GEIGER_BASELINE_FILE="${GEIGER_BASELINE_FILE:-phase1/geiger-baseline-total.txt}"
+# Threshold above the macro-expand "other" category before we yell. Calibrate to
+# your project's baseline of comment/string-literal hits (typically 5-15).
+EXPAND_OTHER_BUDGET="${EXPAND_OTHER_BUDGET:-15}"
+# Whether to run the project's full test suite. Tests can be flaky; set to "0"
+# to skip if you only want soundness gates.
+RUN_TESTS="${RUN_TESTS:-1}"
+# -------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AUDIT_DIR="${AUDIT_DIR:-$SCRIPT_DIR}"
+PROJECT_DIR="${PROJECT_DIR:-$(dirname "$AUDIT_DIR")}"
+
+LOG_DIR="$AUDIT_DIR/verification"
+LOG="$LOG_DIR/verify.log"
+SUMMARY="$LOG_DIR/verify-summary.json"
+mkdir -p "$LOG_DIR"
+exec > >(tee "$LOG") 2>&1
+
+echo "verify-forbid-soundness.sh — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Project: $PROJECT_DIR"
+echo "Audit:   $AUDIT_DIR"
+echo
+
+cd "$PROJECT_DIR" || { echo "error: project dir does not exist: $PROJECT_DIR"; exit 2; }
+
+# Auto-detect CRATE_ROOT_FILE if not explicitly set.
+# Precedence: explicit env var > src/lib.rs > src/main.rs > workspace member root.
+if [ -z "$CRATE_ROOT_FILE" ]; then
+  if [ -f "src/lib.rs" ]; then
+    CRATE_ROOT_FILE="src/lib.rs"
+  elif [ -f "src/main.rs" ]; then
+    CRATE_ROOT_FILE="src/main.rs"
+  else
+    # Workspace member or unusual layout. Try to find via cargo metadata.
+    detected=$(env RCH_DISABLED=1 cargo metadata --no-deps --format-version 1 2>/dev/null \
+               | jq -r '.packages[0].targets[] | select(.kind[] | (. == "lib" or . == "bin")) | .src_path' \
+               | head -1 || true)
+    if [ -n "$detected" ] && [ -f "$detected" ]; then
+      # Make path relative to project dir for friendlier output.
+      CRATE_ROOT_FILE="${detected#$PROJECT_DIR/}"
+    else
+      echo "error: could not auto-detect crate root (no src/lib.rs or src/main.rs)"
+      echo "       set CRATE_ROOT_FILE explicitly, e.g.:"
+      echo "       CRATE_ROOT_FILE=path/to/lib.rs $0"
+      exit 2
+    fi
+  fi
+  echo "auto-detected CRATE_ROOT_FILE=$CRATE_ROOT_FILE"
+fi
+echo
+
+declare -a FAILURES=()
+declare -a SKIPPED=()
+declare -a WARNINGS=()
+
+run_step() {
+  local name="$1"; shift
+  echo "==> $name"
+  if "$@" >/dev/null 2>&1; then
+    echo "    [GREEN]"
+  else
+    echo "    [FAILED] $name"
+    FAILURES+=("$name")
+  fi
+}
+
+# [1] forbid attribute present in crate root
+run_step "forbid attribute present in $CRATE_ROOT_FILE" \
+  grep -qE '^[[:space:]]*#!\[forbid\(unsafe_code\)\]' "$CRATE_ROOT_FILE"
+
+# [2] Cargo lint table forbid is still present
+# Use grep -Pzo for multi-line match; fall back to a simpler check if Pzo unavailable.
+echo "==> forbid present in Cargo.toml [lints.rust]"
+if grep -Pzo '\[lints\.rust\][^\[]*unsafe_code\s*=\s*"forbid"' Cargo.toml >/dev/null 2>&1; then
+  echo "    [GREEN]"
+elif grep -q '^unsafe_code = "forbid"' Cargo.toml; then
+  echo "    [GREEN] (detected via fallback grep)"
+else
+  echo "    [FAILED] forbid missing from Cargo.toml [lints.rust]"
+  FAILURES+=("Cargo.toml forbid missing")
+fi
+
+# [3] No #[allow(unsafe_code)] override anywhere
+echo "==> no #[allow(unsafe_code)] override in src/ tests/ benches/ build.rs"
+ALLOW_OVERRIDES=$(grep -rln 'allow(unsafe_code)' src/ tests/ benches/ build.rs 2>/dev/null | wc -l)
+if [ "$ALLOW_OVERRIDES" -eq 0 ]; then
+  echo "    [GREEN] (zero overrides)"
+else
+  echo "    [FAILED] found $ALLOW_OVERRIDES override(s)"
+  FAILURES+=("allow(unsafe_code) overrides present")
+fi
+
+# [4] Zero source-level unsafe declarations
+echo "==> zero unsafe declarations in src/ tests/ benches/ (excluding forbid declarations)"
+UNSAFE_DECLS=$(grep -rEn '\bunsafe[[:space:]]+(fn|impl|trait|extern|\{)' src/ tests/ benches/ 2>/dev/null \
+               | grep -v 'forbid(unsafe_code)' \
+               | wc -l)
+if [ "$UNSAFE_DECLS" -eq 0 ]; then
+  echo "    [GREEN] (zero declarations)"
+else
+  echo "    [FAILED] found $UNSAFE_DECLS unsafe declaration(s)"
+  FAILURES+=("source unsafe declarations present")
+fi
+
+# [5] cargo check
+run_step "cargo check --all-features" \
+  env RCH_DISABLED=1 cargo check --all-features
+
+# [6] cargo clippy
+run_step "cargo clippy --all-targets -- -D warnings" \
+  env RCH_DISABLED=1 cargo clippy --all-targets --all-features -- -D warnings
+
+# [7] cargo geiger drift (optional)
+if command -v cargo-geiger >/dev/null 2>&1 || cargo +nightly geiger --version >/dev/null 2>&1; then
+  GEIGER_OUT="$LOG_DIR/geiger-current.txt"
+  env RCH_DISABLED=1 cargo +nightly geiger --output-format Ascii > "$GEIGER_OUT" 2>&1 || true
+
+  # Parse the "x/y" used/unsafe count for the local crate's root row. geiger's
+  # output is busy; this regex picks the row whose package name matches the
+  # current package and pulls the first "USED" cell.
+  PKG_NAME=$(env RCH_DISABLED=1 cargo metadata --no-deps --format-version 1 2>/dev/null \
+             | jq -r '.packages[0].name' 2>/dev/null || echo "")
+  LOCAL_UNSAFE_USED="?"
+  if [ -n "$PKG_NAME" ]; then
+    matched_row=$(grep -E "^[[:space:]]*[0-9]+/[0-9]+.*[[:space:]]${PKG_NAME}[[:space:]]" "$GEIGER_OUT" | head -1 || true)
+    if [ -n "$matched_row" ]; then
+      LOCAL_UNSAFE_USED=$(printf '%s\n' "$matched_row" | awk '{print $1}' | cut -d/ -f1)
+      # Guard against an empty result (e.g., line started with the count but
+      # awk split unexpectedly). Fall back to "?".
+      [ -z "$LOCAL_UNSAFE_USED" ] && LOCAL_UNSAFE_USED="?"
+    fi
+  fi
+
+  echo "==> cargo geiger (local crate '$PKG_NAME' used-unsafe count)"
+  case "$LOCAL_UNSAFE_USED" in
+    0)
+      echo "    [GREEN] used-unsafe = 0"
+      ;;
+    "?")
+      echo "    [SKIP] could not parse geiger output for package '$PKG_NAME'"
+      SKIPPED+=("cargo geiger (parse failure)")
+      ;;
+    *)
+      # Sanity-check that we got a number; if not, treat as parse failure.
+      if [[ "$LOCAL_UNSAFE_USED" =~ ^[0-9]+$ ]]; then
+        echo "    [FAILED] used-unsafe = $LOCAL_UNSAFE_USED (expected 0)"
+        FAILURES+=("cargo geiger local regression")
+      else
+        echo "    [SKIP] parsed value not numeric: '$LOCAL_UNSAFE_USED'"
+        SKIPPED+=("cargo geiger (non-numeric parse)")
+      fi
+      ;;
+  esac
+
+  # Dep-side drift check (informational). Defensive parsing: jq could return
+  # "null" / empty / non-numeric on schema drift, so we normalize to "?" and
+  # only do arithmetic on confirmed integers.
+  if [ -n "$GEIGER_BASELINE_FILE" ] && [ -f "$AUDIT_DIR/$GEIGER_BASELINE_FILE" ]; then
+    BASELINE=$(tr -d '[:space:]' < "$AUDIT_DIR/$GEIGER_BASELINE_FILE")
+    CURRENT_TOTAL=$(env RCH_DISABLED=1 cargo +nightly geiger --output-format Json 2>/dev/null \
+                    | jq '[.packages[]?.unsafety.used.functions.unsafe_,
+                           .packages[]?.unsafety.used.exprs.unsafe_,
+                           .packages[]?.unsafety.used.item_impls.unsafe_,
+                           .packages[]?.unsafety.used.item_traits.unsafe_,
+                           .packages[]?.unsafety.used.methods.unsafe_] | add // 0' \
+                    2>/dev/null || echo "?")
+    # Normalize null/empty to "?"
+    case "$CURRENT_TOTAL" in ''|null) CURRENT_TOTAL="?" ;; esac
+    echo "==> cargo geiger dep-side drift (baseline=$BASELINE current=$CURRENT_TOTAL)"
+    if [[ "$CURRENT_TOTAL" =~ ^[0-9]+$ ]] && [[ "$BASELINE" =~ ^[0-9]+$ ]]; then
+      if [ "$CURRENT_TOTAL" -gt "$BASELINE" ]; then
+        DELTA=$((CURRENT_TOTAL - BASELINE))
+        echo "    [WARN] dep-side used-unsafe grew by $DELTA"
+        WARNINGS+=("dep-side used-unsafe drift +$DELTA")
+      else
+        echo "    [GREEN] dep-side used-unsafe ≤ baseline"
+      fi
+    else
+      echo "    [SKIP] could not parse current ($CURRENT_TOTAL) or baseline ($BASELINE)"
+      SKIPPED+=("cargo geiger dep drift (parse failure)")
+    fi
+  else
+    echo "==> cargo geiger dep-side drift — SKIPPED (no baseline at $GEIGER_BASELINE_FILE)"
+    SKIPPED+=("cargo geiger dep drift (no baseline)")
+  fi
+else
+  echo "==> cargo geiger — SKIPPED (install: cargo +nightly install --locked cargo-geiger)"
+  SKIPPED+=("cargo geiger (not installed)")
+fi
+
+# [8] cargo expand accounting (optional)
+if command -v cargo-expand >/dev/null 2>&1 || cargo expand --version >/dev/null 2>&1; then
+  EXPAND_OUT="$LOG_DIR/expand-current.rs"
+  env RCH_DISABLED=1 cargo expand --lib > "$EXPAND_OUT" 2>"$LOG_DIR/expand.stderr.log" || true
+
+  if [ -s "$EXPAND_OUT" ]; then
+    EXPAND_UNSAFE=$(grep -cE '\bunsafe\b' "$EXPAND_OUT" || echo 0)
+    EXPAND_TRIVIAL=$(grep -cE 'unsafe impl ::core::clone::TrivialClone' "$EXPAND_OUT" || echo 0)
+    EXPAND_UNREACH=$(grep -cE 'unsafe \{ ::core::intrinsics::unreachable\(\) \}' "$EXPAND_OUT" || echo 0)
+    EXPAND_OTHER=$((EXPAND_UNSAFE - EXPAND_TRIVIAL - EXPAND_UNREACH))
+
+    echo "==> cargo expand --lib unsafe accounting"
+    echo "    total occurrences: $EXPAND_UNSAFE"
+    echo "    TrivialClone:      $EXPAND_TRIVIAL  (compiler-emitted; sound)"
+    echo "    unreachable():     $EXPAND_UNREACH  (compiler-emitted; sound)"
+    echo "    other:             $EXPAND_OTHER  (string literals + comments + new derive emissions)"
+
+    if [ "$EXPAND_OTHER" -gt "$EXPAND_OTHER_BUDGET" ]; then
+      echo "    [WARN] macro-expanded unsafe outside known categories (budget=$EXPAND_OTHER_BUDGET; observed=$EXPAND_OTHER)"
+      echo "          A new derive macro may be emitting unsafe — review $EXPAND_OUT"
+      WARNINGS+=("expand unsafe drift other=$EXPAND_OTHER > budget=$EXPAND_OTHER_BUDGET")
+    else
+      echo "    [GREEN]"
+    fi
+  else
+    echo "==> cargo expand — SKIPPED (produced empty output; see $LOG_DIR/expand.stderr.log)"
+    SKIPPED+=("cargo expand (empty)")
+  fi
+else
+  echo "==> cargo expand — SKIPPED (install: cargo install cargo-expand --locked)"
+  SKIPPED+=("cargo expand (not installed)")
+fi
+
+# [9] safe-only feature test (optional)
+if grep -q 'safe-only\|no-unsafe\|no_unsafe' Cargo.toml 2>/dev/null; then
+  run_step "test (safe-only features)" \
+    env RCH_DISABLED=1 cargo test --no-default-features --features safe-only --all-targets
+else
+  echo "==> safe-only test — SKIPPED (no safe-only / no-unsafe feature in Cargo.toml)"
+  SKIPPED+=("safe-only test (no feature defined)")
+fi
+
+# [10] full test suite
+if [ "$RUN_TESTS" = "1" ]; then
+  run_step "cargo test --all-features" \
+    env RCH_DISABLED=1 cargo test --all-features
+else
+  echo "==> cargo test — SKIPPED (RUN_TESTS=0)"
+  SKIPPED+=("full test suite (disabled)")
+fi
+
+# Emit summary JSON
+jq -n \
+  --argjson failures "$(printf '%s\n' "${FAILURES[@]+${FAILURES[@]}}" | jq -R . | jq -s .)" \
+  --argjson skipped "$(printf '%s\n' "${SKIPPED[@]+${SKIPPED[@]}}" | jq -R . | jq -s .)" \
+  --argjson warnings "$(printf '%s\n' "${WARNINGS[@]+${WARNINGS[@]}}" | jq -R . | jq -s .)" \
+  --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{date: $date, ok: ($failures | length == 0), failures: $failures, skipped: $skipped, warnings: $warnings}' \
+  > "$SUMMARY"
+
+echo
+echo "============================================"
+if [ ${#FAILURES[@]} -eq 0 ]; then
+  echo "verify.sh OK — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Warnings: ${#WARNINGS[@]}; Skipped: ${#SKIPPED[@]}"
+  exit 0
+else
+  echo "verify.sh FAILED with ${#FAILURES[@]} step(s):"
+  for f in "${FAILURES[@]}"; do echo "  - $f"; done
+  if [ ${#WARNINGS[@]} -gt 0 ]; then
+    echo "Warnings (${#WARNINGS[@]}):"
+    for w in "${WARNINGS[@]}"; do echo "  - $w"; done
+  fi
+  exit 1
+fi

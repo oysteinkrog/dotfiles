@@ -1,0 +1,8 @@
+id: rust-ub-utf8-as-bytes-index
+language: rust
+severity: warning
+message: >-
+  Indexing into &str.as_bytes() can hit mid-UTF-8 sequences. Use chars().nth(),
+  bytes().nth(), or is_char_boundary() guards.
+rule:
+  pattern: '$STR.as_bytes()[$IDX]'

@@ -27,7 +27,7 @@ class TestHaikuCanary:
     def mock_haiku_agent(self):
         """Simulate a Haiku-class agent's behavior."""
         agent = MagicMock()
-        agent.model = "claude-3-5-haiku"
+        agent.model = "claude-haiku-4-5"
         agent.context_window = 8192  # Smaller context
         agent.reasoning_depth = "shallow"
         return agent
@@ -235,7 +235,7 @@ PATH_TRAVERSAL_VECTORS = [
 
     # Absolute paths
     "/etc/passwd",
-    "%SystemRoot%\\System32\\config\\SAM",
+    "C:\\Windows\\System32\\config\\SAM",
 
     # Symlink tricks (path component)
     "safe/../../../etc/passwd",

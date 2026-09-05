@@ -26,6 +26,12 @@ CARD_HEIGHT = 480
 # Video card duration (animations baked into video)
 CARD_VIDEO_DURATION = 6.0  # seconds
 
+YTDLP_METADATA_TIMEOUT_SECONDS = 60
+YTDLP_DOWNLOAD_TIMEOUT_SECONDS = 15 * 60
+THUMBNAIL_DOWNLOAD_TIMEOUT_SECONDS = 30
+MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024
+CARD_RECORD_TIMEOUT_SECONDS = 120
+
 CARD_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -194,13 +200,43 @@ CARD_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
+def download_http_resource(url: str, destination: Path) -> None:
+    """Download a bounded http(s) resource to destination."""
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ValueError("thumbnail URL must be http(s) with a host")
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "obs-youtube-music-card-generator/1.0"},
+    )
+    with urllib.request.urlopen(  # nosec B310 - scheme and host are validated above.
+        request,
+        timeout=THUMBNAIL_DOWNLOAD_TIMEOUT_SECONDS,
+    ) as response:
+        payload = response.read(MAX_THUMBNAIL_BYTES + 1)
+
+    if len(payload) > MAX_THUMBNAIL_BYTES:
+        raise ValueError(f"thumbnail exceeded {MAX_THUMBNAIL_BYTES} bytes")
+
+    destination.write_bytes(payload)
+
+
 def download_song_with_metadata(query: str, output_dir: Path) -> dict:
     """Download song and return metadata including title, duration, thumbnail."""
     # Get metadata first
-    result = subprocess.run(
-        ["yt-dlp", "--print-json", "--no-download", f"ytsearch1:{query}"],
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--print-json", "--no-download", f"ytsearch1:{query}"],
+            capture_output=True, text=True,
+            timeout=YTDLP_METADATA_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        print("Error: yt-dlp is required but was not found in PATH", file=sys.stderr)
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"Error getting metadata for '{query}': timed out", file=sys.stderr)
+        return None
     if result.returncode != 0:
         print(f"Error getting metadata for '{query}'", file=sys.stderr)
         return None
@@ -209,6 +245,15 @@ def download_song_with_metadata(query: str, output_dir: Path) -> dict:
         meta = json.loads(result.stdout)
     except json.JSONDecodeError as e:
         print(f"Error parsing metadata for '{query}': {e}", file=sys.stderr)
+        return None
+    if not isinstance(meta, dict):
+        print(f"Error parsing metadata for '{query}': expected JSON object", file=sys.stderr)
+        return None
+    if not isinstance(meta.get("id"), str) or not meta["id"]:
+        print(f"Error getting metadata for '{query}': missing id", file=sys.stderr)
+        return None
+    if not isinstance(meta.get("webpage_url"), str) or not meta["webpage_url"]:
+        print(f"Error getting metadata for '{query}': missing webpage_url", file=sys.stderr)
         return None
 
     # Download audio
@@ -220,7 +265,13 @@ def download_song_with_metadata(query: str, output_dir: Path) -> dict:
             "yt-dlp", "-x", "--audio-format", "mp3",
             "-o", str(audio_template),
             meta["webpage_url"]
-        ], check=True)
+        ], check=True, timeout=YTDLP_DOWNLOAD_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        print("Error: yt-dlp is required but was not found in PATH", file=sys.stderr)
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"Error downloading audio for '{query}': timed out", file=sys.stderr)
+        return None
     except subprocess.CalledProcessError as e:
         print(f"Error downloading audio for '{query}': {e}", file=sys.stderr)
         return None
@@ -231,18 +282,18 @@ def download_song_with_metadata(query: str, output_dir: Path) -> dict:
     thumb_downloaded = False
     if thumb_url:
         try:
-            urllib.request.urlretrieve(thumb_url, thumb_path)
+            download_http_resource(thumb_url, thumb_path)
             thumb_downloaded = True
         except Exception as e:
             print(f"Warning: Could not download thumbnail: {e}", file=sys.stderr)
 
     return {
         "id": meta["id"],
-        "title": meta.get("title", query),
-        "duration": meta.get("duration", 0),
+        "title": str(meta.get("title") or query),
+        "duration": meta.get("duration", 0) if isinstance(meta.get("duration"), (int, float)) else 0,
         "audio_path": str(audio_path),
         "thumbnail_path": str(thumb_path) if thumb_downloaded else None,
-        "thumbnail_url": thumb_url
+        "thumbnail_url": thumb_url if isinstance(thumb_url, str) else ""
     }
 
 
@@ -287,7 +338,7 @@ def record_card_video(html_path: Path, output_path: Path, duration_ms: int = 600
         str(output_path),
         str(CARD_WIDTH), str(CARD_HEIGHT),
         str(duration_ms)
-    ], check=True)
+    ], check=True, timeout=CARD_RECORD_TIMEOUT_SECONDS)
 
 
 def generate_ffmpeg_overlay_args(songs: list, num_audio_inputs: int = 1,
@@ -379,6 +430,10 @@ def main():
                 print(f"Warning: Could not record card video: {e}", file=sys.stderr)
 
             songs.append(song)
+
+    if not songs:
+        print("Error: no songs were processed successfully", file=sys.stderr)
+        sys.exit(1)
 
     # Output song info as JSON
     manifest = args.output_dir / "songs.json"

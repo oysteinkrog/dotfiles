@@ -517,7 +517,7 @@ git log --oneline v1.0..v2.0 | mods "write changelog entry"
 
 ```yaml
 # ~/.config/mods/mods.yml
-default-model: gpt-4
+default-model: gpt-5
 apis:
   openai:
     api-key-env: OPENAI_API_KEY
@@ -526,15 +526,15 @@ apis:
 
 # Model aliases
 aliases:
-  fast: gpt-3.5-turbo
-  smart: gpt-4
-  creative: claude-3-opus
+  fast: gpt-5-mini
+  smart: gpt-5
+  creative: claude-opus-4-7
 ```
 
 ```bash
 # Use specific model
-mods --model gpt-4 "complex question"
-mods -m claude-3-opus "creative task"
+mods --model gpt-5 "complex question"
+mods -m claude-opus-4-7 "creative task"
 
 # Conversation continuation
 mods "initial question"

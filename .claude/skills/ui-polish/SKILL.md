@@ -30,8 +30,8 @@ I still think there are strong opportunities to enhance the UI/UX look and feel 
 
 | Model | Configuration |
 |-------|---------------|
-| **Claude Code + Opus 4.5** | Use ultrathink |
-| **Codex + GPT 5.2** | High/Extra-High reasoning |
+| **Claude Code + Opus 4.7** | Use ultrathink |
+| **Codex + GPT 5.5** | High/Extra-High reasoning |
 | **Gemini CLI** | Good |
 
 ---

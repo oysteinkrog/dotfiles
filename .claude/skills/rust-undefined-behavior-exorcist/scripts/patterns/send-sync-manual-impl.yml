@@ -1,0 +1,13 @@
+id: rust-ub-send-sync-manual-impl
+language: rust
+severity: error
+message: >-
+  Manual unsafe impl Send/Sync. Verify the SAFETY comment names the external
+  synchronization mechanism, the only public deref path, and why that path is
+  sound.
+rule:
+  any:
+    - pattern: 'unsafe impl Send for $T {}'
+    - pattern: 'unsafe impl Sync for $T {}'
+    - pattern: 'unsafe impl<$P> Send for $T {}'
+    - pattern: 'unsafe impl<$P> Sync for $T {}'

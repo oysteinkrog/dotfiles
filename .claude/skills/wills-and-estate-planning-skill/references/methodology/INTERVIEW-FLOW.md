@@ -207,7 +207,7 @@ Surface the conflicts, estrangements, disabilities, addictions, and complication
 
 ### Output
 
-Narrative in the intake record, flagged by issue type. These flags drive which family-structure reference files get pulled in at [ROUTING](../../SKILL.md#routing-table).
+Narrative in the intake record, flagged by issue type. These flags drive which family-structure reference files get pulled in at [ROUTING](../../SKILL.md#routing-table-which-reference-to-read-next).
 
 ---
 

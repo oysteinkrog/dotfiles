@@ -1,12 +1,203 @@
 ---
 name: vibing-with-ntm
 description: >-
-  Tend NTM agent swarms: orchestrator loop, marching orders, autonomous recovery of stuck or rate-limited panes, review-only mode, and work coordination via Agent Mail, Beads, and BV.
+  Tends NTM agent swarms. Use when running orchestrator ticks, unsticking
+  panes, handling rate limits, marching orders, review-only mode, convergence,
+  queue-dry, or multi-agent coordination.
 ---
 
-<!-- TOC: Decision Tree | Quick Start | The Attention-Feed Loop | Marching Orders | Swarm Loop | Operator Loop | Autonomous Unstick | Observability | Steady-State Cadence | Quality Loops | Coordination | Anti-Patterns | Troubleshooting | References | Related Skills -->
+<!-- TOC: One Rule | Cold Start | Tick Loop | Intervention Score Matrix | Operator Proof Card | Swarm Pathology Triggers | Pattern Tiers | Metrics | Checklist | Decision Tree | Quick Start | Attention-Feed Loop | Marching Orders | Swarm Loop | Operator Loop | Autonomous Unstick | Observability | Steady-State Cadence | Quality Loops | Coordination | Anti-Patterns | Troubleshooting | References | Related Skills -->
 
 > **If you are tending a swarm right now:** jump to the [Orchestrator Decision Tree](#orchestrator-decision-tree) below. Drop into [Autonomous Unstick](#autonomous-unstick--dont-wait-for-the-human) for recovery recipes. Everything else is context.
+
+# Vibing With NTM
+
+> **The One Rule:** Observe real state before every nudge. A swarm is not stuck, done, or blocked until pane truth, robot state, work graph, and artifact/git evidence agree.
+
+## Outcome — When a Tending Session Has Delivered
+
+An operator tending session is complete (for now) when **all** of the following hold:
+
+- Every pane is in one of three explicit states: **making progress** (recent useful output / git activity / br/beads movement), **explicitly blocked** with a logged blocker and a handoff path, or **standing down** by policy (queue-dry, convergence, rate-limit cool-down). "Idle and you don't know why" is not a terminal state — it is unfinished tending work.
+- Every intervention you applied during the tick was **observed to land** via tail/event/git/br/mail evidence within one observation window. Sends that produced no downstream signal are presumed lost, not silently successful.
+- Any policy lever you adjusted (review-only, rate-limit posture, ensemble member set) has been **logged** so the next operator can see what the swarm's contract currently is. Undocumented policy changes are how swarms drift.
+- For convergence: the **triple-check** has fired — ready queue empty AND no in-flight work AND no expected upstream signals — before you declare done. Two of three is not convergence; it is observation lag.
+- For queue-dry / stand-down: you have **stopped manufacturing work** rather than papering over the dry queue with synthetic tasks. Tending discipline includes the discipline of doing nothing.
+
+If you find yourself sending the same nudge twice without movement, the failure mode has escalated past nudging — drop into [Autonomous Unstick](#autonomous-unstick--dont-wait-for-the-human), don't keep nudging.
+
+## Grounding — Where Operator Truth Lives
+
+Operator decisions must be grounded in observable artifacts, never in agent self-report:
+
+- **Pane truth:** `ntm --robot-tail=<session> --lines=N`. What the agent says it's doing is a hypothesis; what the pane shows is the data.
+- **Work graph:** `br ready --json`, `br show <id> --json`. "Ready" status is canonical; if the agent thinks something is ready that br disagrees with, the agent is wrong.
+- **Mail / coordination:** the Agent Mail inbox and threads — not Slack screenshots, not summary cards. The thread is the source.
+- **Git state:** `git log --since=`, `git status` on the project worktrees. Commits and uncommitted changes are ground truth for "is real work being produced."
+- **Snapshot deltas:** compare two `--robot-snapshot` outputs N seconds apart. The diff is what actually changed; everything else is narrative.
+
+Never base an intervention on a swarm participant's self-report when one of these grounding sources can confirm or refute it. If they disagree, the artifact wins.
+
+## Cold Start For Operators
+
+When you open this skill cold, do not read every reference first. Run one bounded operator tick:
+
+1. `ntm --robot-snapshot` and read `sources` / `degraded_sources`, pane states, and cursor.
+2. If the state is unclear, use `ntm --robot-tail=<session> --lines=40` for the suspect panes.
+3. Match exactly one card or branch in the [Orchestrator Decision Tree](#orchestrator-decision-tree).
+4. Act on one pane or one policy lever, then verify tail/event/git/br/mail movement.
+5. If no branch fires, wait on the attention feed instead of inventing work.
+
+Use `/ntm` only when command syntax or schema details are unclear; return here for the intervention decision.
+
+## The Tick Loop (Mandatory)
+
+```
+1. BASELINE    -> ntm --robot-snapshot; capture cursor + sources/degraded_sources
+2. ATTEND      -> ntm --robot-attention / --robot-wait; read only actionable deltas
+3. CLASSIFY    -> match one OC card or AP red flag; no card means observe more
+4. SCORE       -> choose the smallest reversible intervention with highest action score
+5. ACT         -> one targeted send/assign/lock/restart/review instruction; never blanket-nudge
+6. VERIFY      -> tail/event/git/br/mail/pipeline state changed; otherwise escalate one rung
+7. STOP CHECK  -> convergence triple-check or queue-dry; stop instead of manufacturing work
+8. LOG         -> record blocker, degraded source, or handoff when the operator loop changes policy
+```
+
+This is the operator counterpart to `/ntm`. `/ntm` tells you what command exists; this skill tells you when to use it, how to avoid thrashing panes, and when to stop.
+
+## Intervention Score Matrix
+
+When several actions are possible, score them before acting:
+
+```
+Score = (Evidence x Impact x Reversibility) / BlastRadius
+
+Evidence       1-5: independent sources agree this state is real
+Impact         1-5: likely to move code/beads/artifacts, not just produce prose
+Reversibility  1-5: can undo/stop/retry without losing work
+BlastRadius    1-5: one pane/message is low; all panes/session kill is high
+```
+
+Only take Score >= 2.0. If every action scores below 2.0, wait on the attention feed or gather better evidence.
+
+| Candidate action | Evidence | Impact | Reversible | Blast | Decision |
+|---|---:|---:|---:|---:|---|
+| Terse prompt to one idle pane with no output and no commits | 4 | 3 | 5 | 1 | yes |
+| Smart-restart one pane with identical tail across 3 ticks | 5 | 4 | 4 | 2 | yes |
+| Broadcast "status?" to all panes | 1 | 1 | 3 | 4 | no |
+| Kill a pane because it says "Cogitated 35m" | 1 | 3 | 1 | 4 | no |
+| Stop swarm after convergence triple-check + queue-dry | 5 | 5 | 4 | 1 | yes |
+
+## Operator Proof Card
+
+Before any intervention stronger than a read-only check, fill this mentally or in the session log:
+
+```markdown
+## Intervention: <one-line action>
+- Evidence: <robot attention/events>; <pane tail>; <git/br/mail/pipeline fact>
+- Card matched: OC-___ / AP-___ / queue-dry / convergence / other
+- Target: <session>; panes=<N or type>; user pane included? <yes/no>
+- Expected state change: <commit/bead/artifact/tail/status>
+- Reversibility: <wait/interrupt/smart-restart/checkpoint/restore/cancel>
+- Verification command: <exact command>
+- Escalation if unchanged: <next rung, not a jump to nuclear>
+```
+
+No proof card -> no nudge, restart, force-release, or shutdown.
+
+## Swarm Pathology Triggers
+
+| Pathology | Smell | First detector | First move |
+|---|---|---|---|
+| Prose treadmill | many "I'll investigate" lines, no commits/beads | `git log --since=1h`, `br list` | ship-or-surface prompt to that pane |
+| False convergence | "LGTM"/"ready" everywhere, open work unchanged | convergence triple-check | stop if true, targeted artifact demand if false |
+| Stale robot state | activity says old/stale but tail/git moving | attention + tmux capture | trust newer/direct source, resync cursor |
+| Rate-limit mirage | pane text mentions old reset time | `--robot-health-oauth`, quota status | ping-probe before rotation |
+| Coordination drag | mail/register retries consume ticks | stale/unavailable mail or reservation source | degraded fallback, record it, continue |
+| Reservation deadlock | broad lock blocks ready work | `ntm locks list`, coordinator conflicts | narrow/renew/release with evidence |
+| Review bead flood | agents file issues but close none | `br` plus BV status mix | switch to close-the-backlog mode |
+| Context cliff | context >85%, repeated summaries | snapshot/context | handoff-then-restart |
+| Queue-dry ambiguity | `br ready` empty but stale in-progress exists | `ntm work queue-dry` | decide stand-down vs ideate, do not invent silently |
+| Operator overreach | repeated global broadcasts/restarts | tick log | pause, classify one pane at a time |
+
+## Pattern Tiers
+
+### Tier 1: Low-Risk Tending
+
+| Pattern | Use when | Proof |
+|---|---|---|
+| Attention-feed wait | no urgent issue | cursor/event advances |
+| Terse single-pane nudge | one pane genuinely idle | tail changes or blocker appears |
+| Work graph refresh | ready/in-progress unclear | `br`/`bv`/queue-dry agree |
+| Mail/lock digest | coordination seems stale | inbox/conflict list read |
+
+### Tier 2: Directed Recovery
+
+| Pattern | Use when | Guard |
+|---|---|---|
+| Account rotation | confirmed rate limit | provider/quota state, not pane text alone |
+| Smart restart | pane not productively working | refuses active work |
+| Interrupt + replace task | pane on wrong task | tail proves wrong task |
+| Context handoff | context hot | handoff prompt and resume target ready |
+| Reservation mediation | conflict blocks ready work | holder inactive or pattern too broad |
+
+### Tier 3: Session Policy Changes
+
+| Pattern | Use when | Guard |
+|---|---|---|
+| Review-only mode | code churn risky or user asked for audit | no implementer claims |
+| Close-the-backlog mode | review beads exceed shipped fixes | one bead per pane, no new findings unless critical |
+| Queue-dry stand-down | no ready/claimable work | `ntm work queue-dry` confirms |
+| Pipeline handoff | repeated phase work | dry-run/status/cancel path known |
+| Shutdown/convergence | triple-check passes | record final state; stop nudging |
+
+## Metrics You Report
+
+At closeout, summarize the swarm in concrete deltas:
+
+| Metric | Meaning |
+|---|---|
+| Commits landed | real work, not pane chatter |
+| Beads closed / opened | backlog burn vs review inflation |
+| In-flight unchanged ticks | convergence/stall signal |
+| Pane interventions | nudges, restarts, rotations, force-releases |
+| Degraded sources | mail/CASS/beads/RCH/tool health that shaped decisions |
+| Queue state | ready, blocked-only, queue-dry, or active |
+| Residual risk | unverified tests, stale locks, partial runs, open blockers |
+
+## Checklist Before Ending A Tending Turn
+
+- [ ] No command sessions needed for the user's request are still running.
+- [ ] Active panes are either working, blocked with a named blocker, or intentionally stopped.
+- [ ] `br ready` / `ntm work queue-dry` state is known.
+- [ ] Reservations and Agent Mail state are not silently stale.
+- [ ] Any restart/force-release/shutdown has evidence and a verification result.
+- [ ] User-facing closeout names commits/beads/tests/blockers, not "the swarm seems fine."
+
+## When To Use This Skill / When To Skip
+
+**Use this skill when:**
+
+- You are acting as the orchestrator / babysitter of an NTM session with ≥2 panes.
+- A pane looks stuck, wedged, rate-limited, context-saturated, or silently dead.
+- You need to dispatch marching orders, rotate accounts, or restart a pane.
+- The swarm is filing many review beads but closing few ("close-the-backlog" trigger).
+- You're switching the swarm between implementer and review-only mode.
+- You need to know whether the swarm has actually converged (and can be shut down).
+- You're diagnosing cross-session contention (bead DB locks, cargo registry locks, zombie processes) that affects a running swarm.
+
+**Skip this skill when:**
+
+- You just need the `ntm` command catalog itself — use `/ntm`.
+- You're doing single-agent work in one pane — no orchestration layer is needed.
+- You're configuring a brand-new NTM install or provisioning a machine — use `/provision-new-machine`.
+- You're fixing Beads DB corruption or JSONL drift — use `/fixing-beads-problems`.
+- You want Gemini-specific review-swarm tuning (Flash fallback, model lock) — use `/code-review-gemini-swarm-with-ntm`.
+- You want to spawn a weighted swarm from bead backlog size — use `/open-beads-weighted-tmux-agent-sessions`.
+
+**This skill deliberately does NOT cover:** the full `ntm` command surface (see `/ntm`), MCP Agent Mail primitives (see `/agent-mail`), Beads mechanics (see `/beads-br`), BV triage internals (see `/beads-bv`), or CAAM account management (see `/caam`). It focuses on the **operator layer that sits above those tools** — the decisions, ticks, nudges, and recoveries an orchestrator performs.
+
+**Degrees of freedom.** This is a **medium-freedom methodology skill**: the recipes and cards codify a defensible default, but every tick requires judgment about which card applies. Prefer the specific OC/AP/recipe when evidence fires its trigger; fall back to the decision tree otherwise. It is not a turn-by-turn playbook, and blindly following steps without the evidence that their triggers fired produces worse outcomes than skipping the card.
 
 ## Orchestrator Decision Tree
 
@@ -44,7 +235,55 @@ Otherwise — one specific-terse nudge per genuinely-idle pane (OC-010). Then wa
 
 Every card (OC-###) and anti-pattern (AP-###) is documented with recipe, prompt module, and validator. See [OPERATOR-CARDS.md](references/OPERATOR-CARDS.md) and [ANTI-PATTERNS.md](references/ANTI-PATTERNS.md).
 
-# Vibing With NTM
+### Operator Kernel: OIAVS
+
+Use this loop for every tick:
+
+| Phase | Question | Preferred evidence |
+| --- | --- | --- |
+| Observe | What changed since the last tick? | `--robot-attention`, `--robot-events`, `git log`, pane truth stack |
+| Interpret | Which failure or workflow pattern fired? | OC/AP card trigger, `sources`, quota/pressure state |
+| Act | What is the smallest reversible intervention? | Targeted `--robot-send`, assignment, reservation fix, restart ladder |
+| Verify | Did the action change reality? | New commit, bead status, tail movement, health/retry count |
+| Stop | Is the swarm converged or queue-dry? | convergence triple-check, `ntm work queue-dry`, unchanged in-flight set |
+
+If you cannot name the phase and the evidence, do not nudge. Re-observe.
+
+### Red-Flag Phrases In Pane Tail (Scan → Match → Apply)
+
+During a tick, skim each pane's last ~20 lines for these exact-or-near substrings. Match → apply the card. This is the fastest classifier when you don't have time to read every pane.
+
+| If tail contains this phrase | State | Card to apply |
+| --- | --- | --- |
+| "resets 3pm", "You've hit your limit", "Upgrade to Max" | (maybe-stale) rate-limit | OC-001 Ping-Probe; then OC-002 Rotate if confirmed |
+| "Stop and wait / Switch to extra usage" | `/rate-limit-options` dialog | Autonomous Unstick → send `2` Enter |
+| "[Pasted text]" alone | codex paste buffer | Autonomous Unstick → flush Enter |
+| "Ready for validation", "MISSION ACCOMPLISHED", "Awaiting review", "Successfully identified and optimized" | **Handoff failure** (not success!) | OC-036 + Ship-Don't-Hand-Off prompt |
+| "exemplary", "already complete", "no fixes needed", "ready to ship", "LGTM", "tests are passing" | Convergence language | OC-016 three-condition check; if all hold, STOP |
+| "compile error", "build failed", "blocked by unrelated" | Build drift | PROMPTS.md → Build-Drift Repair |
+| "bead DB was locked", "database is locked" | Bead DB contention | RECOVERY.md → `--no-db` bypass + OC-031 |
+| "server unavailable" / "register_agent timed out" / "Resource temporarily unavailable" | Mail down/degraded | OC-007 fallback to bead-assignee lock |
+| "FILE_RESERVATION_CONFLICT" | Over-broad reservation | OC-008 force-release |
+| "Already covered, no bead filed" | Skill rotation dup | OC-041 session-scoped skill de-dup |
+| "zsh: command not found" / "zsh: no matches found" | Prompt landed at bare zsh | OC-026 pid audit → OC-027 two-step relaunch |
+| "Summarize recent commits", "Explain this codebase" (alone, no `• Working`) | Codex idle placeholder (NOT stuck) | Do not nudge; check dispatch history first |
+| "waiting for file lock on registry" | Cargo registry contention | OC-031 cross-session zombie sweep |
+| "Remove lock file?", "Force-push?", "Delete …?" (dialog) | Destructive-action dialog | OC-040 auto-decline (send "No") |
+| `⏵⏵ bypass` bar at bottom of cc pane + long "Cogitated" | Actually executing | Do NOT nudge; cross-check with git log |
+
+When in doubt, apply the **Liveness Truth Stack** above before any state-changing action.
+
+### Liveness Truth Stack (what to believe, in order)
+
+Before acting on any "pane is stuck / rate-limited / done / idle" judgment, verify in this order — each layer catches lies from the one above:
+
+1. **`tmux list-panes … -F '#{pane_current_command} #{pane_pid}'`** — is the agent CLI even running? Silent exits back to zsh are common and invisible to `--robot-tail`. (OC-026)
+2. **`tmux capture-pane -p -S -20`** — ground truth for transient state (post-keypress, dialog transitions). `--robot-tail` can sample stale buffer content for several ticks in a row. (AP-41)
+3. **`git log --since='15 minutes ago'` + `pgrep -af cargo|rustc|go|bun`** — are commits landing? Are build processes running? Timer labels like "Cogitated for 35m" are display artifacts, not activity. (AP-42)
+4. **`ntm --robot-is-working` / `--robot-health-oauth`** — provider-side state (rate-limit, context, quota).
+5. **`ntm --robot-snapshot | jq '{sources, degraded_sources}'`** — data-source freshness before acting on any derived state.
+
+If any two layers disagree, resync before acting. See OBSERVABILITY.md → "Liveness Signals That Can Lie" for the full catalog (timer labels, `⏵⏵ bypass` authoritativeness, codex placeholder suggestions, tmux window-index discovery, disk trajectory, "degraded ≠ broken").
 
 > **Core flow:** understand the repo -> pick work intelligently -> coordinate explicitly -> keep agents moving -> review relentlessly.
 
@@ -187,7 +426,7 @@ ntm assign myproject --auto --strategy=dependency
 
 ```bash
 ntm --robot-snapshot
-ntm --robot-attention --since-cursor=42
+ntm --robot-attention --attention-cursor=42
 ntm --robot-markdown --md-compact
 ntm --robot-terse
 ntm --robot-mail-check --mail-project=myproject --urgent-only
@@ -363,11 +602,17 @@ Helpful commands:
 ```bash
 ntm mail send myproject --all "Report blockers and current file focus."
 ntm locks renew myproject
+ntm locks check internal/auth/service.go --session myproject --pane 2 --json
 ntm checkpoint save myproject -m "before risky merge"
 ntm checkpoint list myproject
 ntm worktrees list
 ntm worktrees merge claude_1
 ```
+
+If Agent Mail returns DB-busy errors, `Resource temporarily unavailable`, or repeated
+timeouts, stop retrying after two attempts. Treat mail/reservations as degraded, mark
+the bead owner/notes with `br update`, keep working, and backfill the coordination
+thread once the mail/reservation source is fresh again.
 
 ## Swarm Anti-Patterns
 
@@ -478,7 +723,7 @@ Fix: at session start, assign each pane an explicit **crate / directory domain**
 | cc pane on `/rate-limit-options` dialog | `tmux send-keys -t session:0.N "2" Enter` to pick "Switch to extra usage"; or rotate the account |
 | codex pane on `[Pasted text]` limbo | `tmux send-keys -t session:0.N "" Enter` to flush the paste buffer |
 | `ntm send` aborts with `Continue anyway?` | Pass `--no-cass-check`, or use `ntm --robot-send` (non-interactive) |
-| Agent Mail server down | Proceed without it (see repo AGENTS.md); use `br update --assignee=...` as a soft coordination lock |
+| Agent Mail server down/degraded/DB-busy | Proceed without it (see repo AGENTS.md); use `br update --assignee=...` as a soft coordination lock |
 | `ntm activity` / `ntm health` show epoch / "56 years stale" | Use `--robot-is-working` / `--robot-agent-health` / `--robot-diagnose` instead |
 | Cursor expired | Re-run `ntm --robot-snapshot` |
 | Saturated-context cc (4+ days old, circular planning) | `ntm --robot-restart-pane --panes=N --restart-bead=br-xxx` on a fresh account |
@@ -517,15 +762,18 @@ Full spec — spawn, dispatch cadence, quality rubric, kill-relaunch timing, ant
 
 | Topic | Reference |
 | --- | --- |
-| **135+ robot-mode surfaces with commands, lanes, categories, transport availability, deprecated flags** | [ROBOT-MODE.md](references/ROBOT-MODE.md) |
+| **137 robot-mode surfaces in the current mainline snapshot; always re-query** for commands, lanes, categories, transport availability, deprecated flags | [ROBOT-MODE.md](references/ROBOT-MODE.md) |
 | **Error taxonomy + autonomous recovery decision tree** (cursor, quota, entity, source, request) | [RECOVERY.md](references/RECOVERY.md) |
 | **Freshness, source health, attention state machine, three-observation rule** | [OBSERVABILITY.md](references/OBSERVABILITY.md) |
-| **25 operationalized field-expertise cards** (trigger + recipe + prompt + validator) | [OPERATOR-CARDS.md](references/OPERATOR-CARDS.md) |
-| **38 named anti-patterns** from real swarm sessions, each with a fix | [ANTI-PATTERNS.md](references/ANTI-PATTERNS.md) |
+| **46 operationalized field-expertise cards** (trigger + recipe + prompt + validator) | [OPERATOR-CARDS.md](references/OPERATOR-CARDS.md) |
+| **61 named anti-patterns** from real swarm sessions, each with a fix | [ANTI-PATTERNS.md](references/ANTI-PATTERNS.md) |
 | **/loop, CronCreate, shell cron, schedule** — when to use each; convergence-gated tick scripts | [CRON-AND-AUTOMATION.md](references/CRON-AND-AUTOMATION.md) |
 | **Review-Only Mode** — phase cycle, mixed-swarm ratios, kill-relaunch rhythm, quality rubric, mode-switch prompts | [REVIEW-MODE.md](references/REVIEW-MODE.md) |
 | Marching orders, review prompts, ship-or-surface, close-backlog, orchestrator diagnosis, autonomous unstick playbook | [PROMPTS.md](references/PROMPTS.md) |
 | Spawn mixes, cadence, close/review ratio, convergence termination, domain assignment, agent-pool awareness, scope discipline | [PLAYBOOK.md](references/PLAYBOOK.md) |
+| **Operator helper scripts** (tick snapshot, convergence check, pane liveness, contention sweep, disk trajectory, depth-gate evidence, stale-bead audit) — zero context cost | [scripts/](scripts/) and [scripts/README.md](scripts/README.md) |
+| **Marching-orders template** (placeholders for session/repo/scope/domains/peers) | [assets/marching-orders-template.md](assets/marching-orders-template.md) |
+| **Trigger-phrase self-test** — confirms this skill activates on operator language and defers to siblings on adjacent language | [SELF-TEST.md](SELF-TEST.md) |
 
 ### Lookup By Symptom
 
@@ -542,7 +790,29 @@ Full spec — spawn, dispatch cadence, quality rubric, kill-relaunch timing, ant
 | Need to automate the tick cadence | CRON-AND-AUTOMATION.md |
 | Need the right robot-mode command | ROBOT-MODE.md registry query |
 | Need to know when to stop | OC-016 Convergence Termination + OBSERVABILITY.md |
+| Queue appears dry / no ready beads | OC-043 Queue-Dry Guard + PROMPTS.md "Queue-Dry Operator Prompt" |
+| Bulk assignment slows the whole swarm | OC-044 Pressure-Aware Assignment + AP-59 |
+| Prompt landed in the wrong pane | OC-045 Pane Identity + AP-60 |
+| Integration command seems nonexistent | OC-046 Tool Contracts + AP-61 |
 | Running an audit/review-only session or mixed impl+review | REVIEW-MODE.md (agent-agnostic) or `/code-review-gemini-swarm-with-ntm` (Gemini-specific) |
+| Pane "restarted" via `--robot-restart-pane` but agent never booted | OC-027 Two-Step Relaunch + AP-39 |
+| `tmux send-keys` silently does nothing | OC-028 Verify Window Index + AP-40 |
+| Dispatch landed as `zsh: command not found: …` | OC-026 Pid/Current-Command Audit + AP-40/AP-39 |
+| Timer says "Cogitated 35m" but unclear if productive | Liveness Truth Stack above + OBSERVABILITY.md "Liveness Signals That Can Lie" + AP-42 |
+| Pane parked on "Ready for validation" / "MISSION ACCOMPLISHED" | OC-036 Handoff-Failure + AP-43 + PROMPTS.md "Ship-Don't-Hand-Off" |
+| Codex dispatch returns success but agent never starts thinking | OC-037 Multi-Enter Submit + AP-44 |
+| Mysterious bead-DB / registry lock with no obvious source in your swarm | OC-031 Cross-Session Zombie Sweep + AP-49 + RECOVERY.md Cross-Session Contention |
+| Disk climbing 3pp/tick, still under threshold | OBSERVABILITY.md "Disk trajectory beats absolute threshold" + OC-032 + AP-50 |
+| Review pane declares "clean — rotate me" in 3 min | OC-034 Depth-Gate + PROMPTS.md Depth-Gate Prompt |
+| Domain-blocked pane | OC-039 Rotate-Into-Phase + PROMPTS.md Rotate-Into-New-Phase |
+| Parent epic cold for 24h, sub-bead workers blocked | OC-033 Stall-Flip |
+| Pane proposes destructive action in dialog | OC-040 Never Auto-"1" + AP-45 |
+| `--no-cass-check` rejected on `--robot-send` | AP-51 (flag is valid on `ntm send`, not `--robot-send`) |
+| `dcg` blocks a dispatch whose message text mentions destructive verbs | AP-52 |
+| Recovered the pane twice and it's still wedged | OC-029 Recovery-Attempt Budget |
+| Many panes sitting on detached retries (br close / mail) | OC-030 Detached Background-Close |
+| Reviewer panes idle because implementers paused | OC-042 Orchestrator Hygiene Commits |
+| Skill rotation repeats the same skill across rounds | OC-041 Session-Scoped De-Dup + AP-56 |
 
 ## Related Skills
 
@@ -566,6 +836,15 @@ This skill is deliberately **narrow**: it covers how to tend an NTM swarm throug
 | Automated pane-stuck detection via hooks | `cc-hooks` |
 | Remote cargo/gcc/bun offload (for rch-related concerns) | `rch` |
 | Past-session mining for prompts / decisions | `cass` |
-| Cross-project pattern extraction | `cross-project-pattern-extraction` |
+| Cross-project pattern extraction | `codebase-pattern-extraction` |
 | Codifying this skill's methodology | `operationalizing-expertise` |
-| Writing or editing Claude skills | `sw` |
+
+---
+
+## Meta-Note On Skill Size
+
+This skill deliberately exceeds the 200-line SKILL.md guideline. Orchestrating a multi-agent swarm requires a large in-the-moment lookup surface — decision tree, truth stack, red-flag phrase table, prompt bank links, convergence conditions, symptom lookup — because an operator tick has a few seconds' budget and the wrong classification wastes hours. The body is still progressively disclosed: only the decision tree, Red-Flag table, Liveness Truth Stack, and Quick Start are needed to run a tick; everything else is referenced on demand via `references/`, `scripts/`, `assets/`, and `SELF-TEST.md`.
+
+Scripts contribute 0 context tokens (they are executed, not loaded). Assets are copy-paste templates, not loaded unless read. References load only when the operator follows a link. The SKILL.md body itself loads once, when the skill triggers — and is structured so the first two screens (Decision Tree → When to Use → Red-Flag Phrases → Liveness Truth Stack) handle ~80% of tick work without scrolling further.
+
+This is the exception that proves the rule: **know why the size guideline exists so you know when to break it**. Skills that reach for this level of detail should explicitly acknowledge and justify the excess.

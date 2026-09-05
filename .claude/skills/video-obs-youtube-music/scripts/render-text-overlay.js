@@ -3,16 +3,20 @@
  * Render text overlay at 4K resolution with transparency.
  */
 
-const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 
-const HOME = process.env.HOME || '';
-const PROJECT_DIR = process.env.SMEARED_LIFE_DIR || path.join(HOME, 'projects', 'smeared_life');
-const DEFAULT_HTML = path.join(PROJECT_DIR, 'outro-text-overlay.html');
-const DEFAULT_OUTPUT_DIR = path.join(HOME, 'Movies', 'text_frames');
-const HTML_FILE = process.argv[2] || process.env.HTML_FILE || DEFAULT_HTML;
-const OUTPUT_DIR = process.argv[3] || process.env.OUTPUT_DIR || DEFAULT_OUTPUT_DIR;
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch (error) {
+  console.error('Error: playwright is required. Run `npm install` in .claude/skills/obs-youtube-music first.');
+  process.exit(1);
+}
+
+const HTML_FILE = path.resolve(process.argv[2] || process.env.OBS_OVERLAY_HTML || 'outro-text-overlay.html');
+const OUTPUT_DIR = path.resolve(process.argv[3] || process.env.OBS_OVERLAY_OUTPUT_DIR || path.join('output', 'text_frames'));
 const WIDTH = 4096;
 const HEIGHT = 2304;
 const FPS = 30;
@@ -22,6 +26,10 @@ async function main() {
   console.log(`Rendering text overlay at ${WIDTH}x${HEIGHT}`);
   console.log(`HTML: ${HTML_FILE}`);
   console.log(`Output: ${OUTPUT_DIR}`);
+
+  if (!fs.existsSync(HTML_FILE)) {
+    throw new Error(`Overlay HTML not found: ${HTML_FILE}`);
+  }
 
   if (!fs.existsSync(OUTPUT_DIR)) {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -45,7 +53,7 @@ async function main() {
     }
   });
 
-  await page.goto(`file://${HTML_FILE}`, { waitUntil: 'networkidle' });
+  await page.goto(pathToFileURL(HTML_FILE).href, { waitUntil: 'networkidle' });
   await page.waitForTimeout(2000);
 
   const expectedFrames = Math.ceil((DURATION_MS / 1000) * FPS);
@@ -71,7 +79,12 @@ async function main() {
       console.log(`Frame ${frameCount}/${expectedFrames} (${realFps.toFixed(1)} fps, ETA: ${eta.toFixed(0)}s)`);
     }
 
-    const complete = await page.evaluate(() => window.stepFrame());
+    const complete = await page.evaluate(() => {
+      if (typeof window.stepFrame !== 'function') {
+        throw new Error('window.stepFrame() is not defined');
+      }
+      return window.stepFrame();
+    });
     if (complete) break;
   }
 

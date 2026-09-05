@@ -115,7 +115,7 @@ Two operators means:
 - `ROLLBACK_OWNER` designates primary; backup operator can substitute if
   primary unreachable.
 - Share `config.env` via a private repo (NOT public); each operator
-  generates their own secrets during `rotate-credentials`.
+  generates their own secrets during `rotate-tokens`.
 
 ## What breaks first as you scale
 

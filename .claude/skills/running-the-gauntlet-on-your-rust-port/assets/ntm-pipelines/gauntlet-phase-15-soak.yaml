@@ -1,0 +1,338 @@
+schema_version: "2.0"
+name: gauntlet-phase-15-soak
+description: >-
+  Phase 15 SOAK / deep-validation. Six soak runners dispatched in parallel
+  to rch workers (long-running: fuzz 24h+, miri multi-day, loom +
+  shuttle multi-thousand-iter, crash-boundary multi-thousand-iter, BOCPD
+  multi-day, adversarial 1-3 days). All runs are background; the pipeline
+  returns once dispatch acks are in. Late-breaking findings (TrueDivergence,
+  UB, ShiftDetected regression, CRITICAL adversarial gate vulnerability)
+  loop back to Phase 12.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name (typically the cc_4 labeled session)
+    required: true
+    type: string
+  project_class:
+    description: SQL-class|RESP-class|Numerical-Python-class|ML-System-class|HTTP-Protocol-class
+    required: true
+    type: string
+  rch_worker_pool:
+    description: >-
+      Comma-separated rch worker names assigned to the seven soak runners
+      (one each, in order: fuzz, miri, loom, crash, bocpd, adversarial)
+    required: true
+    type: string
+  fuzz_duration:
+    description: Fuzz soak duration (per soak-runner-fuzz)
+    default: "24h"
+    type: string
+  miri_duration:
+    description: Miri soak duration
+    default: "72h"
+    type: string
+  loom_duration:
+    description: Loom + Shuttle soak duration
+    default: "48h"
+    type: string
+  crash_duration:
+    description: Crash-boundary soak duration
+    default: "48h"
+    type: string
+  bocpd_duration:
+    description: BOCPD soak duration
+    default: "120h"
+    type: string
+  adversarial_duration:
+    description: Adversarial-search duration
+    default: "48h"
+    type: string
+
+settings:
+  timeout: 240h
+  on_error: continue
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail, desktop, webhook]
+
+steps:
+  - id: precheck
+    name: Verify Phase 14 clean and rch worker pool healthy
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify:
+        ${vars.workspace_path}/.gauntlet/phase14_complete.flag exists
+        ${vars.workspace_path}/phase14_review_status.json shows clean_streak >= 2
+        ntm --robot-rch-status | jq '.healthy_workers >= 6'
+        echo ${vars.rch_worker_pool} | tr ',' '\n' | wc -l → must == 6
+
+      For each worker in ${vars.rch_worker_pool}, verify it's idle:
+        ntm --robot-rch-workers --worker=<name> | jq '.busy == false'
+
+      Mkdir ${vars.workspace_path}/soak/{fuzz,miri,loom,crash-boundary,bocpd,adversarial}/.
+
+      Acknowledge: "Phase 15 SOAK precheck green — dispatching 6 runners".
+    wait: completion
+    timeout: 15m
+    on_error: fail
+
+  - id: parse_workers
+    name: Split rch_worker_pool into named workers
+    depends_on: [precheck]
+    agent: claude
+    pane: 2
+    prompt: |
+      Split ${vars.rch_worker_pool} into six worker names:
+        worker_fuzz, worker_miri, worker_loom, worker_crash,
+        worker_bocpd, worker_adversarial (in that order).
+
+      Write ${vars.workspace_path}/soak/workers.json with the mapping.
+
+      Acknowledge: "Worker assignment written".
+    wait: completion
+    timeout: 5m
+    output_var: worker_map
+
+  - id: dispatch_soak_runners
+    name: Six soak runners — parallel, all background via rch
+    depends_on: [parse_workers]
+    parallel:
+      - id: soak_fuzz
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-fuzz dispatcher.
+
+          Read MO-soak-dispatch.md and substitute:
+            PANE_N           = your pane index
+            WORKSPACE_PATH   = ${vars.workspace_path}
+            PORT_PATH        = ${vars.port_path}
+            ROLE             = soak-runner-fuzz
+            MODEL            = claude-opus
+            COORDINATION_MODE = agent-mail
+            SESSION_ID       = ${vars.run_id}
+            RUNNER_TYPE      = fuzz
+            RUNNER_DURATION  = ${vars.fuzz_duration}
+            RCH_WORKER       = (read worker_fuzz from ${vars.workspace_path}/soak/workers.json)
+            THREAD_ID        = gauntlet-${vars.run_id}-phase15-soak-fuzz
+            OUTPUT_DIR       = ${vars.workspace_path}/soak/fuzz
+
+          Dispatch the 24h+ differential fuzz against previously-divergent
+          APIs via:
+            rch exec --worker <RCH_WORKER> --duration ${vars.fuzz_duration} -- \
+              cd ${vars.port_path} && cargo +nightly fuzz run all-targets \
+              -- -max_total_time=$(echo ${vars.fuzz_duration} | sed 's/h/*3600/' | bc) \
+              -reload=1 -print_pcs=1 \
+              > ${vars.workspace_path}/soak/fuzz/run.log 2>&1
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase15-soak-fuzz` with the
+          rch job ID. Do NOT wait for completion in this step.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+
+      - id: soak_miri
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-miri dispatcher.
+
+          Substitute as above with:
+            RUNNER_TYPE     = miri
+            RUNNER_DURATION = ${vars.miri_duration}
+            RCH_WORKER      = worker_miri
+            THREAD_ID       = gauntlet-${vars.run_id}-phase15-soak-miri
+            OUTPUT_DIR      = ${vars.workspace_path}/soak/miri
+
+          Dispatch multi-day Miri across harness internals:
+            rch exec --worker <RCH_WORKER> --duration ${vars.miri_duration} -- \
+              cd ${vars.port_path} && MIRIFLAGS='-Zmiri-strict-provenance' \
+              cargo +nightly miri test --workspace \
+              > ${vars.workspace_path}/soak/miri/run.log 2>&1
+
+          Acknowledge with rch job ID.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+
+      - id: soak_loom
+        agent: codex
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-loom dispatcher.
+
+          Substitute with:
+            RUNNER_TYPE     = loom
+            RUNNER_DURATION = ${vars.loom_duration}
+            RCH_WORKER      = worker_loom
+            THREAD_ID       = gauntlet-${vars.run_id}-phase15-soak-loom
+            OUTPUT_DIR      = ${vars.workspace_path}/soak/loom
+
+          Dispatch multi-thousand-iteration loom + shuttle:
+            rch exec --worker <RCH_WORKER> --duration ${vars.loom_duration} -- \
+              cd ${vars.port_path} && LOOM_MAX_PREEMPTIONS=4 \
+              LOOM_MAX_BRANCHES=10000 cargo test --features loom-tests \
+              > ${vars.workspace_path}/soak/loom/run.log 2>&1
+
+          Acknowledge with rch job ID.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+
+      - id: soak_crash_boundary
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-crash-boundary dispatcher.
+
+          Substitute with:
+            RUNNER_TYPE     = crash-boundary
+            RUNNER_DURATION = ${vars.crash_duration}
+            RCH_WORKER      = worker_crash
+            THREAD_ID       = gauntlet-${vars.run_id}-phase15-soak-crash
+            OUTPUT_DIR      = ${vars.workspace_path}/soak/crash-boundary
+
+          Dispatch multi-thousand-iteration deterministic fault VFS:
+            rch exec --worker <RCH_WORKER> --duration ${vars.crash_duration} -- \
+              cd ${vars.port_path} && cargo test --release --features crash-boundary-soak \
+              -- --test-threads=1 --nocapture \
+              > ${vars.workspace_path}/soak/crash-boundary/run.log 2>&1
+
+          Each crash boundary gets >=1000 iterations; all recoveries must
+          be consistent per the RecoveryVerifier.
+
+          Acknowledge with rch job ID.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+
+      - id: soak_bocpd
+        agent: gemini
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-bocpd dispatcher.
+
+          Substitute with:
+            RUNNER_TYPE     = bocpd
+            RUNNER_DURATION = ${vars.bocpd_duration}
+            RCH_WORKER      = worker_bocpd
+            THREAD_ID       = gauntlet-${vars.run_id}-phase15-soak-bocpd
+            OUTPUT_DIR      = ${vars.workspace_path}/soak/bocpd
+
+          Dispatch multi-day BOCPD on the parity-score stream. Stream the
+          parity score every 5 minutes; BOCPD classifies regime; we assert
+          Stable for the full window.
+
+            rch exec --worker <RCH_WORKER> --duration ${vars.bocpd_duration} -- \
+              cd ${vars.port_path} && cargo run --release --bin bocpd-soak \
+                --window ${vars.bocpd_duration} \
+                --out ${vars.workspace_path}/soak/bocpd/regime-timeline.json \
+                > ${vars.workspace_path}/soak/bocpd/run.log 2>&1
+
+          If BOCPD detects ShiftDetected in the regression direction
+          mid-window, post CRITICAL on the thread and loop back to Phase 12.
+
+          Acknowledge with rch job ID.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+
+      - id: soak_adversarial
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are the soak-runner-adversarial dispatcher.
+
+          Substitute with:
+            RUNNER_TYPE     = adversarial
+            RUNNER_DURATION = ${vars.adversarial_duration}
+            RCH_WORKER      = worker_adversarial
+            THREAD_ID       = gauntlet-${vars.run_id}-phase15-soak-adversarial
+            OUTPUT_DIR      = ${vars.workspace_path}/soak/adversarial
+
+          Dispatch adversarial-search against every gate:
+            rch exec --worker <RCH_WORKER> --duration ${vars.adversarial_duration} -- \
+              cd ${vars.port_path} && cargo run --release --bin adversarial-search \
+                --duration ${vars.adversarial_duration} \
+                --counterexamples ${vars.workspace_path}/soak/adversarial/counterexamples.json \
+                --gate-vuln ${vars.workspace_path}/soak/adversarial/gate-vulnerabilities.md \
+                > ${vars.workspace_path}/soak/adversarial/run.log 2>&1
+
+          Every counterexample becomes a regression test in Phase 12+.
+
+          Acknowledge with rch job ID.
+        wait: completion
+        timeout: 30m
+        on_error: retry
+        retry_count: 1
+    on_error: continue
+
+  - id: collect_dispatch_acks
+    name: Verify all six dispatch acks landed; record rch job IDs
+    depends_on: [dispatch_soak_runners]
+    agent: claude
+    pane: 2
+    prompt: |
+      For each of the seven soak runners, verify the dispatch ack on the
+      corresponding `gauntlet-${vars.run_id}-phase15-soak-<runner>` thread:
+        ntm mail inbox ${vars.session_name} --json | \
+          jq '.threads[] | select(.id | startswith("gauntlet-${vars.run_id}-phase15-soak-"))
+              | {thread: .id, rch_job_id: (.messages[-1].body | match("rch.*job.*id: ([a-z0-9-]+)").captures[0].string // null)}'
+
+      Write ${vars.workspace_path}/soak/dispatch.json with the six (runner, rch_job_id)
+      pairs.
+
+      If any runner did NOT ack within 30 minutes, post CRITICAL and exit
+      non-zero. Otherwise reply "Six soak runners dispatched — see soak/dispatch.json".
+
+      NOTE: this step does NOT wait for soak completion. Soak runs for
+      days; the orchestrator polls completion separately via
+      `ntm --robot-rch-workers --worker=<name>` and the per-runner summary.json files.
+    wait: completion
+    timeout: 45m
+    on_error: fail
+
+  - id: emit_phase15_dispatched
+    name: Write phase15_dispatched.md and commit
+    depends_on: [collect_dispatch_acks]
+    agent: claude
+    pane: 2
+    prompt: |
+      Write ${vars.workspace_path}/phase15_dispatched.md with:
+        - The six runners + their rch job IDs + start timestamps + expected durations
+        - The polling commands the orchestrator should run periodically
+        - The completion criteria per runner (per references/PHASES.md § Phase 15 exit criteria)
+        - The loop-back-to-Phase-12 trigger conditions (TrueDivergence in fuzz, UB in Miri, ShiftDetected in BOCPD regression direction, CRITICAL adversarial)
+
+      Do NOT write phase15_complete.flag yet — the soak is running. Flag
+      lands only after every soak/<runner>/summary.json shows pass verdict.
+
+      Commit:
+        cd ${vars.workspace_path} && \
+          git add phase15_dispatched.md soak/dispatch.json soak/workers.json && \
+          git commit -m "phase15: seven soak runners dispatched to rch (durations 24h-120h)"
+
+      Acknowledge: "Phase 15 SOAK dispatched — monitor via ntm --robot-rch-workers".
+    wait: completion
+    timeout: 10m
+    on_error: fail

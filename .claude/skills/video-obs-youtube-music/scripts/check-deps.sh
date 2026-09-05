@@ -1,14 +1,31 @@
 #!/bin/bash
 # Check dependencies for video-obs-youtube-music skill
 
+set -euo pipefail
+
 errors=0
 
+install_cmd() {
+    if command -v apt-get >/dev/null 2>&1; then
+        printf 'sudo apt-get install'
+    elif command -v brew >/dev/null 2>&1; then
+        printf 'brew install'
+    elif command -v dnf >/dev/null 2>&1; then
+        printf 'sudo dnf install'
+    else
+        printf '[your package manager] install'
+    fi
+}
+
 check_cmd() {
+    local version
+    local version_output
     if ! command -v "$1" &>/dev/null; then
         echo "❌ Missing: $1"
         errors=$((errors + 1))
     else
-        version=$("$1" --version 2>&1 | head -1)
+        version_output=$("$1" --version 2>&1 || true)
+        version=$(printf '%s\n' "$version_output" | sed -n '1p')
         echo "✓ $1: $version"
     fi
 }
@@ -28,8 +45,9 @@ if command -v node &>/dev/null; then
     version=$(node --version 2>&1)
     echo "✓ node: $version"
 
-    # Check if playwright is installed as npm package
-    if node -e "require('playwright')" 2>/dev/null; then
+    # Playwright may be available via npx even when require() fails outside a project directory.
+    if node -e "require.resolve('playwright/package.json')" 2>/dev/null \
+        || npx --no-install playwright --version >/dev/null 2>&1; then
         echo "✓ playwright: installed"
     else
         echo "⚠ playwright: not installed (optional)"
@@ -37,7 +55,7 @@ if command -v node &>/dev/null; then
     fi
 else
     echo "⚠ node: not installed (optional)"
-    echo "  Install: brew install node"
+    echo "  Install: $(install_cmd) node"
     echo "  Then: npm install playwright && npx playwright install chromium"
 fi
 
@@ -47,6 +65,6 @@ if [ $errors -eq 0 ]; then
     exit 0
 else
     echo "❌ Missing $errors core dependencies"
-    echo "Install: brew install ffmpeg yt-dlp"
+    echo "Install: $(install_cmd) ffmpeg yt-dlp"
     exit 1
 fi

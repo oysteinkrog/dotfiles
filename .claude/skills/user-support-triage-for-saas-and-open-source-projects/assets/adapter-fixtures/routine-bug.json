@@ -1,0 +1,53 @@
+[
+  {
+    "adapter_version": "support-adapter-v1",
+    "surface": "saas-custom",
+    "provider": "fixture",
+    "id": "fixture-routine-bug-001",
+    "stable_url": "https://example.invalid/admin/support/tickets/fixture-routine-bug-001",
+    "public_url": null,
+    "subject": "Install command fails after login",
+    "category": "bug",
+    "status": "open",
+    "priority": "p2",
+    "created_at": "2026-04-27T12:00:00Z",
+    "updated_at": "2026-04-27T12:05:00Z",
+    "last_customer_message_at": "2026-04-27T12:05:00Z",
+    "last_support_message_at": null,
+    "age_hours": 0.08,
+    "customer": {
+      "id": "fixture-user-1",
+      "display": "Fixture User",
+      "email": "fixture-user@example.invalid",
+      "handle": null,
+      "tier": "individual",
+      "org": null
+    },
+    "sla": {
+      "status": "ok",
+      "deadline": "2026-04-28T12:00:00Z",
+      "breached_at": null,
+      "paused": false
+    },
+    "messages": [
+      {
+        "id": "fixture-message-1",
+        "author_type": "customer",
+        "author_display": "Fixture User",
+        "created_at": "2026-04-27T12:05:00Z",
+        "body_preview": "I logged in successfully, but the install command still says I am not authenticated."
+      }
+    ],
+    "labels": ["install", "auth"],
+    "attachments": [],
+    "safe_actions": ["post_internal_note", "file_bead"],
+    "unsafe_actions": ["send_customer_reply"],
+    "evidence": [
+      {
+        "kind": "fixture",
+        "source": "assets/adapter-fixtures/routine-bug.json",
+        "checked_at": "2026-04-27T12:10:00Z"
+      }
+    ]
+  }
+]

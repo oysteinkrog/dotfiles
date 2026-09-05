@@ -1,0 +1,14 @@
+id: rust-ub-mem-zeroed-uninitialized
+language: rust
+severity: warning
+message: >-
+  mem::zeroed and mem::uninitialized are UB for types without an all-zero
+  representation. mem::uninitialized is deprecated; use MaybeUninit.
+rule:
+  any:
+    - pattern: 'std::mem::zeroed()'
+    - pattern: 'core::mem::zeroed()'
+    - pattern: 'mem::zeroed()'
+    - pattern: 'std::mem::uninitialized()'
+    - pattern: 'core::mem::uninitialized()'
+    - pattern: 'mem::uninitialized()'

@@ -1,0 +1,158 @@
+# .github/workflows/feature-coverage.yml
+#
+# Wires CI gate 1.4 from PARITY_RUNBOOK.md: feature-coverage release-gate.
+#
+# Runs compute-feature-coverage.sh; emits the per-family verdict; gates
+# partial → full regression (a feature that was Present cannot quietly
+# regress to Partial without a category-level ratchet update).
+
+name: Feature Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: feature-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Checkout base ref (for regression diff)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          git show "origin/${{ github.base_ref }}:parity_taxonomy.json" \
+            > parity_taxonomy.base.json 2>/dev/null || true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-feat-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (release-perf profile)
+        run: cargo build --profile release-perf --all-features
+
+      - name: Compute feature coverage
+        id: compute
+        run: |
+          TAXONOMY_ARG=()
+          if [[ -f "$PORT/parity_taxonomy.json" ]]; then
+            TAXONOMY_ARG=(--taxonomy "$PORT/parity_taxonomy.json")
+          fi
+          "$WORKSPACE/scripts/compute-feature-coverage.sh" "$WORKSPACE" \
+            --matrix "$WORKSPACE/docs/contracts/supported_surface_matrix.toml" \
+            "${TAXONOMY_ARG[@]}"
+          cp "$WORKSPACE/reports/feature_coverage.json" coverage_report.json
+          cp "$WORKSPACE/reports/feature_coverage.md" coverage_dashboard.md
+          cp "$WORKSPACE/reports/parity_taxonomy.json" parity_taxonomy.json
+
+          # Per-family verdict summary
+          jq -r '.families[] | "\(.family): \(.verdict) (supported=\(.supported_weight), partial=\(.partial_weight), missing=\(.missing_weight), excluded=\(.excluded_weight), debt=\(.coverage_debt_fraction))"' \
+            coverage_report.json
+
+          # Excluded/missing debt blocks strict-full claims.
+          if jq -e '.families[] | select(.verdict == "full" and .coverage_debt_weight > 0)' coverage_report.json >/dev/null; then
+            echo "::error::full verdict emitted while coverage debt is nonzero"
+            exit 1
+          fi
+
+      - name: Detect partial → missing regression
+        id: regress
+        if: github.event_name == 'pull_request' && hashFiles('parity_taxonomy.base.json') != '' && hashFiles('parity_taxonomy.json') != ''
+        run: |
+          # For each feature: if base was Present|Partial AND head is Missing → block.
+          # If base was Present AND head is Partial → also block; route through surface-gap-found.
+          REGRESSIONS=$(jq -n \
+            --slurpfile base parity_taxonomy.base.json \
+            --slurpfile head parity_taxonomy.json \
+            '
+              def norm_status:
+                tostring
+                | ascii_downcase
+                | gsub("[- ]"; "_")
+                | if . == "passing" or . == "present" or . == "supported" or . == "full" then "present"
+                  elif . == "partial" then "partial"
+                  elif . == "missing" or . == "absent" then "missing"
+                  else .
+                  end;
+              ($base[0].features // [] | map({(.id): (.status | norm_status)}) | add // {}) as $b
+              | ($head[0].features // [] | map({(.id): (.status | norm_status)}) | add // {}) as $h
+              | [
+                  $h | to_entries[]
+                  | select(($b[.key] == "present" and (.value == "missing" or .value == "partial")) or
+                           ($b[.key] == "partial" and .value == "missing"))
+                  | {id: .key, base_status: $b[.key], head_status: .value}
+                ]
+            ')
+
+          COUNT=$(echo "$REGRESSIONS" | jq 'length')
+          echo "regression_count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "$REGRESSIONS" > coverage_regressions.json
+
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "Detected $COUNT surface-coverage regression(s):"
+            echo "$REGRESSIONS" | jq -r '.[] | "  \(.id): \(.base_status) → \(.head_status)"'
+          fi
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-coverage-${{ github.run_id }}
+          path: |
+            coverage_report.json
+            coverage_dashboard.md
+            parity_taxonomy.json
+            coverage_regressions.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Annotate
+        if: always()
+        run: |
+          if [[ "${{ steps.regress.outputs.regression_count || '0' }}" -gt 0 ]]; then
+            echo "::error title=Feature Coverage::${{ steps.regress.outputs.regression_count }} feature(s) regressed (Present→Partial/Missing or Partial→Missing). Route through surface-gap-found.md."
+          else
+            echo "::notice title=Feature Coverage::No regressions vs base."
+          fi
+
+      - name: Fail on regression
+        if: steps.regress.outputs.regression_count != '' && steps.regress.outputs.regression_count != '0'
+        run: exit 1

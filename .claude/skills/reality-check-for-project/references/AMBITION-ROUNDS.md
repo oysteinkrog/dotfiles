@@ -69,7 +69,7 @@ HARD ON!
 
 With explicit skill references:
 ```
-I need you to think bigger and bolder. Use $alien-artifact-coding and $extreme-software-optimization.
+I need you to think bigger and bolder. Use $alien-artifact-coding, $alien-graveyard (if available), and $extreme-software-optimization.
 BE AMBITIOUS. Otherwise I won't do this.
 ```
 
@@ -78,7 +78,7 @@ BE AMBITIOUS. Otherwise I won't do this.
 Project-specific context is injected BEFORE the standard escalation templates:
 - **Mathematical depth:** "Surely there is some math..." (process_triage, asupersync, meta_skill)
 - **Quantitative targets:** "1200 lines??? This needs to be more like 6,000+" (frankensqlite)
-- **Skill references:** "Use $alien-artifact-coding and $extreme-software-optimization" (glibc_rust)
+- **Skill references:** "Use $alien-artifact-coding, $alien-graveyard (if available), and $extreme-software-optimization" (glibc_rust)
 - **Preservation requirements:** "EVERY SINGLE ELEMENT... MUST BE PRESERVED **EXACTLY**" (mcp_agent_mail_rust)
 - **Visual quality axis:** "WAY WAY WAY better and more visually appealing" (gemini visualizations)
 

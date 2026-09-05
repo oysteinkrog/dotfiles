@@ -44,25 +44,23 @@ Map user-friendly nicknames to canonical model IDs:
 ```python
 MODEL_ALIASES = {
     # OpenAI aliases
-    "gpt4": "gpt-4-turbo-preview",
-    "gpt4o": "gpt-4o",
-    "gpt4o-mini": "gpt-4o-mini",
-    "gpt3": "gpt-3.5-turbo",
+    "gpt5": "gpt-5",
+    "gpt5-mini": "gpt-5-mini",
 
     # Anthropic aliases
-    "opus": "claude-3-opus-20240229",
-    "sonnet": "claude-3-5-sonnet-20241022",
-    "haiku": "claude-3-5-haiku-20241022",
-    "claude": "claude-3-5-sonnet-20241022",  # Default to latest Sonnet
+    "opus": "claude-opus-4-7",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5",
+    "claude": "claude-sonnet-4-6",  # Default to latest Sonnet
 
     # Google aliases
-    "gemini": "gemini-1.5-pro",
-    "gemini-flash": "gemini-1.5-flash",
-    "gemini-pro": "gemini-1.5-pro",
+    "gemini": "gemini-3.1-pro",
+    "gemini-flash": "gemini-3-flash",
+    "gemini-pro": "gemini-3.1-pro",
 
     # Meta aliases
-    "llama": "llama-3.1-70b-instruct",
-    "llama-small": "llama-3.1-8b-instruct",
+    "llama": "llama-4-70b-instruct",
+    "llama-small": "llama-4-8b-instruct",
 }
 
 def resolve_model_alias(model: str) -> str:
@@ -70,9 +68,9 @@ def resolve_model_alias(model: str) -> str:
     Resolve model alias to canonical model ID.
 
     Examples:
-    - "opus" -> "claude-3-opus-20240229"
-    - "gpt4" -> "gpt-4-turbo-preview"
-    - "claude-3-opus-20240229" -> "claude-3-opus-20240229" (passthrough)
+    - "opus" -> "claude-opus-4-7"
+    - "gpt5" -> "gpt-5"
+    - "claude-opus-4-7" -> "claude-opus-4-7" (passthrough)
     """
     normalized = model.lower().strip()
     return MODEL_ALIASES.get(normalized, model)
@@ -133,14 +131,13 @@ class CostTracker:
 
     # Cost per 1K tokens (input, output) by model
     COSTS = {
-        "gpt-4-turbo-preview": (0.01, 0.03),
-        "gpt-4o": (0.005, 0.015),
-        "gpt-4o-mini": (0.00015, 0.0006),
-        "claude-3-opus": (0.015, 0.075),
-        "claude-3-5-sonnet": (0.003, 0.015),
-        "claude-3-5-haiku": (0.0008, 0.004),
-        "gemini-1.5-pro": (0.00125, 0.005),
-        "gemini-1.5-flash": (0.000075, 0.0003),
+        "gpt-5": (0.01, 0.03),
+        "gpt-5-mini": (0.00015, 0.0006),
+        "claude-opus-4-7": (0.015, 0.075),
+        "claude-sonnet-4-6": (0.003, 0.015),
+        "claude-haiku-4-5": (0.0008, 0.004),
+        "gemini-3.1-pro": (0.00125, 0.005),
+        "gemini-3-flash": (0.000075, 0.0003),
     }
 
     def __init__(self):
@@ -277,8 +274,8 @@ Comprehensive settings for LLM integration:
 @dataclass(slots=True, frozen=True)
 class LLMSettings:
     enabled: bool = True
-    default_model: str = "gpt-4o-mini"
-    fallback_model: str = "gpt-3.5-turbo"
+    default_model: str = "gpt-5-mini"
+    fallback_model: str = "gpt-5-mini"
     timeout_seconds: int = 30
     max_retries: int = 2
     cost_tracking: bool = True
@@ -288,8 +285,8 @@ class LLMSettings:
 def load_llm_settings() -> LLMSettings:
     return LLMSettings(
         enabled=_bool(os.getenv("LLM_ENABLED", "true")),
-        default_model=os.getenv("LLM_DEFAULT_MODEL", "gpt-4o-mini"),
-        fallback_model=os.getenv("LLM_FALLBACK_MODEL", "gpt-3.5-turbo"),
+        default_model=os.getenv("LLM_DEFAULT_MODEL", "gpt-5-mini"),
+        fallback_model=os.getenv("LLM_FALLBACK_MODEL", "gpt-5-mini"),
         timeout_seconds=_int(os.getenv("LLM_TIMEOUT", "30")),
         max_retries=_int(os.getenv("LLM_MAX_RETRIES", "2")),
         cost_tracking=_bool(os.getenv("LLM_COST_TRACKING", "true")),

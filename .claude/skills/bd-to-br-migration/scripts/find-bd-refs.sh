@@ -10,6 +10,15 @@ set -euo pipefail
 
 path="${1:-.}"
 
+if [[ ! -e "$path" ]]; then
+    echo "ERROR: Path not found: $path" >&2
+    exit 2
+fi
+
+count_nonempty_lines() {
+    printf '%s\n' "$1" | awk 'NF{count++} END {print count + 0}'
+}
+
 echo "=== bd → br Migration Discovery ==="
 echo "Scanning: $path"
 echo ""
@@ -39,9 +48,9 @@ if [[ -n "$id_files" ]]; then
 fi
 
 # Count summary
-bd_count=$(echo "$bd_files" | grep -c . 2>/dev/null || echo "0")
-sync_count=$(echo "$sync_files" | grep -c . 2>/dev/null || echo "0")
-id_count=$(echo "$id_files" | grep -c . 2>/dev/null || echo "0")
+bd_count=$(count_nonempty_lines "$bd_files")
+sync_count=$(count_nonempty_lines "$sync_files")
+id_count=$(count_nonempty_lines "$id_files")
 
 echo "=== Summary ==="
 echo "Files with bd commands: $bd_count"
@@ -49,8 +58,8 @@ echo "Files with bd sync: $sync_count"
 echo "Files with bd-### IDs: $id_count"
 
 # Unique files needing migration
-all_files=$(echo -e "$bd_files\n$sync_files\n$id_files" | grep -v '^$' | sort -u || true)
-total=$(echo "$all_files" | grep -c . 2>/dev/null || echo "0")
+all_files=$(printf '%s\n%s\n%s\n' "$bd_files" "$sync_files" "$id_files" | grep -v '^$' | sort -u || true)
+total=$(count_nonempty_lines "$all_files")
 echo ""
 echo "Total unique files needing migration: $total"
 

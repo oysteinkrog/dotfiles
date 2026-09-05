@@ -16,15 +16,25 @@
 # .beads/config.yaml
 
 # Issue ID prefix (default: "bd")
-issue-prefix: "myproject"
+id:
+  prefix: "myproject"
 
-# Use a dedicated branch for syncing `.beads/issues.jsonl` if your team uses that workflow.
-sync-branch: "beads-sync"
+# Default values for new issues
+defaults:
+  priority: 2        # P2 = MEDIUM (0-4 scale)
+  type: "task"
+  assignee: "team@example.com"
 
-# Optional toggles (shown here because they are common in agent automation)
-json: true
-no-auto-import: false
-no-auto-flush: false
+# Output formatting
+output:
+  color: true
+  date_format: "%Y-%m-%d"
+
+# Sync behavior
+sync:
+  auto_import: false
+  auto_flush: false
+  branch: beads-sync  # Use dedicated sync branch
 ```
 
 ---
@@ -42,9 +52,9 @@ no-auto-flush: false
 ## Config Commands
 
 ```bash
-br config list                         # Show all config
-br config get issue-prefix             # Get specific value
-br config set issue-prefix=myproject   # Set value
+br config --list                     # Show all config
+br config --get id.prefix            # Get specific value
+br config --set defaults.priority=1  # Set value
 ```
 
 ---

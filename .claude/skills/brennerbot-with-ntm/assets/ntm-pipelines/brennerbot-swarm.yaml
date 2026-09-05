@@ -1,0 +1,238 @@
+schema_version: "2.0"
+name: brennerbot-swarm
+description: 8-12 pane swarm tier. Multi-pane Phase 7 audit. Domain-assigned investigators. Best for complex design space + multi-model triangulation + deep audits.
+
+inputs:
+  - workspace_path
+  - session_id
+  - question_of_record_path
+  - mode
+
+defaults:
+  model_mix: "cc:5,cod:3,gmi:2"   # 10 panes (excluding operator)
+  productive_ignorance_pane: 1
+  triage_pane: 1
+  meta_synthesizer_pane: 11
+  hard_caps:
+    phase_4_max_rounds: 6
+    phase_6_max_passes: 4
+    phase_7_max_trio_rounds: 4
+
+# Roster (10 panes + operator):
+# pane 1  (cc)  — Proposer-A (productive-ignorance)
+# pane 2  (cod) — Proposer-B
+# pane 3  (gmi) — Proposer-C
+# pane 4  (cc)  — Investigator-1 (domain: H-001..H-003)
+# pane 5  (cod) — Investigator-2 (domain: H-004..H-006)
+# pane 6  (cc)  — Investigator-3 (domain: H-007..H-009)
+# pane 7  (gmi) — Devil's-Advocate-A
+# pane 8  (cc)  — Devil's-Advocate-B
+# pane 9  (cod) — Synthesizer-cod
+# pane 10 (gmi) — Synthesizer-gmi
+# pane 11 (cc)  — Synthesizer-cc + Meta-synthesizer
+
+steps:
+  - id: register_mail
+    command: ./scripts/register-mail-identities.sh --project-key=${workspace_path} --session=${session_id}
+    on_failure: fallback_to_ntm_inbox
+
+  - id: dispatch_onboarding
+    after: register_mail
+    foreach_pane:
+      template: assets/marching-orders/MO-02-onboarding.md
+      params:
+        PANE_N: ${pane.index}
+        WORKSPACE_PATH: ${workspace_path}
+        QUESTION_OF_RECORD_PATH: ${question_of_record_path}
+        SESSION_ID: ${session_id}
+        ROLE: ${pane.role}
+        MODEL: ${pane.model}
+        PEER_LIST: "session roster for ${session_id}; run ntm list ${session_id}"
+        COORDINATION_MODE: agent-mail
+        PRODUCTIVE_IGNORANCE: ${pane.productive_ignorance}
+        DOMAIN: ${pane.domain}
+    parallel: true
+
+  - id: wait_for_acks
+    after: dispatch_onboarding
+    command: ./scripts/wait-for-onboard-acks.sh --session=${session_id}
+    timeout: 600   # longer for swarm
+
+  - id: phase_3_propose
+    after: wait_for_acks
+    foreach_pane:
+      filter: role==proposer
+      template: assets/marching-orders/MO-03a-propose.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: ${session_id}
+        COUNT: 5
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_3_triage
+    after: phase_3_propose
+    pane: ${defaults.triage_pane}
+    template: assets/marching-orders/MO-03b-triage.md
+    params:
+      PANE_N: ${defaults.triage_pane}
+      SESSION_ID: ${session_id}
+
+  - id: phase_3_third_alt_check
+    after: phase_3_triage
+    command: ./scripts/audit-bead-invariants.sh --check=third_alternative_present --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.triage_pane}
+      template: assets/marching-orders/MO-03c-third-alternative.md
+      params:
+        PANE_N: ${defaults.triage_pane}
+        SESSION_ID: ${session_id}
+
+  - id: assign_domains
+    after: phase_3_third_alt_check
+    command: ./scripts/assign-investigator-domains.sh --session=${session_id} --workspace=${workspace_path} --strategy=by-hypothesis-count
+
+  - id: phase_3_complete_flag
+    after: assign_domains
+    command: touch ${workspace_path}/.brenner_workspace/phase_3_complete.flag
+
+  - id: phase_4_loop
+    after: phase_3_complete_flag
+    loop:
+      max_iterations: ${defaults.hard_caps.phase_4_max_rounds}
+      until: ./scripts/convergence-check.sh --phase=4 --workspace=${workspace_path}
+      body:
+        - id: phase_4_investigate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '.issues[]? | select((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04a-investigate.md
+            pane_assignment_strategy: by_domain   # uses domain assignments from earlier step
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+          parallel: true
+        - id: phase_4_devils_advocate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '[.issues[]? | select(((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) and ((.description // "") | contains("confidence: high")))][:3][] | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04b-devils-advocate.md
+            pane_assignment_strategy: by_model_family_difference
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+          parallel: true
+
+  - id: phase_4_complete_flag
+    after: phase_4_loop
+    command: touch ${workspace_path}/.brenner_workspace/phase_4_complete.flag
+
+  - id: phase_5_debate_pairs
+    after: phase_4_complete_flag
+    command: ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=1
+
+  - id: phase_5_rounds_gate
+    after: phase_5_debate_pairs
+    command: |
+      test -f ${workspace_path}/.brenner_workspace/phase_5_debate_rounds_complete.flag || {
+        echo "Phase 5 Round 1 was dispatched and debate-pairs.pairs is frozen. Run ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=2, then --round=3 when ready; round 3 marks .brenner_workspace/phase_5_debate_rounds_complete.flag before adjudication."
+        exit 1
+      }
+
+  - id: phase_5_adjudicate
+    after: phase_5_rounds_gate
+    foreach:
+      pairs: $(cat "${workspace_path}/.brenner_workspace/debate-pairs.resolved.pairs" 2>/dev/null || true)
+      template: assets/marching-orders/MO-05b-adjudicate.md
+      pane_assignment_strategy: rotate_adjudicator
+      params:
+        PANE_N: ${pane.index}
+        DEBATE_ID: ${item.debate_id}
+        SESSION_ID: ${session_id}
+    parallel: true
+
+  - id: phase_5_complete_flag
+    after: phase_5_adjudicate
+    command: touch ${workspace_path}/.brenner_workspace/phase_5_complete.flag
+
+  - id: phase_6_distill
+    after: phase_5_complete_flag
+    foreach:
+      models: ["cc", "cod", "gmi"]
+      template: assets/marching-orders/MO-06a-distill.md
+      pane_assignment_strategy: by_model_family
+      params:
+        PANE_N: ${pane.index}
+        MODEL_FAMILY: ${item}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_6_meta
+    after: phase_6_distill
+    pane: ${defaults.meta_synthesizer_pane}
+    template: assets/marching-orders/MO-06b-meta-synthesize.md
+    params:
+      PANE_N: ${defaults.meta_synthesizer_pane}
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+
+  - id: phase_6_disagreement_lint
+    after: phase_6_meta
+    command: ./scripts/disagreement-register-lint.sh --workspace=${workspace_path} --min-entries=3
+
+  - id: phase_6_convergence_check
+    after: phase_6_disagreement_lint
+    command: ./scripts/convergence-check.sh --phase=6 --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.meta_synthesizer_pane}
+      template: assets/marching-orders/MO-06b-meta-synthesize.md
+      params:
+        PANE_N: ${defaults.meta_synthesizer_pane}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+      reason: "Phase 6 has not produced two consecutive trivial meta-synthesis passes"
+
+  - id: phase_6_complete_flag
+    after: phase_6_convergence_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_6_complete.flag
+
+  # Swarm: 4-pane Phase 7 audit, mixed model families, can run multiple trio-rounds
+  - id: phase_7_audit_loop
+    after: phase_6_complete_flag
+    loop:
+      max_iterations: ${defaults.hard_caps.phase_7_max_trio_rounds}
+      until: ./scripts/convergence-check.sh --phase=7 --workspace=${workspace_path}
+      body:
+        - id: phase_7_trio
+          foreach_pane:
+            filter: role!=proposer   # don't audit the proposers' own work with their own panes
+            template: assets/marching-orders/MO-07a-fresh-eyes.md
+            params:
+              PANE_N: ${pane.index}
+              SESSION_ID: ${session_id}
+          parallel: true
+
+  - id: phase_7_ubs
+    after: phase_7_audit_loop
+    command: ./scripts/run-ubs-on-deliverables.sh --workspace=${workspace_path}
+    on_failure: abort
+
+  - id: phase_7_complete_flag
+    after: phase_7_ubs
+    command: touch ${workspace_path}/.brenner_workspace/phase_7_complete.flag
+
+  - id: phase_8_freeze
+    after: phase_7_complete_flag
+    pane: 0
+    template: assets/marching-orders/MO-08-freeze.md
+    params:
+      PANE_N: 0
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+      SKILL_SCRIPTS: ./scripts
+
+outputs:
+  - resume_md: ${workspace_path}/deliverables/RESUME.md

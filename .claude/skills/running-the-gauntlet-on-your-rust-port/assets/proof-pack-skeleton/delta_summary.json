@@ -1,0 +1,56 @@
+{
+  "schema_version": "gauntlet.proof_pack_delta.v1",
+  "bead_id": "<bd-...>",
+  "candidate_name": "<short-kebab-case>",
+  "target_workload": "<bench-name + args>",
+  "baseline": {
+    "git_sha": "<sha>",
+    "samply_json": "baseline_profile.samply.json",
+    "flamegraph_svg": "baseline_profile.flame.svg",
+    "top_frame": {"symbol": "...", "self_pct": 0.0, "inclusive_pct": 0.0},
+    "primary_score": 0.0,
+    "cv_pct": 0.0,
+    "iters": 0,
+    "platform": "...",
+    "rustflags": "...",
+    "feature_flags": "...",
+    "mode": "release-perf"
+  },
+  "candidate": {
+    "git_sha": "<sha>",
+    "samply_json": "candidate_profile.samply.json",
+    "flamegraph_svg": "candidate_profile.flame.svg",
+    "top_frame": {"symbol": "...", "self_pct": 0.0, "inclusive_pct": 0.0},
+    "primary_score": 0.0,
+    "cv_pct": 0.0,
+    "iters": 0,
+    "platform": "...",
+    "rustflags": "...",
+    "feature_flags": "...",
+    "mode": "release-perf"
+  },
+  "delta": {
+    "primary_score_pct": 0.0,
+    "throughput_pct": 0.0,
+    "p99_latency_pct": 0.0,
+    "closed_frames": [
+      {"symbol": "...", "self_pct_before": 0.0, "self_pct_after": 0.0, "delta_pct": 0.0}
+    ]
+  },
+  "mt8_attribution": {
+    "frame": "...",
+    "self_pct_closed": 0.0,
+    "citation": "Closed 0.X% MT8 <symbol> residual"
+  },
+  "gates": {
+    "primary_score_within_threshold": true,
+    "geomean_within_threshold": true,
+    "per_category_within_threshold": true,
+    "p90_within_threshold": true,
+    "throughput_within_threshold": true,
+    "cv_pct_below_5": true,
+    "both_gates_same_run_window": true,
+    "ev_score_geq_2": true,
+    "one_lever_scope": true
+  }
+}

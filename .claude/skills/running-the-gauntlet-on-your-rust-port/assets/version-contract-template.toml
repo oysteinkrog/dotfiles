@@ -1,0 +1,166 @@
+# <REFERENCE>_version_contract.toml — pinned reference version contract
+#
+# Copied by scope-decider in Phase 2 to docs/contracts/ in the target project.
+# Substitute every <TOKEN> with the actual value for your project + class.
+#
+# This file is the source of truth for "which reference version are we testing
+# against?" Every artifact in the gauntlet embeds the contract's SHA-256 so a
+# silent drift (e.g., a CI image bump that changes the reference binary
+# version) is caught by oracle-preflight-doctor.sh on the next run.
+
+schema_version = "gauntlet.version_contract.v1"
+
+# ---------------------------------------------------------------------------
+# [reference] — what we're testing against
+# ---------------------------------------------------------------------------
+
+[reference]
+name = "<REFERENCE_NAME>"                  # e.g. "sqlite", "redis", "torch", "numpy"
+version = "<PINNED_VERSION>"               # e.g. "3.52.0", "7.2.5", "2.1.2", "1.26.0"
+source_url = "<DOWNLOAD_URL>"              # e.g. "https://www.sqlite.org/2024/sqlite-amalgamation-3520000.zip"
+source_sha256 = "<SHA256_OF_SOURCE_TARBALL>"
+
+# How the subject communicates with the reference. One of:
+#   "linked"       — via FFI / libffi / linked C library (SQL-class via libsqlite3-sys)
+#   "vendored"     — vendored binary executed in a subprocess (RESP-class via redis-server)
+#   "pyo3-bridge"  — in-process Python via PyO3 (Numerical / ML / Python-reference classes)
+#   "http-replay"  — recorded HTTP transcripts (HTTP-class fixture corpus)
+vendor_method = "<linked|vendored|pyo3-bridge|http-replay>"
+
+# Optional: build flags / configure arguments for vendored / linked builds.
+build_flags = []
+configure_args = []
+
+# Optional: declarations for per-class extras.
+[reference.extras]
+# SQL-class: sqlite extensions to compile in
+# enable_fts5 = true
+# enable_rtree = true
+# enable_json1 = true
+#
+# RESP-class: module set + cluster mode
+# modules = ["RedisJSON", "RedisSearch"]
+# cluster_mode = false
+#
+# ML-class: CUDA/cuDNN/driver fingerprint
+# cuda_version = "12.2"
+# cudnn_version = "8.9.5"
+# driver_version = "535.104.05"
+# determinism_flags = ["torch.use_deterministic_algorithms(True)"]
+# dtype_policy = "float32"
+# rng_seed_policy = "torch.manual_seed(42); numpy.random.seed(42); random.seed(42)"
+#
+# Numerical-Python-class: SIMD + BLAS
+# simd_flags = ["avx2", "fma"]
+# blas_impl = "openblas"
+# blas_threads = 1
+# rng_state_policy = "PCG64DXSM-bit-exact"
+#
+# HTTP-class: framework version + middleware stack hash
+# framework = "fastapi"
+# framework_version = "0.110.0"
+# middleware_stack_hash = "<sha256 of canonical middleware ordering>"
+
+# ---------------------------------------------------------------------------
+# [fixture_corpus] — what we're testing it against
+# ---------------------------------------------------------------------------
+
+[fixture_corpus]
+manifest_sha256 = "<SHA256_OF_FIXTURE_MANIFEST_FILE>"
+fixture_directory = "<RELATIVE_PATH_FROM_PROJECT_ROOT>"   # e.g. "tests/fixtures/"
+
+# Cardinality floors — the oracle-preflight-doctor refuses to certify if the
+# corpus shrinks below these counts (catches accidentally-deleted fixtures).
+[fixture_corpus.cardinality_floors]
+# SQL-class: minimum SQL fixture count per category
+# null_semantics_min = 50
+# group_by_min = 30
+# join_min = 100
+# window_function_min = 40
+# pragma_introspection_min = 20
+# ...
+# RESP-class:
+# command_min = 200
+# pipeline_min = 50
+# pubsub_min = 20
+# ...
+# Per-class — fill in from references/taxonomy/PROJECT-CLASSES.md.
+
+# Required category families — every entry must be represented in the corpus.
+[fixture_corpus.required_category_families]
+# SQL-class:
+# families = ["null_semantics", "three_valued_logic", "group_by_having", "recursive_cte",
+#             "join_type", "trigger", "returning", "generated_columns", "window_function",
+#             "pragma", "like_glob_escape", "subquery", "numeric_arithmetic", "blob_io",
+#             "foreign_key", "check_constraint", "conflict_resolution", "compound_select",
+#             "default_value", "attach_temp", "alter_table_rename"]
+families = []
+
+# Hash-locked roots — fixture directories whose top-level content hash is pinned.
+# A drift in this hash triggers the oracle-preflight-doctor red verdict.
+[[fixture_corpus.hash_locked_roots]]
+path = "<RELATIVE_PATH>"
+expected_content_hash = "<SHA256>"
+
+# File-extension allowlist — what counts as a fixture.
+[fixture_corpus.included_extensions]
+# SQL-class: ["sql", "db", "csv", "json", "snap"]
+# RESP-class: ["resp", "rdb", "aof", "json"]
+# Numerical: ["npy", "npz", "json"]
+# ML: ["pt", "safetensors", "json"]
+# HTTP: ["http", "json", "yaml"]
+extensions = []
+
+minimum_included_files = 0    # red verdict if corpus has fewer
+
+# ---------------------------------------------------------------------------
+# [engine_identity] — Subject vs Oracle discriminator (K-9 in KERNEL.md)
+# ---------------------------------------------------------------------------
+
+[engine_identity]
+subject_identity_label = "<PORT_NAME>"               # e.g. "frankensqlite"
+reference_identity_label = "<REFERENCE_NAME>-oracle" # e.g. "csqlite-oracle"
+
+# The oracle-preflight-doctor asserts these strings are present AND distinct on
+# every artifact emission. Prevents the failure mode "agent accidentally wired
+# the oracle's executor to both sides and got 100% pass".
+
+# ---------------------------------------------------------------------------
+# [pragmas] — settings applied to BOTH engines identically before workload
+# ---------------------------------------------------------------------------
+# Per K-4 (both gates same run window) and the comprehensive_bench identical-
+# PRAGMAs rule, the reference and subject must run with byte-identical config.
+# Project-class-specific defaults below.
+
+[pragmas]
+# SQL-class defaults (FrankenSQLite-pinned):
+# journal_mode = "wal"
+# synchronous = "NORMAL"
+# cache_size = -2000          # negative = KiB
+# page_size = 4096
+# foreign_keys = true
+# RESP-class defaults:
+# protocol_version = 3
+# persistence = "aof+rdb"
+# maxmemory_policy = "noeviction"
+# ML-class defaults:
+# torch_use_deterministic_algorithms = true
+# torch_set_num_threads = 1
+# cuda_deterministic = true
+# Numerical defaults:
+# numpy_seterr = "raise"
+# blas_set_num_threads = 1
+# HTTP defaults:
+# request_timeout_ms = 30000
+# max_body_size_bytes = 1048576
+
+# ---------------------------------------------------------------------------
+# [contract_metadata]
+# ---------------------------------------------------------------------------
+
+[contract_metadata]
+created_at_utc = "<ISO_8601>"
+created_by_agent = "scope-decider"
+ratchet_floor_at_creation = 0.0     # initial conformal lower bound (will be updated)
+# Increments on every scope-decider re-run (e.g., after a reference version bump).
+revision = 1

@@ -2,6 +2,13 @@
 
 <!-- TOC: Dispatch & Prompt (AP-1..6) | Observation & Monitoring (AP-7..12) | Pane Lifecycle (AP-13..18) | Coordination (AP-19..24) | Scale & Cadence (AP-25..28) | Dev-Loop (AP-29..33) | Meta/Orchestrator (AP-34..38) | Convergence Language Dictionary | How To Extend -->
 
+## Contents
+
+- Dispatch, prompt, observation, pane lifecycle, and coordination failures
+- Scale/cadence, dev-loop, and orchestrator anti-patterns
+- Convergence and handoff-failure language dictionaries
+- Extension format for promoting repeated field failures into named entries
+
 Every entry is a pattern observed in real swarm sessions. Organized by where in the orchestration flow they occur. Fix each by following the linked operator card or recipe.
 
 ---
@@ -240,7 +247,7 @@ Every entry is a pattern observed in real swarm sessions. Organized by where in 
 
 **Root cause.** No cron/schedule automation.
 
-**Fix.** OC-022: Use `CronCreate`, `/loop`, or shell cron once orchestrating ≥30 min.
+**Fix.** OC-022: Use `CronCreate`, `/loop` if available, or shell cron once orchestrating ≥30 min.
 
 ### AP-28: Over-Nudging A Converged Swarm
 
@@ -312,11 +319,12 @@ Every entry is a pattern observed in real swarm sessions. Organized by where in 
 
 **Root cause.** Old docs or training data using pre-rename flags.
 
-**Fix.** See ROBOT-MODE.md deprecated → canonical table. Verify via `--robot-help=<surface>`.
+**Fix.** See ROBOT-MODE.md deprecated → canonical table. Verify via
+`ntm --robot-capabilities` or `ntm --robot-docs=commands`.
 
 ### AP-36: Cursor Held Across Long Waits
 
-**Symptom.** `ntm --robot-events --cursor=<old>` returns `CURSOR_EXPIRED` after sleeping for >1h.
+**Symptom.** `ntm --robot-events --since-cursor=<old>` returns `CURSOR_EXPIRED` after sleeping for >1h.
 
 **Root cause.** Cursor is GC'd after ~1 hour.
 
@@ -326,7 +334,7 @@ Every entry is a pattern observed in real swarm sessions. Organized by where in 
 
 **Symptom.** Reassigned a bead that was already closed 10 min ago; wasted the tick.
 
-**Root cause.** Used snapshot's bead list without checking `source_health.beads.status`.
+**Root cause.** Used snapshot's bead list without checking `sources` / `degraded_sources` for the bead source.
 
 **Fix.** OC-012: Source-health check before every state-changing action.
 
@@ -358,6 +366,225 @@ When multiple panes produce these phrases across 2+ consecutive ticks AND git lo
 - "all conditions met"
 
 None of these are a substitute for a commit SHA. If the pane can't name a SHA from this tick, it did no new work.
+
+### Handoff-Failure Language (distinct from convergence — see AP-42 below)
+
+These phrases mean the agent *finished the code* but then *parked* instead of validating/closing. They look like success but require a specific re-dispatch (OC-036), not just convergence-termination.
+
+- "Ready for validation"
+- "Ready for review"
+- "MISSION ACCOMPLISHED"
+- "Successfully identified and optimized"
+- "Awaiting review"
+- "Awaiting validation"
+- "Handing off to …"
+- "All done, please verify"
+
+Treat each of these as a dispatch trigger, not an off-switch.
+
+---
+
+## Late-Additions From Real Sessions (AP-39+)
+
+Promoted from post-session notes after being observed ≥3 times across independent swarms. Same format: symptom → root cause → fix.
+
+### AP-39: `--robot-restart-pane` Mistook For Auto-Relaunch
+
+**Symptom.** Operator runs `--robot-restart-pane --restart-prompt="…"`; pane appears "restarted" but the agent never boots; the restart-prompt text shows as a zsh error (e.g. `zsh: no matches found: …`).
+
+**Root cause.** `--robot-restart-pane` uses `tmux respawn-pane -k`, which drops the pane to bare zsh. `--restart-prompt` is handed to zsh, not to the not-yet-launched agent CLI.
+
+**Fix.** OC-027: Two-step relaunch. After restart-pane, explicitly `tmux send-keys "cc" Enter` (or cod/gmi), wait ~10s, then `ntm --robot-send` the marching orders.
+
+### AP-40: Hardcoded `:0` Window Index
+
+**Symptom.** `tmux send-keys -t <session>:0.N "…"` silently fails; the keypress never lands; operator keeps retrying into a bit bucket.
+
+**Root cause.** `~/.tmux.conf` sets `base-index 1` / `pane-base-index 1`. There is no window `:0`.
+
+**Fix.** OC-028: `WIN=$(tmux list-windows -t <session> -F '#{window_index}' | head -1)` at the top of every direct-tmux code path. Then address `:${WIN}.<pane>`.
+
+### AP-41: `--robot-tail` As Ground Truth After An Action
+
+**Symptom.** Operator just sent `"2" Enter` to dismiss a `/rate-limit-options` dialog. `--robot-tail` shows the dialog still on screen. Operator re-sends; nothing changes.
+
+**Root cause.** `--robot-tail` can sample cached / stale buffer content for several ticks on transient states (dialog transitions, keypress echoes).
+
+**Fix.** After any state-changing keypress, verify with `tmux capture-pane -t <session>:<win>.<pane> -p -S -20` instead of `--robot-tail`. `--robot-tail` is for bulk surveys; `capture-pane` is for single-pane ground truth.
+
+### AP-42: Timer Labels Trusted As Activity
+
+**Symptom.** Orchestrator sees "Cogitated for 35m" / "Worked for 1h 39m" and either (a) redirects a productive pane mid-work, or (b) leaves a silently-stuck pane alone thinking it's busy.
+
+**Root cause.** The timer labels are display artifacts; they don't always advance in sync with actual activity (they can freeze during passive waits, or persist across productive ticks).
+
+**Fix.** Cross-reference with `git log --since='15 minutes ago' --oneline | wc -l` and `pgrep -af 'cargo|rustc|go|bun'` before believing the timer. See OBSERVABILITY.md "Liveness Signals That Can Lie".
+
+### AP-43: "Ready For Validation" Misread As Success
+
+**Symptom.** Pane emits "MISSION ACCOMPLISHED", "Ready for validation via rch exec …", or "Successfully identified and optimized" — operator treats bead as done; hours later, nothing is closed or pushed.
+
+**Root cause.** The agent finished code in-memory but parked itself waiting for external validation. Convergence language, not completion.
+
+**Fix.** OC-036: Detect handoff-language (see dictionary above) as its own state; dispatch the self-close nudge ("validate your own work now: commit, push, close bead"). Done = OC-025.
+
+### AP-44: Single-Enter For Multi-Line Codex Paste
+
+**Symptom.** `ntm --robot-send --type=codex` returns `"success": true`; pane tail shows the prompt sitting in the input buffer; agent never starts thinking.
+
+**Root cause.** Codex treats pastes as multi-line edits; one Enter inserts a newline, a second actually submits. Sometimes three are needed for long prompts.
+
+**Fix.** OC-037: Bake a trailing multi-Enter loop (2-3 Enters, 2s apart) into every codex dispatch, then verify via `capture-pane` that a working/thinking indicator appeared.
+
+### AP-45: Auto-"1" / Auto-Accept On Destructive Dialogs
+
+**Symptom.** Pane proposes "Remove lock file?" / "Force-push?" / "Delete stale dir?" and the orchestrator loop's "accept default" path says yes; work or infrastructure disappears.
+
+**Root cause.** Orchestrator assumed all dialogs are benign confirm-to-continue prompts.
+
+**Fix.** OC-040: Regex-detect destructive keywords in the dialog text; default to "No" (option "3" or equivalent); re-prompt the agent to justify and propose a non-destructive alternative. Respect AGENTS.md RULE 1.
+
+### AP-46: Parallel Heavy-Skill Broadcast To ALL Agents
+
+**Symptom.** `ntm --robot-send --all --msg="apply /library-updater"` kicks off 7 parallel `cargo update` runs; lockfile thrashing; crates.io rate-limits; zero net commits.
+
+**Root cause.** Heavy skills that touch shared state (workspace Cargo.lock, package-lock.json, global caches) don't parallelize safely.
+
+**Fix.** Stagger or scope: dispatch `/library-updater` to one pane at a time, or scope it to specific sub-crates per pane. Same rule for `/security-audit-for-saas` across adjacent modules (see AP-48).
+
+### AP-47: Reflexive `/clear` On Productive High-Context Pane
+
+**Symptom.** Orchestrator sees context >400k, dispatches `/clear` reflexively; pane was mid-bead, loses the working set, reopens same bead an hour later from scratch.
+
+**Root cause.** Threshold-only triggering without checking if the pane is actively producing.
+
+**Fix.** Gate `/clear` on both "context high" AND "pane is between beads" signals. Look for the "What do you want to do next?" prompt OR a recent `br close` before dispatching `/clear`. High-context panes still landing commits should be left alone until they naturally hand off.
+
+### AP-48: Cluster-Bury From Parallel Security Audits
+
+**Symptom.** Two panes run `/security-audit-for-saas` on adjacent modules simultaneously; swarm backlog jumps by 15+ HIGH-severity beads in one tick; implementer pool can't keep up; everything else stalls.
+
+**Root cause.** Audit-family skills produce clustered findings — a single systemic weakness often surfaces as 5-10 beads. Running them in parallel multiplies the burst.
+
+**Fix.** Serialize audit-family skills across a swarm (one at a time), OR bound the burst: "file at most N beads per tick; queue the rest." See also PLAYBOOK.md close/review ratio for draining spikes.
+
+### AP-49: Cross-Session Zombie Builds Hold Registry Locks
+
+**Symptom.** Fresh swarm's builds stall on "waiting for file lock on registry"; no process in your own session obviously holds it; restarting your panes doesn't clear it.
+
+**Root cause.** Parasitic `cargo` / `br` / `rsync` processes from closed terminals or dead worktrees kept running and hold cross-session file locks. Can outlive their session by hours or days.
+
+**Fix.** OC-031: `pgrep -af 'cargo|br|rsync'`, check `/proc/<pid>/cwd`, kill any PID whose cwd is NOT in your live swarm's working dirs. Include D-state processes (`ps -eo pid,stat,etime,comm | awk '$2 ~ /D/'`) — they're uninterruptible but still block SQLite writes.
+
+### AP-50: Absolute Disk-% Threshold Fires Too Late
+
+**Symptom.** Disk hits 80%; fuzz corpus write fails mid-run; hours of fuzzing lost.
+
+**Root cause.** Threshold-only alerting misses the runaway trajectory that preceded the cliff.
+
+**Fix.** Track delta-per-tick and warn early. OBSERVABILITY.md "Disk trajectory beats absolute threshold": warn at ≥50% if delta >3pp/tick. Combine with OC-032 per-pane isolated `CARGO_TARGET_DIR` so targeted sweeps work.
+
+### AP-51: `--no-cass-check` Flag Confusion
+
+**Symptom.** `ntm --robot-send --no-cass-check …` fails with "unknown flag".
+
+**Root cause.** `--no-cass-check` is valid on `ntm send` but NOT on `ntm --robot-send` — different parsers, different parser rules.
+
+**Fix.** Remember the parser split:
+
+| Use case | Correct form |
+| --- | --- |
+| Bypass CASS dupe check in orchestrator loop | `ntm send … --no-cass-check …` |
+| Non-interactive dispatch (no CASS check by design) | `ntm --robot-send …` (no flag needed) |
+
+`--robot-send` is already non-interactive, so the flag is redundant and rejected.
+
+### AP-52: dcg Blocks Dispatch Because The Prompt TEXT Contains `rm -rf`
+
+**Symptom.** `ntm --robot-send` fails because the prompt TEXT contains a destructive substring the operator is sending AS CONTENT to describe what an agent should do (e.g. "tell the agent to clean its incremental dir" containing literal `rm -rf`).
+
+**Root cause.** dcg's PreToolUse filter matches on the full command string; it can't tell "executable text" from "message content."
+
+**Fix.** Write dispatch strings in prose that avoids destructive literals: `"cargo clean -p <crate>"` / `"prune the incremental cache"` instead of `"rm -rf target/debug/incremental"`. Same rule for SQL DROP, git reset --hard, etc. in dispatch payloads.
+
+### AP-53: `bv` / `br` JSON Schema Drift Across Projects
+
+**Symptom.** A pipeline that works on project A breaks on project B with "null output / empty array"; running manually shows both projects have data.
+
+**Root cause.** Older beads exports return `{issues: [...]}` at the top level; newer exports return `[...]` directly. Project A and B may be on different versions.
+
+**Fix.** Write jq that handles both shapes:
+
+```bash
+br list --json | jq 'if type=="object" then .issues else . end | .[]'
+bv --robot-triage | jq 'if has("recommendations") then .recommendations else .issues // . end'
+```
+
+### AP-54: Waiting For Background Terminal ≠ Stuck
+
+**Symptom.** Pane shows "• Waiting for background terminal" for 60+ minutes; operator restarts it; kills in-flight `rustc` chaining that would have finished in another 10 min; loses 15-30 min of already-done compile work.
+
+**Root cause.** Long rustc chains look identical to a hung shell from the outside.
+
+**Fix.** Before restarting any "waiting for background terminal" pane, check `ps -fp $(tmux display -p -t <session>:<win>.<pane> '#{pane_pid}') -o pid,pcpu,etime,comm` AND `pgrep -af rustc` activity on the box. Rule: restart eligible only if >20 min wait AND no rustc PIDs have moved (verified by `ps ... --sort=+etime` snapshots across two observations).
+
+### AP-55: Placeholder Suggestions Misread As Stuck
+
+**Symptom.** Codex idle pane shows placeholder suggestions like `Summarize recent commits` / `Explain this codebase`; operator treats this as "waiting for prompt" and nudges, even when a real dispatch is already in flight on that pane.
+
+**Root cause.** Those are codex's idle-state hints, not a waiting-for-input signal.
+
+**Fix.** Authoritative signals: `• Working …` or `• Waiting for background terminal` prefix lines mean busy. Presence of placeholder suggestions alone means "idle, but not necessarily stuck or awaiting nudge — check dispatch history first."
+
+### AP-56: Skill Rotation Without Session-Wide De-Dup
+
+**Symptom.** Pane receives `/testing-metamorphic` in round 1, `/mock-code-finder` in round 2, `/testing-metamorphic` again in round 4; round-4 dispatch returns "Already covered, no bead filed" — wasted tick.
+
+**Root cause.** Rotation logic de-duped per tick but not across the session's history.
+
+**Fix.** OC-041: Maintain per-pane skill-history across the whole session; round-robin against the pool with recent-N exclusion. Reset only when the pool is exhausted.
+
+### AP-57: zsh Silent Failure On Associative Arrays
+
+**Symptom.** A dispatch loop with `declare -A NUDGES=(...)` completes without error, but no nudges actually land.
+
+**Root cause.** The Bash tool runs zsh; zsh's `declare -A` behaves differently from bash's and can silently accept and ignore certain syntactic forms.
+
+**Fix.** For orchestrator loops that use bash associative arrays, wrap the whole loop in `bash -c '…'` (or use plain parallel arrays / newline-delimited string parsing).
+
+---
+
+### AP-58: Queue-Dry Ideation Without The Guard
+
+**Symptom.** `br ready` is empty, so the operator immediately runs an ideation/create flow and seeds duplicate or low-value beads.
+
+**Root cause.** Treating "no ready work" as "invent work" instead of distinguishing dry queue, stale tracker state, blocked graph, and degraded coordination.
+
+**Fix.** OC-043: run `br ready --json`, `bv --robot-triage`, then `ntm work queue-dry --format=json`. Create beads only after reviewing the non-mutating ideation guard.
+
+### AP-59: Pressure-Blind Bulk Assignment
+
+**Symptom.** Ten panes receive fresh work; five minutes later the machine is slower, RCH is queued, quota walls appear, and no commits land.
+
+**Root cause.** Assignment fanout ignored resource pressure, build pressure, provider quota, and reservation contention.
+
+**Fix.** OC-044: check `--robot-agent-health`, `--robot-rch-status`, `--robot-quota-status`, and lock state before broad dispatch. Reduce `--limit`, route only blocker-clearing work, or switch provider pools.
+
+### AP-60: Remembered Pane Index As Target Truth
+
+**Symptom.** A nudge lands in the wrong pane or the user shell after a restart/retile/base-index change.
+
+**Root cause.** Operator remembered `session:0.N` from an earlier tick and reused it without verifying live tmux pane identity.
+
+**Fix.** OC-045: query `tmux list-panes` and NTM robot identity immediately before raw `tmux send-keys`. Prefer NTM robot/serve paths that resolve by stable pane identity.
+
+### AP-61: Integration Command Folklore
+
+**Symptom.** Agents debug `dcg check`, stale robot flags, or an imagined NTM-driven RCH build path.
+
+**Root cause.** Using memory of a helper's command shape instead of the current registry/tool contract.
+
+**Fix.** OC-046: query `ntm --robot-capabilities`, use `ntm --robot-dcg-check --command=...`, and run heavy builds through `rch exec -- <cmd>` when repo rules require it.
 
 ---
 

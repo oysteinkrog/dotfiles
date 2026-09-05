@@ -1,0 +1,96 @@
+schema_version: "2.0"
+name: brennerbot-resume
+description: Resume a brennerbot session from RESUME.md. Verifies hashes, restores ntm checkpoint, re-attaches Agent Mail threads, dispatches MO-resume.md per pane.
+
+inputs:
+  - workspace_path
+  - resume_path           # path to RESUME.md
+  - mode_to_resume        # overrides RESUME.md.mode_to_resume if set
+
+steps:
+  - id: dry_run_verify
+    # NTM command-step `args:` become environment variables, not CLI flags.
+    # Inline the script flags so the dry-run validates the requested RESUME.md.
+    command: ./scripts/resume-session.sh --dry-run --resume=${resume_path}
+    on_failure: abort   # invalid RESUME.md
+
+  - id: parse_resume
+    after: dry_run_verify
+    command: ./scripts/parse-resume.sh --resume=${resume_path} --output=/tmp/resume-parsed.json
+
+  - id: restore_checkpoint
+    after: parse_resume
+    command: ntm checkpoint restore $(jq -r '.session_id' /tmp/resume-parsed.json) $(jq -r '.ntm_checkpoint_id' /tmp/resume-parsed.json) --force
+    on_failure: abort   # checkpoint restore failed; run resume-session.sh manually to fall back
+
+  - id: re_register_mail
+    after: restore_checkpoint
+    command: ./scripts/register-mail-identities.sh --project-key=${workspace_path} --session=$(jq -r '.session_id' /tmp/resume-parsed.json) --from-resume=/tmp/resume-parsed.json
+    on_failure: fallback_to_ntm_inbox
+
+  - id: dispatch_resume
+    after: re_register_mail
+    foreach_pane:
+      template: assets/marching-orders/MO-resume.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: $(jq -r '.session_id' /tmp/resume-parsed.json)
+        ROLE: ${pane.role}
+        DOMAIN: ${pane.domain}
+        LAST_THREAD: ${pane.last_thread}
+        LAST_PHASE_COMPLETED: $(jq -r '.last_phase_completed' /tmp/resume-parsed.json)
+        MODE_TO_RESUME: $(jq -r '.mode_to_resume' /tmp/resume-parsed.json)
+        NEXT_PHASE: $(jq -r '.next_phase' /tmp/resume-parsed.json)
+    parallel: true
+
+  - id: log_resume
+    after: dispatch_resume
+    command: ./scripts/log-resume.sh --workspace=${workspace_path} --resume-path=${resume_path}
+
+  # Then enter phase-specific dispatch per RESUME.md.mode_to_resume:
+  - id: phase_dispatch
+    after: log_resume
+    branch: $(jq -r '.mode_to_resume' /tmp/resume-parsed.json)
+    branches:
+      fresh-pass:
+        # Re-enter at next_phase; operator dispatches the phase's MO via dispatch-marching-order.sh
+        command: >-
+          echo "Resumed in fresh-pass mode; re-entering phase $(jq -r '.next_phase' /tmp/resume-parsed.json). Operator: dispatch the phase's standard MO."
+      targeted-investigation:
+        # Re-enter Phase 4 only on H-IDs in open_threads
+        foreach:
+          beads: $(jq -r '.open_threads[].bead' /tmp/resume-parsed.json)
+          template: assets/marching-orders/MO-04a-investigate.md
+          pane_assignment_strategy: round_robin
+          params:
+            PANE_N: ${pane.index}
+            H_ID: ${item}
+            SESSION_ID: $(jq -r '.session_id' /tmp/resume-parsed.json)
+        parallel: true
+      distillation-only:
+        # Re-enter Phase 6
+        foreach:
+          models: $(./scripts/list-distinct-model-families.sh)
+          template: assets/marching-orders/MO-06a-distill.md
+          pane_assignment_strategy: by_model_family
+          params:
+            PANE_N: ${pane.index}
+            MODEL_FAMILY: ${item}
+            SESSION_ID: $(jq -r '.session_id' /tmp/resume-parsed.json)
+            WORKSPACE_PATH: ${workspace_path}
+        parallel: true
+      audit-only:
+        # Re-enter Phase 7
+        foreach_pane:
+          template: assets/marching-orders/MO-07a-fresh-eyes.md
+          params:
+            PANE_N: ${pane.index}
+            SESSION_ID: $(jq -r '.session_id' /tmp/resume-parsed.json)
+        parallel: true
+      drift-check:
+        command: |
+          echo "drift-check mode: dispatch subagents/drift-auditor.md to a fresh general-purpose Agent."
+          echo "DO NOT run from a swarm pane (per AP-O11)."
+
+outputs:
+  - resumed_session: $(jq -r '.session_id' /tmp/resume-parsed.json)

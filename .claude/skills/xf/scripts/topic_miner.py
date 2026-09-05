@@ -30,7 +30,7 @@ def run_xf(args: list[str]) -> dict | list | None:
     """Run xf command and return parsed JSON."""
     try:
         result = subprocess.run(
-            ["xf"] + args,
+            ["xf", "-q"] + args,
             capture_output=True,
             text=True,
             timeout=60
@@ -124,10 +124,14 @@ def analyze_timeline(results: list) -> dict:
     }
 
 
-def mine_topic(topic: str, since: str = None) -> dict:
+def mine_topic(topic: str, since: str = None, *, verbose: bool = True) -> dict:
     """Comprehensive topic mining."""
-    print(f"Mining topic: {topic}")
-    print("-" * 50)
+    def progress(message: str = "") -> None:
+        if verbose:
+            print(message, file=sys.stderr)
+
+    progress(f"Mining topic: {topic}")
+    progress("-" * 50)
 
     report = {
         "topic": topic,
@@ -136,32 +140,32 @@ def mine_topic(topic: str, since: str = None) -> dict:
     }
 
     # 1. Your tweets
-    print("Searching tweets...")
+    progress("Searching tweets...")
     tweets = search(topic, types="tweet", limit=500, since=since)
     report["tweets"] = analyze_engagement(tweets)
-    print(f"  Found {len(tweets)} tweets")
+    progress(f"  Found {len(tweets)} tweets")
 
     # 2. Liked content
-    print("Searching likes...")
+    progress("Searching likes...")
     likes = search(topic, types="like", limit=500, since=since)
     report["likes"] = {
         "count": len(likes),
         "samples": [l["text"][:100] for l in likes[:5]]
     }
-    print(f"  Found {len(likes)} liked tweets")
+    progress(f"  Found {len(likes)} liked tweets")
 
     # 3. DM mentions
-    print("Searching DMs...")
+    progress("Searching DMs...")
     dms = search(topic, types="dm", limit=200, since=since)
     conv_ids = set(d.get("metadata", {}).get("conversation_id", "") for d in dms)
     report["dms"] = {
         "message_count": len(dms),
         "conversation_count": len(conv_ids - {""})
     }
-    print(f"  Found {len(dms)} DM messages in {len(conv_ids)} conversations")
+    progress(f"  Found {len(dms)} DM messages in {len(conv_ids)} conversations")
 
     # 4. Grok conversations
-    print("Searching Grok...")
+    progress("Searching Grok...")
     grok = search(topic, types="grok", limit=200, since=since)
     chat_ids = set(g.get("metadata", {}).get("chat_id", "") for g in grok)
     user_msgs = [g for g in grok if g.get("metadata", {}).get("sender") == "user"]
@@ -171,30 +175,30 @@ def mine_topic(topic: str, since: str = None) -> dict:
         "user_questions": len(user_msgs),
         "sample_questions": [g["text"][:100] for g in user_msgs[:5]]
     }
-    print(f"  Found {len(grok)} Grok messages in {len(chat_ids)} chats")
+    progress(f"  Found {len(grok)} Grok messages in {len(chat_ids)} chats")
 
     # 5. Related hashtags (from tweets)
-    print("Extracting hashtags...")
+    progress("Extracting hashtags...")
     hashtags = extract_hashtags(tweets)
     # Remove the search term itself if it's a hashtag
     topic_tag = topic.lower().strip("#")
     if topic_tag in hashtags:
         del hashtags[topic_tag]
     report["related_hashtags"] = dict(hashtags.most_common(20))
-    print(f"  Found {len(hashtags)} unique hashtags")
+    progress(f"  Found {len(hashtags)} unique hashtags")
 
     # 6. Related mentions
-    print("Extracting mentions...")
+    progress("Extracting mentions...")
     mentions = extract_mentions(tweets)
     report["related_mentions"] = dict(mentions.most_common(10))
-    print(f"  Found {len(mentions)} unique mentions")
+    progress(f"  Found {len(mentions)} unique mentions")
 
     # 7. Timeline
-    print("Analyzing timeline...")
+    progress("Analyzing timeline...")
     all_results = tweets + likes + dms + grok
     report["timeline"] = analyze_timeline(all_results)
 
-    print("-" * 50)
+    progress("-" * 50)
     return report
 
 
@@ -267,22 +271,35 @@ def main():
 
     # Check xf is available
     try:
-        subprocess.run(["xf", "doctor"], capture_output=True, timeout=5)
+        stats_check = subprocess.run(
+            ["xf", "-q", "-f", "json", "stats"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
     except FileNotFoundError:
         print("Error: 'xf' command not found. Please install xf first.", file=sys.stderr)
         sys.exit(1)
     except subprocess.TimeoutExpired:
-        print("Error: xf health check timed out.", file=sys.stderr)
+        print("Error: xf stats check timed out.", file=sys.stderr)
+        sys.exit(1)
+    if stats_check.returncode != 0:
+        stderr = stats_check.stderr.strip()
+        print(
+            f"Error: xf stats check failed{': ' + stderr if stderr else ''}.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Mine the topic
-    report = mine_topic(args.topic, since=args.since)
+    report = mine_topic(args.topic, since=args.since, verbose=not args.json)
 
     # Output
     if args.output:
         with open(args.output, "w") as f:
             json.dump(report, f, indent=2)
-        print(f"\nReport saved to: {args.output}")
+        if not args.json:
+            print(f"\nReport saved to: {args.output}")
 
     if args.json:
         print(json.dumps(report, indent=2))

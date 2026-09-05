@@ -1,0 +1,46 @@
+[package]
+name = "ub-syn-walkers"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits", "visit", "parsing"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+walkdir = "2"
+serde_json = "1"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "safety_doc_coverage"
+path = "src/bin/safety_doc_coverage.rs"
+
+[[bin]]
+name = "aliasing"
+path = "src/bin/aliasing.rs"
+
+[[bin]]
+name = "validity"
+path = "src/bin/validity.rs"
+
+[[bin]]
+name = "transmute_pairs"
+path = "src/bin/transmute_pairs.rs"
+
+[[bin]]
+name = "data_races"
+path = "src/bin/data_races.rs"
+
+[[bin]]
+# Source is src/bin/pin.rs but the binary is named `pin_walker` to avoid
+# visual confusion with the std `Pin` type and to match how README.md and
+# the syn-walker scripts/syn-walkers/README.md table refer to it.
+name = "pin_walker"
+path = "src/bin/pin.rs"
+
+[[bin]]
+name = "escape"
+path = "src/bin/escape.rs"

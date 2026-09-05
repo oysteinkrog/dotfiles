@@ -8,11 +8,22 @@ import sys
 from pathlib import Path
 
 
+COMMAND_TIMEOUT_SECONDS = 60
+
+
 def run(cmd: list[str], cwd: Path) -> str:
     try:
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError as exc:
         raise RuntimeError(f"command not found: {cmd[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"command timed out: {cmd[0]}") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "command failed")
     return result.stdout
@@ -20,8 +31,14 @@ def run(cmd: list[str], cwd: Path) -> str:
 
 def try_run(cmd: list[str], cwd: Path) -> str | None:
     try:
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    except FileNotFoundError:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
@@ -54,11 +71,12 @@ def github_repo_url(repo: Path) -> str | None:
     gh_out = try_run(["gh", "repo", "view", "--json", "url"], repo)
     if gh_out:
         try:
-            url = json.loads(gh_out)["url"]
-            if isinstance(url, str) and url:
-                return url
-        except Exception:
-            pass
+            gh_data = json.loads(gh_out)
+        except json.JSONDecodeError:
+            gh_data = None
+        url = gh_data.get("url") if isinstance(gh_data, dict) else None
+        if isinstance(url, str) and url:
+            return url
 
     remote = try_run(["git", "remote", "get-url", "origin"], repo)
     if not remote:
@@ -77,11 +95,12 @@ def github_repo_slug(repo: Path) -> str | None:
     gh_out = try_run(["gh", "repo", "view", "--json", "nameWithOwner"], repo)
     if gh_out:
         try:
-            slug = json.loads(gh_out)["nameWithOwner"]
-            if isinstance(slug, str) and slug:
-                return slug
-        except Exception:
-            pass
+            gh_data = json.loads(gh_out)
+        except json.JSONDecodeError:
+            gh_data = None
+        slug = gh_data.get("nameWithOwner") if isinstance(gh_data, dict) else None
+        if isinstance(slug, str) and slug:
+            return slug
 
     url = github_repo_url(repo)
     if url and url.startswith("https://github.com/"):
@@ -100,7 +119,7 @@ def github_releases(repo: Path) -> dict[str, dict[str, str]]:
 
     try:
         rows = json.loads(out)
-    except Exception:
+    except json.JSONDecodeError:
         return {}
     if not isinstance(rows, list):
         return {}
@@ -161,6 +180,9 @@ def is_git_repo(repo: Path) -> bool:
 
 
 def markdown(rows: list[dict[str, str]]) -> str:
+    def escape_cell(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
     lines = [
         "## Version Timeline",
         "",
@@ -172,7 +194,7 @@ def markdown(rows: list[dict[str, str]]) -> str:
     for row in rows:
         label = f"[`{row['version']}`]({row['url']})" if row["url"] else f"`{row['version']}`"
         lines.append(
-            f"| {label} | {row['kind']} | {row['date']} | {row['summary']} |"
+            f"| {label} | {escape_cell(row['kind'])} | {escape_cell(row['date'])} | {escape_cell(row['summary'])} |"
         )
     return "\n".join(lines) + "\n"
 

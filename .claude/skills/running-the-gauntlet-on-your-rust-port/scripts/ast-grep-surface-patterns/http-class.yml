@@ -1,0 +1,110 @@
+# http-class.yml — ast-grep rules for HTTP-Protocol-class port surface
+# (FastAPI / FastMCP-like)
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml \
+#                  -r scripts/ast-grep-surface-patterns/http-class.yml \
+#                  <port-src>
+
+id: route-handler-attr
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: pub fn $HANDLER($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        any:
+          - pattern: "#[route($$$)]"
+          - pattern: "#[get($$$)]"
+          - pattern: "#[post($$$)]"
+          - pattern: "#[put($$$)]"
+          - pattern: "#[delete($$$)]"
+          - pattern: "#[patch($$$)]"
+        stopBy: end
+message: "HTTP route handler: $HANDLER"
+severity: info
+
+---
+
+id: extractor-impl
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl FromRequest for $TY { $$$ }
+message: "Request extractor impl: $TY"
+severity: info
+
+---
+
+id: middleware-impl
+language: Rust
+rule:
+  kind: impl_item
+  any:
+    - pattern: impl Middleware for $TY { $$$ }
+    - pattern: impl Layer<$S> for $TY { $$$ }
+message: "Middleware/Layer impl: $TY"
+severity: info
+
+---
+
+id: handler-ext-struct
+language: Rust
+rule:
+  kind: struct_item
+  pattern: pub struct $NAME { $$$ HandlerExt $$$ }
+message: "HandlerExt-bearing struct: $NAME"
+severity: info
+
+---
+
+id: validation-error-impl
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl ValidationError for $TY { $$$ }
+message: "Validation error impl: $TY (OpenAPI surface)"
+severity: info
+
+---
+
+id: openapi-schema-attr
+language: Rust
+rule:
+  kind: struct_item
+  all:
+    - pattern: pub struct $TY { $$$ }
+    - has:
+        kind: attribute_item
+        pattern: "#[derive($$$ToSchema$$$)]"
+        stopBy: end
+message: "OpenAPI schema type: $TY"
+severity: info
+
+---
+
+id: mcp-tool-attr
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - pattern: pub fn $TOOL($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        pattern: "#[mcp_tool($$$)]"
+        stopBy: end
+message: "MCP tool: $TOOL"
+severity: info
+
+---
+
+id: cancel-token-await
+language: Rust
+rule:
+  kind: call_expression
+  any:
+    - pattern: $TOKEN.cancelled().await
+    - pattern: tokio::select! { _ = $TOKEN.cancelled() => $$$, $$$ }
+message: "Cancellation handling (cancel-correctness parity-critical)"
+severity: warning

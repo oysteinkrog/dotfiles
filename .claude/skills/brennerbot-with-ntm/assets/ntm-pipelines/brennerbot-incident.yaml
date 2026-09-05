@@ -1,0 +1,85 @@
+schema_version: "2.0"
+name: brennerbot-incident
+description: Compressed incident-investigation mode pipeline. Phase 1 + Phase 3 + Phase 4 inline with Phase 5 + Phase 7; ≤60-min wall budget; Pair tier (cc+cod). Output is INCIDENT-VERDICT.md, not standard HANDBACK.
+
+inputs:
+  - workspace_path
+  - session_id
+  - incident_description
+  - time_budget_minutes  # default 60
+
+defaults:
+  model_mix: "cc:1,cod:1"
+  hard_cap_minutes: 60
+
+steps:
+  - id: register_mail
+    command: ./scripts/register-mail-identities.sh --project-key=${workspace_path} --session=${session_id}
+    on_failure: fallback_to_ntm_inbox
+
+  - id: dispatch_compressed_incident
+    after: register_mail
+    foreach_pane:
+      template: assets/marching-orders/MO-incident-compressed.md
+      params:
+        WORKSPACE_PATH: ${workspace_path}
+        SESSION_ID: ${session_id}
+        INCIDENT_DESCRIPTION: ${incident_description}
+        TIME_BUDGET_MINUTES: ${time_budget_minutes}
+    parallel: true
+
+  - id: wait_for_acks
+    after: dispatch_compressed_incident
+    command: ./scripts/wait-for-onboard-acks.sh --session=${session_id} --timeout=300
+
+  - id: monitor_compressed
+    after: wait_for_acks
+    # Compressed mode runs Phase 1+3+5(with Phase 4 inline)+7 within MO-incident-compressed.md;
+    # the operator monitors via tick.sh on a tight cadence.
+    command: |
+      DEADLINE=$(( $(date +%s) + ${time_budget_minutes} * 60 ))
+      while [ $(date +%s) -lt $DEADLINE ]; do
+        ./scripts/tick.sh ${workspace_path} ${session_id} 2>&1 | tail -20
+        if [ -f ${workspace_path}/deliverables/INCIDENT-VERDICT.md ]; then
+          echo "Verdict produced; pipeline complete"
+          break
+        fi
+        sleep 300  # 5-min cadence
+      done
+
+  - id: render_verdict_skeleton
+    after: monitor_compressed
+    command: ./scripts/render-incident-verdict.sh --workspace=${workspace_path}
+
+  - id: dispatch_verdict_writer
+    after: render_verdict_skeleton
+    pane: 1
+    template: subagents/incident-verdict-writer.md
+    params:
+      WORKSPACE_PATH: ${workspace_path}
+      SESSION_ID: ${session_id}
+
+  - id: phase_8_partial_freeze
+    after: dispatch_verdict_writer
+    # Compressed Phase 8: just commit and snapshot. No full RESUME.md (incident verdicts are typically not resumed).
+    command: |
+      cd ${workspace_path}
+      br sync --flush-only
+      git add deliverables/INCIDENT-VERDICT.md evidence/ .beads/ .brenner_workspace/
+      git status
+      git commit -m "Incident verdict: ${session_id}" || true
+
+outputs:
+  - verdict: ${workspace_path}/deliverables/INCIDENT-VERDICT.md
+
+post_pipeline_steps:
+  - description: "Operator: review verdict; arrange post-mortem-formalization session within 24h"
+    command: |
+      echo "Verdict: ${workspace_path}/deliverables/INCIDENT-VERDICT.md"
+      echo "Recommended next: post-mortem-formalization mode session within 24h"
+      echo "  ./scripts/bootstrap-session.sh ${workspace_path}-postmortem 'Post-mortem for ${session_id}' --mode=fresh-question"
+
+notes:
+  - "Phases 2, 4, 6, 8 (full), 9 (handback), 10 (drift) are SKIPPED in incident mode."
+  - "If confidence is low at verdict time, the incident-verdict-writer subagent recommends a follow-up session."
+  - "Post-mortem-formalization mode is the deeper learning loop; this pipeline is operational triage."

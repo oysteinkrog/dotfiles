@@ -1,0 +1,10 @@
+id: rust-ub-get-unchecked
+language: rust
+severity: warning
+message: >-
+  get_unchecked / get_unchecked_mut requires the index to be in-bounds.
+  Out-of-bounds is UB.
+rule:
+  any:
+    - pattern: '$EXPR.get_unchecked($IDX)'
+    - pattern: '$EXPR.get_unchecked_mut($IDX)'

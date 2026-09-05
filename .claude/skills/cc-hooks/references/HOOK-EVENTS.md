@@ -285,7 +285,7 @@ LLM responds: `{"ok": true}` or `{"ok": false, "reason": "Tasks incomplete"}`
   "session_id": "string",
   "hook_event_name": "SessionStart",
   "source": "startup|resume|clear|compact",
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-6",
   "agent_type": "agent-name"
 }
 ```

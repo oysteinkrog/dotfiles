@@ -1,0 +1,19 @@
+id: rust-ub-await-holding-mutex
+language: rust
+severity: warning
+message: >-
+  Holding a std::sync::Mutex guard across an .await point is a deadlock hazard.
+  Use tokio::sync::Mutex or release the guard before awaiting.
+rule:
+  kind: function_item
+  has:
+    kind: let_declaration
+    pattern: 'let $GUARD = $MUTEX.lock().unwrap();'
+    stopBy: end
+    precedes:
+      pattern: '$EXPR.await'
+      stopBy: end
+note: >-
+  See clippy::await_holding_lock; this rule complements it for cases clippy misses.
+  ast-grep cannot express "across an await point" precisely; this approximates by
+  matching any function that contains both a `.lock().unwrap()` let and a later `.await`.

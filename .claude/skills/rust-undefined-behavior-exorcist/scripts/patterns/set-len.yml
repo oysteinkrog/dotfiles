@@ -1,0 +1,8 @@
+id: rust-ub-set-len
+language: rust
+severity: warning
+message: >-
+  Vec::set_len extends the length without initializing. Reading the new region
+  before writing is UB.
+rule:
+  pattern: '$VEC.set_len($LEN)'

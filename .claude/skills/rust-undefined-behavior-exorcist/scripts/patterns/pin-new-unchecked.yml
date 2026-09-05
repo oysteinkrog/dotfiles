@@ -1,0 +1,11 @@
+id: rust-ub-pin-new-unchecked
+language: rust
+severity: warning
+message: >-
+  Pin::new_unchecked promises that the value will never move. Audit that the
+  value cannot be moved out of this Pin, and that no other Pin can be made.
+rule:
+  any:
+    - pattern: 'Pin::new_unchecked($EXPR)'
+    - pattern: 'std::pin::Pin::new_unchecked($EXPR)'
+    - pattern: 'core::pin::Pin::new_unchecked($EXPR)'

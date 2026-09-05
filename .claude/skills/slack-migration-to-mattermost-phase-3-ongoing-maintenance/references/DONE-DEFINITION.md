@@ -53,7 +53,7 @@ as a whole is never done while the server is running.
 - `latest-restore-drill.json.status` is `ok`
 - scratch DB is recreated cleanly (no residue from previous drill)
 
-### `rotate-credentials`
+### `rotate-tokens`
 
 - old credential revoked (verified by 403 on old token / lock-out on old key)
 - new credential verified working (ping + PAT check)
@@ -75,7 +75,7 @@ Phase 3 accumulates these over time; operators can audit back 90 days on demand.
 - Per-stage `<stage>-<ts>.json` + `latest-<stage>.json` symlink
 - `reboot-history.json` (cumulative)
 - `restore-drill-history.json` (cumulative)
-- `rotate-credentials-audit.json` (cumulative)
+- `rotate-tokens-audit.json` (cumulative)
 - DR post-mortems under `workdir-phase3/reports/dr/` if any occurred
 
 ## Required Operational Outcomes
@@ -83,7 +83,7 @@ Phase 3 accumulates these over time; operators can audit back 90 days on demand.
 - Over any 30-day window, at least 28 daily backups with `verify_status=ok`
 - Over any 90-day window, at least 1 passing restore-drill
 - Over any 365-day window, at least 1 full DR drill against a fresh host
-- Over any 90-day window, at least 1 successful `rotate-credentials` for PAT
+- Over any 90-day window, at least 1 successful `rotate-tokens` for PAT
 - Zero stale security patches > 30 days old
 - Zero Mattermost versions > 2 patch releases behind for > 14 days
 

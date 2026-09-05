@@ -1,0 +1,329 @@
+schema_version: "2.0"
+name: gauntlet-phase-11-iterate
+description: >-
+  Phase 11 round-cycle, driven by the iteration-coordinator pane. Per round:
+  dispatch the parallel re-runners for harness expansion (Phases 5+6),
+  re-baselining (Phase 9), idea wizard + advanced-methods mining (Phase 10). Aggregate
+  per-bucket findings into round_<N>/synthesis.md. Run convergence-tracker.sh. Loop
+  until convergence is reached or max_rounds is hit. Convergence requires
+  >=10 rounds, >=2 consecutive clean rounds with <3 new genuine findings,
+  and zero open hypotheses across all four ledgers.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name
+    required: true
+    type: string
+  project_class:
+    description: SQL-class|RESP-class|Numerical-Python-class|ML-System-class|HTTP-Protocol-class
+    required: true
+    type: string
+  reference_version:
+    description: Pinned reference version
+    required: true
+    type: string
+  max_rounds:
+    description: Hard ceiling on iteration count (typically 20; convergence at >=10)
+    default: 20
+    type: number
+  min_rounds:
+    description: Minimum rounds before convergence is even checked
+    default: 10
+    type: number
+  rch_worker:
+    description: rch worker name for offload of long benches/baselines
+    default: ""
+    type: string
+
+settings:
+  timeout: 168h
+  on_error: continue
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail, desktop]
+
+steps:
+  - id: precheck
+    name: Verify Phase 9 round_0 complete and ratchet exists
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify:
+        ${vars.workspace_path}/.gauntlet/phase9_complete.flag exists
+        ${vars.workspace_path}/reports/ratchet_state.json exists
+        ${vars.workspace_path}/GAUNTLET_EXPERIMENT_DESIGNS.md exists
+        ${vars.workspace_path}/PERF_HYPOTHESIS_LEDGER.md exists
+        ${vars.workspace_path}/CONFORMANCE_HYPOTHESIS_LEDGER.md exists
+        ${vars.workspace_path}/SURFACE_PARITY_HYPOTHESIS_LEDGER.md exists
+
+      If anything missing, exit non-zero. Otherwise reply "Phase 11 iteration ready".
+    wait: completion
+    timeout: 5m
+    on_error: fail
+
+  - id: round_loop
+    name: Iterate rounds until convergence
+    depends_on: [precheck]
+    loop:
+      while: "${convergence.converged == false && convergence.round < vars.max_rounds}"
+      as: round_iter
+      max_iterations: 25
+      delay: 2m
+      collect: round_summaries
+      steps:
+        - id: start_round
+          agent: claude
+          pane: 2
+          prompt: |
+            Read ${vars.workspace_path}/reports/ratchet_state.json.
+            Compute next round number N = .round + 1 (start at 1).
+
+            Create directory ${vars.workspace_path}/round_${N}/.
+            Write ${vars.workspace_path}/round_${N}/dispatch.json with
+            the round-level plan (which buckets fan out this round, based
+            on the open hypothesis ledgers).
+
+            Set env ROUND=${N} for downstream steps and acknowledge:
+            "Phase 11 round ${N} dispatch starting".
+          wait: completion
+          timeout: 10m
+          output_var: round_dispatch_plan
+
+        - id: rerun_harness_expansion
+          depends_on: [start_round]
+          parallel:
+            - id: rerun_oracle_tests
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Re-run oracle-test-author for every behavior class with
+                an open NEEDS_REFINEMENT or NEW_HYPOTHESIS_SPAWNED entry in
+                CONFORMANCE_HYPOTHESIS_LEDGER.md.
+
+                For each, extend the existing _oracle_e2e.rs file with new
+                scenarios that probe the refinement. Commit incrementally.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-oracle`.
+              wait: completion
+              timeout: 4h
+              on_error: retry
+              retry_count: 1
+            - id: rerun_metamorphic
+              agent: codex
+              route: least-loaded
+              prompt: |
+                For each open metamorphic hypothesis in
+                CONFORMANCE_HYPOTHESIS_LEDGER.md, add a transform variant
+                that probes the gap.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-metamorphic`.
+              wait: completion
+              timeout: 3h
+              on_error: retry
+              retry_count: 1
+            - id: rerun_perf_micro
+              agent: claude
+              route: least-loaded
+              prompt: |
+                For each open perf hypothesis in PERF_HYPOTHESIS_LEDGER.md
+                with status NEEDS_REFINEMENT, add a focused per-workload
+                bench or refine an existing one. Commit incrementally.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-perf-micro`.
+              wait: completion
+              timeout: 4h
+              on_error: retry
+              retry_count: 1
+
+        - id: rerun_baselines
+          depends_on: [rerun_harness_expansion]
+          parallel:
+            - id: rerun_baseline_perf
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Re-run the cc_2 perf baseline (see Phase 9 perf marching order).
+                Same-window discipline: same git SHA, same target/, same
+                machine, same minute. If rch_worker="${vars.rch_worker}" is set
+                AND wall-time will exceed 5 minutes, dispatch via rch.
+
+                Update ${vars.workspace_path}/round_${ROUND}/baseline_perf.md
+                with the new LOWER bounds and the delta vs prior round.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-perf`.
+              wait: completion
+              timeout: 6h
+              on_error: retry
+              retry_count: 1
+            - id: rerun_baseline_conformance
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Re-run the cc_1 conformance baseline. Emit FailureBundle per
+                TrueDivergence; dedup by MismatchSignature; update
+                ${vars.workspace_path}/round_${ROUND}/baseline_conformance.md.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-conformance`.
+              wait: completion
+              timeout: 6h
+              on_error: retry
+              retry_count: 1
+            - id: rerun_baseline_surface
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Re-run the cc_3 surface baseline. Recompute LOWER bound;
+                update ${vars.workspace_path}/round_${ROUND}/baseline_surface.md.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-surface`.
+              wait: completion
+              timeout: 3h
+              on_error: retry
+              retry_count: 1
+
+        - id: idea_wizard_round
+          depends_on: [rerun_baselines]
+          parallel:
+            - id: idea_wizard
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Run the /idea-wizard Phase 2 prompt against the current
+                state. Generate 30 candidate ideas; triage to 5; then
+                generate 10 more. Write to
+                ${vars.workspace_path}/round_${ROUND}/idea_wizard.md.
+
+                File new entries into the appropriate hypothesis ledger
+                (PERF / CONFORMANCE / SURFACE) with hypothesis +
+                minimal-repro + expected-signal + falsifiability +
+                one-line-invocation + results-inline-stub.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-idea-wizard`.
+              wait: completion
+              timeout: 90m
+              on_error: continue
+            - id: advanced_methods
+              agent: claude
+              route: least-loaded
+              prompt: |
+                Run advanced-methods mining + frontier-math compilation against
+                the current state. Surface candidates that look superficially
+                clever but are actually already covered (in negative ledgers or
+                recently abandoned in cass). Write to
+                ${vars.workspace_path}/round_${ROUND}/advanced_methods.md.
+
+                Acknowledge on `gauntlet-${vars.run_id}-phase11-round-${ROUND}-advanced-methods`.
+              wait: completion
+              timeout: 60m
+              on_error: continue
+
+        - id: synthesize_round
+          depends_on: [idea_wizard_round]
+          agent: claude
+          pane: 2
+          prompt: |
+            Synthesize round ${ROUND} findings into
+            ${vars.workspace_path}/round_${ROUND}/synthesis.md with:
+              - new_divergence_count_by_classification
+              - new_hotspot_count_by_frame
+              - new_feature_gap_count_by_category
+              - new_experiment_design_count_by_source
+              - cross-pillar conflicts surfaced
+              - hypothesis state transitions this round
+
+            This file is the canonical "what we learned this round" document
+            and feeds convergence-tracker.sh.
+          wait: completion
+          timeout: 30m
+          on_error: retry
+          retry_count: 1
+
+        - id: run_convergence_tracker
+          depends_on: [synthesize_round]
+          agent: claude
+          pane: 2
+          prompt: |
+            Run:
+              cd ${vars.workspace_path} && \
+                ./scripts/convergence-tracker.sh ${vars.workspace_path}
+
+            Read reports/convergence_tracker.json and emit:
+              { "converged": bool,
+                "round_count": N,
+                "last_two_findings": [N1, N2],
+                "clean_last_two": bool,
+                "open_hypothesis_count": M }
+
+            Convergence rule:
+              converged == (round_count >= ${vars.min_rounds}) AND (clean_last_two == true) AND (open_hypothesis_count == 0)
+
+            If converged: post on `gauntlet-${vars.run_id}-phase11-coordinator`
+            with "CONVERGED at round ${ROUND}" and write
+            ${vars.workspace_path}/phase11_convergence.md.
+
+            Set output var `convergence` = the JSON object above so the
+            loop predicate can read it.
+          wait: completion
+          timeout: 15m
+          on_error: fail
+          output_var: convergence
+
+        - id: update_ratchet
+          depends_on: [run_convergence_tracker]
+          agent: claude
+          pane: 2
+          prompt: |
+            Run:
+              cd ${vars.workspace_path} && \
+                ./scripts/update-ratchet-state.sh \
+                  --round ${ROUND} \
+                  --perf round_${ROUND}/baseline_perf.md \
+                  --conformance round_${ROUND}/baseline_conformance.md \
+                  --surface round_${ROUND}/baseline_surface.md
+
+            The script enforces monotonicity (no metric LOWER bound may go
+            down without a dated waiver), updates reports/ratchet_state.json,
+            and appends to reports/ratchet_history.jsonl.
+
+            Commit:
+              git add reports/ratchet_state.json reports/ratchet_history.jsonl \
+                      round_${ROUND}/ && \
+              git commit -m "phase11 round ${ROUND}: convergence=${convergence.converged} last_two=${convergence.last_two_findings}"
+          wait: completion
+          timeout: 15m
+          on_error: fail
+
+  - id: emit_phase11_complete
+    name: Write phase11_convergence.md and emit phase-complete signal
+    depends_on: [round_loop]
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify ${vars.workspace_path}/phase11_convergence.md exists and
+      .converged == true. If max_rounds was hit without convergence, post
+      a CRITICAL on `gauntlet-${vars.run_id}-phase11-coordinator` and exit
+      non-zero (do NOT silently treat max_rounds as convergence).
+
+      Otherwise:
+        cd ${vars.workspace_path} && \
+          touch .gauntlet/phase11_complete.flag && \
+          git add .gauntlet/phase11_complete.flag phase11_convergence.md && \
+          git commit -m "phase11: convergence reached at round N"
+
+      Acknowledge: "Phase 11 ITERATE complete — proceed to Phase 12".
+    wait: completion
+    timeout: 10m
+    on_error: fail

@@ -1,0 +1,254 @@
+schema_version: "2.0"
+name: gauntlet-phase-09-baseline
+description: >-
+  Phase 9 three-pillar parallel baseline. Dispatches three baseline runners
+  (perf / conformance / surface) in parallel, each on its own cc_N lane, then
+  collects per-pillar baseline outputs into phase9_baseline_summary.md. The
+  bench-history first commits land in this phase; the keep-gate same-window
+  discipline starts here.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name
+    required: true
+    type: string
+  project_class:
+    description: SQL-class|RESP-class|Numerical-Python-class|ML-System-class|HTTP-Protocol-class
+    required: true
+    type: string
+  reference_version:
+    description: Pinned reference version (e.g. sqlite-3.52.0, redis-7.2.5)
+    required: true
+    type: string
+  rch_worker:
+    description: rch worker name for perf offload (single host, same-minute discipline)
+    default: ""
+    type: string
+
+settings:
+  timeout: 12h
+  on_error: fail
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail]
+
+steps:
+  - id: precheck_round_0
+    name: Verify Phases 5-8 outputs exist and this is round_0
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify these flags exist:
+        ${vars.workspace_path}/.gauntlet/phase5_complete.flag
+        ${vars.workspace_path}/.gauntlet/phase6_complete.flag
+        ${vars.workspace_path}/.gauntlet/phase7_complete.flag
+        ${vars.workspace_path}/.gauntlet/phase8_complete.flag
+
+      Verify NO ${vars.workspace_path}/.gauntlet/phase9_complete.flag yet — this
+      pipeline drives round_0 only.
+
+      Verify ${vars.workspace_path}/docs/progress/perf-negative-results.md,
+      conformance-negative-results.md, surface-deferrals.md all exist
+      (Phase 8 seeded them).
+
+      Acknowledge: "Phase 9 round_0 dispatch ready".
+    wait: completion
+    timeout: 5m
+    on_error: fail
+
+  - id: baseline_pillars
+    name: Three baseline runners in parallel — perf, conformance, surface
+    depends_on: [precheck_round_0]
+    parallel:
+      - id: baseline_perf
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are dispatched as the cc_2 perf baseline runner.
+
+          Read the marching order template:
+            ~/.claude/skills/running-the-gauntlet-on-your-rust-port/assets/ntm-marching-orders/MO-baseline-run.md
+
+          Substitute:
+            PANE_N         = your pane index
+            WORKSPACE_PATH = ${vars.workspace_path}
+            PORT_PATH      = ${vars.port_path}
+            ROLE           = baseline-runner-perf
+            MODEL          = claude-opus
+            COORDINATION_MODE = agent-mail
+            SESSION_ID     = ${vars.run_id}
+            PILLAR         = perf
+            PROJECT_CLASS  = ${vars.project_class}
+            REFERENCE_VERSION = ${vars.reference_version}
+            THREAD_ID      = gauntlet-${vars.run_id}-phase9-baseline-perf
+            RCH_WORKER     = ${vars.rch_worker}
+            ROUND          = 0
+
+          Strict requirements:
+            - Build release-perf profile only (never --release).
+            - Drop concurrent_mode_default_guard.txt (or class-equivalent) into the artifact lane BEFORE running benches.
+            - Run comprehensive_bench in full mode against subject + reference; emit JSON v3.
+            - Commit .bench-history/<family>.latest.json per family — both gates must move in the SAME run window (same git SHA, same target/, same machine, same minute).
+            - Capture flamegraph + samply + dhat + strace under MT8-equivalent load.
+            - Write ${vars.workspace_path}/phase9_baseline_perf.md with the five required sections.
+
+          If wall time >5 min, offload via `rch exec --worker ${vars.rch_worker} -- <cmd>`.
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase9-baseline-perf` when phase9_baseline_perf.md is committed.
+        wait: completion
+        timeout: 6h
+        on_error: retry
+        retry_count: 1
+        retry_delay: 5m
+        output_var: perf_result
+
+      - id: baseline_conformance
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are dispatched as the cc_1 conformance baseline runner.
+
+          Read MO-baseline-run.md and substitute:
+            PILLAR     = conformance
+            THREAD_ID  = gauntlet-${vars.run_id}-phase9-baseline-conformance
+            ROLE       = baseline-runner-conformance
+            (all other params as above)
+
+          Strict requirements:
+            - Run oracle-runner full suite against subject + oracle.
+            - Run differential_v2 corpus to completion.
+            - Run every metamorphic family.
+            - Emit FailureBundle per TrueDivergence with seed + schedule + repro.
+            - Dedup divergences by MismatchSignature.
+            - Write ${vars.workspace_path}/phase9_baseline_conformance.md with: pass-rate per behavior class, top divergences by frequency, top divergences by surprise (low expected probability), the FailureBundle file paths.
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase9-baseline-conformance` when committed.
+        wait: completion
+        timeout: 6h
+        on_error: retry
+        retry_count: 1
+        retry_delay: 5m
+        output_var: conformance_result
+
+      - id: baseline_surface
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are dispatched as the cc_3 surface baseline runner.
+
+          Read MO-baseline-run.md and substitute:
+            PILLAR     = surface
+            THREAD_ID  = gauntlet-${vars.run_id}-phase9-baseline-surface
+            ROLE       = baseline-runner-surface
+            (all other params as above)
+
+          Strict requirements:
+            - Load the FeatureUniverse from Phase 7 and verify weight invariant (sum per category == 1.0).
+            - Run feature_coverage_dashboard against subject vs ${vars.reference_version}.
+            - Apply Beta-posterior + conformal-band math; emit LOWER bound (not point estimate); truncate_score to 6 decimal places.
+            - Write ${vars.workspace_path}/phase9_baseline_surface.md with: per-family coverage verdict, present|partial|missing|n/a|excluded counts, weight-normalized parity score (with LOWER bound), excluded-as-debt tally for strict-100% claim, every weak-evidence bead the dashboard flagged.
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase9-baseline-surface` when committed.
+        wait: completion
+        timeout: 3h
+        on_error: retry
+        retry_count: 1
+        retry_delay: 5m
+        output_var: surface_result
+    on_error: fail
+
+  - id: wait_pillar_acks
+    name: Verify all three per-pillar acks landed
+    depends_on: [baseline_pillars]
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify all three pillar threads contain a success ack:
+        ntm mail inbox ${vars.session_name} --json | \
+          jq '.threads[] | select(.id | startswith("gauntlet-${vars.run_id}-phase9-baseline-"))
+              | {thread: .id, ack: (.messages[-1].subject // "")}'
+
+      Each of the three phase9_baseline_<pillar>.md files must exist and be
+      non-empty. If any is missing, post CRITICAL and exit non-zero.
+
+      Acknowledge: "All three Phase 9 pillars baselined".
+    wait: completion
+    timeout: 15m
+    on_error: fail
+
+  - id: consolidate_summary
+    name: Synthesize phase9_baseline_summary.md from the three pillar reports
+    depends_on: [wait_pillar_acks]
+    agent: claude
+    pane: 2
+    prompt: |
+      Read all three:
+        ${vars.workspace_path}/phase9_baseline_perf.md
+        ${vars.workspace_path}/phase9_baseline_conformance.md
+        ${vars.workspace_path}/phase9_baseline_surface.md
+
+      Write ${vars.workspace_path}/phase9_baseline_summary.md with:
+        - One-line per-pillar verdict
+        - Per-pillar headline number (geomean ratio for perf, pass-rate for conformance, parity-score LOWER bound for surface)
+        - Cross-pillar conflict callouts (e.g. perf regressed AND conformance improved → cross-pillar trade investigation needed for Phase 11)
+        - Open hypothesis count per ledger (PERF/CONFORMANCE/SURFACE)
+        - Recommended Phase 10 idea-wizard prompt scope
+    wait: completion
+    timeout: 20m
+    on_error: retry
+    retry_count: 1
+
+  - id: init_ratchet_state
+    name: Write the initial reports/ratchet_state.json from round_0 LOWER bounds
+    depends_on: [consolidate_summary]
+    agent: claude
+    pane: 2
+    prompt: |
+      Initialize the ratchet:
+        cd ${vars.workspace_path} && \
+          jq -n --arg run "${vars.run_id}" --argjson round 0 \
+            '{run_id: $run, round: $round, ratchet: {}}' \
+            > reports/ratchet_state.json
+
+      Read phase9_baseline_perf.md to extract the per-category LOWER bounds.
+      Read phase9_baseline_conformance.md to extract pass-rate LOWER bounds.
+      Read phase9_baseline_surface.md to extract parity-score LOWER bound.
+
+      Populate reports/ratchet_state.json.ratchet with one key per metric
+      and value = current LOWER bound. Commit.
+
+      Acknowledge: "Ratchet state initialized at round_0 LOWER bounds".
+    wait: completion
+    timeout: 15m
+    on_error: fail
+
+  - id: close_phase
+    name: Commit and emit phase-complete signal
+    depends_on: [init_ratchet_state]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.workspace_path} && \
+          git add phase9_*.md reports/ratchet_state.json && \
+          git add ../<port>/.bench-history/ && \
+          git commit -m "phase9 round_0: baseline perf+conformance+surface; ratchet initialized" && \
+          touch ${vars.workspace_path}/.gauntlet/phase9_complete.flag
+
+      Acknowledge: "Phase 9 round_0 BASELINE complete — proceed to Phase 10".
+    wait: completion
+    timeout: 10m
+    on_error: fail

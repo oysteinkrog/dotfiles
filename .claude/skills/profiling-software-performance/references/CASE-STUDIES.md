@@ -12,7 +12,7 @@
 6. [Case 6 — bd-wwqen seven-round cumulative 1.5x campaign](#case-6--bd-wwqen-seven-round-cumulative-campaign)
 7. [Case 7 — Benchmark truthfulness audit (2026-03-19)](#case-7--benchmark-truthfulness-audit)
 8. [Case 8 — SmallText SSO + 14 named optimization commits](#case-8--smalltext-sso-string-optimization)
-9. [Case 9 — Concurrent writer 4.35× over C SQLite](#case-9--concurrent-writer-4-35)
+9. [Case 9 — Concurrent writer 4.35× over C SQLite](#case-9--concurrent-writer-435-win)
 10. [Case 10 — Cross-filesystem matrix (ext4 vs xfs vs btrfs vs APFS vs tmpfs)](#case-10--cross-filesystem-matrix)
 11. [Meta-lessons across all cases](#meta-lessons-across-all-cases)
 

@@ -1,0 +1,15 @@
+id: rust-ub-custom-hash-without-eq
+language: rust
+severity: error
+message: >-
+  Manual Hash impl without a matching Eq/PartialEq audit is a correctness
+  risk. Hash and Eq must agree for logically equal keys; this is UB only when
+  unsafe code relies on that invariant for memory safety.
+rule:
+  pattern: |
+    impl std::hash::Hash for $T {
+        $$$_
+    }
+note: >-
+  Pattern flags every manual Hash; the audit must verify the matching Eq impl
+  uses the same fields. Run with: ast-grep + grep for 'impl PartialEq for $T'.

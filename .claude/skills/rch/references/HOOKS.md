@@ -1,5 +1,14 @@
 # Hook Integration
 
+## Contents
+
+- [Execution Flow](#execution-flow)
+- [Installation and Status](#installation-and-status)
+- [Hook Protocol (Current)](#hook-protocol-current)
+- [What Gets Intercepted](#what-gets-intercepted)
+- [Quick Hook Tests](#quick-hook-tests)
+- [Performance and Safety Notes](#performance-and-safety-notes)
+
 ## Execution Flow
 
 ```text

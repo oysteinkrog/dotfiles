@@ -1,0 +1,112 @@
+# Audit directory — read me first
+
+This directory is the OUTPUT of an unsafe-audit run by the `rust-unsafe-code-exorcist` Claude Code skill. In the default layout this directory is `<project>/.unsafe-audit/`, so the audited project root is `..`. This dir is its own nested git repo so every audit iteration is reviewable.
+
+Existing project source files, Cargo config, and git metadata were treated read-only during the audit; only this audit directory was modified. Refactor execution (Phase 8.5) only landed in the project repo if you authorized it; check the audit's `REVIEWER_RESPONSES.md` for the trail.
+
+## Where to look (in order)
+
+1. **`AUDIT_SUMMARY.md`** — top-level tally + recommendations. Read this first. Contains the (A) / (B) / (C) count, the top-N highest-risk sites, and a "what to do this week" Pareto recommendation.
+
+2. **`REVIEWER_RESPONSES.md`** — fresh-eyes maintainer review. "Would I land these as the project's maintainer?" Reads like a PR review of the audit itself.
+
+3. **`audit/synthesis/risk-summary.md`** — the prioritized fix list. Address the top-N covering 80% of risk first.
+
+4. **`audit/synthesis/soundness-surface.md`** — which `pub` APIs reach unsafe. The project's external soundness contract lives here.
+
+5. **`audit/synthesis/pre-existing-ub.md`** — any UB the harness uncovered that was OUTSIDE the refactor scope. Each gets a separate `pre-existing-ub-N` bead so it doesn't conflate with the audit's own findings.
+
+## What each subdirectory holds
+
+| Path | Contents |
+|------|----------|
+| `phase1/` | Raw enumerator output per crate: ast-grep JSONs, `cargo expand`, rustdoc JSON, cargo-geiger output. The audit's evidence base. |
+| `audit/sites/<crate>/<file>__<line>.md` | Per-site write-up. One per `unsafe` site. Answers: what does it do? what invariants? where does the data come from? what breaks on panic / async-cancel / FFI-unwind? |
+| `audit/synthesis/` | Global synthesis: invariants clusters, soundness surface, refactor clusters, cross-crate contracts, risk-summary. The bird's-eye view. |
+| `audit/classification/site-NNNN.md` | Per-site classification: (A) / (B) / (C) + falsifiable justification. |
+| `audit/classification/convergence-proof-pass-N.md` | Phase 4 iteration: shows the flip ratio + (A)→(C) flip count per pass. Two consecutive passes <5% flips with zero (A)→(C) = converged. |
+| `audit/plans/site-NNNN.md` | Per-site action plan. For (C): full safe code + property test. For (B): perf numbers + `safe-only` feature flag impl. For (A): hardened SAFETY block. |
+| `audit/plans/cluster-R-NNN.md` | Per-cluster plan when multiple sites share an invariant chokepoint. |
+| `audit/phase7/verification-log.md` | Tee'd output of miri + careful + loom + fuzz + mutants + geiger runs. The harness's record. |
+| `audit/phase7/review-pass-N.md` | Fresh-eyes-reviewer findings per round. |
+| `audit/archeology/` | Git-history mining: per-site birth.md, refactor-wins.md, rejected-refactors.md, tribal-knowledge.md. |
+| `audit/changelog-drafts/` | SECURITY.md draft, CHANGELOG entry, advisory text. Copy to project when ready. |
+| `.beads/` | The bead graph. `br ready --json` shows unblocked work; `bv --robot-triage` ranks it. |
+| `phase0_*.md` | The intake decisions: scope, toolchain, perf budget, execution authorization. |
+| `phase8_bead_commands.sh` | The script that built the bead graph (executable record). |
+| `verify.sh` | Composite harness for the project: runs every safety tool + returns single pass/fail. Use for CI. |
+| `ci-matrix.yml` | GitHub Actions matrix entry template for the project's CI. |
+| `drift/<date>/summary.md` | Continuous-mode nightly drift snapshots. Compares current state to baseline. |
+
+## Glossary (quick)
+
+- **Site** — one specific `unsafe` block / fn / impl. Each has a unique `site-NNNN` ID.
+- **(A) STRICTLY_UNAVOIDABLE** — language can't express the safe form. Hardened SAFETY + clippy lint.
+- **(B) PERF_ONLY** — safe form exists but slower. `safe-only` Cargo feature + measured perf delta.
+- **(C) REFACTORABLE** — safe equivalent exists with the same perf + behavior. Drafted + property-tested.
+- **Invariant chokepoint** — a single safe wrapper that, once built, subsumes a cluster of unsafe sites.
+- **Soundness surface** — the set of public APIs that, if misused, could trigger UB.
+- **Pre-existing-UB bead** — UB found OUTSIDE the refactor scope. Tracked separately so "we made it worse" doesn't conflate with "we found something old."
+
+## Working with the audit's output
+
+### Address the audit's recommendations
+
+```bash
+cd <this audit dir>
+br ready --json | jq '.'                  # unblocked beads (the first wave to claim)
+bv --robot-triage                         # ranked priority + blocker-clearing recs
+br show <bead-id>                         # full bead details
+br update <bead-id> --status=in_progress  # claim a bead
+# ...do the work in the project repo...
+cargo +nightly miri test ...              # the bead's acceptance criteria
+br close <bead-id>                        # done
+```
+
+### Run the verify harness
+
+```bash
+cd <this audit dir>
+bash verify.sh                            # runs the full safety suite
+```
+
+Exits non-zero on any failure. Pass = green.
+
+### Update or re-run
+
+```bash
+# Drift check — has the project changed since baseline?
+bash <skill-root>/scripts/cron-drift-check.sh "$PWD" "$(realpath ..)"
+
+# Full re-audit (use the same audit dir; the orchestrator treats it as resume)
+# /rust-unsafe-code-exorcist <project-path> --audit-dir <this audit dir>
+```
+
+### What to commit
+
+The audit dir is its own nested git repo. Commit everything except heavy intermediates (see `.gitignore`). The `.beads/` directory holds the task graph; commit it. Don't commit `target/` or `phase1/*__expand.rs` (covered by `.gitignore`).
+
+### Don't let the OUTER git see the audit dir
+
+The audit dir sits inside the project; the project also has its own git repo. To prevent confusion, the human project owner can add `/.unsafe-audit` to the project's `.gitignore` when they want the outer repo to ignore the audit artifact. Audit-only agents should not run this step automatically because it modifies an existing project file.
+
+```bash
+cd ..
+if ! test -f .gitignore || ! grep -qxF '/.unsafe-audit' .gitignore; then
+  printf '%s\n' '/.unsafe-audit' >> .gitignore
+fi
+git diff -- .gitignore
+```
+
+Review the diff, then stage and commit it only if you intentionally want the outer project to ignore the nested audit repo. This keeps the audit's own git history separate from the project's, and prevents accidental `git add .` in the project from pulling in audit artifacts.
+
+## Skill version
+
+This audit was produced by `rust-unsafe-code-exorcist`. See the skill's `CHANGELOG.md` (at the skill root) for the version that produced this audit; it's recorded in `AUDIT_SUMMARY.md § Provenance`.
+
+## Questions about this audit?
+
+- **What does (X classification) mean?** → see `<skill-root>/references/methodology/CLASSIFICATION-RUBRIC.md`.
+- **Why was pattern Y rejected from the refactor plan?** → see `<skill-root>/references/methodology/REJECTED-PATTERNS.md`.
+- **How do I run the verify harness in CI?** → see `<skill-root>/references/methodology/CI-INTEGRATION.md` and `ci-matrix.yml` in this dir.
+- **Something looks wrong / contradictory** → file a bead with `br create --type=bug --title="[audit-disagreement] ..."` and include the site IDs.

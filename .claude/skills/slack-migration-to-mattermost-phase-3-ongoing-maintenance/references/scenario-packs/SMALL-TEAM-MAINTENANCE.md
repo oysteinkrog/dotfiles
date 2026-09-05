@@ -89,7 +89,7 @@ Monthly (30 minutes):
 Quarterly (1 hour):
 
 - [ ] `./maintain.sh restore-drill`
-- [ ] `./maintain.sh rotate-credentials` for PAT
+- [ ] `./maintain.sh rotate-tokens` for PAT
 - [ ] Review `workdir-phase3/contacts.md` and update if team changed
 
 Annually (4 hours on a Saturday):

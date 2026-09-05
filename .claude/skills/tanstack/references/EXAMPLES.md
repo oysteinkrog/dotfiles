@@ -4,7 +4,6 @@
 - [Query: Data Fetching](#query-data-fetching)
 - [Query: Mutation](#query-mutation)
 - [Table: Complex Grid](#table-complex-grid)
-- [Form: Multi-Step](#form-multi-step)
 - [Virtual: Long List](#virtual-long-list)
 
 ---

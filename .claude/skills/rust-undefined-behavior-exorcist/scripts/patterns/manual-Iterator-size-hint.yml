@@ -1,0 +1,18 @@
+id: rust-ub-manual-iterator-size-hint
+language: rust
+severity: warning
+message: >-
+  Manual Iterator impl with size_hint must return (low, _) where low <= actual
+  remaining. Violations cause UB in collect() and friends.
+rule:
+  pattern: |
+    impl Iterator for $T {
+        $$$_
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            $$$BODY
+        }
+        $$$_
+    }
+note: >-
+  Pattern flags every manual size_hint; the audit must verify the bound is honest.
+  The default impl returns (0, None) which is always safe.

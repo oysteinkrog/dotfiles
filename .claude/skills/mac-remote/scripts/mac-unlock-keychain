@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Unlock the Mac's login keychain and let command line tools use its keys.
+#
+# Two separate things, and doing only the first is the usual mistake:
+#
+#   1. unlock-keychain          the keychain will open at all
+#   2. set-key-partition-list   codesign and friends may use a key without a
+#                               prompt on screen
+#
+# Neither is enough on its own to make code signing work over ssh. See the
+# mac-remote skill: signing needs the Mac's own login session, and that is what
+# mac-gui-run is for. Run this anyway, because a locked keychain fails there too.
+#
+# The password comes from the secrets store and is never printed. It is passed
+# on the remote stdin rather than as an argument, so it does not appear in the
+# Mac's process list.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAC_SSH="$HERE/mac-ssh"
+KEY=${MAC_PASSWORD_SECRET:-MAC_LOGIN_PASSWORD}
+
+if ! command -v with-secrets >/dev/null; then
+    echo "mac-unlock-keychain: with-secrets is not on PATH" >&2
+    exit 78
+fi
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+# shellcheck disable=SC1090
+set -a; source "$CONFIG"; set +a
+
+run_with_password() {
+    with-secrets "$KEY" -- sh -c "
+        printf '%s\n' \"\$$KEY\" | ssh -o ConnectTimeout=40 -o BatchMode=yes \
+            $MAC_USER@$MAC_HOST '$1'
+    "
+}
+
+echo "unlocking the login keychain"
+run_with_password 'read -r PW; security unlock-keychain -p "$PW" ~/Library/Keychains/login.keychain-db && echo unlocked' || exit 1
+
+echo "allowing command line tools to use its keys"
+run_with_password 'read -r PW; security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PW" ~/Library/Keychains/login.keychain-db >/dev/null 2>&1 && echo allowed' || exit 1
+
+echo
+echo "Note: set-key-partition-list is a standing change to the machine. It stops"
+echo "macOS asking about that key again, for every tool, until the key is"
+echo "replaced. That is what makes unattended builds possible, and it is worth"
+echo "knowing you made it."
+
+"$MAC_SSH" 'security find-identity -v -p codesigning 2>&1 | head -5'

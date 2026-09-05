@@ -101,4 +101,4 @@ jobs:
 
 ## Bun Compile Release
 
-See [RELEASE-PATTERNS.md](RELEASE-PATTERNS.md) for compiled binary releases.
+See [RELEASE-BUILD.md](RELEASE-BUILD.md) for compiled binary releases.

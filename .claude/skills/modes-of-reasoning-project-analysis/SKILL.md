@@ -775,4 +775,3 @@ NTM is required for this skill. Do not attempt to run it without NTM.
 - `operationalizing-expertise` for distilling findings into reusable artifacts
 - `multi-model-triangulation` for cross-validating with different AI models
 - `codebase-audit` for domain-parameterized auditing
-- `alien-artifact-coding` for formal guarantees and mathematical optimization

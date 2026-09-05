@@ -1,0 +1,13 @@
+id: rust-ub-type-punning-transmute
+language: rust
+severity: warning
+message: >-
+  Manual transmute. Verify layout compatibility of source and target types.
+  Prefer bytemuck::cast, zerocopy, or f32::to_bits.
+rule:
+  any:
+    - pattern: 'std::mem::transmute($EXPR)'
+    - pattern: 'core::mem::transmute($EXPR)'
+    - pattern: 'transmute($EXPR)'
+    - pattern: 'std::mem::transmute::<$SRC, $DST>($EXPR)'
+    - pattern: 'core::mem::transmute::<$SRC, $DST>($EXPR)'

@@ -1,0 +1,109 @@
+# ml-class.yml — ast-grep rules for ML-System-class port surface
+# (PyTorch / JAX / Whisper-like — PyO3-bridged + autograd-relevant)
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml \
+#                  -r scripts/ast-grep-surface-patterns/numerical-class.yml \
+#                  -r scripts/ast-grep-surface-patterns/ml-class.yml \
+#                  <port-src>
+
+id: aten-op-impl
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl AtenOp for $TY { $$$ }
+message: "ATen op impl: $TY (autograd-relevant)"
+severity: warning
+
+---
+
+id: autograd-fn
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl AutogradFunction for $TY { $$$ }
+message: "Autograd Function impl: $TY (gradient parity-critical)"
+severity: warning
+
+---
+
+id: jit-compile-callsite
+language: Rust
+rule:
+  kind: call_expression
+  any:
+    - pattern: torch::jit::compile($$$)
+    - pattern: jax::jit::compile($$$)
+    - pattern: xla_compile($$$)
+message: "JIT compile callsite (cache-key parity-critical)"
+severity: warning
+
+---
+
+id: tensor-op-impl
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl TensorOp for $TY { $$$ }
+message: "TensorOp impl: $TY"
+severity: info
+
+---
+
+id: device-dispatch-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match device { Device::$NAME => $BODY }
+    selector: match_arm
+message: "Device dispatch: $NAME"
+severity: info
+
+---
+
+id: dtype-arm
+language: Rust
+rule:
+  kind: match_arm
+  pattern:
+    context: match dtype { Dtype::$NAME => $BODY }
+    selector: match_arm
+message: "Dtype dispatch: $NAME"
+severity: info
+
+---
+
+id: nccl-collective-call
+language: Rust
+rule:
+  kind: call_expression
+  any:
+    - pattern: nccl_all_reduce($$$)
+    - pattern: nccl_broadcast($$$)
+    - pattern: nccl_all_gather($$$)
+    - pattern: nccl_reduce_scatter($$$)
+message: "NCCL collective call (distributed-parity-critical)"
+severity: warning
+
+---
+
+id: cuda-stream-sync
+language: Rust
+rule:
+  kind: call_expression
+  pattern: $STREAM.synchronize()
+message: "CUDA stream sync (perf + correctness boundary)"
+severity: info
+
+---
+
+id: deterministic-flag-call
+language: Rust
+rule:
+  kind: call_expression
+  any:
+    - pattern: torch::use_deterministic_algorithms($$$)
+    - pattern: jax::config::update("jax_enable_x64", $$$)
+message: "Determinism flag (oracle preflight relevant)"
+severity: warning

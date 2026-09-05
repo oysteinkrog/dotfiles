@@ -9,7 +9,7 @@
 5. [Deadlock Detection](#deadlock-detection)
 6. [Memory Corruption](#memory-corruption)
 7. [Stripped Binary Handling](#stripped-binary-handling)
-8. [Async Runtime Debugging](#async-runtime-debugging)
+8. [Async Runtime Debugging](#async-runtime-internals-tokioasync-std)
 9. [Signal Handling](#signal-handling)
 10. [Watchpoints](#watchpoints)
 11. [Conditional Breakpoints](#conditional-breakpoints)

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Run a command on the Mac over ssh, retrying the connection.
+#
+# The link drops often enough that a single ssh call is not a reliable test of
+# anything. A bare failure here reads as "the Mac said no" when it usually means
+# the connection never opened, and that mistake has cost whole debugging
+# sessions. This retries, and tells the two apart in its exit code:
+#
+#   0    the remote command ran (its own exit code is in MAC_SSH_REMOTE_STATUS)
+#   69   could not connect after every attempt
+#
+# Usage:
+#   mac-ssh 'xcrun devicectl list devices'
+#   mac-ssh -t 900 'xcodebuild ... '        # longer timeout for a build
+#   mac-ssh -n 6 'flaky thing'              # more attempts
+
+set -uo pipefail
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+
+if [[ ! -r $CONFIG ]]; then
+    echo "mac-ssh: no config at $CONFIG" >&2
+    echo "mac-ssh: it holds MAC_HOST and MAC_USER; see the mac-remote skill" >&2
+    exit 78
+fi
+
+# shellcheck disable=SC1090
+set -a; source "$CONFIG"; set +a
+
+timeout_s=180
+attempts=3
+
+while getopts ":t:n:" opt; do
+    case $opt in
+        t) timeout_s=$OPTARG ;;
+        n) attempts=$OPTARG ;;
+        *) echo "mac-ssh: unknown option -$OPTARG" >&2; exit 64 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [[ $# -eq 0 ]]; then
+    echo "usage: mac-ssh [-t seconds] [-n attempts] <remote command>" >&2
+    exit 64
+fi
+
+for attempt in $(seq 1 "$attempts"); do
+    out=$(timeout "$timeout_s" ssh \
+        -o ConnectTimeout=40 \
+        -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=10 \
+        -o BatchMode=yes \
+        "$MAC_USER@$MAC_HOST" "$@" 2>&1)
+    status=$?
+
+    # A connection that never opened looks exactly like a command that printed
+    # nothing, so the message text is the only thing that separates them.
+    if [[ $status -ne 0 ]] && grep -qiE 'timed out|connection refused|banner exchange|broken pipe' <<<"$out"; then
+        echo "mac-ssh: attempt $attempt of $attempts could not connect" >&2
+        sleep 5
+        continue
+    fi
+
+    printf '%s\n' "$out"
+    export MAC_SSH_REMOTE_STATUS=$status
+    exit 0
+done
+
+echo "mac-ssh: gave up after $attempts attempts" >&2
+exit 69

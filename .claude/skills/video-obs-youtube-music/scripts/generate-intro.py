@@ -152,6 +152,8 @@ def record_intro(
         print(f"Error: Recording script not found at {record_script}", file=sys.stderr)
         sys.exit(1)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     cmd = [
         "node", str(record_script),
         str(html_path.absolute()),
@@ -166,6 +168,9 @@ def record_intro(
 
     try:
         subprocess.run(cmd, check=True)
+    except FileNotFoundError as e:
+        print(f"Error recording intro: missing executable: {e.filename}", file=sys.stderr)
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"Error recording intro: {e}", file=sys.stderr)
         sys.exit(1)
@@ -250,9 +255,10 @@ Examples:
     print(f"  Effect: {effect_type}")
     print()
 
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
     # Generate HTML
-    script_dir = Path(__file__).parent
-    html_path = script_dir / f"intro-{args.output.stem}.html"
+    html_path = args.output.parent / f"{args.output.stem}.intro.html"
 
     html_path = generate_html(
         title=args.title,
@@ -275,19 +281,20 @@ Examples:
         print("HTML-only mode, skipping video recording")
         return
 
-    # Record video
-    record_intro(
-        html_path=html_path,
-        output_path=args.output,
-        fps=args.fps,
-        width=args.width,
-        height=args.height
-    )
-
-    # Cleanup HTML unless keeping
-    if not args.keep_html:
-        html_path.unlink()
-        print(f"Cleaned up: {html_path}")
+    try:
+        # Record video
+        record_intro(
+            html_path=html_path,
+            output_path=args.output,
+            fps=args.fps,
+            width=args.width,
+            height=args.height
+        )
+    finally:
+        # Cleanup HTML unless keeping
+        if not args.keep_html and html_path.exists():
+            html_path.unlink()
+            print(f"Cleaned up: {html_path}")
 
     print(f"\nIntro video created: {args.output}")
 

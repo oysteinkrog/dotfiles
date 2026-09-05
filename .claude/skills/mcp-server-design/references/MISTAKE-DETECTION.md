@@ -383,7 +383,7 @@ def _detect_suspicious_thread_id(thread_id: str) -> str | None:
         return (
             f"Thread ID '{t}' contains invalid characters. "
             f"Thread IDs must start with alphanumeric, contain only [A-Za-z0-9._-], "
-            f"and be at most 128 characters. Example: 'TASK-123', 'br-456'."
+            f"and be at most 128 characters. Example: 'TASK-123', 'bd-456'."
         )
 
     # Warn about overly generic IDs
@@ -535,7 +535,7 @@ class TestSuspiciousFileReservation:
             assert "too broad" in result.lower()
 
     def test_absolute_paths(self):
-        result = _detect_suspicious_file_reservation("$HOME/project/src")
+        result = _detect_suspicious_file_reservation("/home/user/project/src")
         assert result is not None
         assert "absolute path" in result.lower()
 

@@ -1,0 +1,47 @@
+# clippy-lint-template.toml — encode proof obligations as clippy lints
+#
+# Copy to <project>/clippy.toml (or per-module clippy.toml).
+# Fill in per-site obligation entries.
+
+# Block specific methods whose call would violate a proof obligation.
+# Use fully-qualified paths.
+disallowed-methods = [
+    # Example: only the safe wrapper should call libc::open; raw use bypasses
+    # the null-termination check.
+    # { path = "::libc::open",
+    #   reason = "use mycrate::sys::open_safe(&CStr) to enforce null-termination; see site-NNNN" },
+
+    # Example: this crate's previously-unsafe entry; the deprecated shim
+    # remains for one release.
+    # { path = "::mycrate::Foo::new",
+    #   reason = "use Foo::with_capacity (with explicit size); see site-MMMM and CHANGELOG vX.Y" },
+]
+
+# Block specific types whose use would violate a proof obligation.
+disallowed-types = [
+    # Example: raw `*const c_char` in pub APIs bypasses the CStr null-termination guarantee.
+    # { path = "*const ::std::os::raw::c_char",
+    #   reason = "use &CStr in pub APIs; see site-NNNN" },
+
+    # Example: when the project uses bumpalo, plain Vec in arena modules is wrong.
+    # { path = "::std::vec::Vec",
+    #   reason = "use bumpalo::collections::Vec inside mycrate::arena::*; see operator 📐" },
+]
+
+# Block specific names; useful for catching the next-named-shadow trap.
+disallowed-names = [
+    "_unsafe_global",   # Reserve names that suggest unaudited globals
+]
+
+# Severity tuning for the audit
+allow-unwrap-in-tests = false       # safety-grade tests don't use unwrap; use expect with reason
+allow-expect-in-tests = false       # use proper test scaffolding for fallible setup
+arithmetic-side-effects-allowed = []  # explicitly allowlist u32/u64 etc. if accepting wraparound
+
+# Cognitive complexity limit (force functions with unsafe to be small + reviewable)
+cognitive-complexity-threshold = 12
+
+# Misc strict lints (recommended for unsafe-heavy modules)
+allow-private-module-inception = false
+trivial-copy-size-limit = 16
+type-complexity-threshold = 200

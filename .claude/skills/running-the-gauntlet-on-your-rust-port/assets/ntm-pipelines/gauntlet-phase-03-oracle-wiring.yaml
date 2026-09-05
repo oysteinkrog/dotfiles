@@ -1,0 +1,216 @@
+schema_version: "2.0"
+name: gauntlet-phase-03-oracle-wiring
+description: >-
+  Phase 3 oracle wiring. Per project class, dispatch in parallel: (a) the
+  oracle-wirer that authors `crates/<port>-harness/src/oracle.rs` +
+  `differential_v2.rs` + `engine_identity.rs`, and (b) the
+  oracle-preflight-doctor-builder that authors the `oracle_preflight_doctor.rs`
+  binary. Block on completion gates: cargo test green AND the preflight doctor
+  exits with aggregate_outcome=green AND EngineIdentity::Subject != Oracle is
+  verified at the comparator boundary.
+version: "1.0.0"
+
+vars:
+  workspace_path:
+    description: Absolute path to the gauntlet workspace
+    required: true
+    type: string
+  port_path:
+    description: Absolute path to the target Rust port
+    required: true
+    type: string
+  run_id:
+    description: Stable gauntlet run id
+    required: true
+    type: string
+  session_name:
+    description: NTM session name (must equal NTM_PROJECTS_BASE/<basename>)
+    required: true
+    type: string
+  project_class:
+    description: SQL-class|RESP-class|Numerical-Python-class|ML-System-class|HTTP-Protocol-class
+    required: true
+    type: string
+  reference_version:
+    description: Pinned reference version (e.g. sqlite-3.52.0, redis-7.2.5)
+    required: true
+    type: string
+
+settings:
+  timeout: 6h
+  on_error: fail
+  notify_on_complete: true
+  notify_on_error: true
+  notify_channels: [mail]
+
+steps:
+  - id: verify_phase2_contract
+    name: Verify the version contract and surface contract from Phase 2 exist
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify these files exist and are non-empty:
+        ${vars.workspace_path}/docs/contracts/${vars.reference_version}_version_contract.toml
+        ${vars.workspace_path}/docs/contracts/supported_surface_matrix.toml
+        ${vars.workspace_path}/docs/contracts/canonical_parity_contract.md
+        ${vars.workspace_path}/docs/contracts/parity_score_contract.toml
+
+      Verify weights in parity_score_contract.toml sum to 1.0 per category.
+
+      Acknowledge: "Phase 2 contracts verified — class=${vars.project_class} ref=${vars.reference_version}".
+    wait: completion
+    timeout: 5m
+    on_error: fail
+
+  - id: oracle_wirer_dispatch
+    name: Dispatch the oracle-wirer for ${vars.project_class}
+    depends_on: [verify_phase2_contract]
+    parallel:
+      - id: wire_oracle_module
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are dispatched as the oracle-wirer for ${vars.project_class}.
+
+          Read the marching order template:
+            ~/.claude/skills/running-the-gauntlet-on-your-rust-port/assets/ntm-marching-orders/MO-oracle-wire.md
+
+          Substitute:
+            PANE_N          = your pane index
+            WORKSPACE_PATH  = ${vars.workspace_path}
+            PORT_PATH       = ${vars.port_path}
+            ROLE            = oracle-wirer
+            MODEL           = claude-opus
+            COORDINATION_MODE = agent-mail
+            SESSION_ID      = ${vars.run_id}
+            PROJECT_CLASS   = ${vars.project_class}
+            REFERENCE_VERSION = ${vars.reference_version}
+            THREAD_ID       = gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}
+            TARGET_MODULE   = crates/<port>-harness/src/oracle.rs
+
+          Author per the project class:
+            crates/<port>-harness/src/oracle.rs        (scenario() template + NormalizedValue rendering)
+            crates/<port>-harness/src/differential_v2.rs (ExecutionEnvelope + artifact_id SHA-256)
+            crates/<port>-harness/src/engine_identity.rs (EngineIdentity::Subject vs ::Oracle discriminator)
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}` when oracle.rs compiles.
+        wait: completion
+        timeout: 120m
+        on_error: retry
+        retry_count: 1
+        retry_delay: 60s
+        output_var: oracle_wire_result
+
+      - id: build_preflight_doctor
+        agent: claude
+        route: least-loaded
+        prompt: |
+          You are dispatched as the oracle-preflight-doctor-builder for ${vars.project_class}.
+
+          Author crates/<port>-harness/src/oracle_preflight_doctor.rs with
+          per-class adaptations:
+            SQL-class       : verify rusqlite linked against ${vars.reference_version}, libsqlite3-sys identity string matches
+            RESP-class      : verify vendored redis-server binary version, UNIX socket reachable, sample PING/PONG transcript
+            Numerical-Python: verify PyO3 interpreter version, numpy version pinned, PCG64DXSM seed sample
+            ML-System       : verify torch.use_deterministic_algorithms is supported, per-op ULP table loadable
+            HTTP-Protocol   : verify reference framework spec is loadable, deterministic clock + RNG plumbed
+
+          Emit JSON output with shape:
+            { "aggregate_outcome": "green|yellow|red",
+              "certifying": bool,
+              "subject_identity": "<port>",
+              "oracle_identity": "<reference>-oracle",
+              "checks": [...] }
+
+          Acknowledge on `gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}` when
+          `cargo run --bin oracle_preflight_doctor` exits 0 with aggregate_outcome=green.
+        wait: completion
+        timeout: 120m
+        on_error: retry
+        retry_count: 1
+        retry_delay: 60s
+        output_var: preflight_build_result
+    on_error: fail
+
+  - id: wait_for_acks
+    name: Wait for both wirer and preflight-doctor acks
+    depends_on: [oracle_wirer_dispatch]
+    agent: claude
+    pane: 2
+    prompt: |
+      Verify the Agent Mail thread `gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}`
+      contains acks from BOTH the oracle-wirer (oracle.rs compiles) AND the
+      preflight-doctor-builder (preflight exits 0 green).
+
+        ntm mail inbox ${vars.session_name} --json | \
+          jq '.threads[] | select(.id == "gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}") | .messages[].subject'
+
+      Acknowledge: "Phase 3 wirer+doctor acks present".
+    wait: completion
+    timeout: 15m
+    on_error: fail
+
+  - id: verify_engine_identity
+    name: Hard-verify EngineIdentity::Subject != Oracle at comparator boundary
+    depends_on: [wait_for_acks]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run the oracle round-trip tests:
+        cd ${vars.port_path} && \
+          cargo test -p <port>-harness oracle::tests::subject_eq_subject && \
+          cargo test -p <port>-harness oracle::tests::subject_neq_oracle && \
+          cargo test -p <port>-harness oracle::tests::both_error_agreement && \
+          cargo test -p <port>-harness oracle::tests::engine_identity_distinct
+
+      All four must pass. If any fail, post a CRITICAL message on
+      `gauntlet-${vars.run_id}-phase3-oracle-${vars.project_class}` with the failing test
+      name and exit non-zero.
+
+      Acknowledge: "EngineIdentity distinct + round-trip tests green".
+    wait: completion
+    timeout: 20m
+    on_error: fail
+
+  - id: run_preflight_doctor
+    name: Run the oracle-preflight-doctor and capture phase3_oracle_preflight.json
+    depends_on: [verify_engine_identity]
+    agent: claude
+    pane: 2
+    prompt: |
+      Run:
+        cd ${vars.port_path} && \
+          cargo run --release --bin oracle_preflight_doctor \
+            > ${vars.workspace_path}/phase3_oracle_preflight.json
+
+      Verify .aggregate_outcome == "green" AND .certifying == true AND
+      .subject_identity != .oracle_identity (a hard self-comparison guard).
+
+      Acknowledge: "Oracle preflight doctor green — Phase 3 wiring certified".
+    wait: completion
+    timeout: 15m
+    on_error: fail
+
+  - id: collect_and_commit
+    name: Write phase3_oracle_wiring.md and commit
+    depends_on: [run_preflight_doctor]
+    agent: claude
+    pane: 2
+    prompt: |
+      Write ${vars.workspace_path}/phase3_oracle_wiring.md summarizing:
+        - What was wired (oracle.rs, differential_v2.rs, engine_identity.rs,
+          oracle_preflight_doctor.rs)
+        - Sample diagnostic output from the preflight doctor
+        - The per-class adaptations applied
+        - The four round-trip tests and their results
+
+      Then:
+        cd ${vars.workspace_path} && \
+          git add phase3_*.md phase3_*.json && \
+          git commit -m "phase3: oracle wiring for ${vars.project_class} — preflight green" && \
+          touch ${vars.workspace_path}/.gauntlet/phase3_complete.flag
+
+      Acknowledge: "Phase 3 ORACLE WIRING complete — proceed to Phase 4".
+    wait: completion
+    timeout: 10m
+    on_error: fail

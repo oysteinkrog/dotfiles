@@ -1,3 +1,7 @@
+---
+name: swarm-status
+description: Show current swarm progress: teammate activity, task and bead state, and stuck work.
+---
 # Swarm Status
 
 Show current swarm progress: teammate activity, task + bead state, and stuck work.

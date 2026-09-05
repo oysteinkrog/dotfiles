@@ -394,6 +394,6 @@ Standard: https://securitytxt.org/
 
 - [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md)
 - [SECURITY-MATURITY.md](SECURITY-MATURITY.md)
-- [reporting-sensitive-encrypted-gh-issues](../../reporting-sensitive-encrypted-gh-issues/)
+- `/reporting-sensitive-encrypted-gh-issues` (sibling skill)
 - https://disclose.io/
 - https://securitytxt.org/

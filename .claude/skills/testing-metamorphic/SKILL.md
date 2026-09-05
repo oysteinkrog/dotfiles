@@ -13,6 +13,28 @@ description: >-
 > **The One Rule:** When you can't verify *what* the output is, verify *how* outputs
 > relate to each other under known input transformations. Never guess at oracles.
 
+## Outcome — When This Skill Has Delivered
+
+You're done when **all** of the following hold for the system under test:
+
+- Every domain property worth testing is expressed as a metamorphic relation (MR) with a score ≥ 2.0 on the strength matrix below — low-scoring MRs have been **dropped**, not implemented.
+- Each surviving MR is realized as a property-based test that generates inputs (Hypothesis, proptest, fast-check, or similar) rather than fixed cases.
+- Mutation testing confirms each MR catches **at least one** distinct class of planted bug — otherwise the MR is decorative and should be removed.
+- The MR suite as a whole gives a kill-rate ≥ 80% against a representative mutation set, OR you have a written argument for why the residual mutants are equivalent / unreachable.
+- Compound MRs (chains of simple MRs) are used wherever the chain's combined sensitivity exceeds any single MR's — and chain length is justified.
+
+If you finish with a green test suite but no mutation-kill evidence, you have a *placebo* MR suite. Go back to step 6 of the Loop.
+
+## When NOT to Use This Skill
+
+Reach for something else if any of these holds:
+
+- **You can compute the expected output** for arbitrary inputs (closed-form, reference table, deterministic spec) → use conventional unit tests with assertions; MRs are strictly weaker.
+- **A trusted reference implementation exists** → use **differential testing** against the reference (see `testing-conformance-harnesses`); MRs are only needed when no reference exists.
+- **Inputs are not transformable** in any property-preserving way (e.g., opaque binary blobs with no known invariants) → MRs have nothing to bite on; do domain analysis first.
+- **The system is non-deterministic** in ways orthogonal to your MRs (true randomness, network race conditions) → control for it (seed RNGs, mock time) *before* writing MRs, or the relations won't hold.
+- **You're chasing a single known bug** rather than building a test suite → use a targeted regression test; MRs are an investment that pays off across many bug classes.
+
 ## The Loop (Mandatory)
 
 ```
@@ -362,4 +384,4 @@ fn validate_mr_suite_catches_planted_bugs() {
 | /testing-fuzzing | Finding crashes in parsers | Fuzzing generates source inputs, MRs validate relations |
 | /testing-conformance-harnesses | Reference implementation exists | MRs supplement conformance where spec is ambiguous |
 | /extreme-software-optimization | Performance, not correctness | MRs verify optimization doesn't change behavior |
-| /alien-artifact-coding | Need formal proofs | MRs are the practical bridge between testing and proofs |
+| /lean-formal-feedback-loop | Need formal proofs | MRs are the practical bridge between testing and proofs |

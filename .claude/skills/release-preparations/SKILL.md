@@ -278,11 +278,20 @@ EOF
 git push
 ```
 
-#### Step 3: Sync Branches (if AGENTS.md requires it)
+#### Step 3: Sync Branches (if the repo keeps a legacy `master` mirror)
+
+Only certain repos (e.g. `agentic_coding_flywheel_setup`, some ACFS-adjacent
+projects) keep a `master` branch mirror for legacy install-URL
+compatibility. Most repos do not, and pushing `main:master` unconditionally
+creates a phantom `master` branch on origin that triggers failing Preview
+builds on platforms like Vercel. Gate the push on whether `master` already
+exists on origin so the step is a no-op on repos that don't use the mirror:
 
 ```bash
-# Many projects require main -> master sync
-git push origin main:master
+# Only mirror main -> master if the legacy master branch actually exists
+if git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
+  git push origin main:master
+fi
 ```
 
 #### Step 4: Create and Push Tag
@@ -341,7 +350,11 @@ gh run view <run-id> --log-failed 2>&1 | tail -40
 
 # 3. Commit and push the fix
 git add -A && git commit -m "fix: <what broke in CI>"
-git push && git push origin main:master
+git push
+# Only mirror to legacy master if it exists on origin (see Step 3 above).
+if git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
+  git push origin main:master
+fi
 
 # 4. Update the tag to include the fix
 git tag -f "$VERSION"
@@ -456,7 +469,11 @@ See [OP-6](references/OPERATOR-PATTERNS.md) for the full story.
 # Commit version bump
 git add Cargo.toml Cargo.lock */Cargo.toml
 git commit -m "chore: bump version to X.Y.Z" && git push
-git push origin main:master   # If needed
+# Legacy master mirror (only fires if origin already has a master branch;
+# see Step 3 for why this is guarded).
+if git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
+  git push origin main:master
+fi
 
 # Tag
 VERSION="vX.Y.Z"

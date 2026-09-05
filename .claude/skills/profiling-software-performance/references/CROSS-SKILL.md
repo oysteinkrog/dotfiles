@@ -131,7 +131,7 @@ When `df -h` is near full and that's the cause of perf degradation. IO-AND-TRADE
 
 Remote compilation (cargo / gcc / bun). When local builds are slow and that's blocking the profile run (see CASE-STUDIES.md §Case 4), use `rch exec` in `bench_baseline.sh`.
 
-### `testing-perfect-e2e-integration-tests-with-logging-and-no-mocks`
+### `testing-real-service-e2e-no-mocks`
 
 Integration tests that are mock-free produce the most realistic workloads for profiling. When building a bench scenario, start from one of these tests rather than a synthetic harness.
 

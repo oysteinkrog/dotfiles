@@ -2,6 +2,13 @@
 
 <!-- TOC: Freshness Thresholds | Degradation Semantics | Attention Lifecycle | Per-Pane Truth | Git Log Ground Truth | Scope & Saturation | Convergence Termination | Three-Observation Rule -->
 
+## Contents
+
+- Source freshness and degradation semantics
+- Attention item lifecycle and actionability classes
+- Per-pane truth checks and liveness signals that lie
+- Convergence and stop rules
+
 The swarm is only as honest as your last probe. Every orchestrator decision should answer two questions:
 
 1. **Is this data fresh enough to act on?**
@@ -25,7 +32,7 @@ From `/dp/ntm/docs/freshness-contract.md`. Each source has its own cadence — a
 Query source health explicitly:
 
 ```bash
-ntm --robot-snapshot | jq '.source_health | to_entries[] | {source: .key, status: .value.status, freshness_sec: .value.freshness_sec}'
+ntm --robot-snapshot | jq '.sources.sources | to_entries[] | {source: .key, fresh: .value.fresh, degraded: .value.degraded, age_ms: .value.age_ms, reason: (.value.degraded_reason // .value.reason_code)}'
 ```
 
 ### Decision Rule Per Tier
@@ -81,7 +88,7 @@ Every attention item comes classified:
 | `interesting` | Worth noticing (file conflict warning, low context) | Inspect; may not need immediate action. |
 | `background` | Informational (scheduled task fired, idle pane) | Monitor; no action required. |
 
-**Rule:** Never act on `action_required` items based on stale data. Always check `source_health` for the source that generated the item first.
+**Rule:** Never act on `action_required` items based on stale data. Always check `sources` / `degraded_sources` for the source that generated the item first.
 
 ## Per-Pane Truth Checks
 
@@ -188,3 +195,95 @@ Before any state-changing action (restart, rotate, reassign, escalate), have **t
 3. Underlying system signal (ps, df, OAuth endpoint, tmux socket)
 
 If any two disagree, resync before acting. If three agree, act with confidence. One observation is a guess, not a judgment.
+
+## Liveness Signals That Can Lie
+
+Every signal an orchestrator reads comes through some layer that can stale, cache, or misinterpret. Catalog the ones that have burned operators in real sessions so you don't re-discover them.
+
+### Activity-indicator timers are not activity
+
+CLI timers such as "Cogitated for 35m", "Worked for 1h 39m", "Sautéed for 4m", "Fluttering 4m 47s" persist across ticks even while the agent is landing commits — and, conversely, sometimes hold identical values while the pane is genuinely mid-compile. They're display artifacts, not activity counters.
+
+Authoritative cross-references:
+
+```bash
+# Real productivity of this pane over the last 15 min:
+git -C <repo> log --since='15 minutes ago' --oneline | wc -l
+
+# Real build work happening anywhere on the box:
+pgrep -af 'cargo (test|check|bench|build)' | wc -l
+ps -eo comm | grep -cE '^(cargo|rustc|go|bun|node)$'
+```
+
+If the pane timer is flat AND `git log` shows zero commits AND no build processes match that pane's target dir → genuinely idle. Any one of those three disagreeing → keep observing.
+
+### Rate-limit / paste-buffer text in the buffer is stale by definition
+
+Extends AP-7. The text is rendered once and left in the alt-screen; the CLI doesn't re-check unless the user interacts. Treat any pane-buffer status line as a claim about the past, not the present.
+
+### Agent CLI can silently exit back to zsh
+
+`--robot-tail` will happily return the pane's last N lines of output regardless of whether the agent CLI is still running. A codex/cc pane that crashed or double-C-c'd is now a bare zsh — the next prompt you dispatch lands at the shell as literal text (e.g. `zsh: no matches found: (259f4826)`).
+
+Authoritative signal:
+
+```bash
+tmux list-panes -t <session>:<win> -F '#{pane_index} #{pane_current_command} #{pane_pid}'
+# pane_current_command of "zsh" (or "bash") means the agent CLI is dead.
+# Expected: "claude", "bun" (codex), "gemini", "node" depending on agent type.
+
+# Also track pane_pid — if it matches the pid from your last check, "restart" didn't take.
+```
+
+Add this audit to the stuck-pane ladder **before** any interrupt or dispatch.
+
+### "Executing now" indicators that ARE authoritative
+
+Unlike buffer text, two small indicators on the agent CLI track actual in-flight execution:
+
+- `⏵⏵ bypass` indicator at the bottom of a cc pane → actively executing tool calls (rate-limit / resets text higher in scrollback is leftover frames).
+- `• Working …` / `• Waiting for background terminal` prefix lines on codex → also authoritative.
+- Codex idle-state placeholder suggestions such as `Summarize recent commits` / `Explain this codebase` are NOT a "stuck, waiting for prompt" signal — they're hints shown when no prompt is in flight. Easy to misread and over-nudge.
+
+When these indicators are present, the pane is alive even if timers are frozen. Cross-check against git log and pgrep before redirecting — mid-think panes landing real work should not be interrupted (see AP-47).
+
+### Tmux window index is not always `0`
+
+`pane-base-index` and `base-index` can be set to `1` in `~/.tmux.conf`. Addressing `session:0.<pane>` silently fails with "can't find window: 0" and your keypress disappears. Always discover:
+
+```bash
+tmux list-windows -t <session> -F '#{window_index} #{window_name}'
+# Use the leading index returned here, not a hardcoded 0.
+
+# Or robust one-liner:
+WIN=$(tmux list-windows -t <session> -F '#{window_index}' | head -1)
+tmux send-keys -t <session>:${WIN}.<pane> "…" Enter
+```
+
+### `--robot-tail` as snapshot, `tmux capture-pane` as ground truth
+
+`--robot-tail` is efficient for bulk surveys across many panes but can sample stale buffer content for several ticks in a row on transient states (keypress echoes, dialog transitions). For verifying "did my last keypress actually land" or "is this dialog gone now", prefer:
+
+```bash
+tmux capture-pane -t <session>:<win>.<pane> -p -S -20
+# -p = print to stdout, -S -20 = last 20 lines of scrollback
+```
+
+Rule: `--robot-tail` for bulk, `capture-pane` for single-pane ground truth after an action.
+
+### Disk trajectory beats absolute threshold
+
+A single "disk 73%" reading is a snapshot; the danger signal is **delta-per-tick**. Runaway cargo `target/` dirs can climb `+3pp/tick` for several ticks before cresting, and fuzz corpora / build caches fail silently once the cliff is hit. Track trajectory:
+
+```bash
+# Record each tick
+df -h / | awk 'NR==2 {print $5}' | tr -d '%' > /tmp/disk_tick.$(date +%s)
+
+# Warn early: threshold 50% + delta > 3pp/tick between the last two samples
+```
+
+Signal hierarchy: trajectory > absolute % > targeted sweep. Target per-pane `CARGO_TARGET_DIR=/tmp/build_<proj>_<role>` so sweeps can be scoped per-agent.
+
+### "Degraded" posture ≠ broken
+
+`rch` / coordinator / source-health can report `degraded` when 7/8 workers are healthy and most slots are free. Don't escalate on the warning text alone — look at the underlying counts (`slots_free`, `workers_healthy / workers_total`, `error_rate`). Only escalate on exhaustion or real failures, not on the color of the label.

@@ -1,13 +1,12 @@
 ---
 name: testing-fuzzing
 description: >-
-  Fuzzing harnesses for crash discovery, security auditing, and correctness
-  verification. Coverage-guided, structure-aware, differential, stateful,
-  protocol, and API fuzzing with code instrumentation for fuzzability.
-  AFL++ CMPLOG, persistent mode, sanitizers, custom mutators.
-  Use when: testing parsers, protocols, serialization, cryptography,
-  state machines, file formats, APIs, or smart contracts.
-  Rust, Go, C/C++, Java, Python, TypeScript.
+  Design and implement fuzzing harnesses for crash discovery, security auditing,
+  and correctness verification. Coverage-guided, structure-aware, differential,
+  grammar-based, stateful, network-protocol, and web-API fuzzing across Rust,
+  Go, C/C++, Java, Python, TypeScript. Use when: testing parsers, protocols,
+  serialization, cryptography, state machines, file formats, APIs, or any
+  input-processing code.
 metadata:
   filePattern:
     - "**/fuzz*"

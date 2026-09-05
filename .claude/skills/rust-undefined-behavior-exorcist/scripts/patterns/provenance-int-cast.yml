@@ -1,0 +1,12 @@
+id: rust-ub-provenance-int-cast
+language: rust
+severity: warning
+message: >-
+  Pointer ↔ integer round-trip loses provenance under strict-provenance.
+  Use ptr.with_addr / ptr.map_addr / ptr.add instead.
+rule:
+  any:
+    - pattern: '($EXPR as usize + $OFFSET) as *const $T'
+    - pattern: '($EXPR as usize + $OFFSET) as *mut $T'
+    - pattern: '($EXPR as usize) as *const $T'
+    - pattern: '($EXPR as usize) as *mut $T'

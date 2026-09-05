@@ -21,6 +21,24 @@ import shutil
 from pathlib import Path
 
 
+FFPROBE_TIMEOUT_SECONDS = 30
+FFMPEG_MIN_TIMEOUT_SECONDS = 10 * 60
+FFMPEG_DURATION_MULTIPLIER = 20
+FFMPEG_TIMEOUT_PADDING_SECONDS = 5 * 60
+
+
+def ffmpeg_timeout(*durations: float) -> int:
+    """Bound ffmpeg execution while allowing long renders to scale by input length."""
+    total_seconds = 0.0
+    for duration in durations:
+        try:
+            total_seconds += max(0.0, float(duration or 0))
+        except (TypeError, ValueError):
+            continue
+    scaled = int(total_seconds * FFMPEG_DURATION_MULTIPLIER) + FFMPEG_TIMEOUT_PADDING_SECONDS
+    return max(FFMPEG_MIN_TIMEOUT_SECONDS, scaled)
+
+
 def get_video_info(video_path: Path) -> dict:
     """Get video metadata using ffprobe."""
     cmd = [
@@ -29,11 +47,24 @@ def get_video_info(video_path: Path) -> dict:
         "-show_format", "-show_streams",
         str(video_path)
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffprobe not found in PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffprobe timed out after {exc.timeout}s for {video_path}") from exc
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {result.stderr}")
 
-    data = json.loads(result.stdout)
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("ffprobe returned invalid JSON") from exc
     video_stream = next(
         (s for s in data.get("streams", []) if s.get("codec_type") == "video"),
         None
@@ -45,8 +76,11 @@ def get_video_info(video_path: Path) -> dict:
     # Parse frame rate (can be "30/1" or "30000/1001")
     fps_str = video_stream.get("r_frame_rate", "30/1")
     if "/" in fps_str:
-        num, den = fps_str.split("/")
-        fps = float(num) / float(den)
+        num, den = fps_str.split("/", 1)
+        den_value = float(den)
+        if den_value == 0:
+            raise RuntimeError(f"Invalid frame rate from ffprobe: {fps_str}")
+        fps = float(num) / den_value
     else:
         fps = float(fps_str)
 
@@ -227,12 +261,24 @@ def speed_up_with_timer(
     print(f"  Timer overlay: {'yes' if add_timer else 'no'}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        timeout_seconds = ffmpeg_timeout(video_info.get("duration", 0))
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
         if result.returncode != 0:
             print(f"FFmpeg stderr: {result.stderr}", file=sys.stderr)
             raise subprocess.CalledProcessError(result.returncode, cmd)
+    except FileNotFoundError:
+        print("Error processing video: ffmpeg not found in PATH", file=sys.stderr)
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"Error processing video: {e}", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired as e:
+        print(f"Error processing video: ffmpeg timed out after {e.timeout}s", file=sys.stderr)
         sys.exit(1)
 
 
@@ -246,6 +292,7 @@ def concatenate_with_crossfade(
     Concatenate intro and recording with crossfade transition.
     """
     intro_info = get_video_info(intro_path)
+    recording_info = get_video_info(recording_path)
     intro_duration = intro_info["duration"]
 
     # xfade offset = when fade starts (end of intro minus fade duration)
@@ -272,12 +319,24 @@ def concatenate_with_crossfade(
     print(f"Concatenating with {crossfade_duration}s crossfade...")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        timeout_seconds = ffmpeg_timeout(intro_duration, recording_info.get("duration", 0))
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
         if result.returncode != 0:
             print(f"FFmpeg stderr: {result.stderr}", file=sys.stderr)
             raise subprocess.CalledProcessError(result.returncode, cmd)
+    except FileNotFoundError:
+        print("Error concatenating: ffmpeg not found in PATH", file=sys.stderr)
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"Error concatenating: {e}", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired as e:
+        print(f"Error concatenating: ffmpeg timed out after {e.timeout}s", file=sys.stderr)
         sys.exit(1)
 
 
@@ -327,6 +386,20 @@ Examples:
     if args.intro and not args.intro.exists():
         print(f"Error: Intro not found: {args.intro}", file=sys.stderr)
         sys.exit(1)
+
+    if args.speed <= 0:
+        print("Error: --speed must be greater than 0", file=sys.stderr)
+        sys.exit(1)
+
+    if args.fps <= 0:
+        print("Error: --fps must be greater than 0", file=sys.stderr)
+        sys.exit(1)
+
+    if args.crossfade < 0:
+        print("Error: --crossfade must be non-negative", file=sys.stderr)
+        sys.exit(1)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
 
     # Get recording info
     print(f"\nAnalyzing: {args.recording}")

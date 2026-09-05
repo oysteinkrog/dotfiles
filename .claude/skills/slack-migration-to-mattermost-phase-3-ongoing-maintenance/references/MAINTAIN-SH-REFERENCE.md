@@ -19,7 +19,7 @@ The Phase 3 orchestrator. Thin dispatcher over `scripts/*.sh` and `scripts/*.py`
 | `db-health` | `scripts/db-health.sh` | no | yes |
 | `restore-drill` | `scripts/restore-drill.sh` | yes (wipes SCRATCH_DB_URL) | yes |
 | `schedule-reboot` | `scripts/schedule-reboot.sh` | yes (queues reboot) | yes-if-same-window |
-| `rotate-credentials` | `scripts/rotate-credentials.sh` | yes (revokes old creds) | no |
+| `rotate-tokens` | `scripts/rotate-tokens.sh` | yes (revokes old creds) | no |
 | `disaster-recovery` | prints `references/DISASTER-RECOVERY.md` | n/a (interactive) | n/a |
 | `weekly-sweep` | composite: health → update-os → backup → db-health | aborts on first failure | yes |
 
@@ -60,7 +60,7 @@ All stages are safe to run unattended with exceptions:
 
 - `disaster-recovery` is an interactive playbook; running it non-interactively
   just dumps the playbook markdown to stdout.
-- `rotate-credentials` prompts for operator confirmation at each rotation
+- `rotate-tokens` prompts for operator confirmation at each rotation
   step; pass `--yes` to skip (not recommended for production).
 
 ## Exit codes

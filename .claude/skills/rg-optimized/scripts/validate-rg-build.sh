@@ -4,7 +4,10 @@
 
 set -euo pipefail
 
-RG="${1:-$(which rg)}"
+RG="${1:-}"
+if [[ -z "$RG" ]]; then
+    RG="$(command -v rg || true)"
+fi
 PASS=0
 FAIL=0
 
@@ -12,6 +15,11 @@ info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
 pass() { echo -e "\033[1;32m[PASS]\033[0m $1"; ((PASS++)) || true; }
 fail() { echo -e "\033[1;31m[FAIL]\033[0m $1"; ((FAIL++)) || true; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+
+if [[ -z "$RG" ]]; then
+    fail "rg not found in PATH"
+    exit 1
+fi
 
 info "Validating: $RG"
 echo
@@ -59,6 +67,7 @@ fi
 
 # 6. Test PCRE2 actually works
 TEST_PATTERN='(?<=\$)\d+'
+# shellcheck disable=SC2016
 TEST_INPUT='Price is $100 dollars'
 EXPECTED='100'
 
@@ -83,15 +92,19 @@ else
 fi
 
 # 8. Check binary size (release-lto should be ~4MB)
-SIZE=$(stat -f%z "$RG" 2>/dev/null || stat --printf="%s" "$RG" 2>/dev/null)
-SIZE_MB=$(echo "scale=1; $SIZE / 1048576" | bc)
-info "Binary size: ${SIZE_MB}MB"
-if (( $(echo "$SIZE_MB < 6" | bc -l) )); then
-    pass "Binary size optimal (<6MB, likely LTO build)"
-elif (( $(echo "$SIZE_MB < 10" | bc -l) )); then
-    warn "Binary size moderate (6-10MB, possibly release without LTO)"
+SIZE=$(stat -f%z "$RG" 2>/dev/null || stat --printf="%s" "$RG" 2>/dev/null || true)
+if [[ "$SIZE" =~ ^[0-9]+$ ]]; then
+    SIZE_MB=$(awk -v size="$SIZE" 'BEGIN {printf "%.1f", size / 1048576}')
+    info "Binary size: ${SIZE_MB}MB"
+    if [[ "$SIZE" -lt $((6 * 1048576)) ]]; then
+        pass "Binary size optimal (<6MB, likely LTO build)"
+    elif [[ "$SIZE" -lt $((10 * 1048576)) ]]; then
+        warn "Binary size moderate (6-10MB, possibly release without LTO)"
+    else
+        warn "Binary size large (>10MB, possibly debug build)"
+    fi
 else
-    warn "Binary size large (>10MB, possibly debug build)"
+    warn "Could not determine binary size"
 fi
 
 # Summary

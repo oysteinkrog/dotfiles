@@ -1,0 +1,74 @@
+# Cargo.toml features template for the rust-unsafe-code-exorcist
+#
+# Append the relevant sections to <project>/Cargo.toml (or each member of
+# the workspace's Cargo.toml) per the audit's plans.
+
+[features]
+# Default features — the perf path with unsafe optimizations.
+default = []
+
+# safe-only — zero unsafe in the perf path. (B) sites' safe alternatives
+# replace the perf-path unsafe under this feature.
+safe-only = []
+
+# loom_concurrency_tests — opt-in for the loom-modeled concurrency suite.
+# Use with `RUSTFLAGS="--cfg loom" cargo test --features loom_concurrency_tests`.
+loom_concurrency_tests = ["dep:loom"]
+
+
+[dependencies]
+# Safer alternatives the audit may pull in.
+# Uncomment per the per-site plans.
+
+# pin-project-lite = "0.2"          # for [80-PIN-PROJECTIONS.md § P-1]
+# arc-swap = "1"                    # for [75-LOCK-FREE-PATTERNS.md § LF-1]
+# dashmap = "6"                     # for [75-LOCK-FREE-PATTERNS.md § LF-2]
+# crossbeam = "0.8"                 # for [30-CONCURRENCY-PATTERNS.md]
+# indexmap = "2"                    # for [30-CONCURRENCY-PATTERNS.md]
+# slab = "0.4"                      # for [65-ALLOCATOR-PATTERNS-DEEP.md § AL-1]
+# slotmap = "1"                     # for [65-ALLOCATOR-PATTERNS-DEEP.md § AL-2]
+# bumpalo = { version = "3", features = ["collections"] }   # for arenas
+# zerocopy = "0.7"                  # for [70-UNINIT-AND-TRANSMUTE.md § T-1]
+# bytemuck = { version = "1", features = ["derive"] }
+# arrayvec = "0.7"                  # for [70-UNINIT-AND-TRANSMUTE.md § U-3]
+# wide = "0.7"                      # for [20-SIMD-AND-PERF.md § Refactor S-2]
+# num_enum = "0.7"                  # for [70-UNINIT-AND-TRANSMUTE.md § T-3]
+# static_assertions = "1"           # for [50-SEND-SYNC-IMPLS.md] compile-time impl checks
+# volatile-register = "0.2"         # for [55-EMBEDDED-PATTERNS.md § E-1]
+
+
+[dev-dependencies]
+# Property-based + harness tests
+proptest = "1"
+# quickcheck = "1"                  # alternative to proptest
+# arbitrary = { version = "1", features = ["derive"] }   # for fuzz/structured
+
+# kani (formal verification) — installed separately via `cargo install kani-verifier`
+# kani-verifier = "0.x"             # only as dev-dep where kani proofs live
+
+
+[target.'cfg(loom)'.dependencies]
+# loom is opt-in via cfg(loom); the dep is dev-only but cfg-gated.
+loom = "0.7"
+
+
+[profile.release]
+# For FFI-heavy crates: abort on panic to avoid Rust unwinding through C.
+# Per [60-FFI-PATTERNS.md § F-3 panic boundary] and AGENTS.md cross-cutting unwinding.
+panic = "abort"
+
+# For SIMD-heavy crates: opt-in to target-cpu via env or .cargo/config.toml.
+# RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release
+
+
+[profile.dev]
+# Match release panic strategy if FFI is involved.
+panic = "abort"
+
+
+[profile.bench]
+# For perf-budget measurement; reproducible run-to-run results.
+debug = false
+opt-level = 3
+lto = "fat"           # only if the project's bench infrastructure accepts the longer build time
+codegen-units = 1

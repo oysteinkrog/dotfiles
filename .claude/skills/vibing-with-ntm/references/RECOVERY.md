@@ -119,7 +119,7 @@ If the entity is really gone, pick a new target and continue. Do not retry the s
 
 ### `SOURCE_*` — Data Source Degraded or Unavailable
 
-**Symptom:** `--robot-snapshot` response has `source_health.<source>.status == "stale"` or `"unavailable"`.
+**Symptom:** `--robot-snapshot` response lists the source in `degraded_sources`, or `.sources.sources.<source>` has `fresh: false` / `degraded: true`.
 
 Thresholds (from `/dp/ntm/docs/freshness-contract.md`):
 
@@ -152,9 +152,9 @@ Thresholds (from `/dp/ntm/docs/freshness-contract.md`):
 
 ```bash
 # Always query the registry to get the current shape
-ntm --robot-help=<surface-name>
+ntm --robot-docs=commands
+ntm --robot-capabilities | jq '.commands[] | select(.flag=="--robot-<surface>")'
 ntm --robot-schema=<response-type>
-ntm --robot-capabilities | jq '.commands[] | select(.name=="<surface>")'
 ```
 
 Deprecated → canonical flag mapping:
@@ -348,7 +348,7 @@ cargo test --lib
 
 ```bash
 # 1. Confirm it's really down
-ntm --robot-snapshot | jq '.source_health.mail'
+ntm --robot-snapshot | jq '{sources: .sources.sources, degraded_sources}'
 
 # 2. Fall back to bead-assignee as soft lock
 br update <bead_id> --status=in_progress --assignee=<agent_name>
@@ -360,7 +360,7 @@ br show <bead_id>  # read others' progress notes
 # 4. Proceed. Mail is advisory, not required.
 ```
 
-Return to mail once `source_health.mail.status == "fresh"` again. Back-propagate important coordination as mail messages at that time if needed.
+Return to mail once the relevant mail/reservation source is fresh again. Back-propagate important coordination as mail messages at that time if needed.
 
 ---
 
@@ -457,6 +457,187 @@ ntm coordinator status myproject
 
 ---
 
+## Two-Step Relaunch After `--robot-restart-pane`
+
+**Symptom:** `--robot-restart-pane --restart-prompt="…"` completes, the pane looks "restarted," but the agent CLI never starts. The prompt you supplied is running as a broken shell command (see AP-39).
+
+**Cause:** `--robot-restart-pane` uses `tmux respawn-pane -k`, dropping the pane to bare zsh. `--restart-prompt` is handed to zsh — not to an agent CLI that hasn't been relaunched.
+
+**Recovery:**
+
+```bash
+# Step 1 — the restart itself
+ntm --robot-restart-pane=<session> --panes=<pane>
+
+# Step 2 — discover the window index (OC-028) and relaunch the CLI via its alias
+WIN=$(tmux list-windows -t <session> -F '#{window_index}' | head -1)
+tmux send-keys -t <session>:${WIN}.<pane> "cc" Enter      # or "cod" / "gmi"
+sleep 10     # let the CLI fully boot before dispatching
+
+# Step 3 — verify the CLI is actually running (OC-026)
+tmux list-panes -t <session>:${WIN} -F '#{pane_index} #{pane_current_command} #{pane_pid}' | grep "^<pane> "
+# pane_current_command should now be the agent process, not zsh.
+
+# Step 4 — dispatch marching orders through the normal channel
+ntm --robot-send=<session> --panes=<pane> --msg="$(cat marching_orders.txt)"
+```
+
+If you prefer `--restart-prompt` anyway, treat it as advisory and always follow with Steps 2-4.
+
+Corollary: before/after `--robot-smart-restart --force`, compare `pane_pid`. If unchanged, the restart was soft; escalate to `--robot-restart-pane`.
+
+---
+
+## Codex Multi-Enter Submit Loop
+
+**Symptom:** `ntm --robot-send --type=codex` returns `"success": true` but the prompt sits in the codex input buffer; agent never starts thinking (AP-44).
+
+**Cause:** Codex treats pastes as multi-line edits. One Enter inserts a newline; the second (or third, on long prompts) submits. `cc` auto-submits on one Enter — codex does not.
+
+**Recovery:**
+
+```bash
+WIN=$(tmux list-windows -t <session> -F '#{window_index}' | head -1)
+
+ntm --robot-send=<session> --panes=<pane> --msg="$(cat prompt.txt)" --type=codex
+for i in 1 2 3; do
+  tmux send-keys -t <session>:${WIN}.<pane> Enter
+  sleep 2
+done
+
+# Ground-truth verify submission (NOT --robot-tail here, per AP-41):
+tmux capture-pane -t <session>:${WIN}.<pane> -p -S -10 | \
+  grep -iE '• Working|• Waiting for background terminal|thinking|processing' \
+  || echo "codex prompt may not have submitted — inspect and resend"
+```
+
+Bake this loop into every codex dispatch. Don't fire-and-forget.
+
+---
+
+## Cross-Session Process Contention (Sweep Before Restart)
+
+**Symptom:** Bead DB locks, cargo registry locks, or mysterious "file is busy" errors appear without any obvious process inside the current swarm holding them. Restarting your own panes doesn't clear it.
+
+**Cause:** Parasitic processes from unrelated sessions (closed terminals, dead worktrees, other projects' cargo) hold cross-session file/SQLite locks. Can outlive their origin session by hours or days.
+
+**Diagnosis:**
+
+```bash
+# Who's actually touching the resource, box-wide:
+pgrep -af 'br (create|close|update|sync|list)' | awk '{print $1}' | \
+  xargs -I{} sh -c 'echo "PID {}: cwd=$(readlink /proc/{}/cwd 2>/dev/null)"'
+
+pgrep -af 'cargo (test|check|bench|build|run)' | awk '{print $1}' | \
+  xargs -I{} sh -c 'echo "PID {}: cwd=$(readlink /proc/{}/cwd 2>/dev/null)"'
+
+# Long-outlived processes (etime in D+HH:MM:SS format = days-old):
+ps -eo pid,stat,etime,comm,args --sort=-etime | awk '$3 ~ /-/ {print}' | head
+
+# D-state (uninterruptible I/O) — these block SQLite writes filesystem-wide:
+ps -eo pid,stat,etime,comm | awk '$2 ~ /D/'
+```
+
+**Recovery:**
+
+```bash
+# Confirm the PID's cwd is NOT inside your live swarm's working dirs.
+# Then terminate — SIGTERM first, SIGKILL only if stuck.
+kill -15 <pid>
+sleep 5
+kill -0 <pid> 2>/dev/null && kill -9 <pid>
+
+# Re-check locks afterwards:
+lsof | grep -E '\.beads/beads\.db|registry/\.cargo-lock' || echo "all clear"
+```
+
+D-state processes are uninterruptible — kill `-9` won't work. They'll eventually clear when their I/O completes (or the box reboots). In the meantime, route around them (local build, `--no-db` bead writes, etc.).
+
+---
+
+## Background-Close / Retry-Loop Detachment
+
+**Symptom:** A pane is wedged for 5-10+ minutes waiting for a retryable operation (bead close, mail send, coordinator update) against an intermittently-locked resource.
+
+**Cause:** Blocking retry inside the pane means the agent's attention is stuck on a non-productive wait.
+
+**Recovery — detach the retry loop so the pane can proceed:**
+
+```bash
+# Generic detached-retry (substitute any retryable <cmd>):
+ntm --robot-send=<session> --panes=<pane> --msg='Background your close: run ( for i in 1 2 3 4 5; do timeout 60 br close <id> --reason "..." && break; sleep 20; done ) & then immediately pick your next bead from bv --robot-triage.'
+```
+
+Also works for: mail send, coordinator update, registry publish, any flaky-but-retryable operation. Panes should never idle on a retryable failure.
+
+---
+
+## Bead-DB Busy — `--no-db` Bypass
+
+**Symptom:** `br create`, `br close`, or `br update` hang on "database is locked" for minutes when a long-running `br sync --import-only` holds the SQLite DB.
+
+**Workaround:**
+
+```bash
+# Bypass DB-busy contention; writes go to JSONL, DB reconciles later
+br create --no-db --no-auto-flush --no-auto-import --title="…" --type=task --priority=2
+br update <id> --no-db --no-auto-flush --no-auto-import --status=in_progress
+```
+
+Teach agents this as a fallback via marching orders so they don't hand-off the work when the DB is locked.
+
+**Markdown audit fallback:** when even `--no-db` fails (e.g. underlying FS I/O wedged), agents can write findings to `audit_<project>_<skill>.md` at repo root and batch-create beads later when the DB recovers. Useful escape valve that keeps findings durable.
+
+---
+
+## Stale In-Progress Beads (Self-Audit Pattern)
+
+**Symptom:** After a long session, `br list --status=in_progress` shows dozens of beads; agents shipped the work but forgot to close.
+
+**Recovery — one-line self-audit for an implementer pane:**
+
+```text
+For every bead currently assigned to you with status=in_progress, run:
+  git log --all --grep='<bead_id>' --oneline
+If a commit references that bead:
+  br close <bead_id> --reason 'Shipped in <commit_sha>'
+Otherwise:
+  br update <bead_id> --status=open --reason 'Not actually shipped; releasing'
+Report counts closed vs reopened. Do this before claiming anything new.
+```
+
+Dispatch this as a periodic hygiene nudge, especially near convergence or before shutdown.
+
+---
+
+## Permanently-Orphaned Beads (DB/JSONL Drift)
+
+**Symptom:** `br update <id>` returns "Issue not found" while `br list` shows the same ID. `br doctor` reports "DB and JSONL diverged (merge required)."
+
+**Cause:** Drift between the SQLite DB and the JSONL export. The bead is visible to one storage tier but not the other.
+
+**Recovery:**
+
+- Exclude orphaned beads from convergence math (`br ready` / `--status` counts).
+- Accept they'll never close cleanly without human-run recovery (`br doctor --fix` or manual JSONL/DB reconciliation).
+- See `/fixing-beads-problems` skill for full recovery procedures.
+
+---
+
+## Mailbox DB Corruption Fallback
+
+**Symptom:** Agent Mail server returns errors on `file_reservation_paths`, `send_message`, or `fetch_inbox` for hours; retries waste tokens.
+
+**Recovery — hard-code the fallback into marching orders, once:**
+
+```text
+If the Agent Mail server returns any database error or times out twice in a row during this session, immediately stop retrying. Fall back to bead-assignee as the soft lock (br update <id> --assignee=<your_name>) and use bead descriptions for progress notes. Do not attempt registration again until the next session.
+```
+
+Paired with OC-007, this stops the 4-hour retry loop before it starts.
+
+---
+
 ## When To Actually Escalate To The User
 
 Only escalate after:
@@ -464,7 +645,7 @@ Only escalate after:
 - Cursor resync failed twice
 - Account rotation exhausted available accounts (`--robot-accounts-list` shows none healthy)
 - Nuclear restart still produces the same symptom
-- `source_health` critical for >30 min AND no progress on the underlying service
+- a source remains degraded/critical for >30 min AND no progress on the underlying service
 
 Escalation surface:
 

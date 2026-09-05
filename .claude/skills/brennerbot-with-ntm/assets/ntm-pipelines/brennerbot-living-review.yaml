@@ -1,0 +1,101 @@
+name: brennerbot-living-review
+description: |
+  Living-review mode pipeline — periodic Phase-4 + Phase-7 refresh on a question
+  that's never fully closed. Cadence-driven (e.g., quarterly).
+
+  Per EXTENDED-OPERATING-MODES.md `living-review` mode.
+  Use for: ongoing topics where evidence accumulates over time (technology
+  evaluation, regulatory landscape, evolving best practice).
+
+# Pipeline structure: a "tick" of a living-review session.
+# This is meant to be invoked periodically (cron, manual schedule, etc),
+# NOT continuously. Each tick is a Phase-4 + Phase-7 refresh.
+
+inputs:
+  workspace: required  # Existing workspace from prior brennerbot session
+  cadence: required    # weekly | monthly | quarterly | annual
+  fresh_corpus_dir: optional  # New corpus to ingest this tick
+
+phases:
+  - name: phase_0_pre_check
+    type: manual
+    description: |
+      Verify workspace is in living-review state.
+      - workspace.RESUME.md exists
+      - prior tick's deliverables are committed
+      - mode in phase0_scope_decision.md is `living-review`
+
+  - name: phase_4_refresh
+    type: manual
+    description: |
+      Phase 4 refresh — re-investigate H states with new evidence.
+      Investigators read fresh_corpus_dir if provided.
+      Each existing active H is re-evaluated against new evidence.
+      New Hs may surface from anomalies in fresh evidence.
+
+    sub_steps:
+      - dispatch: MO-04a-investigate.md
+        targets: all_active_H
+      - dispatch: MO-04b-devils-advocate.md
+        targets: confidence_high_H
+      - check: convergence-check.sh --phase=4 --workspace=${workspace}
+
+  - name: phase_7_refresh
+    type: manual
+    description: |
+      Phase 7 audit refresh — what changed since last tick?
+
+    sub_steps:
+      - dispatch: MO-07a-fresh-eyes.md
+        targets: artifacts_changed_since_prior_tick
+      - check: audit-bead-invariants.sh --all
+      - check: check-volatile-source-staleness.sh
+
+  - name: phase_8_freeze
+    type: manual
+    description: |
+      Update RESUME.md with this tick's state.
+
+  - name: phase_9_handback_delta
+    type: manual
+    description: |
+      Produce DELTA-HANDBACK.md highlighting what changed this tick.
+
+      Format:
+      - State changes (active → confirmed, etc.)
+      - New evidence (EV-NNN since last tick)
+      - New anomalies (anomaly beads)
+      - Recommended actions
+
+  - name: phase_10_lightweight_drift
+    type: manual
+    description: |
+      Lightweight drift check — has methodology slipped this tick?
+      Less rigorous than full Phase 10; targeted at this tick's deltas.
+
+scheduling:
+  next_tick: |
+    Computed from cadence:
+    - weekly: now + 7 days
+    - monthly: now + 30 days
+    - quarterly: now + 90 days
+    - annual: now + 365 days
+
+  trigger_conditions: |
+    Either cadence-based (scheduled) OR event-driven:
+    - New regulatory change in scope domain
+    - New peer-reviewed paper cited by ≥3 authoritative sources
+    - User-requested manual refresh
+
+outputs:
+  - DELTA-HANDBACK.md
+  - Updated RESUME.md
+  - Updated audit-findings/
+  - New EV beads (if any)
+  - Updated H states (if any)
+
+anti_patterns:
+  - Continuous polling (defeats cadence-based discipline)
+  - Skip phase 4 refresh when no new evidence (still useful to verify staleness)
+  - Treat each tick as fresh session (lose history; should be incremental)
+  - Skip Phase 10 lightweight drift (drift accumulates across ticks)

@@ -1,0 +1,17 @@
+id: rust-ub-lifetime-escape-as-ptr
+language: rust
+severity: warning
+message: >-
+  Raw pointer derived from a stack value via as_ptr / addr_of may outlive its
+  scope. Trace lifetimes carefully.
+rule:
+  any:
+    - pattern: '$EXPR.as_ptr()'
+    - pattern: '$EXPR.as_mut_ptr()'
+    - pattern: 'std::ptr::addr_of!($EXPR)'
+    - pattern: 'std::ptr::addr_of_mut!($EXPR)'
+    - pattern: 'core::ptr::addr_of!($EXPR)'
+    - pattern: 'core::ptr::addr_of_mut!($EXPR)'
+note: >-
+  False-positive heavy by design — the rule is a starting filter; the syn-walker
+  scripts/syn-walkers/escape.rs does the dataflow.

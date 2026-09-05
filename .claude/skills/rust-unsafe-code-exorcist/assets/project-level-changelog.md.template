@@ -1,0 +1,147 @@
+# Soundness Log
+
+> Append-only record of this project's soundness journey, maintained per the
+> [rust-unsafe-code-exorcist](https://github.com/.../skills/rust-unsafe-code-exorcist)
+> methodology. Auto-generated additions + manual context.
+
+---
+
+## Project metadata
+
+- **Project:** <PROJECT_NAME>
+- **Repository:** <REPO_URL>
+- **First audit:** <YYYY-MM-DD>
+- **Methodology version:** rust-unsafe-code-exorcist v<X.Y>
+- **Verifier:** `<audit-dir>/verify.sh`
+- **Current baseline:** v<X.Y.Z> (audited <YYYY-MM-DD>)
+- **Current geiger count:** <count>
+- **Open soundness debt:** <total_risk_pts>
+- **Continuous mode:** <enabled | disabled>
+
+---
+
+## Audit history
+
+(Newest first. Append new entries at top of this section.)
+
+### Audit #<N> — <YYYY-MM-DD> — v<release>
+
+- **Mode:** <audit-only | audit-and-refactor | harden-incident | …>
+- **Scope:** <crates in scope>
+- **Duration:** <hours>
+- **Result:** verify.sh <GREEN | PARTIAL | FAIL>; <count> sites refactored
+- **Tally:**
+  - (A) STRICTLY_UNAVOIDABLE: <a>
+  - (B) PERF_ONLY: <b>
+  - (C) REFACTORABLE: <c> closed; <open> remaining
+  - pre-existing-UB: <p> filed
+- **Delta from previous audit:** Geiger <prev_g> → <g>; debt <prev_pts> → <pts>
+- **Key refactor clusters:** <list with bead chains>
+- **Reviewer:** <reviewer> @ confidence <H/M/L>
+- **Artifacts:** <audit-dir-path>, commit <hash> / branch <name> / PR #<NNNN>
+
+---
+
+## Incident history
+
+(Newest first.)
+
+### Incident #<M> — <YYYY-MM-DD>
+
+- **Identifier:** <CVE / GHSA / internal>
+- **Severity:** <Critical | High | Medium | Low>
+- **Symptom (one-line):** <summary>
+- **RCA:** [audit/incident-rca.md](../audit/incident-rca.md)
+- **Fix released in:** v<X.Y.Z+1>
+- **Advisory:** <URL>
+- **Reporter:** <name; with permission>
+- **Response time:** <acknowledge: H/D; fix: D/W>
+- **Regression test:** `tests/regression_<id>.rs`
+- **Forward propagation findings:** <N adjacent sites; bead IDs>
+
+---
+
+## Refactor wave summary
+
+| Wave | Quarter | Sites refactored | Risk-pts closed | Highlights |
+|------|---------|------------------|-----------------|------------|
+| <N> | <Q-Y> | <count> | <pts> | <one-liner> |
+| <N-1> | <Q-Y> | <count> | <pts> | <one-liner> |
+| 1 | <Q-Y> | <count> | <pts> | Initial audit baseline |
+
+---
+
+## Continuous-mode highlights
+
+- **Total drift events caught:** <N>
+- **Drift handled within 24h:** <K> (<%>)
+- **False-positive drift bead rate:** <%>
+- **Clean-streak record:** <X> days
+- **Current clean streak:** <Y> days
+- **Last drift event:** <YYYY-MM-DD> (<type>)
+
+---
+
+## Cumulative metrics
+
+| Metric | At baseline | Now | Trend |
+|--------|-------------|-----|-------|
+| Geiger count | <baseline_geiger> | <current_geiger> | <delta_%> |
+| Total risk-pts (open) | <baseline_pts> | <current_pts> | <delta_%> |
+| Soundness surface entries | <baseline_s> | <current_s> | <delta_%> |
+| (A) sites with hardened SAFETY | <%> | <%> | <delta> |
+| `safe-only` feature exists | NO/YES | YES | — |
+| `verify.sh` clean streak | n/a | <days> | — |
+| Audits completed | 0 | <N> | — |
+| Incidents handled | 0 | <M> | — |
+
+---
+
+## Methodology notes
+
+- **Audit scope.** Each audit covers all `unsafe` blocks, `unsafe fn`, `unsafe impl`, `unsafe trait`, `extern` blocks, `asm!`. Soundness surface includes every `pub` item reaching `unsafe`.
+- **Bucket discipline.** A/B/C classification per [CLASSIFICATION-RUBRIC.md](../../skills/rust-unsafe-code-exorcist/references/methodology/CLASSIFICATION-RUBRIC.md). (A) requires falsifiable justification; (B) requires per-target perf measurement; (C) requires property-based equivalence proof.
+- **Verification.** `verify.sh` runs miri (3 modes) + careful + loom + fuzz + mutants + geiger + full test suite under default + safe-only.
+- **Continuous mode.** Per [CONTINUOUS-MODE.md](../../skills/rust-unsafe-code-exorcist/references/methodology/CONTINUOUS-MODE.md). Cron drift checker nightly.
+
+---
+
+## How to read this log
+
+- **Audit history.** What the project has done in audited form. Each entry is a snapshot.
+- **Incident history.** What the project has fixed in incident form. Each entry is a regression test pinned in code.
+- **Refactor wave summary.** The aggregate per-quarter view.
+- **Continuous-mode highlights.** Ongoing drift management.
+- **Cumulative metrics.** The trajectory over time.
+
+For drill-down: each audit entry links to its audit dir; each incident entry links to its RCA.
+
+---
+
+## How to contribute manual context
+
+You may APPEND manual entries for context. Format:
+
+```markdown
+### Context Note — <YYYY-MM-DD> — <topic>
+
+<paragraph explaining the context. Often a policy decision, a rejected
+refactor pattern, or a learning the team wants future contributors to see.>
+```
+
+Examples of valuable manual entries:
+
+- "We standardized on `arc-swap` over hand-rolled `AtomicPtr<Arc<T>>` after wave 3."
+- "We rejected `lazy_static` migration to `OnceLock` for compatibility with rustc < 1.70."
+- "The team's policy is `panic = "abort"` for FFI-heavy crates; debated in PR #1234."
+
+Manual entries are append-only; preserve all history.
+
+---
+
+## Generation
+
+- Auto-appended sections: audit entries, incident entries, refactor wave summary, continuous-mode highlights, cumulative metrics.
+- Manually-edited: project metadata (at top), context notes (anywhere appropriate).
+- Generation script: `scripts/generate-soundness-changelog.sh <audit-dir> <project>`.
+- The script is idempotent: running it twice produces the same output.

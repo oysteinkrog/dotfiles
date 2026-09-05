@@ -84,7 +84,7 @@ No state in agent memory is critical.
 
 ```bash
 # Check in-progress beads
-br list --status in_progress --json | jq '.[].id'
+br list --status in_progress --json | jq '.issues[]?.id'
 
 # Check recent git activity
 git log --oneline -10

@@ -196,7 +196,7 @@ but still widely used.)
 - Not calibrated across raters
 - Microsoft deprecated due to inconsistency
 
-**Modern replacement:** Use [FAIR](#9-fair) for quantitative analysis or a
+**Modern replacement:** Use [FAIR](#9-fair-factor-analysis-of-information-risk) for quantitative analysis or a
 simple severity matrix for qualitative.
 
 ### 7. VAST (Visual, Agile, Simple Threat modeling)

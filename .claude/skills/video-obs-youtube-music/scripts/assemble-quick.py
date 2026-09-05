@@ -4,15 +4,15 @@ Quick assembly - main video with music and song cards (no intro/outro)
 Can be used while intro is still rendering
 """
 
-import subprocess
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 # Paths
-HOME = Path.home()
-MOVIES_DIR = Path(os.environ.get("MOVIES_DIR", str(HOME / "Movies")))
-MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", str(MOVIES_DIR / "ashra_music")))
-CARDS_DIR = Path(os.environ.get("CARDS_DIR", str(MUSIC_DIR / "cards")))
+MOVIES_DIR = Path(os.environ.get("OBS_MOVIES_DIR", Path.home() / "Movies")).expanduser()
+MUSIC_DIR = MOVIES_DIR / "ashra_music"
+CARDS_DIR = MUSIC_DIR / "cards"
 
 # Input files
 MAIN_VIDEO = MOVIES_DIR / "screen_recording_2x_with_timer.mp4"
@@ -22,16 +22,31 @@ CARD_1 = CARDS_DIR / "01_card.mp4"
 CARD_2 = CARDS_DIR / "02_card.mp4"
 
 # Output
-OUTPUT = Path(os.environ.get("OUTPUT_FILE", str(MOVIES_DIR / "multi_agent_workflow_quick.mp4")))
+OUTPUT = MOVIES_DIR / "multi_agent_workflow_quick.mp4"
 
 def get_duration(path):
     result = subprocess.run([
         'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
         '-of', 'csv=p=0', str(path)
     ], capture_output=True, text=True)
-    return float(result.stdout.strip())
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    try:
+        return float(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"Could not parse duration for {path}: {result.stdout!r}") from exc
+
+def validate_inputs():
+    missing = [path for path in [MAIN_VIDEO, SONG_1, SONG_2, CARD_1, CARD_2] if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Missing required input files:\n" + "\n".join(f"  - {path}" for path in missing)
+        )
 
 def main():
+    validate_inputs()
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+
     print("=" * 60)
     print("Quick Assembly - Main Video with Music")
     print("=" * 60)
@@ -66,54 +81,56 @@ def main():
 [v1][card2]overlay=W-w-{margin}:{margin}:enable='between(t,{card_2_start},{card_2_start + card_dur})'[vout]
 """
 
-    overlay_tmp = Path("/tmp/overlay_video.mp4")
-    subprocess.run([
-        'ffmpeg', '-y',
-        '-i', str(MAIN_VIDEO),
-        '-i', str(CARD_1),
-        '-i', str(CARD_2),
-        '-filter_complex', filter_complex,
-        '-map', '[vout]',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-        '-pix_fmt', 'yuv420p',
-        str(overlay_tmp)
-    ], check=True)
+    with tempfile.TemporaryDirectory(prefix="obs-assemble-quick-") as temp_dir:
+        overlay_tmp = Path(temp_dir) / "overlay_video.mp4"
+        audio_tmp = Path(temp_dir) / "mixed_audio.m4a"
 
-    # Step 2: Mix audio tracks
-    print("\n[Step 2] Mixing music tracks...")
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-i', str(MAIN_VIDEO),
+            '-i', str(CARD_1),
+            '-i', str(CARD_2),
+            '-filter_complex', filter_complex,
+            '-map', '[vout]',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            str(overlay_tmp)
+        ], check=True)
 
-    fade_start = main_dur - 5.0
+        # Step 2: Mix audio tracks
+        print("\n[Step 2] Mixing music tracks...")
 
-    audio_filter = f"""
+        fade_start = main_dur - 5.0
+
+        audio_filter = f"""
 [0:a]asetpts=PTS-STARTPTS[a1];
 [1:a]asetpts=PTS-STARTPTS,adelay={int(song1_dur * 1000)}[a2];
 [a1][a2]amix=inputs=2:duration=longest,afade=t=out:st={fade_start}:d=5[aout]
 """
 
-    audio_tmp = Path("/tmp/mixed_audio.m4a")
-    subprocess.run([
-        'ffmpeg', '-y',
-        '-i', str(SONG_1),
-        '-i', str(SONG_2),
-        '-filter_complex', audio_filter,
-        '-map', '[aout]',
-        '-c:a', 'aac', '-b:a', '192k',
-        '-t', str(main_dur),
-        str(audio_tmp)
-    ], check=True)
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-i', str(SONG_1),
+            '-i', str(SONG_2),
+            '-filter_complex', audio_filter,
+            '-map', '[aout]',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-t', str(main_dur),
+            str(audio_tmp)
+        ], check=True)
 
-    # Step 3: Combine video and audio
-    print("\n[Step 3] Combining video and audio...")
+        # Step 3: Combine video and audio
+        print("\n[Step 3] Combining video and audio...")
 
-    subprocess.run([
-        'ffmpeg', '-y',
-        '-i', str(overlay_tmp),
-        '-i', str(audio_tmp),
-        '-c:v', 'copy',
-        '-c:a', 'copy',
-        '-shortest',
-        str(OUTPUT)
-    ], check=True)
+        subprocess.run([
+            'ffmpeg', '-y',
+            '-i', str(overlay_tmp),
+            '-i', str(audio_tmp),
+            '-c:v', 'copy',
+            '-c:a', 'copy',
+            '-shortest',
+            str(OUTPUT)
+        ], check=True)
 
     # Get final info
     final_dur = get_duration(OUTPUT)
@@ -127,10 +144,6 @@ def main():
     print(f"  Size: {final_size:.1f} MB")
     print("\nNote: This version has no intro/outro.")
     print("Run assemble-workflow-video.py once intro finishes rendering.")
-
-    # Cleanup
-    overlay_tmp.unlink()
-    audio_tmp.unlink()
 
 if __name__ == "__main__":
     main()

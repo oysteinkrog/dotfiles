@@ -1,0 +1,253 @@
+schema_version: "2.0"
+name: brennerbot-squad
+description: 5-role canonical brennerbot research session (1 Proposer + 2 Investigators + 1 Devil's-Advocate + 1 Synthesizer-rotating-Adjudicator)
+
+inputs:
+  - workspace_path
+  - session_id
+  - question_of_record_path
+  - mode
+  - model_mix              # default: cc:3,cod:1,gmi:1
+
+defaults:
+  model_mix: "cc:3,cod:1,gmi:1"
+  productive_ignorance_pane: 1
+  triage_pane: 1
+  meta_synthesizer_pane: 5
+  hard_caps:
+    phase_4_max_rounds: 6
+    phase_6_max_passes: 4
+    phase_7_max_trio_rounds: 4
+
+steps:
+  - id: register_mail
+    command: ./scripts/register-mail-identities.sh --project-key=${workspace_path} --session=${session_id}
+    on_failure: fallback_to_ntm_inbox
+
+  - id: dispatch_onboarding
+    after: register_mail
+    foreach_pane:
+      template: assets/marching-orders/MO-02-onboarding.md
+      params:
+        PANE_N: ${pane.index}
+        WORKSPACE_PATH: ${workspace_path}
+        QUESTION_OF_RECORD_PATH: ${question_of_record_path}
+        SESSION_ID: ${session_id}
+        ROLE: ${pane.role}
+        MODEL: ${pane.model}
+        PEER_LIST: "session roster for ${session_id}; run ntm list ${session_id}"
+        COORDINATION_MODE: agent-mail
+        PRODUCTIVE_IGNORANCE: ${pane.productive_ignorance}
+        DOMAIN: ${pane.domain}
+    parallel: true
+    on_failure: continue
+
+  - id: wait_for_acks
+    after: dispatch_onboarding
+    command: ./scripts/wait-for-onboard-acks.sh --session=${session_id}
+    timeout: 300s
+
+  - id: phase_3_propose
+    after: wait_for_acks
+    foreach_pane:
+      filter: role==proposer
+      template: assets/marching-orders/MO-03a-propose.md
+      params:
+        PANE_N: ${pane.index}
+        SESSION_ID: ${session_id}
+        COUNT: 5
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+    on_failure: retry:1
+
+  - id: phase_3_triage
+    after: phase_3_propose
+    pane: ${defaults.triage_pane}
+    template: assets/marching-orders/MO-03b-triage.md
+    params:
+      PANE_N: ${defaults.triage_pane}
+      SESSION_ID: ${session_id}
+
+  - id: phase_3_third_alternative_check
+    after: phase_3_triage
+    command: ./scripts/audit-bead-invariants.sh --check=third_alternative_present --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.triage_pane}
+      template: assets/marching-orders/MO-03c-third-alternative.md
+      params:
+        PANE_N: ${defaults.triage_pane}
+        SESSION_ID: ${session_id}
+
+  - id: phase_3_complete_flag
+    after: phase_3_third_alternative_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_3_complete.flag
+
+  - id: phase_4_loop
+    after: phase_3_complete_flag
+    loop:
+      max_iterations: ${defaults.hard_caps.phase_4_max_rounds}
+      until: ./scripts/convergence-check.sh --phase=4 --workspace=${workspace_path}
+      body:
+        - id: phase_4_investigate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '.issues[]? | select((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04a-investigate.md
+            pane_assignment_strategy: round_robin_by_domain
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+          parallel: true
+        - id: phase_4_devils_advocate
+          foreach:
+            beads: >-
+              $(br list --label=hypothesis --status=open --json | jq -r '[.issues[]? | select(((.description // "") | test("(^|\\n)state:[[:space:]]*active([[:space:]]|$)")) and (((.description // "") | contains("confidence: high")) or ((.description // "") | contains("confidence: medium"))))][:2][] | (.external_ref // "") as $external_ref | (try ((.title // "") | capture("^(?<ref>H-[0-9]+):").ref) catch "") as $title_ref | if $external_ref != "" then $external_ref elif $title_ref != "" then $title_ref else .id end')
+            template: assets/marching-orders/MO-04b-devils-advocate.md
+            pane_assignment_strategy: by_model_family_difference
+            params:
+              PANE_N: ${pane.index}
+              H_ID: ${item}
+              SESSION_ID: ${session_id}
+          parallel: true
+        - id: phase_4_audit_invariants
+          command: ./scripts/audit-bead-invariants.sh --check=phase4_round --workspace=${workspace_path}
+          on_failure: continue   # surfacing invariant violations is informational
+
+  - id: phase_4_complete_flag
+    after: phase_4_loop
+    command: touch ${workspace_path}/.brenner_workspace/phase_4_complete.flag
+
+  - id: phase_5_debate_pairs
+    after: phase_4_complete_flag
+    command: ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=1
+
+  - id: phase_5_rounds_gate
+    after: phase_5_debate_pairs
+    command: |
+      test -f ${workspace_path}/.brenner_workspace/phase_5_debate_rounds_complete.flag || {
+        echo "Phase 5 Round 1 was dispatched and debate-pairs.pairs is frozen. Run ./scripts/run-phase5-debate-loop.sh --workspace=${workspace_path} --session=${session_id} --round=2, then --round=3 when ready; round 3 marks .brenner_workspace/phase_5_debate_rounds_complete.flag before adjudication."
+        exit 1
+      }
+
+  - id: phase_5_adjudicate
+    after: phase_5_rounds_gate
+    foreach:
+      pairs: $(cat "${workspace_path}/.brenner_workspace/debate-pairs.resolved.pairs" 2>/dev/null || true)
+      template: assets/marching-orders/MO-05b-adjudicate.md
+      pane_assignment_strategy: rotate_adjudicator
+      params:
+        PANE_N: ${pane.index}
+        DEBATE_ID: ${item.debate_id}
+        SESSION_ID: ${session_id}
+    parallel: true
+
+  - id: phase_5_complete_flag
+    after: phase_5_adjudicate
+    command: touch ${workspace_path}/.brenner_workspace/phase_5_complete.flag
+
+  - id: phase_6_distill
+    after: phase_5_complete_flag
+    foreach:
+      models: $(./scripts/list-distinct-model-families.sh --session=${session_id})
+      template: assets/marching-orders/MO-06a-distill.md
+      pane_assignment_strategy: by_model_family
+      params:
+        PANE_N: ${pane.index}
+        MODEL_FAMILY: ${item}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+    parallel: true
+
+  - id: phase_6_meta_synthesize
+    after: phase_6_distill
+    pane: ${defaults.meta_synthesizer_pane}
+    template: assets/marching-orders/MO-06b-meta-synthesize.md
+    params:
+      PANE_N: ${defaults.meta_synthesizer_pane}
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+    on_failure: retry:1
+
+  - id: phase_6_disagreement_lint
+    after: phase_6_meta_synthesize
+    command: ./scripts/disagreement-register-lint.sh --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.meta_synthesizer_pane}
+      template: assets/marching-orders/MO-06b-meta-synthesize.md
+      params:
+        PANE_N: ${defaults.meta_synthesizer_pane}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+      reason: "disagreement register insufficient"
+
+  - id: phase_6_convergence_check
+    after: phase_6_disagreement_lint
+    command: ./scripts/convergence-check.sh --phase=6 --workspace=${workspace_path}
+    on_failure:
+      pane: ${defaults.meta_synthesizer_pane}
+      template: assets/marching-orders/MO-06b-meta-synthesize.md
+      params:
+        PANE_N: ${defaults.meta_synthesizer_pane}
+        SESSION_ID: ${session_id}
+        WORKSPACE_PATH: ${workspace_path}
+      reason: "Phase 6 has not produced two consecutive trivial meta-synthesis passes"
+
+  - id: phase_6_complete_flag
+    after: phase_6_convergence_check
+    command: touch ${workspace_path}/.brenner_workspace/phase_6_complete.flag
+
+  - id: phase_7_audit_loop
+    after: phase_6_complete_flag
+    loop:
+      max_iterations: ${defaults.hard_caps.phase_7_max_trio_rounds}
+      until: ./scripts/convergence-check.sh --phase=7 --workspace=${workspace_path}
+      body:
+        - id: phase_7_trio
+          foreach_pane:
+            template: assets/marching-orders/MO-07a-fresh-eyes.md
+            params:
+              PANE_N: ${pane.index}
+              SESSION_ID: ${session_id}
+          parallel: true
+
+  - id: phase_7_ubs
+    after: phase_7_audit_loop
+    command: ./scripts/run-ubs-on-deliverables.sh --workspace=${workspace_path}
+    on_failure: abort   # F-703 hard block
+
+  - id: phase_7_complete_flag
+    after: phase_7_ubs
+    command: touch ${workspace_path}/.brenner_workspace/phase_7_complete.flag
+
+  - id: phase_8_freeze
+    after: phase_7_complete_flag
+    pane: 0   # operator pane
+    template: assets/marching-orders/MO-08-freeze.md
+    params:
+      PANE_N: 0
+      SESSION_ID: ${session_id}
+      WORKSPACE_PATH: ${workspace_path}
+      SKILL_SCRIPTS: ./scripts
+
+outputs:
+  - workspace: ${workspace_path}
+  - resume_md: ${workspace_path}/deliverables/RESUME.md
+  - phase_8_complete_flag: ${workspace_path}/.brenner_workspace/phase_8_complete.flag
+
+post_pipeline_steps:
+  - description: "Phase 9 handback (operator-driven; not pipeline-driven)"
+    command: |
+      # MO-09-handback declares <PANE_N>, <SESSION_ID>, <WORKSPACE_PATH>, and
+      # <SKILL_SCRIPTS> in
+      # its Parameters line; dispatch-marching-order.sh's per-MO validator
+      # demands them. Routing flags (--target-pane / --target-session) are
+      # also mandatory (the dispatch script otherwise exits 2).
+      ./scripts/dispatch-marching-order.sh MO-09-handback \
+        --target-pane=5 --target-session=${session_id} \
+        --PANE_N=5 --SESSION_ID=${session_id} --WORKSPACE_PATH=${workspace_path} \
+        --SKILL_SCRIPTS=./scripts
+  - description: "Phase 10 drift-check (fresh general-purpose Agent only — NOT a swarm pane)"
+    command: |
+      echo "Operator: dispatch subagents/drift-auditor.md to a fresh general-purpose Agent."
+      echo "DO NOT run from a swarm pane (per AP-O11)."

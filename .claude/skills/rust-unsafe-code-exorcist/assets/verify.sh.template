@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# verify.sh — installed-into-audit-dir version (customized by harness-builder)
+#
+# Runs the full safety verification suite and emits a single pass/fail.
+# Tee'd to: <audit-dir>/audit/phase9/verify.log
+#
+# Usage from the installed audit dir:
+#   ./verify.sh [<project-dir>]
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AUDIT_DIR="${AUDIT_DIR:-$SCRIPT_DIR}"
+
+audit_realpath() {
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+audit_project_root_from_dir() {
+  local audit_abs="$1"
+  if [ -f "$audit_abs/phase1/project-root.txt" ]; then
+    audit_realpath "$(sed -n '1p' "$audit_abs/phase1/project-root.txt")"
+    return
+  fi
+  local cur
+  cur="$(dirname "$audit_abs")"
+  while [ "$cur" != "/" ]; do
+    if [ -f "$cur/Cargo.toml" ]; then
+      audit_realpath "$cur"
+      return
+    fi
+    cur="$(dirname "$cur")"
+  done
+  echo "error: cannot infer audited project root from audit dir: $audit_abs" >&2
+  return 2
+}
+
+audit_require_under_project() {
+  local audit_abs project_abs
+  audit_abs="$(audit_realpath "$1")"
+  project_abs="$(audit_realpath "$2")"
+  if [ "$audit_abs" = "$project_abs" ]; then
+    echo "error: audit dir must be a child directory inside the project, not the project root" >&2
+    return 2
+  fi
+  case "$audit_abs/" in
+    "$project_abs"/*) printf '%s\n' "$audit_abs" ;;
+    *)
+      echo "error: audit dir must live inside the project being audited" >&2
+      echo "       project:   $project_abs" >&2
+      echo "       audit dir: $audit_abs" >&2
+      return 2
+      ;;
+  esac
+}
+
+AUDIT_DIR=$(audit_realpath "$AUDIT_DIR")
+AUDIT_PROJECT_ROOT=$(audit_project_root_from_dir "$AUDIT_DIR")
+AUDIT_DIR=$(audit_require_under_project "$AUDIT_DIR" "$AUDIT_PROJECT_ROOT")
+
+infer_project_dir() {
+  if [ -f "$AUDIT_DIR/phase1/project-root.txt" ]; then
+    sed -n '1p' "$AUDIT_DIR/phase1/project-root.txt"
+    return
+  fi
+  local cur
+  cur="$(realpath "$AUDIT_DIR/..")"
+  while [ "$cur" != "/" ]; do
+    if [ -f "$cur/Cargo.toml" ]; then
+      printf '%s\n' "$cur"
+      return
+    fi
+    cur="$(dirname "$cur")"
+  done
+  realpath "$AUDIT_DIR/.."
+}
+
+PROJECT_DIR="${PROJECT_DIR:-${1:-$(infer_project_dir)}}"
+PROJECT_DIR=$(audit_realpath "$PROJECT_DIR")
+
+LOG_DIR="$AUDIT_DIR/audit/phase9"
+LOG="$LOG_DIR/verify.log"
+mkdir -p "$LOG_DIR"
+exec > >(tee -a "$LOG") 2>&1
+
+cd "$PROJECT_DIR"
+
+echo "verify.sh — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Project: $PROJECT_DIR"
+echo "Audit:   $AUDIT_DIR"
+echo
+
+# Track failures
+declare -a FAILURES=()
+
+run_step() {
+  local name="$1"; shift
+  echo "==> $name"
+  if "$@" 2>&1; then
+    echo "    [GREEN]"
+  else
+    echo "    [FAILED] $name"
+    FAILURES+=("$name")
+  fi
+}
+
+# [1] miri
+run_step "miri (default)" \
+  cargo +nightly miri test --workspace --all-features
+
+# [2] miri strict provenance
+run_step "miri (strict provenance)" \
+  bash -c 'MIRIFLAGS="-Zmiri-strict-provenance" cargo +nightly miri test --workspace --all-features'
+
+# [3] cargo-careful
+run_step "cargo-careful" \
+  cargo +nightly careful test --workspace --all-features
+
+# [4] loom
+if grep -q "loom_concurrency_tests" Cargo.toml ./*/Cargo.toml 2>/dev/null; then
+  run_step "loom" \
+    bash -c 'RUSTFLAGS="--cfg loom" cargo test --workspace --features loom_concurrency_tests --release'
+else
+  echo "==> loom — SKIPPED (no loom_concurrency_tests feature)"
+fi
+
+# [5] cargo-fuzz smoke
+if [ -d fuzz ]; then
+  for target in $(cargo fuzz list 2>/dev/null); do
+    run_step "fuzz: $target (60s)" \
+      bash -c "cargo +nightly fuzz run \"$target\" -- -max_total_time=60"
+  done
+else
+  echo "==> cargo-fuzz — SKIPPED (no fuzz/ directory)"
+fi
+
+# [6] cargo-mutants
+run_step "cargo-mutants" \
+  cargo mutants --in-place=false --jobs 4 --output "$AUDIT_DIR/audit/phase9/mutants/"
+
+# [7] cargo-geiger delta
+sum_geiger_file() {
+  jq '[.packages[]?.package.metrics.counters | objects | .[] | numbers] | add // 0' "$1" 2>/dev/null || echo 0
+}
+
+sum_geiger_dir() {
+  local dir="$1"
+  local single="$dir/phase1/cargo-geiger.json"
+  local sum=0 part found=0
+  if [ -f "$single" ]; then
+    sum_geiger_file "$single"
+    return
+  fi
+  for f in "$dir"/phase1/*__geiger.json; do
+    [ -f "$f" ] || continue
+    found=1
+    part=$(sum_geiger_file "$f")
+    case "$part" in ''|null) part=0 ;; esac
+    sum=$((sum + part))
+  done
+  if [ "$found" -eq 0 ]; then
+    return 1
+  fi
+  echo "$sum"
+}
+
+cargo +nightly geiger --output-format Json > "$AUDIT_DIR/geiger-after.json"
+if BL=$(sum_geiger_dir "$AUDIT_DIR"); then
+  CR=$(sum_geiger_file "$AUDIT_DIR/geiger-after.json")
+  case "$BL" in ''|null) BL=0 ;; esac
+  case "$CR" in ''|null) CR=0 ;; esac
+  echo "==> geiger delta: baseline=$BL current=$CR delta=$((CR - BL))"
+  if [ "$CR" -gt "$BL" ]; then
+    echo "    [FAILED] geiger regression"
+    FAILURES+=("geiger regression")
+  else
+    echo "    [GREEN]"
+  fi
+else
+  echo "==> geiger — no phase1 baseline found; saved current run to $AUDIT_DIR/geiger-after.json"
+fi
+
+# [8] default features
+run_step "test (default features)" \
+  cargo test --workspace --all-features
+
+# [9] safe-only features
+if grep -q "safe-only" Cargo.toml ./*/Cargo.toml 2>/dev/null; then
+  run_step "test (safe-only features)" \
+    cargo test --workspace --features safe-only --no-default-features
+else
+  echo "==> safe-only test — SKIPPED (no safe-only feature defined)"
+fi
+
+# Summary
+echo
+echo "============================================"
+if [ ${#FAILURES[@]} -eq 0 ]; then
+  echo "verify.sh OK — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+else
+  echo "verify.sh FAILED with ${#FAILURES[@]} step(s):"
+  for f in "${FAILURES[@]}"; do echo "  - $f"; done
+  echo
+  echo "Triage per operator ⚑ Pre-Existing-UB-Isolator:"
+  echo "  - IN-SCOPE findings (refactor introduced or modified the site): fix the plan; re-run."
+  echo "  - OUT-OF-SCOPE findings (untouched code): file a pre-existing-ub-N bead; do NOT widen this refactor."
+  exit 1
+fi

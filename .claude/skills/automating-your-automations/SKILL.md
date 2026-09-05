@@ -167,7 +167,6 @@ Scaffold template: [RUST-SCAFFOLD.md](references/RUST-SCAFFOLD.md)
 |------|-------|
 | Rust CLI + SQLite patterns | `/rust-cli-with-sqlite` |
 | Search prior agent sessions | `/cass` |
-| Turn automation into a skill | `/sc` + `/sw` |
 | Track automation tasks | `/br` |
 | Optimize slow commands | `/extreme-software-optimization` |
 

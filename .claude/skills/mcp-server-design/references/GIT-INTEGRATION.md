@@ -254,9 +254,9 @@ async def handle_emfile_error(tool_name: str, func: Callable, *args, **kwargs):
 ### The Problem
 
 Same project, different machines:
-- `$HOME/projects/backend` (Mac example)
-- `$HOME/work/backend` (example Linux path)
-- `%USERPROFILE%\Projects\backend` (CI Windows example)
+- `/Users/alice/projects/backend` (Alice's Mac)
+- `/home/bob/work/backend` (Bob's Linux)
+- `C:\Projects\backend` (CI Windows)
 
 All should share one mailbox if they're the same Git repo.
 

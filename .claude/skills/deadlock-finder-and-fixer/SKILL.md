@@ -12,6 +12,40 @@ description: >-
 
 > **Core Insight.** Concurrency bugs do not come from one missing lock — they come from **one lock acquired in the wrong place, at the wrong time, held across the wrong operation, by a thread that didn't know it was holding it.** Find every instance of the hazard, not just the one that fired.
 
+## Outcome — When This Skill Has Delivered
+
+You're done with a concurrency-bug session when **all** of the following hold:
+
+- The fired symptom (hung process, flaky test, `database is locked`, livelock, lost update) is reproducible **before** the fix and **non-reproducible** under the same workload + 10× the original load **after** the fix.
+- The bug has been classified into one of the nine taxonomy classes (Class 1–9). "It's a deadlock" is not a classification; "AB-BA between `Writer::lock` and `Cache::insert`" is.
+- A static audit (ast-grep / Lock Graph reading) has enumerated **every other site** that exhibits the same hazard pattern — and each has either been fixed or has a written argument for why it's safe at this site. The Universal Rule (THE FOURTH INSTANCE) has been honored.
+- The fix is captured as a regression test (deterministic interleaving via `loom`, `shuttle`, deterministic scheduler, or a `--test-threads=1`-vs-N differential) that would have caught the original bug.
+- Where the fix changes lock ordering or boundary semantics, the new invariant is recorded as a `SAFETY:` comment on the lock declaration or critical-section entry — future readers will not re-introduce the hazard.
+
+If you "fixed it" but the symptom comes back under stress, or you can't enumerate the hazard's other sites, you have not finished — you've moved the bug.
+
+## When NOT to Use This Skill
+
+Reach for something else if:
+
+- **The hang is in a single-threaded code path** (event loop with no I/O wait, infinite recursion, CPU-bound loop) → use a profiler / debugger first; this skill is about concurrent interference, not slow code.
+- **You need live-process diagnosis** (attach gdb, read `/proc`, build the Lock Graph from `__owner` fields) → that's covered by `gdb-for-debugging`; this skill is the *taxonomy + static audit + fix catalog + prevention* complement and assumes the runtime inspection step is either done or not yet possible.
+- **The system is intentionally serialized** (e.g., global write lock with documented contention, async queue with bounded parallelism) → contention is not a deadlock; performance work belongs in `extreme-software-optimization`.
+- **The bug is in a third-party crate/library** you can't modify → file upstream and pin a working version; this skill assumes you can change the code that owns the lock.
+
+## Validation Loop
+
+After every proposed fix, run all five before declaring done:
+
+1. **Reproduce the original** — confirm the bug fires on the pre-fix binary under the same workload.
+2. **Apply fix, re-run the reproducer** — symptom gone.
+3. **Stress the fix** — 10× concurrency, 10× iterations, randomized timing if available; symptom still gone.
+4. **Static re-audit** — search for the same hazard pattern across the codebase; every other site either fixed or explicitly justified safe.
+5. **Regression test in CI** — add the deterministic test from the Outcome checklist; CI runs it on every PR.
+
+Skipping any step is how the FOURTH INSTANCE survives.
+
+
 > **The Universal Rule.** When you think you found the deadlock and fixed the three instances you could see, **there is almost always a fourth**. This is the single most common failure mode across every concurrency debugging session in this repo's history. Keep searching until you can prove exhaustively — by code audit — that no hazard remains. See [THE FOURTH INSTANCE](references/THE-FOURTH-INSTANCE.md).
 
 > **The False-Positive Rule.** When you think you found a concurrency bug via static pattern-matching, **verify the actual code paths before reporting it.** Grep-based audits produce pattern matches, not proofs. The most common false positives come from: (1) not checking whether Rust's ownership model (`&mut self`) already prevents the concurrent access, (2) recommending backoff for spin loops protecting nanosecond critical sections, (3) flagging `OnceLock`/`Lazy` in code that is never called from a loader or signal handler, (4) not recognizing correct condvar double-check patterns, and (5) calling `Ordering::Relaxed` a bug when the synchronization comes from a different mechanism (borrow checker, mutex gate, happens-before from thread creation). **Every finding must survive: "Can I construct a concrete interleaving of real threads that reaches this state?"** If you cannot, it is not a bug — it is a pattern match.
@@ -46,7 +80,7 @@ for i in 1 2 3; do cat /proc/$PID/task/*/stack 2>/dev/null | sort -u; sleep 1; d
 | Process 0% CPU, won't respond, threads in `futex_wait` / `__lll_lock_wait` | **Classic deadlock (AB-BA or self)** | [Class 1](#class-1--classic-mutex-deadlock) |
 | Async tasks pending but all tokio workers in `epoll_wait` | **Mutex held across `.await`** or **channel cycle** | [Class 2](#class-2--async--await-deadlocks) |
 | 100% CPU, futex spam, no progress | **Livelock / retry storm / broken condvar** | [Class 3](#class-3--livelock--retry-storms) |
-| `database is locked`, `SQLITE_BUSY`, timeouts | **SQLite WAL contention / long transaction / writer fight** | [Class 4](#class-4--database-concurrency) |
+| `database is locked`, `SQLITE_BUSY`, timeouts | **SQLite WAL contention / long transaction / writer fight** | [Class 4](#class-4--database-concurrency-sqlite-heavy) |
 | Hang during library load, `strlen` or `malloc` call hangs | **LD_PRELOAD / runtime-init reentrancy** | [Class 5](#class-5--runtime-init--reentrant-hazards) |
 | Test flakes under load, passes under `--test-threads=1` | **Data race** (TSAN) or **TOCTOU** | [Class 6](#class-6--data-races--toctou) |
 | Agent swarm stalls; two agents editing same file | **Advisory-lease race or missing reservation** | [Class 7](#class-7--multi-process--swarm-races) |
@@ -436,6 +470,7 @@ Before you declare a concurrency fix done:
 | **Go** — goroutines, channels, sync, context, errgroup, pprof, race detector | [GO.md](references/GO.md) |
 | **Python** — GIL, asyncio, threading, multiprocessing, trio/anyio, py-spy | [PYTHON.md](references/PYTHON.md) |
 | **TypeScript / Node.js** — event loop, promises, worker_threads, React, Next.js, Prisma | [TYPESCRIPT.md](references/TYPESCRIPT.md) |
+| **Java / JVM** — JMM, synchronized, j.u.c., virtual threads, CompletableFuture, JDBC pools | [JAVA.md](references/JAVA.md) |
 
 ### Domain Deep-Dives
 

@@ -7,16 +7,16 @@ Every surface here is a machine-readable entry point the orchestrator should pre
 ## Always Query The Registry First
 
 ```bash
-# Discover all surfaces (135+ commands at time of writing)
+# Discover all surfaces (137 commands in the 2026-05 mainline snapshot; always re-query)
 ntm --robot-capabilities | jq '.commands[] | .name'
 
 # Find commands matching a need
 ntm --robot-capabilities | jq '.commands[] | select(.name | test("rate|limit|health|restart|wait"))'
 
-# Registry-derived help (always current)
-ntm --robot-help=snapshot
-ntm --robot-help=wait
-ntm --robot-help=is-working
+# Registry-derived docs and command entries (always current)
+ntm --robot-docs=commands
+ntm --robot-capabilities | jq '.commands[] | select(.flag=="--robot-wait")'
+ntm --robot-capabilities | jq '.commands[] | select(.flag=="--robot-is-working")'
 ```
 
 If a surface you remember isn't in `--robot-capabilities`, the CLI is a newer build than your memory. Do not invent flags. Query and adapt.
@@ -27,7 +27,7 @@ If a surface you remember isn't in `--robot-capabilities`, the CLI is a newer bu
 | --- | --- | --- | --- |
 | `bootstrap` | Establish baseline | `--robot-snapshot`, `--robot-spawn`, `--robot-status` | Starting a session; resuming after cursor expiration |
 | `summarize` | Quick glance | `--robot-terse`, `--robot-markdown --md-compact`, `--robot-dashboard` | Checking health before deciding next action |
-| `replay` | Audit trail | `--robot-events --cursor=X`, `--robot-digest --cursor=X` | Understanding what changed since last cursor |
+| `replay` | Audit trail | `--robot-events --since-cursor=X`, `--robot-digest` | Understanding what changed since last cursor and summarizing the feed |
 | `triage` | Prioritize | `--robot-attention`, `--robot-wait`, `--robot-alerts` | Waiting for blocking items; deciding what to act on |
 | `inspect` | Drill down | `--robot-tail`, `--robot-is-working`, `--robot-agent-health`, `--robot-diagnose` | Understanding details after triage |
 | `act` | Take action | `--robot-send`, `--robot-interrupt`, `--robot-smart-restart`, `--robot-restart-pane`, `--robot-switch-account` | Dispatching work or recovering stuck agents |
@@ -52,13 +52,13 @@ ntm --robot-markdown --md-compact
 
 ```bash
 # Incremental events since cursor — canonical audit trail
-ntm --robot-events --cursor=<cursor> --actionability=action_required
+ntm --robot-events --since-cursor=<cursor> --events-actionability=action_required
 
-# Token-efficient summary of what changed since cursor
-ntm --robot-digest --cursor=<cursor>
+# Token-efficient non-blocking summary of the attention feed
+ntm --robot-digest --profile=minimal
 
 # Blocking wait for next attention-worthy event (top prioritized item)
-ntm --robot-attention --timeout=30s --since-cursor=<cursor>
+ntm --robot-attention --attention-timeout=30s --attention-cursor=<cursor>
 ```
 
 **Cursor semantics:** monotonic, garbage-collected after 1 hour. If `CURSOR_EXPIRED` returns, resync via `--robot-snapshot` and continue.
@@ -71,7 +71,7 @@ ntm --robot-is-working=myproject --panes=2,3,4
 #   Returns per pane: is_working, is_idle, is_rate_limited, is_context_low, confidence, recommendation
 
 # Detailed drill-down on one pane
-ntm --robot-inspect=myproject --pane=5
+ntm --robot-inspect-pane=myproject --inspect-index=5
 
 # Structured tail (handles alt-screen; better than tmux capture-pane)
 ntm --robot-tail=myproject --lines=50 --panes=2,3,4
@@ -130,7 +130,7 @@ ntm send myproject --pane=5 --no-cass-check "<prompt>"           # use --no-cass
 ntm send myproject --all --skip-first "<prompt>"                 # --skip-first excludes user pane 1
 
 # Interrupt + optional new task
-ntm --robot-interrupt=myproject --panes=5 --send-new-task="..."
+ntm --robot-interrupt=myproject --panes=5 --msg="..."
 
 # Mail check (non-interactive, urgent-only filter)
 ntm --robot-mail-check --mail-project=myproject --urgent-only
@@ -141,7 +141,6 @@ ntm --robot-mail-check --mail-project=myproject --urgent-only
 ```bash
 # Block until condition met
 ntm --robot-wait=myproject --wait-until=idle --timeout=10m
-ntm --robot-wait=myproject --wait-until=any_output --timeout=60s
 ntm --robot-wait=myproject --wait-until=rate_limited --timeout=30m     # wake when wall drops
 ntm --robot-wait=myproject --wait-until=mail_pending --timeout=5m
 ntm --robot-wait=myproject --wait-until=reservation_conflict --timeout=2m
@@ -253,7 +252,7 @@ CURSOR=$(ntm --robot-snapshot | jq -r '.cursor')
 
 while :; do
   # POLL events since last cursor
-  EVENTS=$(ntm --robot-events --cursor="$CURSOR" --actionability=action_required)
+  EVENTS=$(ntm --robot-events --since-cursor="$CURSOR" --events-actionability=action_required)
   CURSOR=$(echo "$EVENTS" | jq -r '.cursor // empty')
   [ -z "$CURSOR" ] && CURSOR=$(ntm --robot-snapshot | jq -r '.cursor')  # resync on CURSOR_EXPIRED
 

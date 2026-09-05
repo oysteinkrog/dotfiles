@@ -11,6 +11,21 @@ set -euo pipefail
 
 file="${1:?Usage: verify-migration.sh <file.md>}"
 
+count_matches() {
+    local mode="${1:-}"
+    local pattern="$2"
+    local target="$3"
+    local out
+
+    if [[ "$mode" == "i" ]]; then
+        out="$(grep -ci -- "$pattern" "$target" 2>/dev/null || true)"
+    else
+        out="$(grep -c -- "$pattern" "$target" 2>/dev/null || true)"
+    fi
+
+    printf '%s' "${out:-0}"
+}
+
 if [[ ! -f "$file" ]]; then
     echo "ERROR: File not found: $file"
     exit 1
@@ -27,7 +42,7 @@ warnings=0
 echo "Checking for remaining bd references (must be 0)..."
 
 # Check for bd command references
-bd_refs=$(grep -c '`bd ' "$file" 2>/dev/null || echo "0")
+bd_refs=$(count_matches "" '`bd ' "$file")
 if [[ "$bd_refs" -gt 0 ]]; then
     echo "  ✗ FAIL: Found $bd_refs \`bd\` command references"
     grep -n '`bd ' "$file" | head -3 | sed 's/^/    /'
@@ -37,7 +52,7 @@ else
 fi
 
 # Check for bd sync specifically
-bd_sync=$(grep -c 'bd sync' "$file" 2>/dev/null || echo "0")
+bd_sync=$(count_matches "" 'bd sync' "$file")
 if [[ "$bd_sync" -gt 0 ]]; then
     echo "  ✗ FAIL: Found $bd_sync 'bd sync' references"
     grep -n 'bd sync' "$file" | head -3 | sed 's/^/    /'
@@ -47,7 +62,7 @@ else
 fi
 
 # Check for bd-### issue IDs
-bd_ids=$(grep -c 'bd-[0-9]' "$file" 2>/dev/null || echo "0")
+bd_ids=$(count_matches "" 'bd-[0-9]' "$file")
 if [[ "$bd_ids" -gt 0 ]]; then
     echo "  ✗ FAIL: Found $bd_ids 'bd-###' issue ID references"
     grep -n 'bd-[0-9]' "$file" | head -3 | sed 's/^/    /'
@@ -57,7 +72,7 @@ else
 fi
 
 # Check for daemon references (should be removed)
-daemon_refs=$(grep -ci 'daemon' "$file" 2>/dev/null || echo "0")
+daemon_refs=$(count_matches "i" 'daemon' "$file")
 if [[ "$daemon_refs" -gt 0 ]]; then
     echo "  ⚠ WARN: Found $daemon_refs daemon references (br has no daemon)"
     warnings=$((warnings + 1))
@@ -67,13 +82,13 @@ echo ""
 
 # === Check if file has beads content ===
 
-has_beads=$(grep -c 'beads\|\.beads\|br ready\|br sync' "$file" 2>/dev/null || echo "0")
+has_beads=$(count_matches "" 'beads\|\.beads\|br ready\|br sync' "$file")
 
 if [[ "$has_beads" -gt 0 ]]; then
     echo "Checking for required br patterns (file has beads content)..."
 
     # Check for br sync --flush-only
-    br_sync=$(grep -c 'br sync --flush-only' "$file" 2>/dev/null || echo "0")
+    br_sync=$(count_matches "" 'br sync --flush-only' "$file")
     if [[ "$br_sync" -eq 0 ]]; then
         echo "  ⚠ WARN: No 'br sync --flush-only' found (expected if file has sync sections)"
         warnings=$((warnings + 1))
@@ -82,7 +97,7 @@ if [[ "$has_beads" -gt 0 ]]; then
     fi
 
     # Check for git add .beads/
-    git_add=$(grep -c 'git add .beads/' "$file" 2>/dev/null || echo "0")
+    git_add=$(count_matches "" 'git add .beads/' "$file")
     if [[ "$git_add" -eq 0 && "$br_sync" -gt 0 ]]; then
         echo "  ⚠ WARN: No 'git add .beads/' found (required after br sync)"
         warnings=$((warnings + 1))
@@ -91,7 +106,7 @@ if [[ "$has_beads" -gt 0 ]]; then
     fi
 
     # Check for non-invasive note
-    note=$(grep -c 'non-invasive' "$file" 2>/dev/null || echo "0")
+    note=$(count_matches "" 'non-invasive' "$file")
     if [[ "$note" -eq 0 ]]; then
         echo "  ⚠ WARN: No non-invasive note found"
         warnings=$((warnings + 1))

@@ -53,7 +53,7 @@ The agent pauses for operator approval before:
 
 - any `ssh` command that writes on the target (install, restart, delete)
 - `./maintain.sh update-mattermost` actually starting the apt install
-- `./maintain.sh rotate-credentials` actually revoking old credentials
+- `./maintain.sh rotate-tokens` actually revoking old credentials
 - `./maintain.sh schedule-reboot` actually queueing a reboot
 - anything in `prompts/disaster-recovery.md` past phase D1
 

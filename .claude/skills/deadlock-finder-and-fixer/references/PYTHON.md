@@ -9,7 +9,7 @@
 - [threading](#threading)
 - [multiprocessing](#multiprocessing)
 - [concurrent.futures](#concurrentfutures)
-- [trio and anyio (Structured Concurrency)](#trio-and-anyio)
+- [trio and anyio (Structured Concurrency)](#trio-and-anyio-structured-concurrency)
 - [Diagnosis Tools](#diagnosis-tools)
 - [Database Concurrency](#database-concurrency)
 - [Framework-Specific Gotchas](#framework-specific-gotchas)

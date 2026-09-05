@@ -1,0 +1,11 @@
+id: rust-ub-raw-fd-without-OwnedFd
+language: rust
+severity: warning
+message: >-
+  Storing a raw RawFd / c_int as a field without OwnedFd risks double-close /
+  use-after-close. Use std::os::fd::OwnedFd for ownership semantics.
+rule:
+  any:
+    - pattern: 'struct $T { $$$_ fd: i32, $$$_ }'
+    - pattern: 'struct $T { $$$_ fd: RawFd, $$$_ }'
+    - pattern: 'struct $T { $$$_ fd: c_int, $$$_ }'

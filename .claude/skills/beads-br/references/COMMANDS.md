@@ -24,11 +24,11 @@
 br init                              # Initialize workspace in .beads/
 br create "Title" -p 1 --type bug    # Create issue (p=priority 0-4)
 br q "Quick note"                    # Quick capture (ID only output)
-br show <id>                         # Show issue details
-br update <id> --priority 0          # Update issue fields
-br close <id> --reason "Done"        # Close issue with reason
-br reopen <id>                       # Reopen closed issue
-br delete <id>                       # Delete issue (tombstone)
+br show bd-abc123                    # Show issue details
+br update bd-abc123 --priority 0     # Update issue fields
+br close bd-abc123 --reason "Done"   # Close issue with reason
+br reopen bd-abc123                  # Reopen closed issue
+br delete bd-abc123                  # Delete issue (tombstone)
 ```
 
 ### Create Options
@@ -44,7 +44,7 @@ br create "Title" \
 ### Update Options
 
 ```bash
-br update <id> \
+br update bd-abc123 \
   --title "New title" \
   --priority 0 \
   --status in_progress \   # open, in_progress, closed
@@ -78,10 +78,10 @@ br count --by status                 # Count with grouping
 ## Dependencies
 
 ```bash
-br dep add br-child br-parent        # child depends on parent
-br dep remove br-child br-parent     # Remove dependency
-br dep list <id>                     # List dependencies for issue
-br dep tree <id>                     # Show dependency tree
+br dep add bd-child bd-parent        # child depends on parent
+br dep remove bd-child bd-parent     # Remove dependency
+br dep list bd-abc123                # List dependencies for issue
+br dep tree bd-abc123                # Show dependency tree
 br dep cycles                        # Find circular dependencies
 ```
 
@@ -92,9 +92,9 @@ br dep cycles                        # Find circular dependencies
 ## Labels
 
 ```bash
-br label add <id> backend auth       # Add multiple labels
-br label remove <id> urgent          # Remove label
-br label list <id>                   # List issue's labels
+br label add bd-abc123 backend auth  # Add multiple labels
+br label remove bd-abc123 urgent     # Remove label
+br label list bd-abc123              # List issue's labels
 br label list-all                    # All labels in project
 ```
 
@@ -103,8 +103,8 @@ br label list-all                    # All labels in project
 ## Comments
 
 ```bash
-br comments add <id> "Found root cause"       # Add comment
-br comments list <id>                         # List comments
+br comments add bd-abc123 "Found root cause"  # Add comment
+br comments list bd-abc123                    # List comments
 ```
 
 ---
@@ -117,19 +117,6 @@ br comments list <id>                         # List comments
 br sync --flush-only                 # Export DB to JSONL
 br sync --import-only                # Import JSONL to DB
 br sync --status                     # Check sync status
-```
-
----
-
-## Skills
-
-```bash
-# Show sync status between canonical repo and global skills
-br skills sync-status
-br skills sync-status --json
-br skills sync-status --verbose
-br skills sync-status --canonical /path/to/repo/.claude/skills
-br skills sync-status --global ~/.claude/skills
 ```
 
 ### Workflow
@@ -151,9 +138,9 @@ br sync --import-only
 ```bash
 br doctor                            # Run diagnostics
 br stats                             # Project statistics
-br config list                       # Show all config
-br config get issue-prefix           # Get specific value
-br config set issue-prefix=myproject # Set value
+br config --list                     # Show all config
+br config --get id.prefix            # Get specific value
+br config --set defaults.priority=1  # Set value
 br version                           # Show version
 br upgrade                           # Self-update (if enabled)
 ```
@@ -167,8 +154,8 @@ br upgrade                           # Self-update (if enabled)
 br ready --json | jq '.[0]'
 
 # Filter high priority
-br list --json | jq '.[] | select(.priority <= 1)'
+br list --json | jq '.issues[]? | select(.priority <= 1)'
 
 # Get specific issue
-br show <id> --json | jq '.title'
+br show bd-abc123 --json | jq 'if type=="array" then (.[0] // {}) else . end | .title'
 ```

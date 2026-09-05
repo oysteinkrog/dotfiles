@@ -1,0 +1,138 @@
+# common.yml — ast-grep rules for cross-class Rust public-API surface
+#
+# Usage:
+#   ast-grep scan -r scripts/ast-grep-surface-patterns/common.yml <port-src>
+#
+# Emits one match per declared surface item. Pair with syn-walkers/ for
+# predicates ast-grep cannot express (signature drift vs reference exports).
+
+id: pub-fn
+language: Rust
+rule:
+  kind: function_item
+  pattern: pub fn $NAME($$$ARGS) $$$
+message: "Public function: $NAME"
+severity: info
+
+---
+
+id: pub-struct
+language: Rust
+rule:
+  kind: struct_item
+  any:
+    - pattern: pub struct $NAME { $$$ }
+    - pattern: pub struct $NAME($$$);
+    - pattern: pub struct $NAME;
+message: "Public struct: $NAME"
+severity: info
+
+---
+
+id: pub-enum
+language: Rust
+rule:
+  kind: enum_item
+  pattern: pub enum $NAME { $$$ }
+message: "Public enum: $NAME"
+severity: info
+
+---
+
+id: pub-trait
+language: Rust
+rule:
+  kind: trait_item
+  pattern: pub trait $NAME { $$$ }
+message: "Public trait: $NAME"
+severity: info
+
+---
+
+id: impl-trait-for-type
+language: Rust
+rule:
+  kind: impl_item
+  pattern: impl $TRAIT for $TY { $$$ }
+message: "Trait impl: $TRAIT for $TY"
+severity: info
+
+---
+
+id: no-mangle-fn
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - any:
+        - pattern: pub fn $NAME($$$ARGS) $$$
+        - pattern: fn $NAME($$$ARGS) $$$
+    - has:
+        kind: attribute_item
+        pattern: "#[no_mangle]"
+        stopBy: end
+message: "no_mangle FFI fn: $NAME (parity-affecting)"
+severity: warning
+
+---
+
+id: no-mangle-static
+language: Rust
+rule:
+  kind: static_item
+  all:
+    - any:
+        - pattern: "pub static $NAME: $TY = $VAL;"
+        - pattern: "static $NAME: $TY = $VAL;"
+    - has:
+        kind: attribute_item
+        pattern: "#[no_mangle]"
+        stopBy: end
+message: "no_mangle FFI static: $NAME (parity-affecting)"
+severity: warning
+
+---
+
+id: extern-c-fn
+language: Rust
+rule:
+  kind: function_item
+  pattern: extern "C" fn $NAME($$$ARGS) $$$
+message: "extern C function: $NAME"
+severity: warning
+
+---
+
+id: pub-const
+language: Rust
+rule:
+  kind: const_item
+  pattern: "pub const $NAME: $TY = $VAL;"
+message: "Public constant: $NAME"
+severity: info
+
+---
+
+id: pub-static
+language: Rust
+rule:
+  kind: static_item
+  pattern: "pub static $NAME: $TY = $VAL;"
+message: "Public static: $NAME"
+severity: info
+
+---
+
+id: macro-export
+language: Rust
+rule:
+  kind: macro_definition
+  all:
+    - any:
+        - pattern: macro_rules! $NAME { $$$ }
+        - pattern: "pub macro $NAME($$$) $$$"
+    - has:
+        pattern: "#[macro_export]"
+        stopBy: end
+message: "Exported macro (parity-affecting surface)"
+severity: warning

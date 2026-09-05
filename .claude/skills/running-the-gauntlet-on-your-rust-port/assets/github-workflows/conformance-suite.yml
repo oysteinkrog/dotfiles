@@ -1,0 +1,165 @@
+# .github/workflows/conformance-suite.yml
+#
+# Wires CI gate 1.3 from PARITY_RUNBOOK.md: full conformance suite +
+# differential V2 + metamorphic corpus + fault injection.
+#
+# Runs on every push to main and on PRs. Uploads FailureBundles on red so
+# the next agent can replay deterministically.
+
+name: Conformance Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WORKSPACE: ${{ github.workspace }}/../gauntlet_workspace
+      PORT: ${{ github.workspace }}
+      RUST_BACKTRACE: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - oracle-e2e
+          - differential-v2
+          - metamorphic
+          - fault-injection
+          - crash-boundary
+    steps:
+      - name: Checkout port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}-gauntlet-workspace
+          path: ../gauntlet_workspace
+          token: ${{ secrets.WORKSPACE_READ_TOKEN }}
+        continue-on-error: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install jq + ripgrep
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq ripgrep
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-conf-${{ matrix.suite }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-conf-${{ matrix.suite }}-
+
+      - name: Build (release-perf profile)
+        run: cargo build --profile release-perf --all-features --tests
+
+      - name: Oracle preflight doctor
+        run: |
+          if [[ -x "$WORKSPACE/scripts/oracle-preflight-doctor.sh" ]]; then
+            "$WORKSPACE/scripts/oracle-preflight-doctor.sh" "$PORT" --workspace "$WORKSPACE"
+          fi
+
+      - name: Run conformance suite (${{ matrix.suite }})
+        id: run
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          case "${{ matrix.suite }}" in
+            fault-injection|crash-boundary)
+              "$WORKSPACE/scripts/run-fault-injection-matrix.sh" "$PORT" "$WORKSPACE" 2>&1 | tee suite_output.log
+              RUN_EXIT=$?
+              ;;
+            *)
+              "$WORKSPACE/scripts/run-conformance-suite.sh" "$PORT" "$WORKSPACE" --no-fuzz 2>&1 | tee suite_output.log
+              RUN_EXIT=$?
+              ;;
+          esac
+          echo "exit_code=$RUN_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload FailureBundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-bundles-${{ matrix.suite }}-${{ github.run_id }}
+          path: |
+            ${{ env.WORKSPACE }}/artifacts/conformance/latest/failure_bundles/
+            ${{ env.WORKSPACE }}/artifacts/fault_matrix/
+            suite_output.log
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Count TrueDivergences
+        if: always()
+        id: count
+        run: |
+          BUNDLES_DIR="$WORKSPACE/artifacts/conformance/latest/failure_bundles"
+          if [[ -d "$BUNDLES_DIR" ]]; then
+            COUNT=$(find "$BUNDLES_DIR" -name '*.json' -exec jq -r \
+              '(.classification // .mismatch_classification // .failure_type // empty)' {} \; \
+              | grep -Ec '^(TrueDivergence|Divergence)$' || true)
+          else
+            COUNT=0
+          fi
+          echo "true_divergences=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "TrueDivergences in ${{ matrix.suite }}: $COUNT"
+
+      - name: Annotate
+        if: always()
+        run: |
+          if [[ "${{ steps.count.outputs.true_divergences }}" -gt 0 ]]; then
+            echo "::error title=Conformance::${{ matrix.suite }} produced ${{ steps.count.outputs.true_divergences }} TrueDivergence(s). Route through oracle-divergence-triage.md."
+          else
+            echo "::notice title=Conformance::${{ matrix.suite }} clean."
+          fi
+
+      - name: Fail on TrueDivergence
+        if: steps.count.outputs.true_divergences != '0'
+        run: exit 1
+
+      - name: Fail on suite runner error
+        if: steps.run.outputs.exit_code != '0'
+        run: |
+          echo "Conformance runner exited ${{ steps.run.outputs.exit_code }}. See suite_output.log and uploaded FailureBundles."
+          exit 1
+
+  aggregate:
+    needs: conformance
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all FailureBundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: failure-bundles-*-${{ github.run_id }}
+          merge-multiple: true
+          path: ./all-bundles
+      - name: Aggregate report
+        run: |
+          TOTAL=$(find ./all-bundles -name '*.json' 2>/dev/null | wc -l)
+          echo "::notice title=Conformance Aggregate::Total FailureBundles across all suites: $TOTAL"

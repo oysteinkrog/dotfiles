@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "tool": "br",
+  "tool_version": "0.4.7",
+  "doctor_version": "1.0.0",
+  "doctor_contract_version": "1.0",
+  "platform": { "os": "linux", "arch": "x86_64" },
+  "subsystems": [
+    "state_files",
+    "configs",
+    "schemas",
+    "caches",
+    "concurrency_primitives",
+    "userland_state"
+  ],
+  "allowed_ops": [
+    "WriteFile",
+    "AppendFile",
+    "Rename",
+    "Chmod",
+    "DbExec",
+    "DbMigrate",
+    "SymlinkAtomic"
+  ],
+  "detectors": [
+    {
+      "id": "fm-state-files-jsonl-tombstone-drift",
+      "subsystem": "state_files",
+      "severity": "P2",
+      "description": "Issues tombstoned in DB still present in JSONL",
+      "estimated_cost_ms": 30,
+      "online_required": false
+    },
+    {
+      "id": "fm-schemas-db-schema-version-mismatch",
+      "subsystem": "schemas",
+      "severity": "P0",
+      "description": "On-disk schema_version differs from binary's compiled version",
+      "estimated_cost_ms": 5,
+      "online_required": false
+    },
+    {
+      "id": "fm-concurrency-primitives-lockfile-orphaned",
+      "subsystem": "concurrency_primitives",
+      "severity": "P1",
+      "description": "Lockfile present but holder PID is not alive",
+      "estimated_cost_ms": 8,
+      "online_required": false
+    }
+  ],
+  "fixers": [
+    {
+      "id": "fm-state-files-jsonl-tombstone-drift",
+      "preconditions": [
+        "lock_acquired",
+        "backup_dir_writable",
+        "issues_jsonl_present"
+      ],
+      "writes_to": [".beads/issues.jsonl"],
+      "ops": ["WriteFile"],
+      "reversible": true,
+      "idempotent": true,
+      "estimated_cost_ms": 50
+    },
+    {
+      "id": "fm-schemas-db-schema-version-mismatch",
+      "preconditions": [
+        "lock_acquired",
+        "backup_dir_writable",
+        "db_present",
+        "migration_path_known"
+      ],
+      "writes_to": [".beads/beads.db", ".beads/beads.db-wal", ".beads/beads.db-shm"],
+      "ops": ["DbMigrate"],
+      "reversible": true,
+      "idempotent": true,
+      "estimated_cost_ms": 200
+    },
+    {
+      "id": "fm-concurrency-primitives-lockfile-orphaned",
+      "preconditions": ["holder_pid_dead"],
+      "writes_to": [".beads/beads.lock"],
+      "ops": ["Rename"],
+      "reversible": true,
+      "idempotent": true,
+      "estimated_cost_ms": 10
+    }
+  ],
+  "manual_remediations": [
+    {
+      "id": "fm-network-anthropic-api-key-missing",
+      "instruction": "Set ANTHROPIC_API_KEY in your environment, then re-run `<tool> doctor`.",
+      "reason": "Doctor cannot generate API keys. User action required."
+    }
+  ],
+  "exit_codes": {
+    "0": "success_or_healthy",
+    "1": "findings_present_no_fix",
+    "2": "fix_partial",
+    "3": "fix_failed_rolled_back",
+    "4": "refused_unsafe",
+    "5": "concurrency_lost",
+    "6": "online_required",
+    "64": "usage_error",
+    "66": "no_input",
+    "73": "cant_create",
+    "74": "io_error"
+  },
+  "env_vars": {
+    "BR_DOCTOR_LOG_LEVEL": "trace|debug|info|warn|error (default: warn)",
+    "BR_DOCTOR_BACKUPS_DIR": "override the default .doctor/ location",
+    "NO_COLOR": "disable ANSI",
+    "CI": "auto-detect non-TTY mode",
+    "TERM": "TTY hint"
+  },
+  "write_scopes": [".beads", ".doctor"],
+  "run_artifact_schema": "https://schemas.example/doctor/run-artifact/1.0.json",
+  "report_schema": "https://schemas.example/doctor/report/1.0.json"
+}

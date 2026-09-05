@@ -719,8 +719,8 @@ class ToolFilterSettings:
 class LLMSettings:
     """Settings for LLM integration."""
     enabled: bool = True
-    default_model: str = "gpt-4o-mini"
-    fallback_model: str = "gpt-3.5-turbo"
+    default_model: str = "gpt-5-mini"
+    fallback_model: str = "gpt-5-mini"
     timeout_seconds: int = 30
     max_retries: int = 2
     cost_tracking: bool = True
@@ -815,7 +815,7 @@ def load_settings() -> Settings:
 
     Examples:
     - MCP_TOOL_FILTER_ENABLED=true
-    - MCP_LLM_DEFAULT_MODEL=claude-3-5-sonnet
+    - MCP_LLM_DEFAULT_MODEL=claude-sonnet-4-6
     - MCP_DATABASE_BUSY_TIMEOUT_MS=60000
     - MCP_DEBUG=true
     """
@@ -834,8 +834,8 @@ def load_settings() -> Settings:
     # Load LLM settings
     llm = LLMSettings(
         enabled=_bool(os.getenv("MCP_LLM_ENABLED", "true")),
-        default_model=os.getenv("MCP_LLM_DEFAULT_MODEL", "gpt-4o-mini"),
-        fallback_model=os.getenv("MCP_LLM_FALLBACK_MODEL", "gpt-3.5-turbo"),
+        default_model=os.getenv("MCP_LLM_DEFAULT_MODEL", "gpt-5-mini"),
+        fallback_model=os.getenv("MCP_LLM_FALLBACK_MODEL", "gpt-5-mini"),
         timeout_seconds=_int(os.getenv("MCP_LLM_TIMEOUT"), 30),
         max_retries=_int(os.getenv("MCP_LLM_MAX_RETRIES"), 2),
         cost_tracking=_bool(os.getenv("MCP_LLM_COST_TRACKING", "true")),

@@ -13,5 +13,5 @@ operation). Takes 30-90 minutes. Requires operator attention for any gates.
 
 Surface any red metric. Do not auto-proceed if any stage flips red.
 
-Don't run `update-mattermost` or `rotate-credentials` as part of this combo;
+Don't run `update-mattermost` or `rotate-tokens` as part of this combo;
 those are deliberate, per-event operations.

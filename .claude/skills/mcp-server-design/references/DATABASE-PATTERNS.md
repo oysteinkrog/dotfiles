@@ -273,7 +273,7 @@ class Agent(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
     name: Mapped[str] = mapped_column(String(64), index=True)  # Adjective+Noun
     program: Mapped[str] = mapped_column(String(64))  # claude-code, codex-cli
-    model: Mapped[str] = mapped_column(String(128))  # claude-3-5-sonnet
+    model: Mapped[str] = mapped_column(String(128))  # claude-sonnet-4-6
     task_description: Mapped[str] = mapped_column(Text, default="")
     inception_ts: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     last_active_ts: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

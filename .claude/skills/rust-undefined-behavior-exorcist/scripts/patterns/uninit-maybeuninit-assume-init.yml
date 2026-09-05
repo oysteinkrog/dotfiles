@@ -1,0 +1,13 @@
+id: rust-ub-uninit-maybeuninit-assume-init
+language: rust
+severity: warning
+message: >-
+  Calling assume_init() on a freshly-uninit MaybeUninit is UB for any non-()
+  type. Initialize every byte first.
+rule:
+  any:
+    - pattern: 'MaybeUninit::<$T>::uninit().assume_init()'
+    - pattern: '$EXPR.assume_init()'
+constraints:
+  EXPR:
+    regex: 'MaybeUninit::uninit\(\)'

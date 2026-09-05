@@ -16,7 +16,7 @@ description: >-
 Update all dependencies in this project to their latest stable versions.
 
 For each dependency:
-1. Use /software-research to find breaking changes between current and target version
+1. Use /research-software to find breaking changes between current and target version
 2. Update the version
 3. Run tests
 4. Fix any issues (search web for recent solutions if needed)
@@ -51,8 +51,8 @@ Log everything to UPGRADE_LOG.md. Ask me before any refactoring that touches >10
 ```
 For each dependency where current != latest stable:
 │
-├─ 1. RESEARCH (invoke software-research skill)
-│     /software-research [package] changelog [current] to [latest]
+├─ 1. RESEARCH (invoke research-software skill)
+│     /research-software [package] changelog [current] to [latest]
 │     → Get: breaking changes, deprecations, migration notes
 │
 ├─ 2. UPDATE
@@ -129,12 +129,12 @@ cp .upgrade-backup/Cargo.toml .
 
 ---
 
-## Integrating software-research
+## Integrating research-software
 
-For each dependency upgrade, invoke the software-research skill:
+For each dependency upgrade, invoke the research-software skill:
 
 ```
-/software-research [package-name] breaking changes [old-version] to [new-version]
+/research-software [package-name] breaking changes [old-version] to [new-version]
 ```
 
 This returns:
@@ -143,7 +143,7 @@ This returns:
 - Migration guides
 - Recent issues/PRs about upgrade problems
 
-**Why:** software-research searches GitHub releases, changelogs, and recent web content more effectively than manual lookup.
+**Why:** research-software searches GitHub releases, changelogs, and recent web content more effectively than manual lookup.
 
 ---
 
