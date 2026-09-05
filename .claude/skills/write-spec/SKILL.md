@@ -16,6 +16,10 @@ whole feature is done.
    assets, and first useful playable checkpoint. Give your recommended
    answer with each question so the user can accept, reject, or edit it.
    Inspect the repo instead of asking questions the code can answer.
+   Close the interview by asking whether the plan must carry backward
+   compatibility or data migrations — the default is **neither**: hard
+   cutovers, no compat shims, no migration scaffolding, no deploy-order
+   dances. Only the user opting in puts them in the plan.
 
 2. **Slice at API seams.** Each slice should behave like a tiny library where
    possible: named module boundary, typed inputs/outputs, deterministic
@@ -135,7 +139,10 @@ whole feature is done.
    variable/API seam, run this same slicing logic on that slice as a sub-feature.
    Keep repeating until the next implementation slice can be accepted or rejected
    by one focused artifact. Record deferred variables as later slices, not prose
-   inside the current slice.
+   inside the current slice. The exit test is the **decision budget**: a slice is
+   fully specified when the implementing agent inherits decisions rather than
+   making them — every freedom left open is either named as delegated in the
+   slice file or the slice needs another pass.
 6. **Materialize:** create `specs/<feature>/` when the feature has more than
    one slice or needs assets/visualizations.
 7. **Refactor-clean the plan:** run [refactor-clean](../refactor-clean/SKILL.md)
@@ -150,12 +157,26 @@ whole feature is done.
    consumers migrate, never carried to the end by default. Encode the resulting
    single-owner invariants and the end-state ("reads as designed today, not tacked
    on") in the README so every implementing pass inherits them.
-8. **Build slice by slice:** leave each slice with a runnable artifact and
+8. **Scrollback audit:** the conversation dies; the spec survives. Before
+   calling the plan done, sweep the full conversation and every earlier
+   planning artifact (maps, interview notes, drafts) for content that exists
+   only there — decisions with their rationale, rejected alternatives with
+   why they lost, mid-stream scope changes, user-supplied constraints and
+   throwaway remarks that decided something. Each either lands in its owning
+   spec file or is deliberately dropped; a scope change propagates to every
+   spot that references it, not just where it landed. Then re-read each
+   surviving pre-plan artifact the spec supersedes (a map's kickoff prompt,
+   open-questions list, or proposed plan) and mark superseded sections with
+   a pointer to the plan — stale instructions must not be able to misroute a
+   fresh agent. Done when every conversation decision is findable in the
+   spec and no surviving artifact contradicts the ladder.
+9. **Build slice by slice:** leave each slice with a runnable artifact and
    verification before depending on it. Keep each artifact small enough to
    iterate on quickly. Keep the README's "Next Agent Prompt" written as the
    handoff text a future agent should read and follow.
-9. **Reslice when the work says so:** if implementation hits a snag and the slice
-   starts changing unrelated variables, stop broadening the patch. Update the spec
+10. **Reslice when the work says so:** if implementation hits a snag and the slice
+   starts changing unrelated variables — or the choices ledger keeps filling
+   from one slice — stop broadening the patch. Update the spec
    first: split the slice into smaller contracts, name the frozen inputs, move the
    extra visual variables to later slices, and rewrite the Next Agent Prompt to
    resume from the first new slice. Then continue. Reslicing is progress, not
@@ -213,6 +234,11 @@ Each slice file answers:
   falloff only; cliff shape, cliff texture, water, sky, and fog are later slices.
   A cliff-silhouette slice compares the ridge outline and depth rows only; rock
   texture and haze are later slices.
+- What decisions are delegated to the implementer? Name the freedoms
+  deliberately left open (internal structure, naming, reversible cosmetic
+  calls). Everything else must be resolved by the slice: an unlisted decision
+  the implementer has to invent is a spec gap that lands in the choices ledger
+  ([audit-choices](../audit-choices/SKILL.md)), not implementer discretion.
 - What must stay green?
 - What feedback from the human would change this slice?
 - If the slice has a human review checkpoint, the slice file must frame it as
