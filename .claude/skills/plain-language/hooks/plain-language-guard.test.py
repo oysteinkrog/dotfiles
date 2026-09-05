@@ -71,6 +71,23 @@ NORWEGIAN = (
     "brukeren igjen uten at noen trenger aa ta paa telefonen."
 )
 
+# Artifact cases read the page off disk, so these two exist as real files. The
+# skip case is the regression: the marker regex accepts an `<!--` prefix, but the
+# Artifact branch stripped every tag before testing for it, so a page that
+# declared skip the documented way was scored anyway. A generated report whose
+# text is table cells and CSS comments can never pass, so without the escape the
+# gate stops saying anything about that file at all.
+ART_DIR = Path("/tmp/plainlang-artifact-cases")
+ART_DIR.mkdir(parents=True, exist_ok=True)
+ART_SLOP = ART_DIR / "slop.html"
+ART_SLOP.write_text(f"<title>x</title>\n<p>{SLOP}</p>\n", encoding="utf-8")
+ART_SKIP = ART_DIR / "skip.html"
+ART_SKIP.write_text(
+    f"<!-- plainlang: skip\n     assembled from tables, gated at its source -->\n"
+    f"<title>x</title>\n<p>{SLOP}</p>\n",
+    encoding="utf-8",
+)
+
 CASES = [
     # name, tool_name, tool_input, expected exit
     ("write .md, inflated", "Write", {"file_path": "/tmp/a.md", "content": SLOP}, 2),
@@ -97,6 +114,8 @@ CASES = [
     ("Jira comment, inflated", "mcp__claude_ai_Atlassian__addCommentToJiraIssue", {"commentBody": SLOP}, 2),
     ("artifact comment reply, inflated", "Artifact", {"action": "reply", "text": SLOP}, 2),
     ("artifact listing is not text", "Artifact", {"action": "list"}, 0),
+    ("artifact page, inflated", "Artifact", {"file_path": str(ART_SLOP)}, 2),
+    ("artifact page skip marker in an HTML comment", "Artifact", {"file_path": str(ART_SKIP)}, 0),
     ("Zendesk comment, inflated", "mcp__zendesk__add_comment", {"body": SLOP}, 2),
     ("Zendesk nested comment body", "mcp__zendesk__update_ticket", {"comment": {"body": SLOP}}, 2),
     ("Slack canvas, inflated", "mcp__claude_ai_Slack__slack_create_canvas", {"markdown": SLOP}, 2),

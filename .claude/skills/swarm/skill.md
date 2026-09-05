@@ -33,6 +33,7 @@ Activate when the user says:
 - `status` → delegate to `/swarm-status`
 
 ---
+name: swarm
 
 ### A. Start a swarm
 

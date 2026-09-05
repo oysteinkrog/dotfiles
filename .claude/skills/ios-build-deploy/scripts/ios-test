@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Run the app's unit tests on a simulator.
+#
+# On a simulator, not the device, unless you are testing something a simulator
+# cannot do. A simulator run needs no signing, no cable and nobody at the Mac,
+# which is what makes it usable unattended.
+#
+#   ios-test                     every test
+#   ios-test SomeTestClass       one class or one method
+
+set -uo pipefail
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+MAC_SSH="$HOME/.claude/skills/mac-remote/scripts/mac-ssh"
+
+if [[ ! -r $CONFIG ]]; then
+    echo "ios-test: no config at $CONFIG; see the mac-remote skill" >&2
+    exit 78
+fi
+# shellcheck disable=SC1090
+set -a; source "$CONFIG"; set +a
+
+filter=${1:-}
+log=/tmp/ios-test.log
+
+only=""
+if [[ -n $filter ]]; then
+    only="-only-testing:${IOS_SCHEME}Tests/$filter"
+fi
+
+cmd="cd '$IOS_PROJECT_DIR' && xcodebuild \
+    -project '$IOS_PROJECT_FILE' \
+    -scheme '$IOS_SCHEME' \
+    -destination 'platform=iOS Simulator,name=$IOS_SIM_NAME' \
+    -derivedDataPath '$IOS_DD_SIM' \
+    $only test > $log 2>&1"
+
+echo "running tests on the $IOS_SIM_NAME simulator"
+"$MAC_SSH" -t 1800 "$cmd; echo EXIT=\$?"
+
+# The line that says whether the run passed is `** TEST SUCCEEDED **`. There is
+# no "all tests passed" summary line to grep for, and looking for one reports a
+# green run as a failure, which is worse than no check at all.
+summary=$("$MAC_SSH" -t 120 "grep -E '\*\* TEST (SUCCEEDED|FAILED) \*\*|error:|Unable to find a device matching' $log | sort -u | head -20")
+passed=$("$MAC_SSH" -t 120 "grep -c \"' passed on \" $log")
+failed=$("$MAC_SSH" -t 120 "grep -c \"' failed on \" $log")
+
+printf '%s\n' "$summary"
+echo "${passed//[[:space:]]/} passed, ${failed//[[:space:]]/} failed"
+
+if grep -q 'TEST SUCCEEDED' <<<"$summary"; then
+    exit 0
+fi
+
+echo >&2
+echo "ios-test: not green. The full log is $log on the Mac." >&2
+
+if grep -q 'Unable to find a device matching' <<<"$summary"; then
+    # The name is right and the pairing is wrong. xcodebuild asks for OS:latest,
+    # so a model that only ships on an older runtime cannot match, even though
+    # `xcrun simctl list devices available` lists it. Print what does pair.
+    echo "ios-test: '$IOS_SIM_NAME' does not exist on the newest runtime." >&2
+    echo "ios-test: these do. Put one in IOS_SIM_NAME." >&2
+    "$MAC_SSH" -t 120 "grep -E 'iOS Simulator.*name:iPhone' $log | grep -oE 'OS:[0-9.]+, name:iPhone [^}]*' | sort -u" >&2
+    exit 1
+fi
+
+echo "ios-test: an empty summary usually means the build failed before any" >&2
+echo "          test ran; grep the log for 'error:' to see it." >&2
+exit 1

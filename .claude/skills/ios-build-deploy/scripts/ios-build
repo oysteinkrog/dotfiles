@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Build the iOS app, for the simulator or for a real device.
+#
+#   ios-build sim        compiles, does not sign, runs over ssh
+#   ios-build device     compiles and signs, needs the Mac's login session
+#
+# Build for the simulator first when you are checking code. It is the same
+# compiler over the same sources with none of the signing machinery, so a
+# simulator build that succeeds tells you the code is fine and a device build
+# that then fails is a signing or a session problem, not a code problem. Making
+# that split has repeatedly turned a confusing failure into an obvious one.
+
+set -uo pipefail
+
+CONFIG="${MAC_REMOTE_ENV:-$HOME/.config/mac-remote.env}"
+MAC_SKILL="$HOME/.claude/skills/mac-remote/scripts"
+MAC_SSH="$MAC_SKILL/mac-ssh"
+MAC_GUI="$MAC_SKILL/mac-gui-run"
+
+if [[ ! -r $CONFIG ]]; then
+    echo "ios-build: no config at $CONFIG; see the mac-remote skill" >&2
+    exit 78
+fi
+# shellcheck disable=SC1090
+set -a; source "$CONFIG"; set +a
+
+target=${1:-sim}
+log=/tmp/ios-build-$target.log
+
+case $target in
+    sim)
+        dest='generic/platform=iOS Simulator'
+        dd=$IOS_DD_SIM
+        ;;
+    device)
+        dest='generic/platform=iOS'
+        dd=$IOS_DD_DEVICE
+        ;;
+    *)
+        echo "usage: ios-build [sim|device]" >&2
+        exit 64
+        ;;
+esac
+
+cmd="cd '$IOS_PROJECT_DIR' && xcodebuild \
+    -project '$IOS_PROJECT_FILE' \
+    -scheme '$IOS_SCHEME' \
+    -destination '$dest' \
+    -derivedDataPath '$dd' \
+    build > $log 2>&1"
+
+echo "building for $target"
+
+if [[ $target == sim ]]; then
+    "$MAC_SSH" -t 1200 "$cmd; echo EXIT=\$?"
+else
+    # Signing needs the login session. Over ssh this fails with
+    # errSecInternalComponent however unlocked the keychain is.
+    "$MAC_GUI" -t 1800 "$cmd" >/dev/null
+fi
+
+summary=$("$MAC_SSH" -t 120 "grep -E 'error:|BUILD SUCCEEDED|BUILD FAILED' $log | tail -20")
+printf '%s\n' "$summary"
+
+if grep -q 'BUILD SUCCEEDED' <<<"$summary"; then
+    exit 0
+fi
+
+echo >&2
+echo "ios-build: failed. The full log is $log on the Mac." >&2
+if grep -q 'errSecInternalComponent' <<<"$summary"; then
+    echo "ios-build: that is the login session problem, not the code." >&2
+    echo "           Run mac-unlock-keychain, then build through mac-gui-run." >&2
+fi
+exit 1
