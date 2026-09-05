@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# aiolos-hooks — enable/disable/toggle/status the Claude Code -> aiolos
+# event forwarding pipeline.
+#
+# Architecture (almost-zero hot path cost):
+#   Claude Code fires lifecycle hook
+#     -> ~/.claude/hooks/forward_to_aiolos.sh checks for the flag file at
+#        ~/.config/aiolos/hooks-enabled and bails if absent (one stat call).
+#        If present, appends the event JSON to the local spool with a NUL
+#        separator. No network in the hot path.
+#     -> aiolos-hooks-shipper (Python, persistent) tails the spool, POSTs
+#        with HTTP/1.1 keep-alive to aiolos /api/observe/events, truncates
+#        the spool when fully drained.
+#
+# Subcommands:
+#   enable    create flag, start shipper (idempotent)
+#   disable   remove flag, stop shipper (idempotent)
+#   toggle    flip enable/disable
+#   status    print flag state, shipper PID, spool size, lag
+#   start     start shipper only (no flag change)
+#   stop      stop shipper only (no flag change)
+#   drain     run shipper once in the foreground until spool empty, then exit
+#   tail      tail -F the spool (debug)
+
+set -euo pipefail
+
+FLAG="$HOME/.config/aiolos/hooks-enabled"
+SPOOL_DIR="$HOME/.cache/aiolos-hooks"
+SPOOL="$SPOOL_DIR/spool.jsonl"
+OFFSET="$SPOOL.offset"
+PID_FILE="$SPOOL_DIR/shipper.pid"
+LOG_FILE="$SPOOL_DIR/shipper.log"
+
+# Locate the shipper. Same dir as this script.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHIPPER="$SCRIPT_DIR/aiolos-hooks-shipper"
+
+mkdir -p "$SPOOL_DIR" "$(dirname "$FLAG")"
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid=$(cat "$PID_FILE" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+start_shipper() {
+  if is_running; then
+    return 0
+  fi
+  nohup python3 "$SHIPPER" >>"$LOG_FILE" 2>&1 &
+  echo $! > "$PID_FILE"
+  disown 2>/dev/null || true
+  echo "shipper started (pid $(cat "$PID_FILE"))"
+}
+
+stop_shipper() {
+  if ! is_running; then
+    rm -f "$PID_FILE"
+    return 0
+  fi
+  local pid
+  pid=$(cat "$PID_FILE")
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+  echo "shipper stopped"
+}
+
+human_bytes() {
+  numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "${1}B"
+}
+
+cmd_status() {
+  if [ -f "$FLAG" ]; then
+    echo "flag:     ENABLED  ($FLAG)"
+  else
+    echo "flag:     disabled (touch $FLAG to enable)"
+  fi
+  if is_running; then
+    echo "shipper:  RUNNING  (pid $(cat "$PID_FILE"))"
+  else
+    echo "shipper:  not running"
+  fi
+  if [ -f "$SPOOL" ]; then
+    local size off lag
+    size=$(stat -c%s "$SPOOL" 2>/dev/null || echo 0)
+    off=$(cat "$OFFSET" 2>/dev/null || echo 0)
+    lag=$((size - off))
+    echo "spool:    $(human_bytes "$size") at $SPOOL"
+    echo "lag:      $(human_bytes "$lag") unshipped"
+  else
+    echo "spool:    (empty, no spool file yet)"
+  fi
+}
+
+cmd_enable() {
+  touch "$FLAG"
+  start_shipper
+  echo "aiolos hook forwarding: ENABLED"
+}
+
+cmd_disable() {
+  rm -f "$FLAG"
+  stop_shipper
+  echo "aiolos hook forwarding: disabled"
+}
+
+cmd_toggle() {
+  if [ -f "$FLAG" ]; then
+    cmd_disable
+  else
+    cmd_enable
+  fi
+}
+
+cmd_drain() {
+  AIOLOS_HOOK_POLL=0.1 timeout 30 python3 "$SHIPPER" || true
+  cmd_status
+}
+
+cmd_tail() {
+  if [ ! -f "$SPOOL" ]; then
+    echo "no spool yet at $SPOOL" >&2
+    exit 1
+  fi
+  tail -F "$SPOOL" | tr '\0' '\n'
+}
+
+case "${1:-status}" in
+  enable)  cmd_enable ;;
+  disable) cmd_disable ;;
+  toggle)  cmd_toggle ;;
+  status)  cmd_status ;;
+  start)   start_shipper ;;
+  stop)    stop_shipper ;;
+  drain)   cmd_drain ;;
+  tail)    cmd_tail ;;
+  -h|--help|help)
+    sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+    ;;
+  *)
+    echo "usage: aiolos-hooks {enable|disable|toggle|status|start|stop|drain|tail}" >&2
+    exit 1
+    ;;
+esac
