@@ -38,6 +38,7 @@
 # Usage:
 #   aiolos-rc [--no-pin | --account <id|email>] [claude args...]
 #   aiolos-rc --no-pin -c                       # continue, load-balanced
+#   aiolos-rc --no-pin rc                       # remote-control daemon (passthrough)
 #   aiolos-rc --stop | --status                 # manage running session shims
 #
 # Env: RC_DEBUG=1 logs per-request routing (per-session log under shims/).
@@ -92,16 +93,6 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-# Preflight: the shim needs the local certs; point the user at setup.sh if absent.
-if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || [ ! -f "$CA" ]; then
-  echo "aiolos-rc: certs missing under $SECRETS/certs — run $DIR/setup.sh first" >&2
-  exit 1
-fi
-if [ ! -f "$PRELOAD" ]; then
-  echo "aiolos-rc: $PRELOAD not built — run $DIR/setup.sh first" >&2
-  exit 1
-fi
-
 # Routing mode + optional leading options.
 NOPIN=0
 ACCOUNT="${RC_ACCOUNT_ID:-$DEFAULT_ACCOUNT}"
@@ -112,6 +103,58 @@ while true; do
     *) break ;;
   esac
 done
+
+# Resolve how to exec the native binary (WSL1 p_align patch, ld-linux fallback),
+# the same way ~/.config/fish/functions/claude.fish does.
+CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
+REAL="$(realpath "$CLAUDE_BIN")"
+SKIP="${AIOLOS_RC_SKIP_PERMISSIONS---dangerously-skip-permissions}"
+if command -v claude-wsl-elf-fix >/dev/null 2>&1 && claude-wsl-elf-fix "$REAL" >/dev/null 2>&1; then
+  LAUNCH=("$REAL")
+elif [ -x /lib64/ld-linux-x86-64.so.2 ]; then
+  LAUNCH=(/lib64/ld-linux-x86-64.so.2 "$REAL")
+else
+  LAUNCH=("$REAL")
+fi
+
+# `rc` / `remote-control` goes straight to the binary: no shim, no --settings, no
+# LD_PRELOAD. Three reasons:
+#   * The bridge owns every argument after the subcommand and rejects --settings,
+#     so the per-process base-URL override cannot be applied at all.
+#   * It is not needed. The RC control channel authenticates against your stored
+#     main login and connects with settings.local.json still pinning
+#     ANTHROPIC_BASE_URL at aiolos, and sessions the bridge spawns read that same
+#     pin, so inference keeps going through aiolos.
+#   * The subcommand must be the FIRST argument. Anything in front of it bypasses
+#     the CLI fast path, and the fallback it lands in slices argv at a fixed
+#     offset, feeding the subcommand name to the bridge as a stray argument:
+#     `Error: Unknown argument: rc`.
+#     See https://github.com/anthropics/claude-code/issues/42485
+# The bridge has no --dangerously-skip-permissions either; --permission-mode is
+# the equivalent for the sessions it spawns, and it has to follow the subcommand.
+case "${1:-}" in
+  rc|remote-control)
+    sub="$1"; shift
+    have_pm=0
+    for a in "$@"; do
+      if [ "$a" = "--permission-mode" ]; then have_pm=1; fi
+    done
+    if [ -n "$SKIP" ] && [ "$have_pm" = 0 ]; then
+      set -- --permission-mode bypassPermissions "$@"
+    fi
+    exec "${LAUNCH[@]}" "$sub" "$@"
+    ;;
+esac
+
+# Preflight: the shim needs the local certs; point the user at setup.sh if absent.
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || [ ! -f "$CA" ]; then
+  echo "aiolos-rc: certs missing under $SECRETS/certs — run $DIR/setup.sh first" >&2
+  exit 1
+fi
+if [ ! -f "$PRELOAD" ]; then
+  echo "aiolos-rc: $PRELOAD not built — run $DIR/setup.sh first" >&2
+  exit 1
+fi
 
 # The aiolos URL for the inference leg. Prefer an explicit shell override; else
 # read it from ~/.claude/settings.local.json (the on-disk source of record).
@@ -210,20 +253,8 @@ export NODE_EXTRA_CA_CERTS="$CA"
 
 printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > "$OVERRIDE_SETTINGS"
 
-# Launch the native binary the same way ~/.config/fish/functions/claude.fish does
-# (WSL1 p_align patch), as a CHILD (not exec) so the trap can tear down this
-# session's shim when Claude exits. LD_PRELOAD is inherited by the child.
-CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
-REAL="$(realpath "$CLAUDE_BIN")"
-SKIP="${AIOLOS_RC_SKIP_PERMISSIONS---dangerously-skip-permissions}"
-if command -v claude-wsl-elf-fix >/dev/null 2>&1 && claude-wsl-elf-fix "$REAL" >/dev/null 2>&1; then
-  LAUNCH=("$REAL")
-elif [ -x /lib64/ld-linux-x86-64.so.2 ]; then
-  LAUNCH=(/lib64/ld-linux-x86-64.so.2 "$REAL")
-else
-  LAUNCH=("$REAL")
-fi
-
+# Launch as a CHILD (not exec) so the trap can tear down this session's shim when
+# Claude exits. LD_PRELOAD is inherited by the child.
 set +e
 "${LAUNCH[@]}" --settings "$OVERRIDE_SETTINGS" $SKIP "$@"
 rc=$?
