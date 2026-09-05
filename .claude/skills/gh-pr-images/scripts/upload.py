@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 
 # Public Worker URL for the company gh-pr-images service. Not a secret.
-WORKER_URL = "https://gh-pr-images.REPLACE-ME.workers.dev"
+WORKER_URL = "https://gh-pr-images.initialforce.com"
 
 _PLACEHOLDER = "REPLACE-ME"
 
