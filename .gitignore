@@ -113,3 +113,16 @@ list-worktrees.sh
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Built binaries and runtime state (2026-09-05)
+bin/cc-sessions
+bin/*.exe
+bin/*.exe.replaced-*
+bin/aiolos-hook-forwarder
+bin/logs/
+.claude/daemon
+.claude/daemon.lock
+.claude/daemon.log
+.claude/daemon.status.json
+.claude/agent-mail/
+.claude/feedback/
