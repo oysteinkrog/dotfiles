@@ -21,12 +21,13 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 # Oracle Review Skill
 
-> **Oracle policy (2026-06):** Fable (`claude-fable-5`) is the primary oracle. By
-> default the FOR/AGAINST sessions below run as two fresh Fable subagents (`Agent`
-> tool with `model: "fable"`; Fable is not reachable through PAL). The PAL 2x GPT-Pro
-> setup is the escalation tier — extremely important or complex validations only, and
-> always paired with a Fable consultation on the same prompt. See `/consult-oracles`
-> and the Oracle Consultation Policy in `~/CLAUDE.md`.
+> **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
+> primary oracle. By default the FOR/AGAINST sessions below run as two `codex exec`
+> calls, one per stance, and that is enough on its own. Fable (`claude-fable-5`) is the
+> secondary oracle: add a Fable FOR/AGAINST pair for high-stakes or contested
+> validations, and use it as the whole debate when Codex is unavailable (Fable is not
+> reachable through PAL). See `/consult-oracles` and the Oracle Consultation Policy in
+> `~/CLAUDE.md`.
 
 Two-part process: (1) oracle consensus validation with FOR/AGAINST stances,
 then (2) iterative hardening loop until findings converge to near-zero.
@@ -50,8 +51,9 @@ then (2) iterative hardening loop until findings converge to near-zero.
 ### Setup
 
 Run 2 concurrent oracle sessions:
-- **Default tier:** two Fable subagents (`Agent`, `model: "fable"`), one FOR stance, one AGAINST stance, spawned in a single message
-- **Escalation tier** (extremely important/complex only): PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST), plus a parallel Fable consult on the same prompt
+- **Default tier:** two `codex exec` calls on `gpt-6-astra` (`-c model_reasoning_effort=xhigh`, `< /dev/null`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, both launched in a single message. See `/swarm-oracle` Step 2 for the exact commands
+- **Second opinion / Codex fallback:** two Fable subagents (`Agent`, `model: "fable"`), one FOR stance, one AGAINST stance, spawned in a single message
+- **Alternate route:** PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST) when Codex is unavailable and the structured consensus flow is wanted
 
 ### Oracle Prompt Template
 
@@ -181,11 +183,11 @@ performance impact, data integrity, rollback strategy.
 ## Full Hardening Pipeline Example
 
 ```
-Phase 1: Oracle (2x Fable FOR/AGAINST; escalate to 2x GPT-5.5-Pro + Fable if extremely important)
+Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Fable if high-stakes or contested)
   -> Fix CRITICAL/HIGH findings
 Phase 2: Agent Review (10 Opus, multi-lens)
   -> Fix all findings
-Phase 3: Oracle (2x Fable FOR/AGAINST) on fixes
+Phase 3: Oracle (2x Astra FOR/AGAINST) on fixes
   -> Verify fixes, find remaining issues
 Phase 4: Agent Hardening (8 Opus, fresh eyes)
   -> Embed cross-cutting, convert ACs, split oversized
@@ -202,4 +204,4 @@ Phase 5: Final Correctness (10 Opus)
 3. **Track convergence** — if issues aren't decreasing, the artifact needs redesign, not more rounds
 4. **Validate fixes against plan** — hardening must not drift from the original design intent
 5. **Oracle before agents, agents before oracle** — alternate perspectives for best coverage
-6. **Verify PAL MCP is running** before launching GPT/Gemini oracle sessions (agents silently fall back to self-analysis without it); Fable subagents need no PAL
+6. **Check the oracle route before launching** — for Astra, `codex` on PATH and the repo root trusted in `~/.codex/config.toml`; for the PAL route, PAL MCP running (agents silently fall back to self-analysis without it). Fable subagents need neither
