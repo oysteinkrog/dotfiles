@@ -144,21 +144,27 @@ If sync fails with auth errors, cookies have expired — ask the user to re-extr
 
 ## Oracle Consultation Policy
 
-**Fable (claude-fable-5) is the primary oracle.** For second opinions, design validation,
-debugging help, and architecture reviews, consult Fable first and by default.
+**GPT-6 Astra (gpt-6-astra) is the primary oracle.** For second opinions, design
+validation, debugging help, and architecture reviews, consult Astra first and by default.
+One Astra call is a complete consultation; nothing needs to run alongside it.
 
-- **The GPT escalation tier is reserved for extremely important or complex tasks only**
-  (e.g. high-stakes architecture decisions, problems Fable could not crack, board-level
-  deliverables). Do not reach for it for routine second opinions. Preferred GPT route:
-  **GPT-5.6 Sol via Codex CLI** (`codex exec --sandbox read-only -m gpt-5.6-sol
-  -c model_reasoning_effort=xhigh` — explicit tier ID required, the bare `gpt-5.6`
-  alias hangs); alternate: GPT-5.5-Pro via PAL (PAL does not have GPT-5.6).
-- **Never use the GPT tier alone.** Whenever GPT is consulted, ALWAYS also consult Fable
-  on the same question and compare the two answers. Present both views, clearly labelled,
-  and call out disagreements explicitly.
-- This supersedes any skill or doc that frames GPT Pro as the default/smartest oracle
-  (e.g. `/consult-oracles`, `/swarm-oracle`): run those patterns with Fable as the
-  primary, adding GPT Pro only under the criteria above.
+- **How to reach it: Codex CLI.** `codex exec --sandbox read-only -m gpt-6-astra
+  -c model_reasoning_effort=xhigh "<question>" < /dev/null` — explicit tier ID required,
+  the bare `gpt-6` alias hangs; `< /dev/null` or the call blocks on stdin forever.
+  Astra is not reachable via PAL, which tops out at gpt-5.5-pro.
+- **Fable (claude-fable-5) is the secondary oracle.** Add a Fable consultation on the
+  same question when the decision is high-stakes or hard to reverse, when Astra's answer
+  looks uncertain or shallow, or when the user asks for a second opinion. Present both
+  views, clearly labelled, and call out disagreements explicitly.
+- **Fallback order when the Codex call fails** (Codex missing, path not trusted, auth
+  error, empty output): Fable subagent, then Opus subagent. Say which one answered; do
+  not silently downgrade.
+- **Sensitive code:** Codex and PAL calls leave the machine. Proprietary material needs
+  approval before it goes to Astra; without approval, run the consultation on Fable and
+  say why.
+- This supersedes any skill or doc that frames Fable as the primary oracle (e.g.
+  `/consult-oracles`, `/swarm-oracle`, `/swarm-oracle-review`): run those patterns with
+  Astra as the primary and Fable as the second opinion.
 
 ## Multi-Agent Orchestration
 

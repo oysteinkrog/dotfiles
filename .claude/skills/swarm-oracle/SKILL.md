@@ -1,23 +1,28 @@
 ---
 name: swarm-oracle
 model: opus
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents; escalate to GPT-5.6 Sol via Codex CLI or PAL 2x GPT-Pro (always paired with Fable) for extremely important or complex validations. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra sessions via Codex CLI; add two Fable subagents as a second opinion for high-stakes or contested validations, and use them as the fallback when Codex is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"
 ---
 
 # Oracle Consensus
 
-> **Oracle policy (2026-06):** Fable (`claude-fable-5`) is the primary oracle — the
-> default FOR/AGAINST debate runs as two fresh Fable subagents (`Agent` tool with
-> `model: "fable"`; Fable is not reachable through PAL). The PAL 2x GPT-Pro consensus
-> is the **escalation tier**, for extremely important or complex validations only, and
-> must always run alongside a Fable consultation on the same question. See
-> `/consult-oracles` and the Oracle Consultation Policy in `~/CLAUDE.md`.
+> **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
+> primary oracle — the default FOR/AGAINST debate runs as two `codex exec` calls, one
+> per stance. Astra alone is the normal shape of a validation; no pairing is required.
+> Fable (`claude-fable-5`) is the **secondary oracle**: add a Fable FOR/AGAINST pair
+> when the validation is high-stakes or the two Astra stances leave the call contested,
+> or when the user asks for a second opinion. See `/consult-oracles` and the Oracle
+> Consultation Policy in `~/CLAUDE.md`.
 >
-> **Availability fallback:** if Fable spawns fail (model not accessible, permission or
-> repeated spawn errors), run the same FOR/AGAINST debate with `model: "opus"` subagents
-> instead and state the substitution in the verdict. Fable being unavailable is NOT a
-> reason to escalate to the GPT-Pro tier.
+> **Availability fallback:** if the Codex calls fail (Codex missing, path not trusted,
+> auth error, empty output after a real attempt), run the same FOR/AGAINST debate with
+> Fable subagents (`Agent` tool with `model: "fable"`; Fable is not reachable through
+> PAL) and state the substitution in the verdict. If Fable spawns also fail, use
+> `model: "opus"` subagents and say so. Do not silently downgrade.
+>
+> **Sensitive code:** the Codex calls leave the machine. Proprietary or sensitive
+> material needs approval first; without it, run the debate on Fable and note why.
 
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
@@ -31,7 +36,7 @@ Run a structured FOR/AGAINST debate between two high-capability oracle sessions 
 
 ## Prerequisites
 
-For the escalation tier only: verify PAL MCP is running before launching GPT oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. The default Fable tier needs no PAL.
+The default Astra tier needs Codex only: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. Fable subagents need no PAL.
 
 ## Workflow
 
@@ -58,9 +63,34 @@ The evaluation prompt must be self-contained — models do not share context bet
 
 ### Step 2: Configure Stances
 
-**Default tier (Fable):** spawn two fresh Fable subagents in a single message with
-opposing stances. Each prompt is self-contained (evaluation prompt + file paths);
-the agents share no context.
+**Default tier (GPT-6 Astra):** run FOR and AGAINST as two `codex exec` calls in one
+message. Each prompt is self-contained (evaluation prompt + file paths); the two
+sessions share no context. Astra is not reachable through PAL, and the explicit tier
+ID is required — the bare `gpt-6` alias hangs. See the `/codex` skill for prompting
+and exec pitfalls.
+
+`xhigh` is the default effort; switch a stance to `model_reasoning_effort=ultra`
+(subagent fan-out) only when its evaluation decomposes into parallel facets, e.g. an
+AGAINST pass over a large bead set or a design spanning several independent
+subsystems:
+
+```bash
+codex exec --sandbox read-only -m gpt-6-astra -c model_reasoning_effort=xhigh \
+  -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." < /dev/null 2>/dev/null
+codex exec --sandbox read-only -m gpt-6-astra -c model_reasoning_effort=xhigh \
+  -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." < /dev/null 2>/dev/null
+```
+
+`< /dev/null` is required: without a stdin source `codex exec` blocks forever on
+"Reading additional input from stdin" and looks like a slow model. `-o <file>`
+captures the final message; read the file rather than parsing stdout.
+
+Then skip to Step 4 and synthesize the two responses yourself.
+
+**Second opinion (Fable):** for high-stakes validations, or when the two Astra
+stances leave the call contested, spawn a Fable FOR/AGAINST pair in a single message
+and synthesize all four responses. Same shape when Codex is unavailable, in which
+case the Fable pair is the whole debate.
 
 ```
 Agent({ subagent_type: "general-purpose", model: "fable",
@@ -70,28 +100,8 @@ Agent({ subagent_type: "general-purpose", model: "fable",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
 
-Then skip to Step 4 and synthesize the two responses yourself.
-
-**Escalation tier (extremely important/complex only, always paired with a parallel
-Fable consult on the same evaluation prompt).** Two GPT routes:
-
-*Preferred — GPT-5.6 Sol via Codex CLI* (GPT-5.6 is not reachable through PAL;
-use explicit tier IDs, the bare `gpt-5.6` alias hangs; see the `/codex` skill
-for prompting and exec pitfalls). Run FOR and AGAINST as two codex exec calls
-in one message. `xhigh` is the default effort; switch a stance to
-`model_reasoning_effort=ultra` (Sol Ultra, subagent fan-out) only when its
-evaluation decomposes into parallel facets — e.g. an AGAINST pass over a large
-bead set or a design spanning several independent subsystems:
-
-```bash
-codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
-  -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." 2>/dev/null
-codex exec --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
-  -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." 2>/dev/null
-```
-
-*Alternate — PAL 2x GPT-Pro* (when Codex is unavailable or the structured
-consensus flow is wanted):
+*Alternate route — PAL 2x GPT-Pro* (when Codex is unavailable and the structured
+consensus flow is wanted; PAL tops out at gpt-5.5-pro):
 
 ```json
 {
@@ -102,7 +112,7 @@ consensus flow is wanted):
 }
 ```
 
-#### Alternate Configurations (escalation tier)
+#### Alternate Configurations (PAL route)
 
 **Architecture validation (3 models):**
 ```json
@@ -121,10 +131,9 @@ consensus flow is wanted):
 ]
 ```
 
-### Step 3: Run Consensus (escalation tier only)
+### Step 3: Run Consensus (PAL route only)
 
-Use the PAL MCP consensus tool, with the paired Fable subagent launched in the same
-message. The tool manages the multi-step flow internally:
+Use the PAL MCP consensus tool. The tool manages the multi-step flow internally:
 
 1. **Step 1 (your analysis):** Write the evaluation prompt and your own independent assessment
 2. **Steps 2-N (model consultations):** Each model responds with its stance
