@@ -1,39 +1,68 @@
 #!/usr/bin/env bash
-# imagegen-gpt-image — Generate images via OpenAI gpt-image-2.
+# imagegen-gpt-image — Generate and edit images via OpenAI GPT Image 2.5.
+#
+# Two models, both on v1/images/generations and v1/images/edits:
+#   gpt-image-2.5-flare     fast, high quality, the default here
+#   gpt-image-2.5-sunburst  best instruction-following and edit precision
 #
 # Reads OPENAI_API_KEY from env or from ~/.config/imagegen-gpt-image/keys.env
 # (override path with IMAGEGEN_GPT_IMAGE_KEYS_FILE).
 
 set -euo pipefail
 
-MODEL="gpt-image-2"
+MODEL="gpt-image-2.5-flare"
 SIZE="1024x1024"
 QUALITY="high"
 N=1
 FORMAT="png"
 OUT=""
 PROMPT=""
+BACKGROUND=""
+COMPRESSION=""
+MODERATION=""
+INPUT_FIDELITY=""
+MASK=""
+INPUT_IMAGES=()
 KEYS_FILE="${IMAGEGEN_GPT_IMAGE_KEYS_FILE:-$HOME/.config/imagegen-gpt-image/keys.env}"
 
 usage() {
   cat <<'EOF'
-imagegen-gpt-image — Generate images via OpenAI gpt-image-2
+imagegen-gpt-image — Generate and edit images via OpenAI GPT Image 2.5
 
 Usage:
   imagegen-gpt-image [OPTIONS] <prompt>
   imagegen-gpt-image [OPTIONS] -p "<prompt>"
+  imagegen-gpt-image -i ref.png [-i ref2.png ...] [OPTIONS] "<edit instruction>"
 
 Options:
   -p, --prompt TEXT       Prompt (or pass as the final positional arg).
   -o, --out PATH          Output file (default: ./imagegen-gpt-image-<ts>.<format>).
                           With -n >1, suffix _1, _2, ... is inserted.
-  -m, --model ID          Model ID (default: gpt-image-2).
-  -s, --size SIZE         1024x1024, 1536x1024, 1024x1536, 2048x2048, etc.
-                          (default: 1024x1024).
-  -q, --quality LEVEL     low | medium | high | auto (default: high).
+  -m, --model ID          gpt-image-2.5-flare (default) | gpt-image-2.5-sunburst
+      --sunburst          Shorthand for -m gpt-image-2.5-sunburst.
+      --flare             Shorthand for -m gpt-image-2.5-flare.
+  -s, --size SIZE         WIDTHxHEIGHT or auto (default: 1024x1024).
+                          Both edges multiples of 16, at most 3840 per edge,
+                          aspect ratio between 1:3 and 3:1, total pixels
+                          between 655360 and 8294400.
+                          Common: 1024x1024, 1536x1024, 1024x1536, 2048x2048.
+  -q, --quality LEVEL     low | medium | high | xhigh | max | auto
+                          (default: high).
   -n, --count N           Number of images (default: 1).
   -f, --format FMT        png | jpeg | webp (default: png).
+  -b, --background MODE   transparent | opaque | auto. Transparency needs
+                          png or webp.
+  -c, --compression N     0-100, jpeg and webp only.
+      --moderation LEVEL  auto (server default) | low.
       --stdout            Write base64-decoded image to stdout (n=1 only).
+
+Edit mode (turned on by -i; uses v1/images/edits):
+  -i, --image PATH        Reference image. Repeat for up to 16 images.
+      --mask PATH         Mask PNG for inpainting. Transparent pixels mark the
+                          area to change.
+      --input-fidelity F  high | low. Older models only (gpt-image-2 and
+                          earlier). The 2.5 models reject it and hold
+                          reference subjects by default.
   -h, --help              Show this help.
 
 API key:
@@ -45,8 +74,13 @@ API key:
 
 Examples:
   imagegen-gpt-image "a cat reading a newspaper" -o cat.png
-  imagegen-gpt-image -s 2048x2048 -q high "isometric coffee shop"
+  imagegen-gpt-image --sunburst -q max -s 2048x2048 "isometric coffee shop"
   imagegen-gpt-image -n 3 -o sketches.png "rough pencil sketch of a fox"
+  imagegen-gpt-image -b transparent -o logo.png "flat fox head icon"
+  imagegen-gpt-image --sunburst \
+    -i me.png -o portrait.png "put this person in a wool coat, snowy street"
+  imagegen-gpt-image --sunburst -i room.png --mask wall.png \
+    -o room2.png "paint the masked wall deep green"
 EOF
 }
 
@@ -56,18 +90,26 @@ die() { echo "imagegen-gpt-image: $*" >&2; exit 1; }
 STDOUT_MODE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -p|--prompt)   PROMPT="$2"; shift 2 ;;
-    -o|--out)      OUT="$2"; shift 2 ;;
-    -m|--model)    MODEL="$2"; shift 2 ;;
-    -s|--size)     SIZE="$2"; shift 2 ;;
-    -q|--quality)  QUALITY="$2"; shift 2 ;;
-    -n|--count)    N="$2"; shift 2 ;;
-    -f|--format)   FORMAT="$2"; shift 2 ;;
-    --stdout)      STDOUT_MODE=1; shift ;;
-    -h|--help)     usage; exit 0 ;;
-    --)            shift; PROMPT="${PROMPT:+$PROMPT }$*"; break ;;
-    -*)            die "unknown option: $1 (try --help)" ;;
-    *)             PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
+    -p|--prompt)        PROMPT="$2"; shift 2 ;;
+    -o|--out)           OUT="$2"; shift 2 ;;
+    -m|--model)         MODEL="$2"; shift 2 ;;
+    --sunburst)         MODEL="gpt-image-2.5-sunburst"; shift ;;
+    --flare)            MODEL="gpt-image-2.5-flare"; shift ;;
+    -s|--size)          SIZE="$2"; shift 2 ;;
+    -q|--quality)       QUALITY="$2"; shift 2 ;;
+    -n|--count)         N="$2"; shift 2 ;;
+    -f|--format)        FORMAT="$2"; shift 2 ;;
+    -b|--background)    BACKGROUND="$2"; shift 2 ;;
+    -c|--compression)   COMPRESSION="$2"; shift 2 ;;
+    --moderation)       MODERATION="$2"; shift 2 ;;
+    -i|--image)         INPUT_IMAGES+=("$2"); shift 2 ;;
+    --mask)             MASK="$2"; shift 2 ;;
+    --input-fidelity)   INPUT_FIDELITY="$2"; shift 2 ;;
+    --stdout)           STDOUT_MODE=1; shift ;;
+    -h|--help)          usage; exit 0 ;;
+    --)                 shift; PROMPT="${PROMPT:+$PROMPT }$*"; break ;;
+    -*)                 die "unknown option: $1 (try --help)" ;;
+    *)                  PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
   esac
 done
 
@@ -75,6 +117,52 @@ done
 command -v curl >/dev/null || die "curl is required"
 command -v jq   >/dev/null || die "jq is required"
 command -v base64 >/dev/null || die "base64 is required"
+
+case "$QUALITY" in
+  low|medium|high|xhigh|max|auto) ;;
+  *) die "invalid quality: $QUALITY (low|medium|high|xhigh|max|auto)" ;;
+esac
+case "$FORMAT" in
+  png|jpeg|webp) ;;
+  *) die "invalid format: $FORMAT (png|jpeg|webp)" ;;
+esac
+if [[ -n "$BACKGROUND" ]]; then
+  case "$BACKGROUND" in
+    transparent|opaque|auto) ;;
+    *) die "invalid background: $BACKGROUND (transparent|opaque|auto)" ;;
+  esac
+  if [[ "$BACKGROUND" == "transparent" && "$FORMAT" == "jpeg" ]]; then
+    die "transparent background needs -f png or -f webp"
+  fi
+fi
+if [[ -n "$COMPRESSION" && "$FORMAT" == "png" ]]; then
+  die "--compression applies to jpeg and webp only"
+fi
+if [[ -n "$INPUT_FIDELITY" ]]; then
+  case "$INPUT_FIDELITY" in
+    high|low) ;;
+    *) die "invalid --input-fidelity: $INPUT_FIDELITY (high|low)" ;;
+  esac
+  # Verified 2026-09-11: both 2.5 models reject this parameter outright.
+  # They preserve reference subjects by default, so there is nothing to set.
+  if [[ "$MODEL" == gpt-image-2.5-* ]]; then
+    die "$MODEL does not support --input-fidelity; it preserves reference subjects by default"
+  fi
+fi
+
+EDIT_MODE=0
+if [[ ${#INPUT_IMAGES[@]} -gt 0 ]]; then
+  EDIT_MODE=1
+  [[ ${#INPUT_IMAGES[@]} -le 16 ]] || die "at most 16 -i images (got ${#INPUT_IMAGES[@]})"
+  for f in "${INPUT_IMAGES[@]}"; do
+    [[ -f "$f" ]] || die "input image not found: $f"
+  done
+  [[ -z "$MASK" || -f "$MASK" ]] || die "mask not found: $MASK"
+else
+  if [[ -n "$MASK" || -n "$INPUT_FIDELITY" ]]; then
+    die "--mask and --input-fidelity require at least one -i image"
+  fi
+fi
 
 # --- load API key ---
 if [[ -z "${OPENAI_API_KEY:-}" && -f "$KEYS_FILE" ]]; then
@@ -85,23 +173,48 @@ if [[ -z "${OPENAI_API_KEY:-}" && -f "$KEYS_FILE" ]]; then
 fi
 [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY not set (env or $KEYS_FILE)"
 
-# --- build request ---
-REQ=$(jq -n \
-  --arg model    "$MODEL" \
-  --arg prompt   "$PROMPT" \
-  --arg size     "$SIZE" \
-  --arg quality  "$QUALITY" \
-  --arg fmt      "$FORMAT" \
-  --argjson n    "$N" \
-  '{model:$model, prompt:$prompt, size:$size, quality:$quality, n:$n,
-    output_format:$fmt}')
-
 # --- call API ---
-RESP=$(curl -sS --fail-with-body \
-  -X POST "https://api.openai.com/v1/images/generations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$REQ") || die "API request failed: $RESP"
+if [[ "$EDIT_MODE" -eq 1 ]]; then
+  # v1/images/edits takes multipart/form-data, one image[] field per reference.
+  FORM=(-F "model=$MODEL" -F "prompt=$PROMPT" -F "size=$SIZE"
+        -F "quality=$QUALITY" -F "n=$N" -F "output_format=$FORMAT")
+  for f in "${INPUT_IMAGES[@]}"; do FORM+=(-F "image[]=@$f"); done
+  [[ -n "$MASK" ]]           && FORM+=(-F "mask=@$MASK")
+  [[ -n "$INPUT_FIDELITY" ]] && FORM+=(-F "input_fidelity=$INPUT_FIDELITY")
+  [[ -n "$BACKGROUND" ]]     && FORM+=(-F "background=$BACKGROUND")
+  [[ -n "$COMPRESSION" ]]    && FORM+=(-F "output_compression=$COMPRESSION")
+  [[ -n "$MODERATION" ]]     && FORM+=(-F "moderation=$MODERATION")
+
+  RESP=$(curl -sS --fail-with-body \
+    -X POST "https://api.openai.com/v1/images/edits" \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    "${FORM[@]}") || die "API request failed: $RESP"
+else
+  REQ=$(jq -n \
+    --arg model    "$MODEL" \
+    --arg prompt   "$PROMPT" \
+    --arg size     "$SIZE" \
+    --arg quality  "$QUALITY" \
+    --arg fmt      "$FORMAT" \
+    --argjson n    "$N" \
+    '{model:$model, prompt:$prompt, size:$size, quality:$quality, n:$n,
+      output_format:$fmt}')
+  if [[ -n "$BACKGROUND" ]]; then
+    REQ=$(jq --arg v "$BACKGROUND" '.background=$v' <<<"$REQ")
+  fi
+  if [[ -n "$COMPRESSION" ]]; then
+    REQ=$(jq --argjson v "$COMPRESSION" '.output_compression=$v' <<<"$REQ")
+  fi
+  if [[ -n "$MODERATION" ]]; then
+    REQ=$(jq --arg v "$MODERATION" '.moderation=$v' <<<"$REQ")
+  fi
+
+  RESP=$(curl -sS --fail-with-body \
+    -X POST "https://api.openai.com/v1/images/generations" \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$REQ") || die "API request failed: $RESP"
+fi
 
 # Surface OpenAI errors clearly.
 if jq -e '.error' >/dev/null 2>&1 <<<"$RESP"; then
