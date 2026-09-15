@@ -212,12 +212,32 @@ live in `~/.local/bin` (on PATH): `mcp-agent-mail` (the MCP server) and `am` (op
 The old Python install at `~/mcp_agent_mail` is retired — do not start it.
 
 The HTTP server runs as a **PM2 service** (`~/.config/pm2/ecosystem.config.js`): it launches
-`am serve-http --no-tui --no-auth --port 8765`. Localhost-only, **no bearer token** (no-auth).
-Store lives at `~/.mcp_agent_mail_git_mailbox_repo/` (SQLite + git archive).
+`am serve-http --no-tui --no-auth --port 4809`. Localhost-only, **no bearer token** (no-auth).
+The port was 8765 until 2026-09-10. MotionCatalyst's Mobile Camera pairing service
+defaults to 8765 for WiFi and 8766 for USB, so agent-mail on 8765 stopped the pairing
+service from starting at all. 4809 keeps every MCP server in the same 48xx block.
+Store lives at `/home/oystein/.mcp_agent_mail_git_mailbox_repo/` (SQLite + git archive).
+It moved there from `~/.mcp_agent_mail_git_mailbox_repo/` on 2026-09-15: `~` is on `/c`,
+which is drvfs, and SQLite in WAL mode on drvfs does not get the file locking and fsync
+behaviour it needs. The store went corrupt on nearly every day from 2026-08-25. `/` is
+wslfs and has proper POSIX semantics. The server reads the root from `STORAGE_ROOT`,
+and the `am` CLI from `AGENT_MAIL_STORAGE_ROOT`; both are set, to the same value, in the
+pm2 ecosystem file and in `~/.config/fish/conf.d/agent-mail.fish`. Setting only
+`AGENT_MAIL_STORAGE_ROOT` is silently ignored by the server. wslfs is not reachable from Windows tools, which is part of the point.
+The old root is kept as a backup.
+
+**Never run `am doctor fix`.** It rewrites every MCP config to port 8765 with a bearer
+token, which breaks the deliberate 4809 no-auth setup. To repair a corrupt database use
+`sqlite3 .recover`, not `am doctor reconstruct` (its output gets rejected by an acceptance
+gate and it drops rows). Ubuntu's `/usr/bin/sqlite3` cannot run `.recover`; build the
+amalgamation with `-DSQLITE_ENABLE_DBPAGE_VTAB` first.
 
 - Restart:  `pm2 restart mcp-agent-mail` (then `pm2 save`)
-- Health:   `curl -s http://127.0.0.1:8765/health` → 200, or `am doctor check`
-- Recover:  `am doctor fix` (clears stale procs/locks, repairs/rebuilds SQLite from the archive)
+- Health:   `curl -s http://127.0.0.1:4809/health` → 200, or `am doctor check`
+- Recover:  `am doctor check` to diagnose. Do NOT run `am doctor fix` (see above).
+- Repair and storage-root moves: the `agent-mail-ops` skill owns this. It carries the
+  damage-type table, the scripts, and the traps (`STORAGE_ROOT` vs `AGENT_MAIL_STORAGE_ROOT`,
+  `pm2 restart` not reloading env, the four permanent WSL1 `server_*` warnings).
 
 The rust server is backward-compatible: it answers JSON-RPC on both `/mcp/` (canonical) and
 `/api/` (legacy), so existing project `.mcp.json` files on `/api/` keep working unchanged.
@@ -231,7 +251,7 @@ Note: on WSL1/wslfs the Tantivy full-text index can't build (`os error 22`), so
 preference — apply it to any such repo you touch that lacks the entry:
 
 ```json
-"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:8765/mcp/" }
+"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:4809/mcp/" }
 ```
 
 **There is deliberately NO user-scope registration in `~/.claude.json`** — it was removed
@@ -249,7 +269,7 @@ Two lessons that outlive the fix:
   "no matching tools", which reads as the server being down when it isn't.
 - If the tools are genuinely absent from a session, the JSON-RPC endpoint works from
   any shell and is the same transport:
-  `curl -s -X POST http://127.0.0.1:8765/mcp/ -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_reservation_paths","arguments":{...}}}'`
+  `curl -s -X POST http://127.0.0.1:4809/mcp/ -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_reservation_paths","arguments":{...}}}'`
 
 ### Identity is automatic and mandatory (hook-enforced 2026-08-19)
 
