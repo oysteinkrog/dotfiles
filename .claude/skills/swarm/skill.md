@@ -223,8 +223,14 @@ Note: `<area>` follows project git conventions (e.g., `test/`, `model/`, `vm/`).
 #### 5. Spawn teammates
 
 Send one `Agent` tool call per teammate in a SINGLE leader message so they run
-concurrently. **Never** pass `isolation: "worktree"` for execution-swarm teammates
-(see global CLAUDE.md "Agent Swarm Rules").
+concurrently. **Never** pass `isolation: "worktree"` for execution-swarm teammates.
+
+Why, in one line of evidence: worktree isolation caused silent merge regressions, where a
+later merge overwrote an earlier security fix. The measured reversion rate on 2026-03-07 was
+16%. All execution teammates work on the same branch and commit directly, each bead small
+enough for one atomic commit. Worktree isolation stays fine for read-only research or design
+teammates that return findings in their final message, but not for a teammate whose output is
+a file the leader must read, because that file lands in the worktree, not the main checkout.
 
 ```
 Agent({
