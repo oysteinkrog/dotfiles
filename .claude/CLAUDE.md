@@ -446,6 +446,8 @@ surface and output flags. Agent sandboxing:
 `GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
 Gmail/Calendar are also on Claude.ai remote MCPs: use those for quick reads, and
 `gog` for Drive, Docs, Sheets, Contacts.
+Name clash to watch: the fish function `gws` is `git status --short`, not the old
+`gws` workspace CLI.
 
 ## Static Sites (GitHub Pages)
 

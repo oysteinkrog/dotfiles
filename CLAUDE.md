@@ -7,7 +7,7 @@ Tracked files live throughout `~` (CLAUDE.md, .claude/, .config/fish/, bin/, etc
 
 ## Grove - Git Worktree Manager
 
-The `grove` command manages git worktrees for a mono-repo workflow. Each worktree is a "project" identified by a short tag. Config is at `~/.config/grove/config.json`, registry at `~/.config/grove/registry.json`.
+The `grove` command manages git worktrees for a mono-repo workflow. Each worktree is a "project" identified by a short tag. This is the rust rewrite: binary `~/.cargo/bin/grove`, source `/c/work/grove`. Global config is `~/.config/grove/repos.json`; each repo keeps its own `<work_dir>/.grove/registry.json`. The `config.json` and `registry.json` left behind in `~/.config/grove/` are stale, so do not read worktree lists from them. The `grove-workflow` skill is the full reference.
 
 ### Commands
 
@@ -45,7 +45,13 @@ grove rename <old> <new> [--no-move]
 # Freeze/thaw (exclude from launch)
 grove freeze <tag>
 grove thaw <tag>
+
+# Clean up stray worktrees and scratch
+grove gc [--dry-run] [--yes]
 ```
+
+Note: every form of `grove list` works out git status per project and can take many minutes
+on WSL1. In agent context prefer `git -C <repo>/master worktree list --porcelain`.
 
 ### Examples
 
