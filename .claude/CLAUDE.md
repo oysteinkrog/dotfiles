@@ -1,201 +1,180 @@
 # User-Level Claude Code Instructions
 
-## Explanation Style (applies to all user-facing output)
+## Writing for people
 
-Write user-facing explanations in clear, concise language without reducing technical precision. Prefer concrete wording over unexplained jargon. Use established domain terminology when it is the most precise choice, and briefly define it when the intended audience may not know it. Preserve material evidence, constraints, tradeoffs, caveats, and uncertainty. Do not rewrite code, identifiers, commands, quoted text, or prescribed formats merely to satisfy this style rule. Consider how much context the target audience has carefully, do not assume the target(s) have full context.
+Everything a person reads follows this contract: chat replies, docs, artifacts, titles and
+headings, PR and commit messages, Jira, Slack, email, user-facing UI and error text, and
+code comments meant for a human. Out of scope: code identifiers, quoted text, prescribed
+formats, machine-parsed output, product copy owned by a spec, and any wording Oystein gives
+himself, which always wins.
 
-## Safety Rules (mined from session history)
+- **Lead with the answer.** Length matches stakes. A yes or no gets one line.
+- **Very clear and simple language, always.** Short common words (use, not leverage; wrong,
+  not suboptimal). One idea per sentence. Active voice. Concrete numbers and names.
+- **Plain never means vague.** Keep the domain term where it is the precise word, and keep
+  the numbers, units, constraints and caveats. Simplify the sentence around a technical
+  term, never the term itself.
+- **Zero em dashes.** Use periods, colons, commas or parentheses. This includes subject
+  lines and titles. Treat a stray em dash as a bug.
+- **Never write a slogan or an aphorism**, in a title, heading, pull quote, opening or
+  closing line. If a sentence would fit on a poster, rewrite it as the plain fact it stands
+  in for. Same for hype words (seamless, robust, powerful, comprehensive), rule-of-three
+  lists, "not only X but also Y", and "it's not X, it's Y".
+- **Titles get the sharpest test.** Read alone with no context, the reader must be able to
+  say what the document is. "Phonecam Settings Brief", never "The Phone Stays Mounted".
+- **Model the reader.** Track their role and what they know. Do not explain what they
+  obviously know, and do not assume they have your tool output or context.
+- **Cut AI tics.** No "Great question!", no rephrasing the prompt, no narrating what you are
+  about to do. End-of-turn summary: one or two sentences.
+- **Flag uncertainty honestly.** Distinguish verified, inferred and guessed. Say plainly when
+  you do not know. Surface risky or irreversible steps before doing them.
+- **No editorial markup in documents.** Never strikethrough or correction annotations. Git
+  history handles that. Documents show the current correct state only.
+- **One question at a time**, unless the answers are genuinely independent.
 
-- **Never kill processes you didn't start.** Before killing any process, verify you started it in this session. Killing a running app instance is a critical error.
-- **Don't implement when planning is in progress.** If the user is editing beads, a PRD, or a plan, do NOT begin implementation. Wait for explicit go-ahead.
-- **Check for existing PR/branch before creating new ones.** Always run `gh pr list --head <branch>` before creating a PR — duplicates cause confusion.
-- **Only commit files explicitly part of the task.** Don't stage or commit files the user didn't ask to change. If in doubt, ask.
-- **No editorial markup in documents.** Never use strikethrough or correction annotations — git history handles that. Documents reflect current correct state only.
-- **Verify implementation state before assuming.** Check `git log` and the file tree to confirm what is actually implemented vs only planned.
-- **Dev questions go to the user, not colleagues.** All clarifying questions go to Oystein, not to other employees via Slack/email.
-- **Ask before installing apt packages.** Passwordless sudo is configured for `apt`/`apt-get` only (`/etc/sudoers.d/oystein-apt`), so you CAN run `sudo apt install <pkg>` yourself — but always ask the user first (AskUserQuestion) naming the package(s), then install on approval. For anything needing broader sudo, ask the user to run it.
-- **Always use AskUserQuestion when you need user input.** Never ask a question in plain text and then wait — the chat surface doesn't reliably show it as a prompt. Use the `AskUserQuestion` tool for every yes/no, multiple-choice, or clarifying question. If the question is genuinely open-ended, still use the tool with an "Other" path so the user has a clear input affordance.
+**Before sending, publishing or handing over anything written for a person, load the
+`plain-language` skill.** It carries the full rule set, the banned-shapes table and the
+review procedure. For prose longer than a couple of sentences, also load `humanizer` to
+strip AI tells. Skip both only for machine-bound text, a one-line chat reply, or when
+Oystein opts out for the turn.
 
-## Communicating with humans
+The rule is checked mechanically. `pl check draft.md` scores a draft and names the lines to
+fix; `echo "$BODY" | pl check -` reads stdin; `pl explain draft.md` shows where the cost
+went. A hook runs the same gate on anything about to reach a person and hands back findings
+on failure. `PLAINLANG_MODE=warn` reports without blocking, `PLAINLANG_OFF=1` switches it
+off, and a `plainlang: skip` line marks genuinely out-of-scope text.
 
-Humans have far less I/O than you and lack your tool-output context, but have deep domain knowledge you don't. Your edge is parallel bandwidth; theirs is depth — trade accordingly.
+## Safety rules
 
-- **Model the person.** Track their role, expertise, and what they care about right now. Adapt vocabulary and depth. Don't explain things they obviously know. When uncertain about expertise level, probe with one calibration sentence and adjust from the response — don't guess and barrel ahead.
-- **Lead with the answer, then offer depth.** Progressive disclosure. Length matches stakes — yes/no gets one line, architecture gets a paragraph. Never pad.
-- **Cut AI tics.** No "Great question!", no rephrasing the prompt, no narrating what you're about to do. End-of-turn summary: one or two sentences max.
-- **Track what they've seen this session.** Don't repeat what you've already said. Don't reference files, tool output, or agent findings they haven't been shown — summarise inline the *first* time it matters, not the third. When you've done work they couldn't see (background agents, long tool chains), give a one-line bridge before continuing.
-- **Flag uncertainty honestly.** Distinguish verified / inferred / guessed. Surface risky-or-irreversible steps *before* doing them. If you don't know, say so plainly — don't fill space with hedged confidence.
-- **One question at a time** unless answers are genuinely independent. (Pairs with the `AskUserQuestion` rule above.)
+- **Never kill a process you did not start** in this session. Killing a running app instance
+  is a critical error.
+- **Do not implement while planning is in progress.** If Oystein is editing beads, a PRD or a
+  plan, wait for an explicit go-ahead.
+- **Check for an existing PR or branch first.** Run `gh pr list --head <branch>` before
+  creating a PR.
+- **Only commit files that are part of the task.** If in doubt, ask.
+- **Verify state before assuming it.** Check `git log` and the file tree to see what is
+  actually implemented rather than only planned.
+- **Clarifying questions go to Oystein**, never to colleagues over Slack or email.
+- **Ask before installing apt packages.** Passwordless sudo is configured for `apt` and
+  `apt-get` only, so you can run `sudo apt install <pkg>` yourself, but name the packages and
+  get approval first. Anything needing broader sudo goes to Oystein to run.
+- **Always use `AskUserQuestion` when you need input.** A question in plain text does not
+  reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
+  multiple-choice or clarifying question, and for open questions too, so there is a clear
+  input affordance.
 
-## Dotfiles
+## Secrets and credentials
 
-`~/.claude` is a symlink to `~/.dotfiles/.claude`; skills, settings, and other Claude
-config are version-controlled there. Repo details and home-dir tooling (grove,
-git-hunks, skills-sync, etc.) are documented in the dotfiles repo's own CLAUDE.md.
+**Do not search the filesystem or old session logs for secrets.** Everything is in one place.
 
-## Secrets & Credentials
-
-**Don't search for secrets across the filesystem or in old session logs.** Everything lives in one place; check here first.
-
-### Primary store
-
-- **`~/.config/secrets/.env`** — mode 600, `KEY=VALUE` per line, no quotes. Single source of truth for API tokens and similar credentials. Currently holds:
+- **`~/.config/secrets/.env`**, mode 600, `KEY=VALUE` per line, no quotes. Single source of
+  truth. Current keys:
   <!-- BEGIN:secrets-keys (regenerated by ~/bin/refresh-secrets-list — do not edit by hand) -->
   `AIOLOS_OBSERVE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `APIFY_TOKEN`, `BROWSERBASE_API_KEY`, `CLOUDFLARE_API_TOKEN`, `DISCORD_USER_TOKEN`, `DISCORD_USER_TOKEN_MAIN`, `GH_PR_IMAGES_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `GOG_KEYRING_PASSWORD`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `HF_TOKEN`, `HUBSPOT_ACCESS_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL`, `JIRA_SITE`, `MAC_LOGIN_PASSWORD`, `MCP_AGENT_MAIL_TOKEN`, `SENTRY_AUTH_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_CI_BOT_TOKEN`, `SLACK_TEAM_ID`, `TAILSCALE_API_KEY`, `ZENDESK_API_TOKEN`, `ZENDESK_EMAIL`, `ZENDESK_SUBDOMAIN`.
   <!-- END:secrets-keys -->
-- **`~/.config/secrets/huma-tokens.json`** — Huma HR API bearer tokens.
-- **`~/.config/secrets/humahr-cookies.json`** — Huma HR session cookies.
+- **`~/.config/secrets/huma-tokens.json`** and **`~/.config/secrets/humahr-cookies.json`**
+  hold Huma HR tokens and session cookies.
+- Tool-managed stores to leave alone unless you are working on them: `~/.ssh/`, `~/.gnupg/`,
+  `~/.config/gh/`, `~/.config/gcloud/`, `~/.azure/`, `~/.docker/config.json`. Never copy
+  values out of these into `.env`.
 
-### On-demand retrieval (no global env exports)
-
-Secrets are **not** auto-exported into the shell environment. Use these shell-agnostic
-helpers (scripts in `~/bin`, on PATH; work from fish, bash, scripts, cron):
-
-```sh
-secret KEY                       # print value to stdout (length-only test: secret KEY | wc -c)
-secret --list                    # list available keys (no values)
-with-secrets KEY [KEY ...] -- CMD ARGS...   # run CMD with named keys in its env; vars vanish when CMD exits
-```
-
-Examples (any shell; quote so the calling shell does not expand the var itself):
-```sh
-with-secrets CLOUDFLARE_API_TOKEN -- sh -c 'curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/...'
-with-secrets GITHUB_PERSONAL_ACCESS_TOKEN -- gh api /user
-body=$(with-secrets HUBSPOT_ACCESS_TOKEN -- sh -c 'curl -s -H "Authorization: Bearer $HUBSPOT_ACCESS_TOKEN" ...')
-```
-
-Note: CMD must be a real command (PATH or path), not a shell function/alias of the
-calling shell. Wrap shell syntax in `sh -c '...'` (or `fish -c`).
-
-Why: subprocesses (npm postinstalls, MCP servers, anything you exec) used to inherit all 18 tokens by default. Now they get only what you name. **Don't restore the old behavior with ad-hoc `set -gx` lines** — that defeats the point.
-
-Rollback (if something breaks): `cp ~/.config/fish/conf.d/secrets.fish.disabled ~/.config/fish/conf.d/secrets.fish && exec fish`.
-
-### Tool-managed credential stores (leave alone unless explicitly working on them)
-
-`~/.ssh/`, `~/.gnupg/`, `~/.config/gh/`, `~/.config/gcloud/`, `~/.azure/`, `~/.docker/config.json`. Each is the canonical location for its tool — don't duplicate values from these into `.env`.
-
-### Rules for agents
-
-- **Never echo a secret value into chat.** Not even partial, not even "for confirmation." Transcripts end up in `cass` indexes. To confirm presence, check **length only**: `secret FOO | string length`. Never `echo $FOO` and never interpolate `$FOO` into a string that gets printed — the parent shell may still have residual env from before the loader was disabled.
-- **Never commit a secret.** `~/.config/secrets/` is outside any repo. If you see a secret being added to a tracked file, stop and flag it.
-- **Reference by env-var name** in scripts and configs (`$CLOUDFLARE_API_TOKEN`), never by literal value. Wrap the consuming command in `with-secrets KEY -- ...`.
-- **Add a new credential:** append `NEW_KEY=value` to `~/.config/secrets/.env`, then run `~/bin/refresh-secrets-list` to regenerate the key list in this doc.
-- **Rotate:** edit the value in `~/.config/secrets/.env`. New fish sessions and `with-secrets` calls pick it up immediately; long-running shells need `exec fish`.
-
-## Image Second Opinions — `codex-look` skill
-
-**Whenever you look at an image, proactively follow up with the `/codex-look` skill
-to get a second pair of eyes from Codex (GPT).** This is *augmentation*, not
-replacement — Opus produces the primary read, Codex confirms or surfaces things
-Opus missed. Cross-model verification on visual content catches mistakes that
-single-model analysis routinely misses.
-
-**Apply the skill when:**
-- The user shares a screenshot, photo, diagram, chart, UI mock, or PDF page
-- You've just described or analyzed an image and the user might act on your read
-- The image is ambiguous, contains fine print, dense layout, or non-English text
-- The user asks "what do you see" or anything that hinges on getting the visual right
-
-**Skip the skill only when:**
-- The user has explicitly opted out for this turn
-- The image is trivial (a single icon, a screenshot of plain text you've quoted verbatim)
-- You're in the middle of a tight loop where the extra ~30s would derail flow — say
-  so explicitly so the user can ask for it later if they want
-
-**How to present results:** Give your own read first, then run `/codex-look`, then
-show Codex's reply clearly labelled. Call out any disagreements explicitly — the
-disagreement *is* the value of the second opinion.
-
-## Human-Facing Prose — `humanizer` skill (use proactively)
-
-**Whenever you write prose a human will read or send, run it through the `humanizer`
-skill before presenting it.** This is not an occasional polish step; it is the default
-for any non-trivial writing. AI tells (em-dash overuse, rule-of-three, inflated
-vocabulary, negative parallelisms, "not only... but also", vague attributions) leak
-into drafts constantly and Oystein notices them. Catch them before he does.
-
-**Apply the skill (or its checklist) when writing:**
-- Emails, Slack/DM messages, and any external- or colleague-facing text
-- Job descriptions, proposals, reports, role docs, announcements
-- README/docs prose, PR descriptions, commit bodies of any length
-- Any passage longer than a couple of sentences meant for a person, not a machine
-
-**The em-dash rule is hard:** default to zero em dashes (—) in human-facing prose.
-Use periods, colons, commas, or parentheses instead. Oystein considers em-dash
-overuse "catastrophic"; treat a stray `—` as a bug, including in subject lines.
-
-**Skip the skill only when:**
-- The text is for a machine (code, config, structured data, tool input)
-- It's a one- or two-line throwaway reply in chat
-- The user has explicitly opted out for this turn
-
-**How to apply:** Draft → run the `humanizer` pass → present the cleaned version.
-For short messages you may apply the checklist inline rather than invoking the full
-skill, but the em-dash rule and AI-tell removal still apply. Pairs with the `voice`
-skill when matching Oystein's own writing register.
-
-## Plain Language (`plain-language` skill, hard rule, applies always)
-
-**Very clear and simple language at all times in output meant for human readers.**
-Standing instruction from Oystein. Not a preference to weigh against other goals, and
-not a mode reserved for formal documents. It covers **all English a human will read**,
-not just titles: terminal replies and summaries, artifacts and documents, headings,
-PR titles and bodies, commit messages, Jira, Slack, email, README and docs prose,
-user-facing UI and error strings, and code comments meant for a person.
-
-Write so the reader understands on the first pass. Lead with the answer. Short common
-words (use, not leverage; wrong, not suboptimal). One idea per sentence. Active voice.
-Concrete numbers and names. Say plainly when you do not know.
-
-**Plain never means vague.** Keep the domain term where it is the precise word, and
-keep the numbers, units, constraints and caveats. Simplify the sentence around a
-technical term, never the term itself.
-
-**Never write a slogan or an aphorism**, in a title, a heading, a pull quote, an
-opening line or a closing line. If a sentence would fit on a poster, it is performing
-rather than informing; rewrite it as the plain fact it stands in for. Same for hype
-words (seamless, robust, powerful, comprehensive), rule-of-three lists, "not only X
-but also Y", and "it's not X, it's Y".
-
-Titles get the sharpest version of this test: read alone with no context, the reader
-must be able to say what the document is. The case that prompted the rule was an
-artifact titled **"The Phone Stays Mounted"** for a phonecam settings brief. Correct
-name: **"Phonecam Settings Brief"**.
-
-**Run the `plain-language` skill before sending, publishing, or handing over anything
-written for a person.** It carries the full rule set, the banned-shapes table, and the
-review procedure.
-
-Out of scope: code identifiers, quoted text, prescribed formats, machine-parsed
-output, product copy that a spec or localisation file owns, and any wording Oystein
-specifies himself, which always wins.
-
-**The rule is now checked mechanically.** `pl` scores a draft and names the lines to
-fix:
+Secrets are **not** exported into the shell environment. Two helpers on PATH fetch them:
 
 ```sh
-pl check draft.md          # findings with line and column; exit 1 if it fails
-echo "$BODY" | pl check -  # read from stdin
-pl explain draft.md        # where the cost went
+secret KEY                                   # print one value to stdout
+secret --list                                # key names only
+with-secrets KEY [KEY ...] -- CMD ARGS...    # run CMD with only those keys in its env
 ```
 
-A hook runs the same gate on anything about to reach a person: writes to `.md` and
-`.txt`, commit messages, pull request bodies, Jira and Confluence text, Slack, email,
-artifacts, and the chat reply itself. A failing gate hands back the findings; fix the
-text and try again. It skips code, config, generated files, localisation and resource
-files, and anything under 40 words. `PLAINLANG_MODE=warn` reports without blocking,
-`PLAINLANG_OFF=1` switches it off, and a `plainlang: skip` line marks text that is
-genuinely out of scope.
+`CMD` must be a real command, not a shell function, so wrap shell syntax in `sh -c '...'`.
+Why: subprocesses used to inherit every token. **Do not restore that with ad-hoc `set -gx`
+lines.** If the loader breaks, the rollback copy is
+`~/.config/fish/conf.d/secrets.fish.disabled`.
 
-Nothing is banned by the scorer. Rare, late-learned, abstract words cost budget; a
-domain term, an acronym, a proper noun, a number, code and quoted text cost nothing.
-Put per-repo domain terms in `<repo>/.plainlang/glossary.txt`.
+Rules, all hard:
 
-Relationship to the neighbours: `humanizer` and `de-slopify` scrub tells from a
-finished draft; `plain-language` is the register to write in from the start. Do not
-compensate for a plain title by making the body flowery, and never treat `humanizer`'s
-"add soul" as licence for a slogan.
+- **Never print a secret value**, not partially, not "to confirm". Transcripts get indexed.
+  To check presence, check length only: `secret FOO | string length`.
+- **Never commit a secret.** If you see one going into a tracked file, stop and say so.
+- **Reference by env-var name** in scripts and configs, never by value, and wrap the
+  consuming command in `with-secrets KEY -- ...`.
+- **Nothing proprietary leaves the machine without approval.** Codex and PAL calls go to an
+  external provider. Without approval, run the consultation on Fable and say why.
+- Add a credential by appending to `~/.config/secrets/.env`, then run
+  `~/bin/refresh-secrets-list`. Rotate by editing the value in place. New shells and
+  `with-secrets` calls pick it up at once; long-running shells need `exec fish`.
+
+## Multi-agent work
+
+Swarms run inside Claude Code via `Agent`, `SendMessage`, `TaskCreate` and `TeamCreate`.
+There is no external tmux manager.
+
+**Load the skill before spawning.** `swarm-agents` for a research, design, review or planning
+swarm, and for how to pick a model per agent. `swarm` and `swarm-exec` for bead execution.
+`agent-swarm-workflow` for the full pipeline, `agent-fungibility` for why the teammates are
+interchangeable. `swarm-review`, `swarm-oracle` and `swarm-pipeline` cover their own patterns.
+
+These rules hold whether or not a skill is loaded:
+
+- **Never pass `isolation: "worktree"` to a bead-implementation teammate.** Worktree
+  isolation caused silent merge regressions, where a later merge overwrote an earlier
+  security fix, at a measured 16% reversion rate. All execution teammates work on the same
+  branch and commit directly. Worktree isolation is still fine for a read-only teammate that
+  returns findings in its final message, but not for one whose output is a file the leader
+  must read.
+- **Never change branch or history in a shared checkout.** Execution teammates share one
+  working tree and index, so a teammate must never switch branch, move HEAD, reset, rebase
+  or amend there. Any such change corrupts other teammates' in-flight commits. If a task
+  truly needs its own history, clone into the session scratchpad and work there. Never clone
+  or add a worktree under a grove `work_dir`; use `grove new --ephemeral`. Putting a branch
+  back is leader-only.
+- **One work unit, one commit, committed before moving on.** Put explicit commit
+  instructions in every autonomous teammate prompt. Commit with a pathspec,
+  `git commit -m "..." -- <your files>`, never a bare `git commit`: teammates share one index
+  and a bare commit sweeps up their staged files. A pathspec limits the commit to those
+  paths, but it does not prove the work in them is yours, so still check what you are
+  committing. New files need `git add` first.
+- **For a bead producing a large file, commit before you build or test.** Write the file,
+  commit it, then run the build. Agents run out of context between writing and committing,
+  and the file is the hard part. Fix-ups go in a follow-up commit, never an amend.
+- **Size beads for one to three files.** Security fixes need a regression test. Keep
+  refactors off the same files as security fixes, or serialize them with `blockedBy`.
+- **Verify after the swarm.** Grep for the patterns that should be gone, diff each bead's
+  expected changes against HEAD, run the full test suite.
+- **Pass `model:` explicitly on every spawn**, defaulting to `'sonnet'`. Do not reintroduce a
+  `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one model everywhere and breaks
+  per-call overrides.
+- Tell teammates to read CLAUDE.md first, and name the files they will touch so reservations
+  can prevent conflicts.
+
+## Agent mail
+
+The rust `mcp-agent-mail` runs as a PM2 service on `http://127.0.0.1:4809/mcp/`, localhost
+only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. Restart with
+`pm2 restart mcp-agent-mail`, then `pm2 save`. It answers on `/api/` as well, so older
+project configs keep working.
+
+- **Never run `am doctor fix`.** It rewrites every MCP config back to port 8765 with a bearer
+  token, which breaks this setup. For anything wrong with the service or its SQLite store,
+  load `agent-mail-ops`, which owns repair. For using agent mail as an agent, load
+  `agent-mail`.
+- **Every repo that uses beads or swarms carries its own `.mcp.json` entry:**
+  `"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:4809/mcp/" }`. Add it to any
+  such repo you touch that lacks it. **There is deliberately no user-scope registration** in
+  `~/.claude.json` and it must not come back: two registrations of one server raced for the
+  same tool-namespace slot, and tools intermittently failed to appear.
+- **Identity is automatic.** A SessionStart hook registers you and tells you your own name.
+  Do not register by hand and do not pick a name. The hook is non-blocking: when agent mail
+  is unreachable it says so and the turn continues, and it never restarts or repairs the
+  service itself.
+- **Coordination is still yours.** Reserve shared files with `file_reservation_paths` before
+  editing, and release with `release_file_reservations` after committing. Find recipients
+  with `list_agents` on the project key rather than guessing a name.
+- `ToolSearch` `select:` matches only fully-qualified names such as
+  `mcp__mcp-agent-mail__file_reservation_paths`. A bare tool name returns nothing, which
+  reads as the server being down when it is not.
+
 ## Repo Index — Initial Force
 
 | Repo | Local path | GitHub | Access |
@@ -203,391 +182,60 @@ compensate for a plain title by making the body flowery, and never treat `humani
 | **ifkb** | `/c/work/ifkb` | `InitialForce/ifkb` | All employees |
 | **ifboard** | `/c/work/ifboard` | `InitialForce/ifboard` | CEO + CTO only |
 
-When working across repos, read the target repo's `CLAUDE.md` and `AGENTS.md` for content rules, search tools, and cross-repo access policy. **ifboard can read ifkb; ifkb must never reference ifboard.**
+Read the target repo's `CLAUDE.md` and `AGENTS.md` when working across repos.
+**ifboard can read ifkb; ifkb must never reference ifboard.**
 
-## MCP Agent Mail (mcp-agent-mail) — Rust
+## Publishing static sites
 
-Agent-mail is the **rust** rewrite (`Dicklesworthstone/mcp_agent_mail_rust`). Two binaries
-live in `~/.local/bin` (on PATH): `mcp-agent-mail` (the MCP server) and `am` (operator CLI).
-The old Python install at `~/mcp_agent_mail` is retired — do not start it.
+Pick the destination by **who owns the content**, not by who is typing.
 
-The HTTP server runs as a **PM2 service** (`~/.config/pm2/ecosystem.config.js`): it launches
-`am serve-http --no-tui --no-auth --port 4809`. Localhost-only, **no bearer token** (no-auth).
-The port was 8765 until 2026-09-10. MotionCatalyst's Mobile Camera pairing service
-defaults to 8765 for WiFi and 8766 for USB, so agent-mail on 8765 stopped the pairing
-service from starting at all. 4809 keeps every MCP server in the same 48xx block.
-Store lives at `/home/oystein/.mcp_agent_mail_git_mailbox_repo/` (SQLite + git archive).
-It moved there from `~/.mcp_agent_mail_git_mailbox_repo/` on 2026-09-15: `~` is on `/c`,
-which is drvfs, and SQLite in WAL mode on drvfs does not get the file locking and fsync
-behaviour it needs. The store went corrupt on nearly every day from 2026-08-25. `/` is
-wslfs and has proper POSIX semantics. The server reads the root from `STORAGE_ROOT`,
-and the `am` CLI from `AGENT_MAIL_STORAGE_ROOT`; both are set, to the same value, in the
-pm2 ecosystem file and in `~/.config/fish/conf.d/agent-mail.fish`. Setting only
-`AGENT_MAIL_STORAGE_ROOT` is silently ignored by the server. wslfs is not reachable from Windows tools, which is part of the point.
-The old root is kept as a backup.
+| Destination | Use for | Visibility |
+|---|---|---|
+| `InitialForce/sites` | Company content: anything that speaks for Initial Force AS, or that another person would treat as authoritative | Private Pages, org members only |
+| `oysteinkrog/sites` | Personal content: my own tools, notes and experiments | Public Pages |
 
-**Never run `am doctor fix`.** It rewrites every MCP config to port 8765 with a bearer
-token, which breaks the deliberate 4809 no-auth setup. To repair a corrupt database use
-`sqlite3 .recover`, not `am doctor reconstruct` (its output gets rejected by an acceptance
-gate and it drops rows). Ubuntu's `/usr/bin/sqlite3` cannot run `.recover`; build the
-amalgamation with `-DSQLITE_ENABLE_DBPAGE_VTAB` first.
+If it speaks for the company, or anyone else will reference it, it goes to the company repo.
+Writing something yourself does not make it publishable, so check first when the content
+names customers, staff or unreleased plans. The binding company policy is
+`ifkb/knowledge-base/technical/website-publishing.md`.
 
-- Restart:  `pm2 restart mcp-agent-mail` (then `pm2 save`)
-- Health:   `curl -s http://127.0.0.1:4809/health` → 200, or `am doctor check`
-- Recover:  `am doctor check` to diagnose. Do NOT run `am doctor fix` (see above).
-- Repair and storage-root moves: the `agent-mail-ops` skill owns this. It carries the
-  damage-type table, the scripts, and the traps (`STORAGE_ROOT` vs `AGENT_MAIL_STORAGE_ROOT`,
-  `pm2 restart` not reloading env, the four permanent WSL1 `server_*` warnings).
+**Load `publish-site` to publish.** It owns the branches, checkout paths and URL layout.
 
-The rust server is backward-compatible: it answers JSON-RPC on both `/mcp/` (canonical) and
-`/api/` (legacy), so existing project `.mcp.json` files on `/api/` keep working unchanged.
-Note: on WSL1/wslfs the Tantivy full-text index can't build (`os error 22`), so
-`search_messages` may be degraded — core messaging + file reservations are unaffected.
+## CASS and cm
 
-### Setup for projects — MANDATORY per-repo registration (policy changed 2026-08-07)
+`cass` searches 14K+ indexed agent sessions. `cm` extracts procedural rules from them.
 
-**Every repo that uses beads (`br`) or multi-agent swarms MUST carry its own
-`mcp-agent-mail` entry in the repo's `.mcp.json`.** This is a required uplift, not a
-preference — apply it to any such repo you touch that lacks the entry:
+- **Start significant work with** `cm context "<task>" --json --limit 5 --no-history`, and
+  close it with `cm outcome success` or `cm outcome failure`. Leave feedback inline as
+  `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`.
+- **Never run `cass index --semantic`, and never `cass-gpu index`.** One mixes vector
+  provenance, the other hits a memory regression. `cass` is the stock build; `cass-gpu` is a
+  custom GPU build that reports its version as 0.6.0, so do not let `cass upgrade` overwrite
+  it.
+- Load `cass` for session archaeology and `cass-memory` for the memory system. The full
+  setup and recovery runbook is `~/.dotfiles/docs/cass-setup.md`.
 
-```json
-"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:4809/mcp/" }
-```
+## Second opinion on images
 
-**There is deliberately NO user-scope registration in `~/.claude.json`** — it was removed
-2026-08-07. Do not re-add it. Why: the server was registered twice (user scope + project
-scope, same name, same URL), and it was the only server that intermittently failed to
-surface its tools to sessions and subagents — some agents got `file_reservation_paths`,
-others got nothing, with no config difference. The duplicate was the one structural
-difference from the always-reliable single-registration servers; best-supported theory is
-the two registrations race for one tool-namespace slot at session start (diagnosed on
-simhw bead bd-agentmail-tools-absent-jl8). One registration, project scope, everywhere.
+Whenever you look at an image a person shared, or your read of it is something they might act
+on, give your own read first and then run `/codex-look` for a cross-model check. Show Codex's
+reply clearly labelled and call out any disagreement, because the disagreement is the point.
+Skip it for a trivial image, when Oystein opts out, or in a tight loop, and say when you
+skip. The confidentiality rule above applies, because Codex is external.
 
-Two lessons that outlive the fix:
-- `ToolSearch` `select:` only matches **fully-qualified** names
-  (`mcp__mcp-agent-mail__file_reservation_paths`); bare tool names silently return
-  "no matching tools", which reads as the server being down when it isn't.
-- If the tools are genuinely absent from a session, the JSON-RPC endpoint works from
-  any shell and is the same transport:
-  `curl -s -X POST http://127.0.0.1:4809/mcp/ -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_reservation_paths","arguments":{...}}}'`
+## Beads
 
-### Identity is automatic and mandatory (hook-enforced 2026-08-19)
+`bv` is a TUI plus robot API over the beads tracker; `br` is the CLI. **Never run bare `bv`**
+in agent context, because it opens the TUI and hangs. Always pass a `--robot-*` flag. Load
+`beads-br` and `beads-bv` for the command surface.
 
-`~/.claude/hooks/agent-mail-guard.sh` runs on `SessionStart` and `UserPromptSubmit`:
+## Dotfiles and local tools
 
-- **SessionStart** calls `ensure_project` on the session's cwd and `register_agent`,
-  then tells you your own agent name in context. You do not register by hand and you
-  do not pick your name; the server requires adjective+noun and rejects descriptive
-  names. Your worktree and branch travel in `task_description`, which is what peers
-  see in `list_agents`.
-- **UserPromptSubmit** blocks the turn outright if agent-mail is unreachable, after
-  one rate-limited `pm2 restart` plus `am doctor fix` attempt. Recovery is in the
-  block message. `AGENT_MAIL_OPTIONAL=1` in the environment is the escape hatch for
-  deliberate offline work.
+`~/.dotfiles` is a regular git repo whose work tree is `~`, remote
+`https://github.com/oysteinkrog/dotfiles`. `~/.claude` is a symlink into it, so skills,
+settings and Claude config are version controlled there. Commit with
+`git -C ~/.dotfiles add <files> && git -C ~/.dotfiles commit`.
 
-Identity is cached per session id, so resume and compact reuse the registered name
-rather than minting a second one.
-
-**Why it is mechanical rather than a rule.** A session that never registered has no
-name, so no peer can address it and its work is invisible to `list_agents`. That is
-not something the peer can fix from its side: on 2026-08-19 a review had to be left
-in a placeholder mailbox because the session it was for had been running unregistered
-for eleven minutes. Registration driven by "an agent needs to send mail" happens far
-too late, because by then the peer it wants has already been unaddressable for the
-whole session.
-
-**What this obliges you to do.** Registration is handled; coordination is not.
-Reserve shared files with `file_reservation_paths` before editing and release after
-committing, and find recipients with `list_agents` on the relevant project key rather
-than guessing a name or inventing a mailbox.
-
-### Key tools
-Tool names are discoverable from the server. The two that matter for coordination:
-`file_reservation_paths` before editing, `release_file_reservations` after committing.
-`ensure_project` and `register_agent` are handled by the hook above.
-
-## Claude Code Teams & Agents (Multi-Agent Orchestration)
-
-Multi-agent work runs **inside Claude Code** via the built-in `Agent`, `SendMessage`,
-`TaskCreate`, and `TeamCreate` tools. No external tmux manager.
-
-### Subagent model selection (convention, not a hard pin)
-
-There is **no `CLAUDE_CODE_SUBAGENT_MODEL` env pin** — it was removed so per-call
-model overrides actually take effect. The session leader model is set in
-settings.json; subagents do **not** inherit it by default. The convention:
-
-- **Default every spawned subagent and workflow `agent()` to `model: 'sonnet'`.**
-  Always pass it explicitly — do not rely on inheritance (an unspecified model
-  falls back to the leader model, which is expensive at fan-out scale).
-- **Override per-call when the task warrants it:** `model: 'opus'` for the hardest
-  reasoning (adversarial verification, subtle-inconsistency detection, load-bearing
-  synthesis), `model: 'fable'` / `'claude-fable-5'` when Oystein asks for Fable
-  workers or a lane genuinely needs the frontier model, `model: 'haiku'` for cheap
-  mechanical lanes.
-- Mixing models within one fan-out is fine and encouraged — set the model per leaf,
-  not per wave. Sonnet for breadth, Opus/Fable for the few contested lanes.
-
-If Oystein says "use Fable subagents," pass `model: 'fable'` (or `'claude-fable-5'`)
-explicitly on the spawns — that now works, where before the env pin silently
-forced Sonnet.
-
-**Do NOT reintroduce the env pin.** Setting `CLAUDE_CODE_SUBAGENT_MODEL` would
-silently force every subagent to one model and break per-call `model:` overrides
-(Opus/Fable lanes). The Sonnet default is a prompt-level convention, not a
-settings-level constraint — keep it that way.
-
-### Two swarm shapes
-
-1. **Artifact swarm** (research / design / review) — a fixed roster of teammates, one
-   per facet, each producing a single report. Teammates may use `isolation: "worktree"`
-   because their output is returned in the agent's final message (leader writes the
-   synthesis). `SendMessage` is appropriate here for follow-up questions.
-2. **Execution swarm** (implement beads from `br`) — a pool of **fungible, terminal**
-   teammates. Each picks one bead, implements it, commits to the shared branch, closes
-   the bead, marks its task completed, and **exits**. The leader spawns replacement
-   teammates as new beads become ready. `isolation: "worktree"` is FORBIDDEN here
-   (see "Agent Swarm Rules" below). `SendMessage` is NOT used for implementation
-   teammates — they are one-shot by design, which keeps each teammate's context
-   window clean.
-
-### NxM swarm notation
-
-When Oystein writes **"NxM <model> agents"** it means **N agents per round × M rounds**,
-NOT N×M total agents in one shot. Example phrasings and what they mean:
-
-| User says | Shape |
-|-----------|-------|
-| "5x5 sonnet agents to search" | 5 parallel Sonnet agents per round, run 5 rounds sequentially (25 agent-runs total) |
-| "2x6 opus research session" | 2 parallel Opus agents per round, run 6 rounds sequentially (12 agent-runs total) |
-| "3x1" or just "3 agents" | 3 parallel agents, one round (one-shot artifact swarm) |
-
-**How to run rounds:**
-- Each round, spawn N agents in a SINGLE message (parallel tool calls) — they run concurrently.
-- Wait for all N to return, then read/synthesize their outputs.
-- Round K+1 should be **informed by** rounds 1..K — pass forward accumulated findings, de-dupe
-  already-covered ground, direct the next round at gaps or deeper follow-ups.
-- If the work is inherently breadth-first (e.g. "scan for news"), each round can take a new
-  angle/lane. If depth-first (e.g. "dig into these findings"), each round escalates from the
-  prior round's output.
-- Subagents **return their findings as text** (in their final assistant message) and the
-  **leader** persists each round's findings to a shared directory (e.g.
-  `data/<project>-<date>/findings-round-<K>-agent-<N>.md`) so there are durable artifacts
-  across rounds. The leader-written files, not the agents' ephemeral messages, are what
-  later rounds build on. Three reasons this is the default, none of them a harness-wide
-  block on Write:
-  - A worktree teammate's file lands inside its own worktree, so the leader never sees it
-    at the path it expects in the main checkout.
-  - `Explore`, `Plan`, and `qa-triager` have no Write tool at all (per-agent-type tool
-    allowlist), so they cannot write a report even when told to.
-  - Leader-written files keep one consistent naming scheme across rounds.
-  Agent types that do have Write (`general-purpose`, `claude`, the domain agents) can
-  write files normally; code files from execution-swarm teammates are expected.
-
-**Why N agents in parallel, not one big agent:** parallel agents cover more ground faster and
-each keeps a clean context budget for its lane. Why M rounds instead of one bigger round:
-later rounds can react to what earlier rounds found (fill gaps, dig deeper, challenge claims)
-without polluting earlier agents' context.
-
-### Primitives
-
-- Spawn a teammate: `Agent({ subagent_type, prompt, name?, team_name?, isolation?, run_in_background? })`.
-- Assign ongoing work via shared tasks: `TaskCreate` / `TaskUpdate` / `TaskList` with
-  per-task `owner` so each teammate claims its next unit of work.
-- Inter-agent messaging: `SendMessage({ to: <name>, ... })` — continues a named agent
-  with full prior context. Use for **artifact swarms** (follow-ups on a reviewer/
-  designer). Do NOT use for execution-swarm teammates; spawn a fresh `Agent` for the
-  next bead instead so the teammate starts with a clean context budget.
-- Teams: `TeamCreate` groups agents + shared task list + shared inboxes. Team state lives
-  under `~/.claude/teams/<team-name>/` (inboxes only; harness handles lifecycle).
-- Parallel exploration: send multiple `Agent` tool calls in a single message — they run
-  concurrently. Use `run_in_background: true` for long-running teammates while the leader
-  keeps working.
-- Isolation: pass `isolation: "worktree"` only for artifact-swarm teammates whose
-  output is a single final message. NEVER for execution swarm or for any teammate
-  whose output is a file the leader needs to read directly from the main checkout.
-
-### Bead-swarm leader workflow
-
-1. `br list --status open --json` — seed **all open beads in scope**, not just
-   `br ready`. If only ready beads are seeded, there are no downstream tasks
-   for `addBlockedBy` to unblock later.
-2. For each bead, `TaskCreate({ subject: "bd-XXX: ...", ... })`. Keep the
-   `bead_id → taskId` mapping in memory — you need it for the next step.
-3. Translate bead-space dependencies (from `br dep tree --json`) into task-space
-   with the mapping, then `TaskUpdate({ taskId, addBlockedBy: [<upstream-task-ids>] })`.
-   `addBlockedBy` takes task IDs, not bead IDs.
-4. Spawn teammates telling them to `TaskList`, claim an unowned unblocked task
-   (set `owner`), verify the claim with `TaskGet` (race guard), implement, commit,
-   `br close`, then `TaskUpdate({ status: "completed" })`, then exit. Execution
-   teammates are **terminal** — the leader spawns a fresh one for the next bead.
-
-Monitoring: `TaskList` for progress/owners/blocked-by, `TaskGet` for detail; the
-sidebar shows live teammate status. `br ready` / `bv --robot-triage` stays the
-source of truth for backlog health.
-
-Use `/swarm`, `/swarm-agents`, `/swarm-exec`, `/swarm-review`, etc. skills for the
-established orchestration patterns (research / design / review / bead implementation).
-
-## BV (Beads Viewer) + br (beads_rust)
-
-`bv` (`~/go/bin/bv`) is a TUI plus robot API over the beads tracker; `br` is the CLI.
-**Never run bare `bv`** in agent context: it opens the TUI and hangs. Always pass a
-`--robot-*` flag. Full command reference: the `beads-br` and `beads-bv` skills.
-Agent workflow: triage → leader spawns teammates via `Agent` → coordinate via TaskCreate
-+ SendMessage + agent-mail file reservations → teammates run `br close` and commit.
-
-## Google Workspace CLI (gog)
-
-Go binary at `~/bin/gog` (steipete/gogcli; config `~/.config/gogcli/`), called via
-Bash rather than an MCP server to avoid context bloat. **Always pass `-a` with the
-user's work email** (provided in session context). Run `gog --help` for the command
-surface and output flags. Agent sandboxing:
-`GOG_ENABLE_COMMANDS="gmail,calendar,drive,tasks" gog ...`
-Gmail/Calendar are also on Claude.ai remote MCPs: use those for quick reads, and
-`gog` for Drive, Docs, Sheets, Contacts.
-Name clash to watch: the fish function `gws` is `git status --short`, not the old
-`gws` workspace CLI.
-
-## Static Sites (GitHub Pages)
-
-Two destinations — pick by **content ownership**, not by who's typing.
-
-| Destination | Use for | Visibility | Local checkout |
-|---|---|---|---|
-| **`oysteinkrog/sites`** | Personal stuff + work output that is *mine* (personal tools, dashboards, research notes I author, experiments under my own identity). The account is GitHub Pro, so private repos can serve public Pages if needed. | Public Pages (free GH Pages) | `/c/work/sites-repo-personal` (clone on demand) |
-| **`InitialForce/sites`** | **Company** content — anything that represents Initial Force AS as an entity (OKRs, board-facing reports, shared dashboards, official docs, anything an employee would treat as authoritative). | Private Pages, org members only | `/c/work/sites-repo` |
-
-**Decision rule:** if the content speaks *for the company* or would be referenced by anyone other than me, it goes in `InitialForce/sites`. If it's mine — personal site, my own dotfiles renders, my own benchmarks — it goes in `oysteinkrog/sites`.
-
-The full policy for IFKB agents (and any agent operating inside `/c/work/ifkb`) is in
-`ifkb/knowledge-base/technical/website-publishing.md`. That policy is binding for company content; nothing in it restricts what goes on personal accounts.
-
-### Publishing
-Use the `/publish-site` skill. Both repos serve from the **`gh-pages` branch**, via
-single-branch checkouts at the paths in the table above. Results land at
-`https://initialforce.github.io/sites/<category>/<slug>/` (org-member login required)
-and `https://oysteinkrog.github.io/sites/<category>/<slug>/` (public).
-
-### Conventions (both repos)
-- Organize by category: `okrs/`, `bv/`, `docs/`, `reports/`, etc.
-- Each site is a self-contained directory with its own `index.html`
-
-## CASS Memory System (`cm` + `cass`)
-
-Cross-agent procedural memory. `cass` indexes session logs (14K+ sessions);
-`cm` extracts rules and provides them in context.
-
-- **cm:** `~/.local/bin/cm` (v0.2.3, rebuilt from source). Config: `~/.cass-memory/config.json`
-- **cass:** split-binary layout (2026-08-09): `cass` wrapper → stock 0.6.23 (indexing + lexical/interactive search); `cass-gpu` wrapper → custom GPU/DirectML build (semantic embedding backfill and `search --mode semantic` only, ~4 min/query; reports `cass 0.6.0`, don't let `cass upgrade` clobber it). NEVER `cass index --semantic` and NEVER `cass-gpu index` (vector provenance / memory regression — see runbook). Data: `C:\Users\oystein\AppData\Roaming\coding-agent-search\` (the old `cass-old` data dir was orphaned legacy, now archived at `D:\archive\cass-old`). Full setup/recovery runbook: dotfiles `docs/cass-setup.md`.
-
-### Agent protocol
-1. **Start:** `cm context "<task>" --json --limit 5 --no-history` before significant work
-2. **Work:** Follow relevant rules. Leave feedback: `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`
-3. **Finish:** `cm outcome success` or `cm outcome failure`
-
-### Key commands
-`cm --help` and `cass --help` carry the full surface; both take `--json`.
-
-## Agent Swarm Rules
-
-### NO WORKTREES for bead implementation — teammates commit to the same branch
-**NEVER pass `isolation: "worktree"` to `Agent` for bead-implementation teammates.**
-Worktree isolation causes silent merge regressions — later merges overwrite earlier
-security fixes (16% reversion rate observed 2026-03-07). Instead:
-- All teammates work on the same branch (typically `main`)
-- Each bead is small enough for a single atomic commit
-- Teammates commit directly after completing each bead
-- If a bead would touch 5+ files, split it into smaller beads first
-
-(Worktree isolation is still fine for read-only research/design teammates that return
-findings in their final message and make no code changes. Not for a teammate whose output
-is a file the leader must read: that file lands in the worktree, not the main checkout.)
-
-### Never rewrite shared-checkout history
-Execution teammates share ONE working tree and index. A teammate must NEVER
-`git switch`/`git checkout`/`git branch`/`git reset`/`git rebase` in the shared
-checkout — any branch or HEAD change corrupts other teammates' in-flight commits
-(orphaned/misrouted commits observed 2026-07-02). If a task genuinely needs a throwaway
-branch or a real commit graph, use a **scratchpad clone** in the session scratchpad —
-literal path pattern `/tmp/claude-*/.../scratchpad` (named in your own system prompt),
-e.g. `git clone . <that-scratchpad-path>/scratch-...` — and operate there. **Never
-clone or `git worktree add` directly under any grove `work_dir`** (e.g.
-`/c/work/desktop`); use `grove new --ephemeral` for a scratch worktree there instead.
-Branch/HEAD restore is **leader-only**; never let a teammate self-heal a branch.
-
-### Atomic commits per work unit
-When writing prompts for any autonomous teammate, **always include explicit git commit
-instructions**. Each bead/task/work-unit MUST be committed atomically before moving to
-the next. Example instruction to include in agent prompts:
-
-```
-After closing each bead, IMMEDIATELY commit your changes:
-  git add <only your new/changed files>
-  git commit -m "feat(bead-id): short description" -- <files you changed>
-Do NOT batch multiple beads into one commit. Each bead = one atomic commit.
-```
-
-**Why the `-- <files>` pathspec:** in a shared checkout parallel teammates share one
-index, so a bare `git commit` sweeps other agents' already-staged files into yours.
-The pathspec limits the commit to your listed paths, whatever else is staged. New files
-still need `git add` first — a pathspec commit cannot include an unstaged new file.
-
-**Why:** Without this, agents implement code and mark tasks closed but never commit.
-You end up with thousands of lines across dozens of files as one uncommitted blob,
-with no way to separate changes per task after the fact.
-
-### Commit before building (for large-file beads)
-For beads that produce large files (>500 LOC), agents often hit context limits between
-writing the file and the commit step — leaving orphaned untracked files. Use this order:
-
-```
-1. Write the implementation file
-2. COMMIT IMMEDIATELY (before running build or tests):
-   git add <file> && git commit -m "feat(bead-id): description"
-3. cargo build --release  (or equivalent)
-4. cargo test
-5. If checks fail: fix, then git add <file> && git commit --amend --no-edit -- <file>
-6. Close bead and exit
-```
-
-**Why:** The file is the hard part. If the agent runs out of context after step 2,
-the work is preserved and the swarm operator can rescue it with a single build fix.
-If the commit comes last, all work is lost on context exhaustion.
-
-### Bead sizing for swarms
-- Each bead should touch 1-3 files max
-- Security fixes MUST include a regression test
-- Refactoring beads must NOT overlap with security fix beads (separate files)
-- If file overlap is unavoidable, serialize those beads (use `blockedBy` dependencies)
-
-### Post-swarm verification
-After all agents finish, verify each bead's expected changes exist on `main`:
-- Grep for known-bad patterns that should have been removed
-- Diff each bead's expected file changes against current HEAD
-- Run the full test suite
-
-### Agent-mail file reservations (MANDATORY)
-Before launching any swarm, ensure agent-mail MCP is running and configured in `.mcp.json`.
-Every agent MUST reserve files via `file_reservation_paths` before editing, and release after
-committing. Without this, parallel agents editing the same file create merge conflicts.
-See `/swarm` skill pre-flight for setup automation.
-
-### Other swarm prompt essentials
-- Tell teammates to read CLAUDE.md first
-- Specify file paths teammates will touch so file reservations can prevent conflicts
-- For ordered assignment, have the leader release tasks in dependency order (use
-  `br dep tree` / `bv --robot-plan` to compute the order) and use `TaskUpdate` with
-  `addBlockedBy` to encode the dependency graph so teammates only claim unblocked tasks
-
-## Obsidian CLI
-
-The official Obsidian CLI is built into Obsidian v1.12+ (not an npm package). Obsidian must be running for CLI commands to work.
-
-On WSL1/Windows, the CLI binary is located at:
-
-```
-/mnt/c/Users/Oystein/AppData/Local/Programs/Obsidian/Obsidian.com
-```
-
-It is not in PATH by default. Use the full path when invoking from WSL.
+**Load `local-tools`** for the small machine-specific commands: `git hunks` and `git addmatch`
+for staging part of a file, `cfclip` for the Windows clipboard, `rgg` for filename search, the
+Obsidian CLI, `gog` for Google Workspace, and `skills-sync` for external skill repos.
