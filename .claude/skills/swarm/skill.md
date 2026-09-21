@@ -42,8 +42,8 @@ name: swarm
 ```bash
 # Verify the live agent-mail server is reachable (rust rewrite, pm2-managed, NO auth).
 # Do NOT start any server here. On failure, the LEADER runs `pm2 restart mcp-agent-mail`
-# (or `am doctor fix`) and re-checks http://127.0.0.1:8765/health before spawning.
-curl -sf http://127.0.0.1:8765/health > /dev/null 2>&1 && echo "Agent-mail: running" || echo "Agent-mail DOWN — run 'pm2 restart mcp-agent-mail' (or 'am doctor fix'), then re-check http://127.0.0.1:8765/health before spawning teammates."
+# and re-checks http://127.0.0.1:4809/health before spawning.
+curl -sf http://127.0.0.1:4809/health > /dev/null 2>&1 && echo "Agent-mail: running" || echo "Agent-mail DOWN — run 'pm2 restart mcp-agent-mail', then re-check http://127.0.0.1:4809/health before spawning teammates."
 
 # Ensure the PROJECT .mcp.json registers agent-mail (no-auth rust entry). This MUST
 # live in the PROJECT .mcp.json: subagents inherit project scope, but the user-scope
@@ -54,7 +54,7 @@ p = '.mcp.json'
 cfg = json.load(open(p)) if os.path.exists(p) else {'mcpServers': {}}
 if 'mcp-agent-mail' not in cfg.get('mcpServers', {}):
     cfg.setdefault('mcpServers', {})['mcp-agent-mail'] = {
-        'type': 'http', 'url': 'http://127.0.0.1:8765/mcp/'
+        'type': 'http', 'url': 'http://127.0.0.1:4809/mcp/'
     }
     json.dump(cfg, open(p, 'w'), indent=2)
     print('Added agent-mail to project .mcp.json')

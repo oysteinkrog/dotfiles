@@ -231,10 +231,10 @@ message**, and the **leader** writes them to the shared directory (see Step 5). 
   per-round findings itself so there are durable artifacts across rounds.
 - Code files written by execution-swarm teammates (`/swarm`) are unaffected — that block
   targets report-style files only. Execution swarms still commit code on the shared branch
-  (no worktrees) per "Agent Swarm Rules" in CLAUDE.md.
+  (no worktrees) per "Multi-agent work" in CLAUDE.md.
 
 The execution swarm (`/swarm`) is a different shape entirely — it MUST use shared
-branch (same-branch, no worktrees) per "Agent Swarm Rules" in CLAUDE.md.
+branch (same-branch, no worktrees) per "Multi-agent work" in CLAUDE.md.
 
 ### Step 4: Monitor and Collect
 
