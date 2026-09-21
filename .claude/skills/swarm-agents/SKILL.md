@@ -44,6 +44,40 @@ Each agent explores one facet independently; results are synthesized by the lead
 - Oracle consensus validation (use `/swarm-oracle-review`)
 - Full end-to-end pipeline (use `/swarm-pipeline`)
 
+## Picking a model per agent
+
+There is **no `CLAUDE_CODE_SUBAGENT_MODEL` env pin**, and it must not come back. It was
+removed because it silently forced every subagent to one model and broke per-call `model:`
+overrides. The Sonnet default below is a prompt-level convention, not a setting.
+
+- **Pass `model:` explicitly on every spawn.** An unspecified model falls back to the
+  leader model, which is expensive at fan-out scale.
+- **Default to `model: 'sonnet'`** for spawned subagents and workflow `agent()` calls.
+- **Override per call:** `'opus'` for the hardest reasoning (adversarial verification,
+  subtle-inconsistency detection, load-bearing synthesis), `'fable'` when Oystein asks for
+  Fable workers or a lane needs the frontier model, `'haiku'` for cheap mechanical lanes.
+- Mixing models inside one fan-out is encouraged. Set the model per leaf, not per wave.
+  Sonnet for breadth, Opus or Fable for the few contested lanes.
+
+## NxM notation
+
+When Oystein writes **"NxM <model> agents"** he means **N agents per round, M rounds**, not
+N times M agents at once.
+
+| He says | Shape |
+|---|---|
+| "5x5 sonnet agents to search" | 5 parallel Sonnet agents per round, 5 rounds in sequence, 25 agent-runs |
+| "2x6 opus research session" | 2 parallel Opus agents per round, 6 rounds, 12 agent-runs |
+| "3x1", or just "3 agents" | 3 parallel agents, one round |
+
+Running rounds: spawn all N of a round in a single message so they run at once, wait for
+them all, then synthesize. Round K+1 must be informed by rounds 1 to K, so pass forward what
+was found, drop ground already covered, and aim the next round at the gaps. Breadth-first
+work gives each round a new lane; depth-first work escalates from the previous round's
+output. The **leader** writes each round's findings to a shared directory, because a
+worktree teammate's file lands inside its own worktree and some agent types have no Write
+tool at all.
+
 ## Swarm Types
 
 ### Research Swarm
