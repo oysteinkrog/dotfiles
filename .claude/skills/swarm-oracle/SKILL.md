@@ -10,7 +10,7 @@ argument-hint: "<topic or file to evaluate> [--rounds N] [--models M1,M2]"
 > **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
 > primary oracle — the default FOR/AGAINST debate runs as two `codex exec` calls, one
 > per stance. Astra alone is the normal shape of a validation; no pairing is required.
-> Fable (`claude-fable-5`) is the **secondary oracle**: add a Fable FOR/AGAINST pair
+> Fable is the **secondary oracle**: add a Fable FOR/AGAINST pair
 > when the validation is high-stakes or the two Astra stances leave the call contested,
 > or when the user asks for a second opinion. See `/consult-oracles` and the Oracle
 > Consultation Policy in `~/CLAUDE.md`.
