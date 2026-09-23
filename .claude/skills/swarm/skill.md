@@ -193,7 +193,7 @@ Before editing ANY file, reserve it via the mcp-agent-mail MCP:
    - For .NET/MSBuild projects: pass `--no-dependencies` (or equivalent) when
      multiple teammates may be building simultaneously, to avoid MSB3021 lock
      conflicts.
-6. If checks fail, fix and amend (keep it path-scoped): git add <only your files> && git commit --amend --no-edit -- <your files>
+6. If checks fail, fix and commit a follow-up with the same pathspec: git add <only your files> && git commit -m "..." -- <your files>. Never amend.
 7. Release file reservations via agent-mail release_file_reservations.
 8. Close: br close {BEAD_ID}
 9. Mark your task completed: TaskUpdate({ taskId, status: "completed" })
