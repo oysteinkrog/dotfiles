@@ -430,6 +430,21 @@ def test_an_unclosed_fence_runs_to_the_end_of_the_file(scorer):
     assert "paradigm" not in joined
 
 
+def test_a_fence_indented_under_a_list_item_masks_its_contents(scorer):
+    """A code block inside a numbered step is indented to the step's text.
+
+    The fence matched only at column 0, so this command was scored as prose and
+    its `--` separator was charged as an em dash.
+    """
+    doc = ("1. Run the command with only the key it needs:\n\n"
+           "   ```sh\n   with-secrets KEY -- sh -c 'echo hi'\n   ```\n\n"
+           "2. Check the exit code after the call returns.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "with-secrets" not in joined
+    assert "Check the exit code" in joined
+    assert not [f for f in scorer.score(doc).findings if f.rule == "em-dash"]
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
