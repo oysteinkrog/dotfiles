@@ -201,7 +201,9 @@ Write `{artifact_dir}/hardening-summary.md`:
 
 ## Convergence Rules
 
-The pipeline is designed to converge (each round finds fewer issues):
+Rounds usually find fewer issues as the artifact improves, but no round has a target
+count. Reviewers report supported findings, including zero, and say why zero would be
+surprising. Stop on the severity gates below:
 
 | Condition | Action |
 |-----------|--------|

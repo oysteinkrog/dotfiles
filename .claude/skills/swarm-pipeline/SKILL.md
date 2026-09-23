@@ -171,15 +171,17 @@ optional PAL route.
 
 ### Oracle Placement
 
-| After Phase | Focus | Expected Findings |
-|-------------|-------|-------------------|
-| 3 (Design) | UX soundness + arch feasibility | 3-5 critical corrections |
-| 5 (Impl Plan) | Spec completeness + conflicts | 2-4 blocking issues |
-| 8 (Bead Creation) | Bead readiness + cross-cutting | 3-5 spec contradictions |
-| 10 (Arch Audit) | Rewrite scope validation | Scope adjustment (usually narrowing) |
+| After Phase | Focus |
+|-------------|-------|
+| 3 (Design) | UX soundness + arch feasibility |
+| 5 (Impl Plan) | Spec completeness + conflicts |
+| 8 (Bead Creation) | Bead readiness + cross-cutting |
+| 10 (Arch Audit) | Rewrite scope validation |
 
-**Expected scores:** 7-9/10 on first pass. Below 7 = fundamental rethink needed.
-Above 9 = suspicious (verify oracle actually challenged the work).
+Do not tell an oracle how many findings or what score to expect. Ask it to report
+supported findings, including zero, and to say why zero would be surprising. A score
+below 7 means a fundamental rethink. A 9+ with no challenge to the work is suspicious:
+check that the oracle actually pushed back.
 
 **CRITICAL pre-flight:** Before oracle phases, confirm `codex` is on PATH and the repo
 root is trusted in `~/.codex/config.toml`. If a call fails, use the documented fallback,
@@ -189,18 +191,19 @@ name the model that answered, and report the validation as not done if no oracle
 
 ## Pattern 4: Convergence Detection
 
-Track issue count per review round. Each round MUST find fewer than the previous.
+Track issue count per review round, split by logic/correctness issues and the rest.
+Reviewers report only supported findings, never a target number.
 
-| Round | Type | Expected Issues | Character |
-|-------|------|----------------|-----------|
-| 1 | Opus review (10) | 15-25 | Logic, structure, missing pieces |
-| 2 | Oracle (2 Astra) | 3-7 | Deeper: spec contradictions, arch gaps |
-| 3 | Fresh-eyes (8) | 5-10 | Format, completeness, cross-cutting |
-| 4 | Final (10) | 0-5 | Minor: paths, typos, deps |
+| Round | Type | Character |
+|-------|------|-----------|
+| 1 | Opus review (10) | Logic, structure, missing pieces |
+| 2 | Oracle (2 Astra) | Deeper: spec contradictions, arch gaps |
+| 3 | Fresh-eyes (8) | Format, completeness, cross-cutting |
+| 4 | Final (10) | Minor: paths, typos, deps |
 
 ### Stop Condition
 
-Round finds < 3 issues AND zero logic/correctness issues → Done.
+Round finds zero logic/correctness issues and no CRITICAL/HIGH issues → Done.
 
 ### Divergence Signal
 
@@ -430,7 +433,7 @@ Output: decisions + rationale + new beads needed.
 | 3 | Redundant reviewer roles | Assign distinct lenses, zero overlap |
 | 4 | Stale context in fresh-eyes round | Only current state + original reqs, no history |
 | 5 | Beads before oracle validation | Oracle after design, before beads |
-| 6 | No convergence tracking | Track issue count per round, stop at < 3 |
+| 6 | No convergence tracking | Track issue count per round, stop at zero CRITICAL/HIGH |
 | 7 | Monolithic beads (5+ files) | Split to 1-3 files during creation |
 | 8 | All beads same priority | Two-track labeling after Phase 8 |
 | 9 | Round findings never committed | The leader commits each round's findings |

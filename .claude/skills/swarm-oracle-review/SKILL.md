@@ -76,7 +76,8 @@ For each issue found, provide:
 - Recommendation: Specific fix
 
 Do NOT say "looks good" without specific evidence.
-Produce at least 3 actionable findings per category.
+Report only findings you can support with evidence. Zero findings in a category is a
+valid answer; if you report zero, say why zero would be surprising.
 ```
 
 ### Interpreting Results
@@ -125,16 +126,16 @@ Each round has 3 steps:
 
 ### Convergence Signal
 
-Track issues found per round:
+Track issues found per round, split by severity. Count only issues the reviewers
+support with evidence, and never set a target count for a round.
 
-| Round | Issues Found | Action |
-|-------|-------------|--------|
-| 1 | 15-20 | Expected — many first-pass issues |
-| 2 | 8-12 | Good — deeper issues surfacing |
-| 3 | 3-5 | Converging — mostly edge cases |
-| 4 | 0-2 | Done — ready to ship |
+| Signal | Action |
+|--------|--------|
+| Round finds CRITICAL or HIGH issues | Fix them, run another round |
+| Round finds zero CRITICAL/HIGH, only MEDIUM/LOW | Fix what is worth fixing, then stop |
+| Count of non-trivial issues rises round over round | Check whether fixes caused new problems; the artifact may need redesign |
 
-Stop when a round finds <= 2 non-trivial issues. Typical: 3-4 rounds.
+Stop when a round finds zero CRITICAL/HIGH issues.
 
 ### Hardening Agent Prompt Template
 
