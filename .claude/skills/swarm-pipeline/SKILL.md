@@ -139,7 +139,8 @@ Agent({ subagent_type: "general-purpose", name: "<facet-slug>",
 Each agent prompt MUST include:
 1. Explicit file paths to read (actual source, not specs)
 2. Structured output format expected
-3. Git commit instructions (per CLAUDE.md swarm rules)
+3. An instruction to return findings as text in the final message (the leader commits
+   each round's findings)
 4. What NOT to do (e.g., "Do NOT propose solutions" for researchers)
 
 ---
@@ -432,7 +433,7 @@ Output: decisions + rationale + new beads needed.
 | 6 | No convergence tracking | Track issue count per round, stop at < 3 |
 | 7 | Monolithic beads (5+ files) | Split to 1-3 files during creation |
 | 8 | All beads same priority | Two-track labeling after Phase 8 |
-| 9 | Agents don't commit | Explicit commit instructions in every prompt |
+| 9 | Round findings never committed | The leader commits each round's findings |
 | 10 | Over-scaling teams | Match team size to facet count, 20 is max not default |
 
 ---

@@ -315,7 +315,8 @@ Your assigned facet: [FACET]
 
 1. **Each agent reads actual code** — never just specs or summaries
 2. **One facet per agent** — no overlap, clear boundaries
-3. **Commit immediately** — each agent commits its output before moving on
+3. **The leader commits each round's findings.** Agents return text, and the leader
+   persists and commits it before the next round
 4. **Synthesis is mandatory** — raw reports are not the deliverable
 5. **User approves facets** before spawning agents
 6. **Spawn all teammates in a single leader message** (one `Agent` call each, in the
