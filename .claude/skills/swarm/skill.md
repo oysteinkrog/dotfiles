@@ -272,9 +272,8 @@ notification the leader should:
 4. Look for stuck in-progress tasks whose owner is no longer running (see
    `/swarm-status` stuck-task rescue).
 
-If the leader hasn't received notifications for a while and the pool isn't at
-capacity, `ScheduleWakeup` with a sensible delay to re-check `TaskList`. Don't
-busy-poll; the notifications are the primary signal.
+Between spawns, wait for the completion notification, then re-check `TaskList`.
+Don't busy-poll; the notifications are the primary signal.
 
 #### Known issues
 
