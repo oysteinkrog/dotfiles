@@ -145,7 +145,7 @@ These rules hold whether or not a skill is loaded:
   refactors off the same files as security fixes, or serialize them with `blockedBy`.
 - **Verify after the swarm.** Grep for the patterns that should be gone, diff each bead's
   expected changes against HEAD, run the full test suite.
-- **Pass `model:` explicitly on every spawn**, defaulting to `'sonnet'`. Do not reintroduce a
+- **Pass `model:` explicitly on every spawn**, defaulting to `'opus'`. Do not reintroduce a
   `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one model everywhere and breaks
   per-call overrides.
 - Tell teammates to read CLAUDE.md first, and name the files they will touch so reservations
