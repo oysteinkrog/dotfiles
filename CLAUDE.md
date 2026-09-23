@@ -29,8 +29,7 @@ a complete consultation.
 - **Fallback order when the Codex call fails**, whatever the reason: Fable subagent, then
   Opus subagent. Say which one answered. Never downgrade silently.
 - **Codex calls leave the machine.** The confidentiality rule in the global file applies.
-- **Load `consult-oracles`** for the exact invocation and its known failure modes. This
-  policy wins over any skill that still frames Fable as primary.
+- **Load `consult-oracles`** for the exact invocation and its known failure modes.
 
 ## Python
 
