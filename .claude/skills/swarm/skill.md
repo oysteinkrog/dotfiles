@@ -18,6 +18,17 @@ context window clean.
 All orchestration uses Claude Code built-ins: `Agent`, `TaskCreate`, `TaskUpdate`,
 `TaskList`, `TaskGet`, `TeamCreate`. `SendMessage` is NOT used for execution teammates.
 
+When `TaskCreate` and `TeamCreate` are not available, skip the task list. The leader
+assigns each bead directly by name: it binds `{BEAD_ID}` in the prompt, spawns one
+teammate per bead, and spawns the next bead's teammate when a completion notice arrives.
+
+**File coordination is the leader's job.** Subagent teammates get no agent-mail
+identity (the SessionStart hook registers only the parent session), so they cannot
+reserve files. The leader gives each running teammate one bead whose files no other
+running teammate touches, and chains beads that share a file with `blockedBy` (or
+`br dep add`) so they run one after another. A teammate that does have an agent-mail
+identity still reserves its files as an extra guard.
+
 ## When to activate
 
 Activate when the user says:
@@ -121,7 +132,14 @@ for bead in beads:
     blockers = [bead_to_task[dep] for dep in bead.blocked_by if dep in bead_to_task]
     if blockers:
         TaskUpdate({ taskId: bead_to_task[bead.id], addBlockedBy: blockers })
+
+# d) Chain same-file beads
+for a, b in pairs_of_beads_sharing_a_file:
+    TaskUpdate({ taskId: bead_to_task[b.id], addBlockedBy: [bead_to_task[a.id]] })
 ```
+
+Put each bead's file list in its task description, so teammates and the leader can
+see which files it touches. Step d means no two ready tasks share a file.
 
 Now `TaskList` returns the correct ready-set (tasks with no unresolved blockers),
 and downstream tasks become claimable automatically as their predecessors complete.
@@ -154,15 +172,17 @@ Claim in beads:   br update {BEAD_ID} --status in_progress
 Get details:      br show {BEAD_ID} --json 2>/dev/null
 Check related:    bv -robot-related {BEAD_ID} 2>/dev/null | jq '.categories'
 
-## File Coordination (MANDATORY)
+## File coordination
 
-Before editing ANY file, reserve it via the mcp-agent-mail MCP:
-1. Call `file_reservation_paths` with the list of files you plan to edit.
-2. If any file is already reserved by another teammate, STOP — release any
-   reservations you did obtain, set your task back to pending + owner=null via
-   TaskUpdate, then exit. The leader will reassign it later when the other
-   teammate finishes and releases its files.
-3. After committing, call `release_file_reservations` for your files.
+The leader gave you a bead whose files no other running teammate touches. Edit only
+the files the bead names.
+1. Before editing, run `git diff --stat -- <your files>`. If a file already has
+   uncommitted changes that are not yours, do not commit them. Stage only your own
+   hunks (git-partial-stage skill) or stop and report it.
+2. File reservations are optional. If you have an agent-mail identity, call
+   `file_reservation_paths` for your files. If a file is reserved by someone else,
+   stop and report. If you have no identity or agent-mail errors, skip reservations
+   and say so in your report.
 
 ## Rules
 
@@ -170,7 +190,7 @@ Before editing ANY file, reserve it via the mcp-agent-mail MCP:
 2. Match existing project conventions (see CLAUDE.md).
 3. Test/file folders must mirror source structure.
 4. Follow .editorconfig and analyzer rules.
-5. Reserve files before editing. Never edit unreserved files.
+5. Edit only the files your bead names. Never commit changes that are not yours.
 6. NEVER `git switch`/`git checkout`/`git branch`/`git reset`/`git rebase` in this
    shared checkout — all teammates share one working tree and index; any branch or
    HEAD change corrupts other teammates' in-flight commits. If an acceptance test needs
@@ -181,7 +201,7 @@ Before editing ANY file, reserve it via the mcp-agent-mail MCP:
 ## Steps
 
 1. Read and understand related existing code thoroughly.
-2. Reserve all files you plan to edit via agent-mail file_reservation_paths.
+2. Check your files for foreign uncommitted changes (see File coordination).
 3. Implement according to acceptance criteria.
 4. Commit IMMEDIATELY after writing files (before full test suite). Stage only your
    own files, then commit with the `-- <your files>` pathspec (NOT a bare `git commit`):
@@ -192,20 +212,23 @@ Before editing ANY file, reserve it via the mcp-agent-mail MCP:
    paths, whatever else is staged. New/untracked files must still be `git add`-ed first —
    a pathspec commit cannot pick up an unstaged new file (it errors `pathspec did not
    match any file(s) known to git`).
+   If git fails on `index.lock`, another teammate is committing. Wait a few seconds
+   and retry. Never delete the lock file.
 5. Run project checks (tests, linting — see CLAUDE.md).
    - For .NET/MSBuild projects: pass `--no-dependencies` (or equivalent) when
      multiple teammates may be building simultaneously, to avoid MSB3021 lock
      conflicts.
 6. If checks fail, fix and commit a follow-up with the same pathspec: git add <only your files> && git commit -m "..." -- <your files>. Never amend.
-7. Release file reservations via agent-mail release_file_reservations.
-8. Close: br close {BEAD_ID}
+7. If you reserved files, release them with release_file_reservations.
+8. Close: br close {BEAD_ID} --reason "<what changed, commit sha>"
 9. Mark your task completed: TaskUpdate({ taskId, status: "completed" })
-10. Exit.
+10. Report in your final message: bead id, commit sha(s), files changed, check
+    results, and anything you did not do or were unsure about. Then exit.
 
 Do NOT go idle or stop with a claimed task in an unfinished state (no idle-in-progress).
 A task is finished ONLY after commit → `br close {BEAD_ID}` → `TaskUpdate({ taskId,
 status: "completed" })`. If you cannot finish (blocked, out of budget), run the
-"On abort / shutdown" path below (release reservations, `TaskUpdate({ taskId,
+"On abort / shutdown" path below (release any reservations, `TaskUpdate({ taskId,
 owner: null, status: "pending" })`) and exit so the leader reclaims it — never leave
 it idle-in-progress.
 
@@ -215,7 +238,7 @@ Do NOT mark your task completed unless step 8 (br close) succeeded. Instead:
 1. If mid-edit: decide whether the partial work is worth keeping.
    - Keep: finish the write, commit, then follow the completion path above.
    - Discard: `git restore` the files; proceed to release step.
-2. Release all file reservations via release_file_reservations.
+2. If you reserved files, release them with release_file_reservations.
 3. TaskUpdate({ taskId, owner: null, status: "pending" }) — the leader will
    reclaim or reassign.
 4. Exit.
@@ -247,8 +270,9 @@ Agent({ ..., name: "swarm-2", ... })
 # ... up to $AGENT_COUNT
 ```
 
-Each teammate self-claims the next available task. The leader does not need to
-pre-assign specific beads to specific teammates.
+Each teammate self-claims the next available task. This is safe only because step 3d
+chained same-file beads, so no two claimable tasks share a file. Without a task list,
+the leader names the bead in each prompt and picks beads with disjoint files.
 
 **Targeted assignment** (if you want a specific bead to go to a specific teammate):
 pre-set `owner` on the task before spawning:
@@ -342,7 +366,7 @@ Agent({
 
 1. For each running backgrounded teammate, signal a stop via a fresh `Agent`
    instruction OR `TaskStop` if the harness supports interrupting by ID. Give
-   them the "On abort / shutdown" script from A.4 so they release reservations
+   them the "On abort / shutdown" script from A.4 so they release any reservations
    and return their task to `pending` (NOT completed — completed implies the
    bead was actually closed in `br`).
 2. Wait for notifications. If a teammate is truly stuck, `TaskStop({ taskId })`.
