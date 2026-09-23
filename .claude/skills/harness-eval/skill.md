@@ -1,7 +1,7 @@
 ---
 name: harness-eval
 model: opus
-description: Evaluate a repository against the Harness Engineering framework (OpenAI, Feb 2026) with multi-model consensus scoring. Triggers on "harness eval", "harness engineering", "agent readiness", "evaluate harness", "score repo".
+description: Evaluate a repository against the Harness Engineering framework (OpenAI, Feb 2026) with FOR/AGAINST oracle scoring (Astra via /swarm-oracle). Triggers on "harness eval", "harness engineering", "agent readiness", "evaluate harness", "score repo".
 context: fork
 ---
 
@@ -139,28 +139,16 @@ Read the repository's key files to understand current state:
 - Dependency managers (Renovate, Dependabot)
 - Memory files (.claude/memory/, agents/, etc.)
 
-### Step 2: Multi-Model Consensus Scoring
+### Step 2: Oracle Scoring
 
-Use `mcp__pal__consensus` with three models in different stances:
+Load `/swarm-oracle` and run its FOR/AGAINST debate on the scorecard. By default that is two GPT-6 Astra sessions through the Codex CLI:
 
-```
-mcp__pal__consensus:
-  step: "Evaluate this repository against OpenAI's Harness Engineering framework..."
-  models:
-    - model: "gpt-5.4-pro"
-      stance: "for"
-      stance_prompt: "Score generously, highlight strengths"
-    - model: "gemini-3.1-pro-preview"
-      stance: "against"
-      stance_prompt: "Score critically, emphasize gaps"
-    - model: "gpt-5.4"
-      stance: "neutral"
-      stance_prompt: "Balanced assessment"
-  step_number: 1
-  total_steps: 4
-  next_step_required: true
-  findings: "<your verified inventory analysis — use agent findings, not assumptions>"
-```
+- **FOR:** score generously and name the strengths.
+- **AGAINST:** score critically and name the gaps.
+
+Add the Fable FOR/AGAINST pair when the result is high-stakes (a score that will be shared or acted on) or when the two Astra scores differ by more than 2 points on any pillar. `/swarm-oracle` owns the invocation, the Fable fallback when Codex fails, and the approval rule for sending proprietary code off the machine.
+
+Pass your verified inventory analysis as the evaluation input. Use the agent findings, not assumptions.
 
 Include in the evaluation prompt:
 1. Full inventory of context engineering assets (with line counts and project-level vs user-level distinction)
@@ -174,30 +162,30 @@ Include in the evaluation prompt:
 Present a consensus scorecard with sub-area detail:
 
 ```
-| Pillar                    | Model A | Model B | Model C | Consensus |
-|---------------------------|---------|---------|---------|-----------|
-| Context Engineering       |         |         |         |           |
-|   Static context          |         |         |         |           |
-|   Dynamic context         |         |         |         |           |
-|   Tiered documentation    |         |         |         |           |
-|   In-context accessibility|         |         |         |           |
-|   Three-tier memory       |         |         |         |           |
-|   Context conciseness     |         |         |         |           |
-| Architectural Constraints |         |         |         |           |
-|   Dependency layering     |         |         |         |           |
-|   Deterministic linters   |         |         |         |           |
-|   LLM-based auditors      |         |         |         |           |
-|   Structural tests & hooks|         |         |         |           |
-|   Red/Green TDD           |         |         |         |           |
-|   Constraint credibility  |         |         |         |           |
-|   Executable guardrails   |         |         |         |           |
-| Entropy Management        |         |         |         |           |
-|   Background cleanup      |         |         |         |           |
-|   Doc consistency         |         |         |         |           |
-|   Constraint scanning     |         |         |         |           |
-|   Pattern enforcement     |         |         |         |           |
-|   Functional correctness  |         |         |         |           |
-| **Weighted Overall**      |         |         |         |           |
+| Pillar                    | Astra FOR | Astra AGAINST | Fable (if run) | Consensus |
+|---------------------------|-----------|---------------|----------------|-----------|
+| Context Engineering       |           |               |                |           |
+|   Static context          |           |               |                |           |
+|   Dynamic context         |           |               |                |           |
+|   Tiered documentation    |           |               |                |           |
+|   In-context accessibility|           |               |                |           |
+|   Three-tier memory       |           |               |                |           |
+|   Context conciseness     |           |               |                |           |
+| Architectural Constraints |           |               |                |           |
+|   Dependency layering     |           |               |                |           |
+|   Deterministic linters   |           |               |                |           |
+|   LLM-based auditors      |           |               |                |           |
+|   Structural tests & hooks|           |               |                |           |
+|   Red/Green TDD           |           |               |                |           |
+|   Constraint credibility  |           |               |                |           |
+|   Executable guardrails   |           |               |                |           |
+| Entropy Management        |           |               |                |           |
+|   Background cleanup      |           |               |                |           |
+|   Doc consistency         |           |               |                |           |
+|   Constraint scanning     |           |               |                |           |
+|   Pattern enforcement     |           |               |                |           |
+|   Functional correctness  |           |               |                |           |
+| **Weighted Overall**      |           |               |                |           |
 ```
 
 ### Step 4: Gap Analysis
