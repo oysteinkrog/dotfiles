@@ -48,16 +48,15 @@ Each agent explores one facet independently; results are synthesized by the lead
 
 There is **no `CLAUDE_CODE_SUBAGENT_MODEL` env pin**, and it must not come back. It was
 removed because it silently forced every subagent to one model and broke per-call `model:`
-overrides. The Sonnet default below is a prompt-level convention, not a setting.
+overrides. The Opus default below is a prompt-level convention, not a setting.
 
 - **Pass `model:` explicitly on every spawn.** An unspecified model falls back to the
   leader model, which is expensive at fan-out scale.
-- **Default to `model: 'sonnet'`** for spawned subagents and workflow `agent()` calls.
-- **Override per call:** `'opus'` for the hardest reasoning (adversarial verification,
-  subtle-inconsistency detection, load-bearing synthesis), `'fable'` when Oystein asks for
-  Fable workers or a lane needs the frontier model, `'haiku'` for cheap mechanical lanes.
+- **Default to `model: 'opus'`** for spawned subagents and workflow `agent()` calls.
+- **Override per call:** `'fable'` when Oystein asks for Fable workers or a lane needs the
+  frontier model, `'sonnet'` for cheap breadth lanes, `'haiku'` for cheap mechanical lanes.
 - Mixing models inside one fan-out is encouraged. Set the model per leaf, not per wave.
-  Sonnet for breadth, Opus or Fable for the few contested lanes.
+  Opus for most lanes, Fable for the few contested ones, Sonnet or Haiku where cost matters.
 
 ## NxM notation
 
