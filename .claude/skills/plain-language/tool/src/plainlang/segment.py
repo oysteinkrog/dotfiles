@@ -50,10 +50,13 @@ class Document:
 # CommonMark allows a fence of three or more markers, and a longer fence is how
 # you quote a block that itself contains ```. Matching only exactly three let the
 # inner code leak into the prose and be scored as writing. The closer must be at
-# least as long as the opener, which is also CommonMark.
+# least as long as the opener, which is also CommonMark. Either fence line may be
+# indented, because a code block inside a list item is indented to the item's
+# text. Anchoring at column 0 left that code scored as prose, so a `--` in a
+# shell command was charged as an em dash.
 _FENCE = re.compile(
-    r"(?m)^(?P<fence>`{3,}|~{3,})[^\n]*\n"
-    r"(?:.*?(?m:^)(?P=fence)`*~*[ \t]*$|.*\Z)", re.S)
+    r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n"
+    r"(?:.*?(?m:^)[ \t]*(?P=fence)`*~*[ \t]*$|.*\Z)", re.S)
 _FRONTMATTER = re.compile(r"\A---\n.*?\n---[ \t]*$", re.S | re.M)
 # An indented line is code only when it is not a continuation of a list. Nested
 # bullets and list continuation paragraphs are indented by four spaces in normal
