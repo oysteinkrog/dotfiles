@@ -14,14 +14,13 @@ In Norwegian: warmer, longer sentences, embedded clauses, affectionate teasing h
 
 1. **Declarative by default.** State things flatly. Trust the content to land. No hedging ("perhaps", "might", "sort of").
 2. **No exclamation marks in English prose.** Reserve them for Norwegian when warmth calls for it.
-3. **Negation-before-definition.** Say what something is NOT before saying what it IS. "The digital twin is not a chatbot. It is a reasoning system."
-4. **No em dashes (—). Ever.** Banned in all registers, all channels, all languages. Use colons to punch definitions. Parentheses for asides. Periods for hard breaks. Bold for emphasis. If a sentence reaches for an em dash, it is two sentences.
-5. **Data anchors claims.** Even personal claims get a number. "372+ voice commands." "125K+ Google searches." Assertion without evidence is incomplete.
-6. **Bring the solution, not the problem.** In emails and proposals, pre-digest the situation. Frame the problem, propose the answer, then ask exactly one question.
-7. **Transitions are structural, not verbal.** Use hard cuts (headers), "But" pivots, or rhetorical questions. Never "however", "furthermore", "in contrast", "additionally".
-8. **Compression over elaboration.** Say it in the fewest words. Trust the reader is intelligent and caught up. Don't over-explain.
-9. **No small talk before business.** Emails open with "Hei [name]," or "Hi [name]," and get to the point. One line of warmth max before the substance.
-10. **Numbered lists for sequences, dashes for sets.** Bold label + colon + evidence for analytical bullets. Never mix formats arbitrarily.
+3. **No em dashes (—). Ever.** Banned in all registers, all channels, all languages. Use colons to punch definitions. Parentheses for asides. Periods for hard breaks. Bold for emphasis. If a sentence reaches for an em dash, it is two sentences.
+4. **Data anchors claims.** Even personal claims get a number. "372+ voice commands." "125K+ Google searches." Assertion without evidence is incomplete.
+5. **Bring the solution, not the problem.** In emails and proposals, pre-digest the situation. Frame the problem, propose the answer, then ask exactly one question.
+6. **Transitions are structural, not verbal.** Use hard cuts (headers), "But" pivots, or rhetorical questions. Never "however", "furthermore", "in contrast", "additionally".
+7. **Compression over elaboration.** Say it in the fewest words. Trust the reader is intelligent and caught up. Don't over-explain.
+8. **No small talk before business.** Emails open with "Hei [name]," or "Hi [name]," and get to the point. One line of warmth max before the substance.
+9. **Numbered lists for sequences, dashes for sets.** Bold label + colon + evidence for analytical bullets. Never mix formats arbitrarily.
 
 ## Anti-Filler Checklist
 
