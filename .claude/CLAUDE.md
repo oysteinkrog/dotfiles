@@ -39,11 +39,9 @@ review procedure. For prose longer than a couple of sentences, also load `humani
 strip AI tells. Skip both only for machine-bound text, a one-line chat reply, or when
 Oystein opts out for the turn.
 
-The rule is checked mechanically. `pl check draft.md` scores a draft and names the lines to
-fix; `echo "$BODY" | pl check -` reads stdin; `pl explain draft.md` shows where the cost
-went. A hook runs the same gate on anything about to reach a person and hands back findings
-on failure. `PLAINLANG_MODE=warn` reports without blocking, `PLAINLANG_OFF=1` switches it
-off, and a `plainlang: skip` line marks genuinely out-of-scope text.
+The rule is checked mechanically. The `pl` scorer names the lines to fix, and a hook runs the
+same gate on anything about to reach a person and hands back findings on failure. The
+`plain-language` skill lists the `pl` commands and the switches that warn or turn it off.
 
 ## Safety rules
 
