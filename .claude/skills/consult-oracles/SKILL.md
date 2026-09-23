@@ -50,8 +50,9 @@ effort only applies to the Codex call; Fable subagents have no effort knob.
    subagent as the oracle and say so in the synthesis. If Fable also fails, fall back
    to an Opus subagent and say that too. Do not silently downgrade.
 4. Sensitive or proprietary code needs approval before it goes to Astra, because the
-   Codex call leaves the machine. If approval is not available, run the consultation
-   on Fable instead and note why.
+   Codex call goes to OpenAI. Claude subagents (Fable, Opus) use the same approved
+   Anthropic boundary as the session and need no extra approval. If approval is not
+   available, run the consultation on Fable instead and note why.
 
 ## When to Use
 
@@ -279,8 +280,9 @@ mcp__pal__chat with:
 
 ## Safety Notes
 
-- Don't share sensitive/proprietary code without approval (Codex and PAL calls
-  leave the machine; Fable subagents stay inside Claude Code). Without approval,
+- Don't share sensitive/proprietary code without approval (Codex and PAL calls go
+  to a non-Anthropic provider; Fable and Opus subagents use the same approved
+  Anthropic boundary as the session). Without approval,
   run the consultation on Fable and say why
 - Verify recommendations against project constraints
 - Document which recommendation was chosen and why, including the Astra effort used
