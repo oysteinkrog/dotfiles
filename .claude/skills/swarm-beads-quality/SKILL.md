@@ -51,7 +51,7 @@ Review each bead through 10 independent lenses. Each lens checks different failu
 
 | # | Lens | What to Check |
 |---|------|---------------|
-| 1 | **Correctness** | Do ACs match the plan? Are file paths real? Do enums/types exist? |
+| 1 | **Correctness** | Do ACs match the plan? Does each file path and type either exist, or get created by this bead or a dependency? |
 | 2 | **Self-Containment** | Can an agent implement this with ONLY the bead description + source code? |
 | 3 | **Dependencies** | Are deps correct? Missing deps? Would executing out-of-order break anything? |
 | 4 | **Test Coverage** | Does every AC have a corresponding test requirement? Are test beads linked? |
@@ -70,9 +70,11 @@ For each bead under review:
 # Read the bead
 br show <id>
 
-# Verify file paths exist
+# Verify file paths
 # For each file in the bead's Files section:
-test -f <path> || echo "MISSING: <path>"
+test -f <path> || echo "NOT YET PRESENT: <path>"
+# A path that is not present yet is fine when this bead creates it, or when a
+# dependency's Files section creates it. Flag it only when neither is true.
 
 # Check deps exist and are open
 br dep tree <id>
@@ -242,8 +244,8 @@ br ready
 ### Final Verification Checklist
 
 For EACH bead:
-- [ ] All file paths exist in the repo
-- [ ] All referenced types/enums/classes exist in source code
+- [ ] Every file path exists in the repo, is created by this bead, or is created by a dependency
+- [ ] Every referenced type/enum/class exists in source code, is created by this bead, or is created by a dependency
 - [ ] All ACs are in Given/When/Then format (zero prose)
 - [ ] Cross-cutting section has specific values (not "TBD" or "see other bead")
 - [ ] Dependencies are correct (no missing, no cycles)
