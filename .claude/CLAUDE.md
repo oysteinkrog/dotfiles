@@ -150,14 +150,13 @@ These rules hold whether or not a skill is loaded:
 ## Agent mail
 
 The rust `mcp-agent-mail` runs as a PM2 service on `http://127.0.0.1:4809/mcp/`, localhost
-only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. Restart with
-`pm2 restart mcp-agent-mail`, then `pm2 save`. It answers on `/api/` as well, so older
-project configs keep working.
+only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It answers on
+`/api/` as well, so older project configs keep working.
 
 - **Never run `am doctor fix`.** It rewrites every MCP config back to port 8765 with a bearer
-  token, which breaks this setup. For anything wrong with the service or its SQLite store,
-  load `agent-mail-ops`, which owns repair. For using agent mail as an agent, load
-  `agent-mail`.
+  token, which breaks this setup. To restart the service, or for anything wrong with it or
+  its SQLite store, load `agent-mail-ops`, which owns restart and repair. For using agent
+  mail as an agent, load `agent-mail`.
 - **Every repo that uses beads or swarms carries its own `.mcp.json` entry:**
   `"mcp-agent-mail": { "type": "http", "url": "http://127.0.0.1:4809/mcp/" }`. Add it to any
   such repo you touch that lacks it. **There is deliberately no user-scope registration** in
