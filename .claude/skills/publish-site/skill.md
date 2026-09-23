@@ -65,10 +65,10 @@ Set `REPO` and `CHECKOUT` from the table above, then:
    mkdir -p <CHECKOUT>/<category>/<slug>
    cp -r <source>/* <CHECKOUT>/<category>/<slug>/
    ```
-4. Commit and push:
+4. Commit and push. Stage and commit only the site directory from step 3:
    ```bash
-   git -C <CHECKOUT> add -A
-   git -C <CHECKOUT> commit -m "add <category>/<slug>"
+   git -C <CHECKOUT> add -- <category>/<slug>
+   git -C <CHECKOUT> commit -m "add <category>/<slug>" -- <category>/<slug>
    git -C <CHECKOUT> push origin gh-pages
    ```
 5. Report the live URL:
