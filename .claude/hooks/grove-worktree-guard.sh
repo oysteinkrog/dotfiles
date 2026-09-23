@@ -31,6 +31,12 @@
 # under /tmp/claude-*/, outside any guarded work_dir by construction, so no
 # extra carve-out is needed for them here.
 #
+# It also blocks two grove commands agents must not run:
+#   grove list           per-project git status scan, 17+ minutes on WSL1.
+#                        `--no-status` is blocked too until it has been timed.
+#   grove done --force   removes a worktree without grove's safety checks.
+# `--help` on either is allowed, and so is `grove repo list`.
+#
 # To bypass intentionally, append ` # noqa: grove-worktree` to the command.
 
 set -euo pipefail
@@ -42,10 +48,10 @@ command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""')
 
 # Cheap pre-filter: skip invoking python for the vast majority of Bash calls
-# that mention neither keyword anywhere. Correctness (anchoring, quoting)
+# that mention none of the keywords anywhere. Correctness (anchoring, quoting)
 # is entirely the python detector's job; this is purely a perf shortcut so
 # every unrelated Bash call doesn't pay for a subprocess spawn.
-if ! printf '%s' "$command" | grep -qE 'worktree|clone'; then
+if ! printf '%s' "$command" | grep -qE 'worktree|clone|grove'; then
   exit 0
 fi
 
@@ -60,11 +66,51 @@ if [[ -z ${workdirs:-} ]]; then
   workdirs="/c/work/desktop"
 fi
 
-target=$(GROVE_GUARD_COMMAND="$command" GROVE_GUARD_CWD="$cwd" GROVE_GUARD_WORKDIRS="$workdirs" python3 "$here/grove-worktree-detect.py" 2>/dev/null || true)
+hit=$(GROVE_GUARD_COMMAND="$command" GROVE_GUARD_CWD="$cwd" GROVE_GUARD_WORKDIRS="$workdirs" python3 "$here/grove-worktree-detect.py" 2>/dev/null || true)
 
-if [[ -z ${target:-} ]]; then
+if [[ -z ${hit:-} ]]; then
   exit 0
 fi
+
+kind=${hit%%$'\t'*}
+detail=${hit#*$'\t'}
+
+if [[ $kind == grove_list ]]; then
+  cat >&2 <<EOF
+BLOCKED: \`grove list\` in agent context.
+
+Command: $detail
+
+It runs a git status scan per project and takes 17+ minutes on WSL1.
+\`grove list --no-status\` should skip that scan, but it has not been timed
+yet, so it is blocked too.
+
+Use instead:
+  grove path <tag>                                   one project's path
+  git -C <repo>/master worktree list --porcelain     every worktree, fast
+
+If you genuinely need it, append \` # noqa: grove-worktree\` to the command.
+EOF
+  exit 2
+fi
+
+if [[ $kind == grove_done_force ]]; then
+  cat >&2 <<EOF
+BLOCKED: \`grove done --force\` in agent context.
+
+Command: $detail
+
+--force removes the worktree without grove's checks for uncommitted or
+unpushed work. Run \`grove done <tag>\` without --force and deal with what it
+reports, or ask Oystein.
+
+If Oystein approved the forced removal, append \` # noqa: grove-worktree\` to the
+command.
+EOF
+  exit 2
+fi
+
+target=$detail
 
 cat >&2 <<EOF
 BLOCKED: raw worktree/clone creation under a grove-managed directory.
