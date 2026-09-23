@@ -284,12 +284,12 @@ Your assigned facet: [FACET]
 ## Instructions
 1. Read CLAUDE.md in the project root
 2. [TYPE-SPECIFIC INSTRUCTIONS]
-3. Be thorough — read actual source code, not just file names
+3. Read the actual source code, not just file names
 4. Return your report as text in your final assistant message (do NOT write a report
    file — the harness blocks that, and the leader persists your findings to [OUTPUT_PATH])
 
 ## Output Format
-### Summary (3-5 sentences)
+### Summary
 ### Findings
 ### Recommendations
 ### Files Examined
