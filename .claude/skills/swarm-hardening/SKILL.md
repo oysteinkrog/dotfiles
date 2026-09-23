@@ -106,7 +106,7 @@ Spawn 8 agents, each with a different hardening focus. These agents have NOT see
 |---|-------|-------------|
 | 1 | **Cross-cutting embedding** | Ensure cross-cutting requirements (logging, error handling, telemetry) are embedded in every bead/plan section that needs them, not just referenced from a central doc |
 | 2 | **AC conversion** | Convert all acceptance criteria to Given/When/Then format; flag any that are untestable |
-| 3 | **File path verification** | Verify every file path referenced actually exists in the codebase; fix incorrect paths |
+| 3 | **File path verification** | Classify every referenced file path as existing, created by this bead, or created by a dependency; fix any path that is none of these |
 | 4 | **Dependency validation** | Check all dependency chains for cycles, missing links, and incorrect ordering |
 | 5 | **Scope splitting** | Identify beads/sections that are too large for atomic implementation; propose splits |
 | 6 | **Terminology consistency** | Ensure consistent terminology throughout (no mixing "plate"/"device"/"sensor") |
@@ -153,7 +153,7 @@ You are a final correctness verifier. Your job is to verify, not find new issues
 
 ## Verify Each Item Against
 1. All acceptance criteria are in Given/When/Then format
-2. All file paths exist in codebase
+2. Every file path exists in the codebase, is created by this item, or is created by a dependency
 3. All dependencies are correct and acyclic
 4. No contradictions with other items
 5. Cross-cutting requirements are embedded (not just referenced)
