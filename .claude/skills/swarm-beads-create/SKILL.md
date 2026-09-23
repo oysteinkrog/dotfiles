@@ -143,7 +143,7 @@ Create beads using `br` CLI:
 
 ```bash
 # Create epic first
-br epic create "Epic Name" --prefix E1
+br create "Epic Name" --type epic
 
 # Create beads within epic
 br create "Bead title" \
