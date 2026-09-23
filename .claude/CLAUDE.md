@@ -88,8 +88,7 @@ with-secrets KEY [KEY ...] -- CMD ARGS...    # run CMD with only those keys in i
 
 `CMD` must be a real command, not a shell function, so wrap shell syntax in `sh -c '...'`.
 Why: subprocesses used to inherit every token. **Do not restore that with ad-hoc `set -gx`
-lines.** If the loader breaks, the rollback copy is
-`~/.config/fish/conf.d/secrets.fish.disabled`.
+lines.**
 
 Rules, all hard:
 
@@ -102,9 +101,8 @@ Rules, all hard:
   subagents (Opus, Sonnet, Fable) use the same approved Anthropic boundary as this session,
   so they need no extra approval. Codex, PAL and any other provider do. Without approval,
   run the consultation on Fable and say why.
-- Add a credential by appending to `~/.config/secrets/.env`, then run
-  `~/bin/refresh-secrets-list`. Rotate by editing the value in place. New shells and
-  `with-secrets` calls pick it up at once; long-running shells need `exec fish`.
+- **Load `secret-lookup`** to add, rotate or remove a credential, or to roll back the
+  loader if it breaks.
 
 ## Multi-agent work
 
