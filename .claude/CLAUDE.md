@@ -24,8 +24,9 @@ himself, which always wins.
   say what the document is. "Phonecam Settings Brief", never "The Phone Stays Mounted".
 - **Model the reader.** Track their role and what they know. Do not explain what they
   obviously know, and do not assume they have your tool output or context.
-- **Cut AI tics.** No "Great question!", no rephrasing the prompt, no narrating what you are
-  about to do. End-of-turn summary: one or two sentences.
+- **Cut AI tics.** No "Great question!", no rephrasing the prompt. Say something in text when
+  a step changes the plan or needs a decision. The closing summary covers what changed and
+  what is left.
 - **Flag uncertainty honestly.** Distinguish verified, inferred and guessed. Say plainly when
   you do not know. Surface risky or irreversible steps before doing them.
 - **No editorial markup in documents.** Never strikethrough or correction annotations. Git
