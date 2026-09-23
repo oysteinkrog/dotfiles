@@ -43,7 +43,7 @@ Poll a PR's check status, diagnose failures, fix them, push, and repeat until al
 while checks not all green:
   1. Poll check status
   2. If all passed → done, report success
-  3. If any still pending/skipping → wait 60s and re-poll
+  3. If any still pending → run the watcher until checks finish
   4. If any failed → diagnose and fix
   5. Push fix and restart loop
 ```
@@ -56,7 +56,8 @@ gh pr checks <number> --repo InitialForce/ScDesktop
 
 Parse the tabular output. Classify each check:
 - `pass` → passed
-- `pending`, `skipping` → pending (wait)
+- `pending` → pending (wait)
+- `skipping` → finished without running (not pending)
 - `fail` → failed (diagnose)
 
 Note: `gh pr checks` does NOT support `--json`. Parse the tab-separated text output.
@@ -65,12 +66,12 @@ Also check: if `skipping` checks depend on a failed check (e.g. Build skips when
 
 ### Step 2: Handle Pending Checks
 
-If checks are still running and none have failed:
+If checks are still running and none have failed, do not write a `sleep` loop (foreground `sleep` is blocked). Run the watcher with the Bash tool's `run_in_background: true`, so it can outlast the 10-minute Bash timeout:
 ```bash
-sleep 60
+pr-checks <number> --watch
 ```
 
-Re-poll up to 30 times (30 min). If still pending, report status and ask user.
+It polls every 60s, treats `skipping` as finished, and exits when every check is done: 0 = all passed, 1 = a check failed. It gives up after 30 min (exit 2) or when the pending set has not changed for 10 polls (exit 3). On exit 2 or 3, report status and ask the user. If `pr-checks` is missing, use `gh pr checks <number> --watch --fail-fast` the same way.
 
 ### Step 3: Diagnose Failures
 
