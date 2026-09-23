@@ -34,6 +34,10 @@ Poll a PR's check status, diagnose failures, fix them, push, and repeat until al
   gh pr view --json number,url,headRefName 2>/dev/null
   ```
 - If no PR exists for the current branch, abort with a message.
+- **Repository** — detect `OWNER/REPO` from the current checkout and use it as `<repo>` below:
+  ```bash
+  gh repo view --json nameWithOwner --jq .nameWithOwner
+  ```
 
 ## Workflow
 
@@ -51,7 +55,7 @@ while checks not all green:
 ### Step 1: Poll Check Status
 
 ```bash
-gh pr checks <number> --repo InitialForce/ScDesktop
+gh pr checks <number> --repo <repo>
 ```
 
 Parse the tabular output. Classify each check:
@@ -84,23 +88,15 @@ Extract the run ID from the details URL in `gh pr checks` output:
 
 ```bash
 # Get failed step logs
-gh run view <run-id> --repo InitialForce/ScDesktop --log-failed 2>&1 | tail -100
+gh run view <run-id> --repo <repo> --log-failed 2>&1 | tail -100
 
 # Or get specific job logs via API
-gh api repos/InitialForce/ScDesktop/actions/jobs/<job-id>/logs 2>&1 | tail -60
+gh api repos/<repo>/actions/jobs/<job-id>/logs 2>&1 | tail -60
 ```
 
-#### Common CI Checks and Fixes
+#### Find the Local Equivalent
 
-| Check | What it does | How to fix |
-|-------|-------------|-----------|
-| **Banned API Check** | Scans Test.Unit for `Process.Start`, `File.` I/O | Move offending test to Test.Integration |
-| **Provider Isolation** | Checks Test.Unit has no direct EF SQLite ref | Remove PackageReference or move test |
-| **Build** | `dotnet build` | Fix compiler errors: `cmd.exe /c "dotnet build ..."` |
-| **Unit Tests** | `dotnet test` Test.Unit | Run locally: `/run-tests --filter <name>` |
-| **Integration Tests** | `dotnet test` Test.Integration | Run locally: `/run-tests --filter <name>` |
-| **Code Analysis** | ReSharper InspectCode | Use `/inspectcode` skill |
-| **Check Localization** | Validates .resx files | Use `/localize` skill |
+Read the failed step's log to see the exact command CI ran. Run that command locally to reproduce the failure. Check the repo's `CLAUDE.md` and `AGENTS.md` for its build, test and lint commands, and for any project skills that cover them.
 
 ### Step 4: Fix the Issue
 
@@ -117,7 +113,7 @@ gh api repos/InitialForce/ScDesktop/actions/jobs/<job-id>/logs 2>&1 | tail -60
 ### Step 5: Push and Restart
 
 ```bash
-git push my <branch> --force-with-lease
+git push --force-with-lease
 ```
 
 Then go back to Step 1 and wait for new checks.
