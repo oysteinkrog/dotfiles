@@ -6,8 +6,9 @@ description: Start and manage an execution swarm of Claude Code teammates that e
 # Swarm (Execution)
 
 Start and manage an **execution swarm** — Claude Code teammates implementing beads from
-`br` (beads_rust). See `~/.claude/CLAUDE.md` "Two swarm shapes" for why execution
-teammates are terminal/fungible (NOT continued with `SendMessage`).
+`br` (beads_rust). See "Multi-agent work" in `~/.claude/CLAUDE.md` and the
+`agent-fungibility` skill for why execution teammates are terminal/fungible (NOT continued
+with `SendMessage`).
 
 Each teammate: claims one task → implements one bead → commits to the shared branch →
 closes the bead → marks the task completed → exits. The leader spawns replacements as
