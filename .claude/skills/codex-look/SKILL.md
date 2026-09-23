@@ -40,7 +40,7 @@ Then `Read` or `cat` `/tmp/codex-look-out.txt` to get Codex's reply.
 ### Why this exact form
 
 - `--skip-git-repo-check` — Codex normally refuses to run outside a git repo; this lets it run from any working directory.
-- `--sandbox read-only` — Codex won't try to edit anything; we only want a description.
+- `--sandbox read-only` — keeps Codex from running commands; we only want a description. The image still arrives, because `-i` attaches it to the prompt (verified on WSL1, 2026-09-23). On WSL1 the sandbox cannot start, so Codex cannot read any other file. That is fine here, but never copy this flag into a command that needs Codex to read the repo (see `consult-oracles`).
 - `-o /tmp/codex-look-out.txt` — writes only Codex's final answer to a file. Cleaner than parsing stdout.
 - **Prompt comes BEFORE `-i`.** `codex exec -i FILE "prompt"` is parsed as `-i [FILE, "prompt"]` and Codex then reads from stdin and finds nothing. Always put the prompt first, image flag last.
 - Redirect stdout/stderr to `/dev/null` — Codex prints MCP startup chatter and a session header. The `-o` file holds the only thing worth keeping.
