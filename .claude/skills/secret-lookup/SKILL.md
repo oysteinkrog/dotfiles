@@ -37,12 +37,12 @@ secret --list                        # prints all key names, one per line
 ## How to run a command with a secret in its env
 
 ```fish
-with-secrets CLOUDFLARE_API_TOKEN -- curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/...
+with-secrets CLOUDFLARE_API_TOKEN -- sh -c 'curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/...'
 with-secrets GITHUB_PERSONAL_ACCESS_TOKEN -- gh api /user
 with-secrets ZENDESK_API_TOKEN ZENDESK_EMAIL -- some-script
 ```
 
-The variables exist only inside CMD. The parent shell never gets them. **This is the only correct way** to give a subprocess a secret.
+The variables exist only inside CMD. The parent shell never gets them. **This is the only correct way** to give a subprocess a secret. When the secret goes in an argument, wrap the command in `sh -c '...'` with single quotes. The inner shell then expands `$CLOUDFLARE_API_TOKEN`. Without the wrapper, the parent shell expands it first, and it is empty there.
 
 ## Hard rules (these matter)
 
