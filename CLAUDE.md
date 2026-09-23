@@ -36,6 +36,12 @@ All Python work uses uv for packages, ruff for lint and format, ty for type chec
 editing `.py` files run `ruff check --fix && ruff format && ty check`. Load `/py-uv`,
 `/py-ruff` and `/py-ty` for details.
 
+A PostToolUse hook (`~/.claude/hooks/python-lint-hook.sh`) runs the same three checks after
+each Write or Edit of a `.py` file in a git repo and reports what it finds. It only reports
+and never rewrites the file. A fix between two steps of an edit could delete an import you
+have not used yet, or change text that the next Edit expects. So still run the fixing
+command yourself when the edit is done.
+
 ## X/Twitter bookmarks
 
 Bookmarks are archived locally in `~/.ft-bookmarks/` and searched with the `ft` CLI. **Load
