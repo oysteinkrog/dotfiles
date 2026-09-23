@@ -42,6 +42,9 @@ retired. Do not follow docs or memories that reference them.
   `~/.config/grove/<repo>/{registry,config}.json` layout — that does not match
   what the installed 0.1.0 binary actually reads/writes; trust this document and
   `grove repo show <id>` over the README.)
+- **Stale files**: the `config.json` and `registry.json` left behind in
+  `~/.config/grove/` are stale leftovers. Never read worktree lists
+  from them.
 - **No shell wrapper is installed for this setup** — `grove cd <tag>` prints the
   path; the fish function wrapping it (`gr`) is optional shell integration, not
   part of grove itself.

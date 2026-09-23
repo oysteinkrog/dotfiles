@@ -7,9 +7,8 @@ including multi-agent orchestration, secrets and the writing contract.
 
 `grove` manages git worktrees for a mono-repo workflow, each worktree a "project" with a
 short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `/c/work/grove`.
-Global config is `~/.config/grove/repos.json`, and each repo keeps its own
-`<work_dir>/.grove/registry.json`. The `config.json` and `registry.json` left behind in
-`~/.config/grove/` are stale, so never read worktree lists from them.
+Never read worktree lists from the stale files in `~/.config/grove/`; `grove-workflow`
+names the live config and registry paths.
 
 - **Load `grove-workflow` before any worktree work.** It holds every command, the flags and
   the traps.
