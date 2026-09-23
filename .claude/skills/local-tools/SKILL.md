@@ -5,8 +5,8 @@ description: Small local command-line tools on this WSL1 machine that are not ob
 
 # Local tools
 
-Each of these is installed and on PATH. This skill exists so the details do not have to sit
-in CLAUDE.md on every session.
+Each of these is installed, and all but the Obsidian CLI are on PATH. This skill exists so
+the details do not have to sit in CLAUDE.md on every session.
 
 ## git-hunks: stage hunks without a prompt
 
