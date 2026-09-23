@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Detect a raw `git worktree add` / `git clone` / `gh repo clone` invocation
-whose TARGET directory resolves under a grove-managed work_dir.
+whose TARGET directory resolves under a grove-managed work_dir, plus two
+grove invocations agents must not run: `grove list` (a per-project git status
+scan that takes 17+ minutes on WSL1) and `grove done --force`.
 
 Reads the candidate shell command from GROVE_GUARD_COMMAND, the PreToolUse
 payload's cwd from GROVE_GUARD_CWD, and newline-separated guarded work_dirs
-from GROVE_GUARD_WORKDIRS. Prints the resolved (or indeterminate) target on
-one line and exits 0 when the command should be denied; prints nothing when
-it is fine.
+from GROVE_GUARD_WORKDIRS. When the command should be denied, prints one line
+`KIND<TAB>DETAIL` and exits 0, where KIND is `worktree` (DETAIL = resolved or
+indeterminate target), `grove_list` or `grove_done_force` (DETAIL = the
+offending command segment). Prints nothing when it is fine.
 
 Kept in its own file rather than inlined into the hook script, matching
 rg-replace-detect.py's split: this needs real shell tokenization (quoting,
@@ -208,6 +211,39 @@ def parse_gh(tokens, payload_cwd):
     return ("gh_clone", resolved, payload_cwd)
 
 
+GROVE_HELP_FLAGS = {"-h", "--help"}
+
+
+def parse_grove(tokens):
+    """tokens[0] is grove. Returns "grove_list" or "grove_done_force" when
+    the segment is one of the denied invocations, else None. Global flags
+    (-v, --verbose, --repo X) may come before the subcommand. `--help`
+    anywhere allows the call, and `grove repo list` is a different command.
+    `grove list --no-status` is denied too: it should skip the scan, but it
+    has not been timed on this machine yet.
+    """
+    i = 1
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--repo":
+            i += 2
+            continue
+        if t.startswith("--repo=") or t == "--verbose" or re.fullmatch(r"-v+", t):
+            i += 1
+            continue
+        break
+    if i >= len(tokens):
+        return None
+    sub, rest = tokens[i], tokens[i + 1 :]
+    if GROVE_HELP_FLAGS & set(rest):
+        return None
+    if sub == "list":
+        return "grove_list"
+    if sub == "done" and "--force" in rest:
+        return "grove_done_force"
+    return None
+
+
 def classify_segment(raw_segment, payload_cwd):
     try:
         tokens = shlex.split(raw_segment)
@@ -221,6 +257,9 @@ def classify_segment(raw_segment, payload_cwd):
         return parse_git(tokens, payload_cwd)
     if head == "gh":
         return parse_gh(tokens, payload_cwd)
+    if os.path.basename(head) == "grove":
+        kind = parse_grove(tokens)
+        return (kind, None, None) if kind else None
     return None
 
 
@@ -254,11 +293,14 @@ def main():
         result = classify_segment(raw_segment, payload_cwd)
         if result is None:
             continue
-        _kind, resolved, effective_cwd = result
+        kind, resolved, effective_cwd = result
+        if kind.startswith("grove_"):
+            print(f"{kind}\t{raw_segment.strip()}")
+            return 0
         if resolved is not None:
             guard = find_guard(resolved, workdirs)
             if guard:
-                print(resolved)
+                print(f"worktree\t{resolved}")
                 return 0
         else:
             # Target undeterminable. Fail CLOSED only if we're already
@@ -266,7 +308,7 @@ def main():
             # unrelated to grove and failing open avoids nuisance blocks.
             guard = find_guard(effective_cwd, workdirs)
             if guard:
-                print(f"{effective_cwd} (target undeterminable; failing closed because cwd is inside {guard})")
+                print(f"worktree\t{effective_cwd} (target undeterminable; failing closed because cwd is inside {guard})")
                 return 0
     return 0
 
