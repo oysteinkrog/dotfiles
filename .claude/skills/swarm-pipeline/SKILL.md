@@ -25,7 +25,7 @@ argument-hint: "<feature description or Jira issue>"
 # Feature Pipeline — Large-Scale AI-Assisted Development
 
 Multi-phase pipeline: research → design → oracle → plan → review → beads → harden.
-Proven at scale: ~160 Opus + 12 Pro oracles → 80 beads, 271 test cases, zero cycles.
+Proven at scale: ~160 Opus + 12 oracle sessions → 80 beads, 271 test cases, zero cycles.
 
 This skill documents 5 meta-patterns that make the pipeline work, plus the full phase
 structure. Sub-skills handle individual phases; this skill orchestrates the whole.
@@ -146,7 +146,7 @@ Each agent prompt MUST include:
 
 ## Pattern 3: Oracle Integration
 
-Use Pro oracles (GPT-5.4-Pro via `/swarm-oracle`) for adversarial review at
+Use Astra oracles (GPT-6 Astra via `/swarm-oracle`) for adversarial review at
 decision points. Oracles challenge assumptions; agents cover breadth.
 
 ### Oracles vs More Opus Agents
@@ -154,30 +154,19 @@ decision points. Oracles challenge assumptions; agents cover breadth.
 | Need | Use | Why |
 |------|-----|-----|
 | Broader coverage of known concerns | More Opus | Parallel breadth |
-| Challenge assumptions, find blind spots | Pro oracles | Adversarial depth |
-| Design tradeoff decisions | Pro oracles | FOR/AGAINST surfaces tension |
+| Challenge assumptions, find blind spots | Astra oracles | Adversarial depth |
+| Design tradeoff decisions | Astra oracles | FOR/AGAINST surfaces tension |
 | Spec/bead correctness | Opus first, then oracles | Opus catches obvious; oracles catch subtle |
-| Rewrite scope validation | Pro oracles | Prevents over/under-scoping |
+| Rewrite scope validation | Astra oracles | Prevents over/under-scoping |
 | File-by-file impl details | Opus | Oracles too expensive for mechanical work |
 
 ### Oracle Session Structure
 
 ALWAYS use FOR + AGAINST stances. Never two neutrals (produces bland agreement).
 
-Use `/swarm-oracle` which wraps the PAL consensus tool:
-```python
-mcp__pal__consensus(
-  step="Evaluate: [SPECIFIC QUESTION]",
-  models=[
-    {"model": "gpt-5.4-pro", "stance": "for",
-     "stance_prompt": "Argue this approach is sound and sufficient."},
-    {"model": "gpt-5.4-pro", "stance": "against",
-     "stance_prompt": "Argue this approach has critical gaps or flaws."}
-  ],
-  relevant_files=[...],
-  ...
-)
-```
+Use `/swarm-oracle`. It runs the FOR and AGAINST stances as two GPT-6 Astra calls
+through the Codex CLI, and holds the exact invocation, the Fable escalation and the
+optional PAL route.
 
 ### Oracle Placement
 
@@ -191,8 +180,9 @@ mcp__pal__consensus(
 **Expected scores:** 7-9/10 on first pass. Below 7 = fundamental rethink needed.
 Above 9 = suspicious (verify oracle actually challenged the work).
 
-**CRITICAL pre-flight:** Verify PAL MCP is running before oracle phases. Agents silently
-fall back to self-analysis if PAL is down, producing worthless "oracle validated" results.
+**CRITICAL pre-flight:** Before oracle phases, confirm `codex` is on PATH and the repo
+root is trusted in `~/.codex/config.toml`. If a call fails, use the documented fallback,
+name the model that answered, and report the validation as not done if no oracle answered.
 
 ---
 
@@ -203,7 +193,7 @@ Track issue count per review round. Each round MUST find fewer than the previous
 | Round | Type | Expected Issues | Character |
 |-------|------|----------------|-----------|
 | 1 | Opus review (10) | 15-25 | Logic, structure, missing pieces |
-| 2 | Oracle (2 Pro) | 3-7 | Deeper: spec contradictions, arch gaps |
+| 2 | Oracle (2 Astra) | 3-7 | Deeper: spec contradictions, arch gaps |
 | 3 | Fresh-eyes (8) | 5-10 | Format, completeness, cross-cutting |
 | 4 | Final (10) | 0-5 | Minor: paths, typos, deps |
 
@@ -225,7 +215,7 @@ If Round N finds MORE issues than Round N-1:
 | Round | Agents | Issues Found | Logic Issues | Stop? |
 |-------|--------|-------------|-------------|-------|
 | 1 | 10 Opus | 25 | 8 | No |
-| 2 | 2 Pro | 5 | 3 | No |
+| 2 | 2 Astra | 5 | 3 | No |
 | 3 | 8 Opus (fresh) | 10 | 1 | No |
 | 4 | 10 Opus | 3 | 0 | YES |
 ```
@@ -276,7 +266,7 @@ Fix every issue you find. Do NOT assume prior reviewers caught anything.
 
 Fresh-eyes is Round 3 of the hardening loop (Phase 9):
 1. Round 1: Opus review (agents familiar with the plan)
-2. Round 2: Oracle validation (Pro, adversarial)
+2. Round 2: Oracle validation (Astra, adversarial)
 3. **Round 3: Fresh-eyes hardening (NEW agents, no history)**
 4. Round 4: Final correctness (can reuse Round 1 agents)
 
@@ -319,7 +309,7 @@ wizard flow, data model, integration, terminology, a11y, VM architecture.
 **Output:** Synthesize designs into plan → `foundation/product/features/`.
 
 ## Phase 4: Oracle Validation
-**Use:** `/swarm-oracle` | **Team:** 2 GPT-5.4-Pro (FOR + AGAINST)
+**Use:** `/swarm-oracle` | **Team:** 2 GPT-6 Astra (FOR + AGAINST)
 
 Two rounds: (1) UX + interaction design, (2) architecture + data model.
 Apply corrections before proceeding.
@@ -357,7 +347,7 @@ Use `br create` + `br dep add`. Target 1-3 files per bead.
 
 Four rounds with convergence tracking (see Pattern 4):
 1. 10 Opus: per-epic + deps + tests + self-containment
-2. 2 Pro: oracle challenge on readiness
+2. 2 Astra: oracle challenge on readiness
 3. 8 Opus: **fresh eyes** (see Pattern 5) — fix specs, embed cross-cutting, GWT
 4. 10 Opus: final correctness
 
@@ -366,7 +356,7 @@ Four rounds with convergence tracking (see Pattern 4):
 Creates new beads for gaps found. Oracle validates rewrite scope.
 
 ## Phase 11: Apply + Two-Track Labeling
-Apply audit findings → 6 Opus rewrite beads → 2 Pro oracle validate scope.
+Apply audit findings → 6 Opus rewrite beads → 2 Astra oracles validate scope.
 Apply two-track labels (Pattern 1) to all beads.
 
 ## Phase 12: Final Correctness
@@ -435,7 +425,7 @@ Output: decisions + rationale + new beads needed.
 | # | Anti-Pattern | Fix |
 |---|-------------|-----|
 | 1 | Agents design from specs, not code | Every prompt includes file paths to read |
-| 2 | Oracle without PAL verification | Pre-flight check before oracle phases |
+| 2 | Oracle without route verification | Pre-flight check before oracle phases |
 | 3 | Redundant reviewer roles | Assign distinct lenses, zero overlap |
 | 4 | Stale context in fresh-eyes round | Only current state + original reqs, no history |
 | 5 | Beads before oracle validation | Oracle after design, before beads |
@@ -455,7 +445,7 @@ Never auto-advance without confirmation.
 ```
 [ ] Phase 1-2: Research (10+10 agents) → research summary
 [ ] Phase 3: Design (10 agents) → design doc
-[ ] Phase 4: Oracle (2 Pro FOR/AGAINST) → corrections applied
+[ ] Phase 4: Oracle (2 Astra FOR/AGAINST) → corrections applied
 [ ] Phase 5: Impl Planning (20 agents) → 20 plan docs
 [ ] Phase 6-7: Review (10+6 agents) → findings fixed
 [ ] Phase 8: Bead Creation (6 agents) → beads with ACs
@@ -469,7 +459,7 @@ Never auto-advance without confirmation.
 | Metric | Value |
 |--------|-------|
 | Total Opus agents | ~160 |
-| Pro oracle sessions | 12 |
+| Oracle sessions | 12 |
 | Final beads | 80 |
 | Test cases | 271 |
 | Dependency cycles | 0 |
@@ -483,12 +473,12 @@ Never auto-advance without confirmation.
 |-------|--------|-------|
 | Research (2 rounds) | 20 | Opus |
 | Design | 10 | Opus |
-| Oracle (2 rounds) | 4 | GPT-5.4-Pro |
+| Oracle (2 rounds) | 4 | GPT-6 Astra |
 | Planning | 20 | Opus |
 | Review (2 rounds) | 16 | Opus |
 | Bead creation | 6 | Opus |
 | Hardening (4 rounds) | 30 | Opus |
-| Oracle (2 rounds) | 4 | GPT-5.4-Pro |
+| Oracle (2 rounds) | 4 | GPT-6 Astra |
 | Final pass | 10 | Opus |
 | **Total** | **~120** | |
 
@@ -511,7 +501,7 @@ foundation/product/features/
 | `/swarm-pipeline` | Orchestrator | Full research→design→beads pipeline |
 | `/swarm-agents` | Any phase | Spin up N parallel research/design/review agents |
 | `/swarm-review` | Review | 10-lens multi-perspective review |
-| `/swarm-oracle` | Validation | FOR/AGAINST Pro oracle consensus |
+| `/swarm-oracle` | Validation | FOR/AGAINST Astra oracle consensus |
 | `/swarm-oracle-review` | Validation | Combined oracle + hardening loop |
 | `/swarm-hardening` | Quality | 4-round iterative hardening |
 | `/swarm-beads-create` | Bead creation | Convert plans to beads (multi-agent) |
