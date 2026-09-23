@@ -143,17 +143,8 @@ Rate overall readiness 1-10. List SPECIFIC blocking issues with bead IDs.
 
 ### Running Oracles
 
-Use `/consult-oracles` or the PAL MCP consensus tool:
-
-```
-mcp__pal__consensus(
-  models: [
-    {model: "gpt-5.4-pro", stance: "for", stance_prompt: "Argue beads ARE ready"},
-    {model: "gpt-5.4-pro", stance: "against", stance_prompt: "Argue beads are NOT ready"}
-  ],
-  step: "<oracle prompt with beads>"
-)
-```
+Use `/swarm-oracle` with the oracle prompt above and its bead-readiness stance prompts. It
+runs one FOR stance and one AGAINST stance, and it holds the exact invocation.
 
 ### Processing Oracle Findings
 
