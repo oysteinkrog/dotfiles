@@ -104,10 +104,11 @@ The real case that prompted this skill: an artifact named **"The Phone Stays Mou
 for what was simply a phonecam settings brief. Correct name: **"Phonecam Settings
 Brief"**.
 
-- Name it, don't pitch it. A noun phrase, usually two to five words.
+- Name it, don't pitch it. A noun phrase, as short as it can be while still clear.
 - Specific enough to tell it apart from its neighbours. "Product Brief" alone fails.
 - Including the document type (brief, plan, audit, runbook) is helpful, not filler.
-- No colon or dash bolting an explainer onto the name.
+- A colon is fine when the part after it names something, such as a scope or a
+  date ("Hook Audit: Jira and Slack"). It is not fine when it adds a pitch.
 - Headings say what the section covers. "Risks" beats "Risks we are carrying".
 - Keep a published title stable. Readers find a page by its name.
 
