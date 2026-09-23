@@ -84,6 +84,9 @@ Command details that matter:
 - `-o <file>` captures the final message; read the file instead of parsing stdout.
 - Run it from the repo root and make sure that path is trusted in
   `~/.codex/config.toml`; an untrusted worktree blocks on an invisible prompt.
+- Outside a git repo root, add `--skip-git-repo-check`. Without it `codex exec`
+  refuses to start, even when the directory is trusted. This failed an oracle run
+  on 2026-09-23.
 - Put long questions in a prompt file and pass `-` (`codex exec ... - < q.md`)
   instead of a giant positional string.
 
