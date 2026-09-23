@@ -109,10 +109,9 @@ gh api repos/InitialForce/ScDesktop/actions/jobs/<job-id>/logs 2>&1 | tail -60
 4. **Commit the fix:**
    ```bash
    git add <specific-files>
-   git commit -m "<area>: fix <description>
-
-   Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+   git commit -m "<area>: fix <description>"
    ```
+   End the message with the attribution lines the session gives you.
 
 ### Step 5: Push and Restart
 
