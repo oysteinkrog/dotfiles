@@ -131,7 +131,7 @@ Every page MUST follow these non-negotiable rules:
 - Line height: 1.3–1.45 (unitless)
 - Line length: max-width 65ch on prose containers
 - Proper heading hierarchy (max 3 levels, minimal size jumps)
-- Curly quotes (" " ' '), em dashes (—), en dashes (–)
+- Curly quotes (" " ' '), en dashes (–) for ranges; never em dashes
 - Bold OR italic for emphasis, never both
 - font-kerning: normal
 
