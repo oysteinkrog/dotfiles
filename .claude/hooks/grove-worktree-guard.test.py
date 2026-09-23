@@ -50,6 +50,36 @@ cases = [
     ("git clone git@github.com:foo/bar.git", UNGUARDED_CWD, False),
     # --- extra: quoted mention as the WHOLE command line still doesn't match ---
     ('echo "git clone https://github.com/foo/bar.git"', GUARDED_CWD, False),
+    # --- grove list: blocked (17+ min status scan on WSL1) ---
+    ("grove list", UNGUARDED_CWD, True),
+    ("grove list --short", GUARDED_CWD, True),
+    ("grove list --json", UNGUARDED_CWD, True),
+    ("grove list --no-status", UNGUARDED_CWD, True),
+    ("grove --repo desktop list", UNGUARDED_CWD, True),
+    ("grove -v list --short", UNGUARDED_CWD, True),
+    ("~/.cargo/bin/grove list", UNGUARDED_CWD, True),
+    ("cd /c/work/desktop && grove list | head", UNGUARDED_CWD, True),
+    # --- grove list: allowed near-misses ---
+    ("grove list --help", UNGUARDED_CWD, False),
+    ("grove list -h", UNGUARDED_CWD, False),
+    ("grove help list", UNGUARDED_CWD, False),
+    ("grove repo list", UNGUARDED_CWD, False),
+    ("grove path mytag", UNGUARDED_CWD, False),
+    ("grove status mytag", UNGUARDED_CWD, False),
+    ('echo "never run grove list here"', UNGUARDED_CWD, False),
+    ('br update bd-1 --description "deny grove list and grove done --force"', UNGUARDED_CWD, False),
+    ("rg 'grove list' ~/.claude/skills", UNGUARDED_CWD, False),
+    ("grove list  # noqa: grove-worktree", UNGUARDED_CWD, False),
+    # --- grove done --force: blocked ---
+    ("grove done mytag --force", UNGUARDED_CWD, True),
+    ("grove done --force", GUARDED_CWD, True),
+    ("grove done --force --keep-remote mytag", UNGUARDED_CWD, True),
+    # --- grove done: allowed near-misses ---
+    ("grove done mytag", UNGUARDED_CWD, False),
+    ("grove done mytag --keep-local", UNGUARDED_CWD, False),
+    ("grove done --help", UNGUARDED_CWD, False),
+    ("grove done --force --help", UNGUARDED_CWD, False),
+    ("grove repo remove old --force", UNGUARDED_CWD, False),
 ]
 
 
