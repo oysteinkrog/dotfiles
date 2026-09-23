@@ -23,7 +23,7 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 > **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
 > primary oracle. By default the FOR/AGAINST sessions below run as two `codex exec`
-> calls, one per stance, and that is enough on its own. Fable (`claude-fable-5`) is the
+> calls, one per stance, and that is enough on its own. Fable is the
 > secondary oracle: add a Fable FOR/AGAINST pair for high-stakes or contested
 > validations, and use it as the whole debate when Codex is unavailable (Fable is not
 > reachable through PAL). See `/consult-oracles` and the Oracle Consultation Policy in

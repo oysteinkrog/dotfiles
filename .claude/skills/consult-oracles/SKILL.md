@@ -10,7 +10,7 @@ context: fork
 
 Get expert analysis by consulting AI models. **GPT-6 Astra (`gpt-6-astra`, reached
 through the Codex CLI) is the primary oracle and the default choice, used on its
-own.** Fable (`claude-fable-5`) is the secondary oracle: add it when the question is
+own.** Fable is the secondary oracle: add it when the question is
 high-stakes or the answer is contested, and use it as the fallback when Codex or
 Astra is unavailable.
 
@@ -32,7 +32,7 @@ effort only applies to the Codex call; Fable subagents have no effort knob.
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
 | **GPT-6 Astra** (`gpt-6-astra`) | Codex CLI (see `/codex` skill): `codex exec --sandbox read-only -m gpt-6-astra -c model_reasoning_effort=<effort> "<question>" < /dev/null` | **Default: all oracle consultations.** Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
-| **Fable** (`claude-fable-5`) | Fresh subagent via `Agent` tool with `model: "fable"` | Secondary oracle. Add it for high-stakes or contested questions, when the user asks for a second opinion, or as the primary when Codex/Astra is unreachable |
+| **Fable** | Fresh subagent via `Agent` tool with `model: "fable"` | Secondary oracle. Add it for high-stakes or contested questions, when the user asks for a second opinion, or as the primary when Codex/Astra is unreachable |
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Astra is unreachable and the Fable spawn also fails. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted, or Codex is unavailable and a GPT view is still needed |
 | `gpt-5.6-sol` / `gpt-5.6-terra` | Codex CLI | Rarely; prior-generation GPT probe |
