@@ -12,7 +12,7 @@ In Norwegian: warmer, longer sentences, embedded clauses, affectionate teasing h
 
 ### Core Rules
 
-1. **Declarative by default.** State things flatly. Trust the content to land. No hedging ("perhaps", "might", "sort of").
+1. **Declarative by default.** State things flatly. Trust the content to land. No filler hedges ("perhaps", "might", "sort of"). When something is genuinely uncertain, say so plainly once: "Not verified yet." "Estimate, not measured."
 2. **No exclamation marks in English prose.** Reserve them for Norwegian when warmth calls for it.
 3. **No em dashes (—). Ever.** Banned in all registers, all channels, all languages. Use colons to punch definitions. Parentheses for asides. Periods for hard breaks. Bold for emphasis. If a sentence reaches for an em dash, it is two sentences.
 4. **Data anchors claims.** Even personal claims get a number. "372+ voice commands." "125K+ Google searches." Assertion without evidence is incomplete.
