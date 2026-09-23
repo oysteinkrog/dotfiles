@@ -186,6 +186,8 @@ reconstruct-failed,precorruption}-*` file. On the last move that was 1.4 GB of t
 
 ## Clean restarts
 
+Restarting the pm2-managed `mcp-agent-mail` service with the commands in this skill is the named exception to "never kill a process you did not start".
+
 ```bash
 pm2 restart mcp-agent-mail && pm2 save      # no env change
 am doctor drain                              # must say safe_to_mutate before any repair
