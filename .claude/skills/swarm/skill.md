@@ -1,3 +1,8 @@
+---
+name: swarm
+description: Start and manage an execution swarm of Claude Code teammates that each implement one bead from br, commit to the shared branch and exit. Use when the user says "swarm", "start swarm", "launch swarm", "run swarm", "assign bead X", "run bead X", "start agents" or "spawn agents".
+---
+
 # Swarm (Execution)
 
 Start and manage an **execution swarm** — Claude Code teammates implementing beads from
@@ -31,9 +36,6 @@ Activate when the user says:
 - A bead ID (starts with `bd-`) → **assign that single bead** (section B)
 - `kill` or `stop` → **stop** the swarm (section C)
 - `status` → delegate to `/swarm-status`
-
----
-name: swarm
 
 ### A. Start a swarm
 
