@@ -203,8 +203,8 @@ names customers, staff or unreleased plans. The binding company policy is
 
 `cass` searches 14K+ indexed agent sessions. `cm` extracts procedural rules from them.
 
-- **Start significant work with** `cm context "<task>" --json --limit 5 --no-history`, and
-  close it with `cm outcome success` or `cm outcome failure`. Leave feedback inline as
+- **Start significant work with** `cm context "<task>" --json --limit 5`. There is no
+  closing command: `cm outcome` needs the rule ids you were shown. Leave feedback inline as
   `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`.
 - **Never run `cass index --semantic`, and never `cass-gpu index`.** One mixes vector
   provenance, the other hits a memory regression. `cass` is the stock build; `cass-gpu` is a
