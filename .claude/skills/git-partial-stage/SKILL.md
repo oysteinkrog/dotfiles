@@ -19,7 +19,7 @@ Stage individual change groups (sub-hunk granularity) without interactive prompt
 
 ## Tool
 
-The helper script lives at `~/.claude/skills/partial-stage/partial-stage.py`.
+The helper script lives at `~/.claude/skills/git-partial-stage/partial-stage.py`.
 It parses diffs into individually selectable "change groups" — contiguous
 blocks of added/removed lines within a hunk — so you can stage at finer
 granularity than whole hunks.
@@ -31,28 +31,28 @@ granularity than whole hunks.
 ### Show change groups in a file
 
 ```bash
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file>
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file> --verbose    # include context
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file> --grep "pattern"  # filter by regex
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file> --group 5    # show one group
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file> --cached     # show staged changes
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file>
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file> --verbose    # include context
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file> --grep "pattern"  # filter by regex
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file> --group 5    # show one group
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file> --cached     # show staged changes
 ```
 
 ### Stage specific groups
 
 ```bash
 # By group number (comma-separated, ranges supported)
-python3 ~/.claude/skills/partial-stage/partial-stage.py stage <file> --groups 2,5,7-9
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py stage <file> --groups 2,5,7-9
 
 # By pattern match (searches in diff lines and surrounding context)
-python3 ~/.claude/skills/partial-stage/partial-stage.py stage <file> --grep "lightbox"
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py stage <file> --grep "lightbox"
 ```
 
 ### Unstage specific groups
 
 ```bash
-python3 ~/.claude/skills/partial-stage/partial-stage.py unstage <file> --groups 3
-python3 ~/.claude/skills/partial-stage/partial-stage.py unstage <file> --grep "pattern"
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py unstage <file> --groups 3
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py unstage <file> --grep "pattern"
 ```
 
 ## Workflow
@@ -67,10 +67,10 @@ git diff --stat HEAD
 
 ```bash
 # See all groups in the file
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file>
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file>
 
 # If the user describes what they want to stage, use --grep to find it
-python3 ~/.claude/skills/partial-stage/partial-stage.py show <file> --grep "keyword"
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py show <file> --grep "keyword"
 ```
 
 Present the groups to the user and ask which ones to stage.
@@ -78,9 +78,9 @@ Present the groups to the user and ask which ones to stage.
 ### Step 3: Stage the selected groups
 
 ```bash
-python3 ~/.claude/skills/partial-stage/partial-stage.py stage <file> --groups <selection>
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py stage <file> --groups <selection>
 # or
-python3 ~/.claude/skills/partial-stage/partial-stage.py stage <file> --grep "keyword"
+python3 ~/.claude/skills/git-partial-stage/partial-stage.py stage <file> --grep "keyword"
 ```
 
 The script automatically:
