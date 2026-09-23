@@ -75,15 +75,22 @@ AGAINST pass over a large bead set or a design spanning several independent
 subsystems:
 
 ```bash
-codex exec --sandbox read-only -m gpt-6-astra -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh \
   -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." < /dev/null 2>/dev/null
-codex exec --sandbox read-only -m gpt-6-astra -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh \
   -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." < /dev/null 2>/dev/null
 ```
 
 `< /dev/null` is required: without a stdin source `codex exec` blocks forever on
 "Reading additional input from stdin" and looks like a slow model. `-o <file>`
 captures the final message; read the file rather than parsing stdout.
+
+Do not pass `--sandbox read-only`. On WSL1 the sandbox cannot start, so Astra cannot
+read any file and answers from the prompt alone, while still exiting 0. The default
+`sandbox_mode` in `~/.codex/config.toml` lets it read the repo. Before the two long
+runs, send one cheap probe: ask Astra for the title and line count of one known file,
+check both, and run `git status` afterwards to confirm it wrote nothing. A stance
+answer that cites no file or line was not read from the repo.
 
 Then skip to Step 4 and synthesize the two responses yourself.
 
