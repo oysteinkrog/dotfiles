@@ -100,8 +100,10 @@ Rules, all hard:
 - **Never commit a secret.** If you see one going into a tracked file, stop and say so.
 - **Reference by env-var name** in scripts and configs, never by value, and wrap the
   consuming command in `with-secrets KEY -- ...`.
-- **Nothing proprietary leaves the machine without approval.** Codex and PAL calls go to an
-  external provider. Without approval, run the consultation on Fable and say why.
+- **Nothing proprietary goes to a non-Anthropic provider without approval.** Claude
+  subagents (Opus, Sonnet, Fable) use the same approved Anthropic boundary as this session,
+  so they need no extra approval. Codex, PAL and any other provider do. Without approval,
+  run the consultation on Fable and say why.
 - Add a credential by appending to `~/.config/secrets/.env`, then run
   `~/bin/refresh-secrets-list`. Rotate by editing the value in place. New shells and
   `with-secrets` calls pick it up at once; long-running shells need `exec fish`.
