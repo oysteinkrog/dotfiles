@@ -185,11 +185,6 @@
           },
           {
             "type": "command",
-            "command": "cm outcome success 2>/dev/null || true",
-            "async": true
-          },
-          {
-            "type": "command",
             "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
@@ -263,11 +258,6 @@
           {
             "type": "command",
             "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state ZXJyb3I=",
-            "async": true
-          },
-          {
-            "type": "command",
-            "command": "cm outcome failure 2>/dev/null || true",
             "async": true
           },
           {
