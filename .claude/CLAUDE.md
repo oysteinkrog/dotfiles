@@ -199,19 +199,16 @@ names customers, staff or unreleased plans. The binding company policy is
 
 **Load `publish-site` to publish.** It owns the branches, checkout paths and URL layout.
 
-## CASS and cm
+## CASS
 
-`cass` searches 14K+ indexed agent sessions. `cm` extracts procedural rules from them.
+`cass` searches 14K+ indexed agent sessions.
 
-- **Start significant work with** `cm context "<task>" --json --limit 5`. There is no
-  closing command: `cm outcome` needs the rule ids you were shown. Leave feedback inline as
-  `// [cass: helpful b-xyz]` or `// [cass: harmful b-xyz]`.
 - **Never run `cass index --semantic`, and never `cass-gpu index`.** One mixes vector
   provenance, the other hits a memory regression. `cass` is the stock build; `cass-gpu` is a
   custom GPU build that reports its version as 0.6.0, so do not let `cass upgrade` overwrite
   it.
-- Load `cass` for session archaeology and `cass-memory` for the memory system. The full
-  setup and recovery runbook is `~/.dotfiles/docs/cass-setup.md`.
+- Load `cass` for session archaeology. The full setup and recovery runbook is
+  `~/.dotfiles/docs/cass-setup.md`.
 
 ## Second opinion on images
 
