@@ -71,6 +71,15 @@ if [[ ${#SKILLS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# Known-good matches, as "path:pattern". cm 0.2.9 ships claude-sonnet-4-20250514
+# as its default model, so the cass-memory docs quote it correctly.
+PIN_ALLOW=(
+    ".claude/skills/cass-memory/references/ARCHITECTURE.md:claude-sonnet-4-2"
+)
+
+# Tracked dirs under skills/ that hold scripts, not skills.
+NOT_SKILLS=(lab-deploy)
+
 FAILURES=0
 fail() {
     echo "$1: $2"
@@ -93,6 +102,7 @@ if [[ ${#FILES[@]} -gt 0 ]]; then
     while IFS= read -r hit; do
         file="${hit%%:*}"; rest="${hit#*:}"; line="${rest%%:*}"
         match=$(grep -oP "$PIN_RE" <<<"${rest#*:}" | head -1)
+        [[ " ${PIN_ALLOW[*]} " == *" $file:$match "* ]] && continue
         fail "$file:$line" "stale model pin '$match'"
     done < <(cd "$REPO" && grep -nHP "$PIN_RE" -- "${FILES[@]}" || true)
 fi
@@ -103,6 +113,7 @@ declare -A BODY_OWNER=()
 for s in "${SKILLS[@]}"; do
     skill_md=$(git -C "$REPO" ls-files -- "$SKILLS_REL/$s/" \
         | grep -iE "^$SKILLS_REL/$s/skill\.md$" | head -1 || true)
+    [[ " ${NOT_SKILLS[*]} " == *" $s "* ]] && continue
     if [[ -z "$skill_md" ]]; then
         fail "$SKILLS_REL/$s" "no SKILL.md"
         continue
