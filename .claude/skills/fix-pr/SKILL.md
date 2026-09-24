@@ -29,12 +29,12 @@ Poll a PR's check status, diagnose failures, fix them, push, and repeat until al
 
 ## Inputs
 
-- **PR number or URL** — if not provided, detect from current branch:
+- **PR number or URL**: if not provided, detect from current branch:
   ```bash
   gh pr view --json number,url,headRefName 2>/dev/null
   ```
 - If no PR exists for the current branch, abort with a message.
-- **Repository** — detect `OWNER/REPO` from the current checkout and use it as `<repo>` below:
+- **Repository**: detect `OWNER/REPO` from the current checkout and use it as `<repo>` below:
   ```bash
   gh repo view --json nameWithOwner --jq .nameWithOwner
   ```
@@ -102,7 +102,7 @@ Read the failed step's log to see the exact command CI ran. Run that command loc
 
 1. **Read the relevant source files**
 2. **Make the fix**
-3. **Verify locally** — build/test to confirm
+3. **Verify locally**: build and test to confirm
 4. **Commit the fix:**
    ```bash
    git add <specific-files>
