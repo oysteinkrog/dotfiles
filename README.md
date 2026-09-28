@@ -1,6 +1,7 @@
 # Dotfiles
 
-Personal dotfiles for WSL (Ubuntu 24.04) and native Linux (CachyOS/Arch). Symlinked via `install.sh`.
+Personal dotfiles for native Linux (CachyOS/Arch) and WSL (Ubuntu 24.04). Symlinked via `install.sh`.
+On Linux, run `setup/bootstrap.sh` (see "Native Linux" below).
 
 `install.sh` checks `/proc/version` for WSL. On native Linux it skips Windows-only
 configs, links `~/.gitconfig.local` to `.gitconfig.linux`, links the systemd user units in
@@ -60,37 +61,10 @@ removed (it lives in git history if wanted again).
 
 ### Native Linux (CachyOS/Arch)
 
-```bash
-sudo pacman -S --needed git git-lfs github-cli fish tmux ripgrep fd jq rsync base-devel \
-  neovim starship rustup uv bun dotnet-sdk nvm tailscale docker docker-compose docker-buildx
-sudo pacman -S --needed 7zip qemu-img ntfs-3g   # only to read the old Windows disk
-
-# Node via nvm
-source /usr/share/nvm/nvm.sh
-nvm install 22.14.0 && nvm alias default 22.14.0
-npm install -g @ast-grep/cli @browserbasehq/browse-cli @getpaseo/cli @google/gemini-cli \
-  @googleworkspace/cli @isaacphi/mcp-gdrive @jetbrains/mcp-proxy @modelcontextprotocol/inspector \
-  @modelcontextprotocol/server-github @openai/codex @poai/mcpm-aider better-ccflare ccexp \
-  codeburn esbuild fieldtheory mcp-remote onnxruntime-node opencode-ai pm2 supergateway
-
-chsh -s /usr/bin/fish
-git lfs install --skip-repo
-gh auth login
-
-# Old WSL paths (/c/users/oystein, /c/work) keep working through these links
-sudo mkdir -p /c/users
-sudo ln -s /home/oystein /c/users/oystein
-sudo ln -s /home/oystein/work /c/work
-```
-
-Then run `./install.sh` (below). It links `~/.claude` to `.dotfiles/.claude` as a whole
-when `~/.claude` does not exist yet (set `CLAUDE_LINK_ITEMS=1` to link single items instead).
-On Linux, agent-mail runs as a systemd user service instead of under PM2:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now agent-mail.service   # am serve-http on port 4809
-```
+Clone to `~/.dotfiles`, restore secrets with `setup/secrets-bundle.sh`, then run
+`setup/bootstrap.sh`. Package lists are in `setup/packages/`. The step-by-step guide and each
+machine's own profile are kept in a private repo, because they name hosts, disks and networks.
+Without a profile, bootstrap applies the shared settings only.
 
 ### Install dotfiles
 

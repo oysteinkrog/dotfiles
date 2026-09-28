@@ -52,3 +52,16 @@ with an auth error, ask Oystein to re-extract them.
 
 The full setup and recovery runbook for a new machine is
 [docs/cass-setup.md](docs/cass-setup.md). The standing rules are in the global file.
+
+## Machine setup
+
+This machine runs native CachyOS. `~/.dotfiles` is a normal repo and `install.sh` symlinks it into
+`~`. The setup and restore system is `setup/bootstrap.sh`. The guide and the machine profiles are
+in the private Life repo (`~/work/Life`): `docs/computers/linux-setup.md` and
+`setup/machines/<hostname>/`. This dotfiles repo is public, so never put hostnames of other
+machines, IP addresses, disk UUIDs, account names or internal repo names here.
+
+When you install a package, change a KDE setting or add a config file that both desktops should
+share, record it: the package lists in `setup/packages/`, the KDE keys in
+`setup/steps/60-desktop.sh`, new links in `install.sh`. Machine-only settings go in the Life
+machine profile, and new procedures in the Life docs.
