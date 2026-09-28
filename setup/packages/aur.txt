@@ -1,0 +1,5 @@
+plainlang: skip
+# AUR packages shared by both desktops. Installed with paru -S --needed.
+# pacman -Syu does not update these; use paru -Syu.
+google-chrome
+slack-desktop

@@ -1,0 +1,8 @@
+plainlang: skip
+# Installed only when lspci shows an NVIDIA GPU. The driver itself comes from the
+# CachyOS installer (chwd), so it is not listed here.
+nvtop
+# cuda and cudnn (about 6 GB) were installed for a cass-gpu build that was dropped.
+# cass 0.9 embeds on the CPU, so nothing here needs them. Add them back if a GPU build does.
+# cuda
+# cudnn

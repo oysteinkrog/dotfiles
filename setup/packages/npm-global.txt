@@ -1,0 +1,24 @@
+plainlang: skip
+# npm install -g, under the nvm Node version in node-version.
+# clawdbot and mcp-sentry-ts were on the WSL list but failed to install on Linux.
+@ast-grep/cli
+@browserbasehq/browse-cli
+@getpaseo/cli
+@google/gemini-cli
+@googleworkspace/cli
+@isaacphi/mcp-gdrive
+@jetbrains/mcp-proxy
+@modelcontextprotocol/inspector
+@modelcontextprotocol/server-github
+@openai/codex
+@poai/mcpm-aider
+better-ccflare
+ccexp
+codeburn
+esbuild
+fieldtheory
+mcp-remote
+onnxruntime-node
+opencode-ai
+pm2
+supergateway
