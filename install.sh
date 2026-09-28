@@ -49,6 +49,12 @@ config_dirs=(
   wezterm
 )
 
+# Native Linux (not WSL): skip Windows-only configs and link the Linux git overrides
+if ! grep -qi microsoft /proc/version 2>/dev/null; then
+  config_dirs=("${config_dirs[@]/ConEmu}")
+  linux_links=(".gitconfig.local:.gitconfig.linux")
+fi
+
 # Files inside .claude to symlink individually (not the whole dir — it has runtime state)
 claude_items=(
   CLAUDE.md
@@ -72,6 +78,11 @@ for file in "${files[@]}"; do
   echo "  $file -> $dir/$file"
 done
 
+for pair in "${linux_links[@]}"; do
+  ln -sf "$dir/${pair#*:}" "$HOME/${pair%%:*}"
+  echo "  ${pair%%:*} -> $dir/${pair#*:}"
+done
+
 echo ""
 echo "=== Linking bin ==="
 if [ -e "$HOME/bin" ] && [ ! -L "$HOME/bin" ]; then
@@ -85,6 +96,7 @@ echo ""
 echo "=== Linking .config subdirectories ==="
 mkdir -p "$HOME/.config"
 for sub in "${config_dirs[@]}"; do
+  [ -n "$sub" ] || continue
   if [ -e "$HOME/.config/$sub" ] && [ ! -L "$HOME/.config/$sub" ]; then
     mv "$HOME/.config/$sub" "$olddir/config-$sub"
     echo "  backed up .config/$sub"
