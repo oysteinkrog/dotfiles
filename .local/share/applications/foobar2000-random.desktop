@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Music: Random track
+Exec=/home/oystein/.local/bin/music-control random
+Icon=foobar2000
+NoDisplay=true
+StartupNotify=false

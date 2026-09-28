@@ -1,0 +1,7 @@
+Device: IEM Audioengine D1    {4cada692-65d7-48c7-95d3-8d6eb52621a3}
+Convolution: C:\WORK\AutoEq\results\crinacle\harman_in-ear_2019v2\KZ ZSX\KZ ZSX minimum phase 48000Hz.wav
+Preamp: 8.5 dB
+Include: HeSuVi\hesuvi.txt
+# Device:  Microphone Logitech StreamCam {af35d5ac-2a61-4fbf-8a10-50addc590d48}
+# Include: microphone_blue.txt
+# Include: microphone_own.txt

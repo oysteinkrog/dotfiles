@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Music: Play or pause
+Exec=/home/oystein/.local/bin/music-control playpause
+Icon=foobar2000
+NoDisplay=true
+StartupNotify=false

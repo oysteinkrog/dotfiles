@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Music: Navigator back
+Exec=/home/oystein/.local/bin/music-control back
+Icon=foobar2000
+NoDisplay=true
+StartupNotify=false

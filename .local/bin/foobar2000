@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run the portable foobar2000 from the STORAGE drive in its own Wine prefix.
+export WINEPREFIX="$HOME/.wine-foobar2000"
+export WINEDLLOVERRIDES="mscoree,mshtml="
+export WINEDEBUG=-all
+# Hide udisks from Wine so it does not map USB sticks onto F: and G:.
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent
+FB="/run/media/oystein/STORAGE/MUSIC/foobar20002"
+if [ ! -d "$FB" ]; then
+    udisksctl mount -b /dev/disk/by-label/STORAGE >/dev/null 2>&1
+fi
+# Playlists use F:\ and the library uses G:\, both on the STORAGE drive.
+ln -sfn /run/media/oystein/STORAGE "$WINEPREFIX/dosdevices/f:"
+ln -sfn /run/media/oystein/STORAGE "$WINEPREFIX/dosdevices/g:"
+cd "$FB" && exec wine foobar2000.exe "$@"
