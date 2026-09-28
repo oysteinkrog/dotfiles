@@ -1,0 +1,84 @@
+plainlang: skip
+# Repo packages shared by both desktops. Installed with pacman -S --needed.
+# CachyOS already ships many of the base tools; listing them keeps a plain Arch install working too.
+# Repo names are not pinned: CachyOS picks the v3 or v4 repos for the CPU.
+
+# Base tools
+git
+git-lfs
+github-cli
+fish
+fzy                 # fish-fzy plugin in .config/fish/fishfile
+tmux
+neovim
+ripgrep
+fd
+jq
+rsync
+bat
+eza
+fzf
+starship
+wl-clipboard        # wl-copy / wl-paste
+tree
+time
+strace
+hyperfine
+patchutils
+7zip
+paru                # AUR helper, in the cachyos repo
+
+# Build and language toolchains
+base-devel
+cmake
+lld
+mold
+sccache
+rustup
+uv
+ruff
+ty
+bun
+nvm                 # Node itself comes from nvm, see setup/packages/node-version
+dotnet-sdk
+
+# Prebuilt tools that used to live as binaries in ~/bin
+gitui
+hugo
+pandoc-cli
+hcloud
+
+# Containers and VMs
+docker
+docker-compose
+docker-buildx
+qemu-img
+
+# Terminals (the WezTerm fork is built by setup/steps/50-tools.sh; this package is the fallback)
+alacritty
+wezterm
+
+# Remote access
+tailscale
+sunshine            # game-stream host, Moonlight clients connect to it
+krdp                # KDE RDP server
+remmina             # RDP client (use it for the home PC, KRDC fails with Microsoft accounts)
+freerdp
+parsec-bin          # client only, Parsec cannot host on Linux
+
+# Apps
+firefox
+claude-desktop      # pulls in qemu for the Cowork VM
+mission-center
+fooyin              # native foobar2000-style player
+
+# Windows compatibility (portable foobar2000 under Wine)
+wine
+winetricks
+icoutils
+
+# Audio
+noise-suppression-for-voice   # RNNoise LADSPA plugin for the mic filter-chain
+
+# Files and disks
+ntfs-3g
