@@ -1,0 +1,14 @@
+[Unit]
+Description=WezTerm mux server (keeps terminal sessions alive without a window)
+Documentation=https://wezterm.org/multiplexing.html
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wezterm-mux-server
+Restart=on-failure
+RestartSec=2
+# Let sessions finish writing on shutdown before they are killed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

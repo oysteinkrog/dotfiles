@@ -28,10 +28,16 @@ wezterm.on("close_other_tabs", function(window, pane)
   end
 end)
 
--- Quake-style: top of screen, full width, 40% height, no title bar
-config.window_decorations = 'RESIZE'
+-- Quake-style: top of screen, full width, 40% height, no title bar (Windows).
+-- On Linux/Wayland wezterm draws its own (odd-looking) frame for any
+-- non-default value; only the default asks KDE to draw the native one.
+if wezterm.target_triple:find('windows') then
+  config.window_decorations = 'RESIZE'
+end
 
 local function reposition_window(win)
+  -- Frankenterm has no wezterm.gui.screens; leave the window where it is there
+  if not (wezterm.gui and wezterm.gui.screens) then return end
   local screen = wezterm.gui.screens().main
   local width = screen.width * 0.9
   local height = screen.height * 0.8
@@ -51,11 +57,57 @@ wezterm.on('gui-startup', function(cmd)
   window:gui_window():set_inner_size(screen.width * 0.9, screen.height * 0.8)
 end)
 
--- Default program: Ubuntu WSL
-config.default_prog = { 'wsl.exe', '-d', 'Ubuntu' }
+local is_windows = wezterm.target_triple:find('windows') ~= nil
+
+if is_windows then
+  -- Default program: Ubuntu WSL
+  config.default_prog = { 'wsl.exe', '-d', 'Ubuntu' }
+else
+  -- Linux: sessions live in wezterm-mux-server (systemd user unit wezterm-mux.service),
+  -- so they survive closing the window. The GUI attaches to it on start.
+  config.unix_domains = { { name = 'unix' } }
+  config.default_gui_startup_args = { 'connect', 'unix' }
+
+  -- When the mux server starts (at boot), reopen the Claude Code sessions that
+  -- were still open at shutdown. claude-persist.sh plan prints one line per
+  -- session: <cwd> TAB <tab title> TAB <shell command>.
+  wezterm.on('mux-startup', function()
+    local window
+    local plan = io.popen('bash ' .. wezterm.home_dir .. '/.claude/hooks/claude-persist.sh plan')
+    if plan then
+      for line in plan:lines() do
+        local cwd, title, cmd = line:match('^([^\t]*)\t([^\t]*)\t(.*)$')
+        if cwd then
+          -- run claude, then keep a shell open in the tab when it exits
+          local spec = { cwd = cwd, args = { 'bash', '-c', cmd .. '; exec fish -l' } }
+          local tab
+          if window then
+            tab = window:spawn_tab(spec)
+          else
+            tab, _, window = mux.spawn_window(spec)
+          end
+          tab:set_title(title)
+        end
+      end
+      plan:close()
+    end
+    -- always leave at least one window with a plain shell
+    if not window then mux.spawn_window({}) end
+  end)
+
+  -- 'connect' skips gui-startup, so size the window when it attaches instead
+  wezterm.on('gui-attached', function(domain)
+    for _, w in ipairs(mux.all_windows()) do
+      -- the gui window may not exist yet when this fires; skip it then
+      local ok, gw = pcall(function() return w:gui_window() end)
+      if ok and gw then reposition_window(gw) end
+    end
+  end)
+end
 
 -- Font (matching Windows Terminal)
-config.font = wezterm.font('DejaVu Sans Mono for Powerline')
+-- Linux has plain DejaVu Sans Mono; wezterm draws the powerline glyphs itself
+config.font = wezterm.font(is_windows and 'DejaVu Sans Mono for Powerline' or 'DejaVu Sans Mono')
 config.font_size = 11
 
 -- Cursor (matching Windows Terminal: filledBox, white)
@@ -98,10 +150,13 @@ config.window_close_confirmation = 'NeverPrompt'
 config.use_fancy_tab_bar = false
 config.tab_max_width = 32
 
--- Vertical tab bar (Left or Right)
-config.tab_bar_position = 'Left'
-config.vertical_tab_width = 25
-config.vertical_tab_cell_height = 1
+-- Vertical tab bar (Left or Right). Only the oysteinkrog/wezterm fork has these
+-- options; stock wezterm rejects them, so skip them there instead of failing.
+pcall(function()
+  config.tab_bar_position = 'Left'
+  config.vertical_tab_width = 25
+  config.vertical_tab_cell_height = 1
+end)
 
 -- Pad tab index to fixed width so titles align
 -- Prefer explicitly set tab title (from `wezterm cli set-tab-title`)
@@ -171,15 +226,6 @@ config.colors = {
             fg_color = '#AAAAAA',
             italic = true,
         },
-        inactive_tab_bell = {
-            bg_color = '#8B4513', -- dark orange/brown for bell
-            fg_color = '#FFFFFF',
-        },
-        inactive_tab_bell_hover = {
-            bg_color = '#A0522D', -- slightly lighter when hovering
-            fg_color = '#FFFFFF',
-            italic = true,
-        },
     },
     ansi = {
         '#000000', -- black
@@ -202,5 +248,58 @@ config.colors = {
         '#ECF0F1', -- bright white
     },
 }
+
+local bell_bg, bell_hover_bg = '#8B4513', '#A0522D' -- dark orange/brown
+
+-- Linux: Nord, matching ~/.config/alacritty/alacritty.toml
+if not is_windows then
+  config.font = wezterm.font('Noto Sans Mono') -- what alacritty's "monospace" resolves to
+  config.font_size = 12
+  config.default_cursor_style = 'SteadyUnderline'
+  config.window_background_opacity = 0.97
+  config.bold_brightens_ansi_colors = 'BrightAndBold'
+
+  config.colors = {
+    foreground = '#D8DEE9',
+    background = '#2E3440',
+    cursor_bg = '#D8DEE9',
+    cursor_fg = '#2E3440',
+    cursor_border = '#D8DEE9',
+    selection_bg = '#4C566A',
+    selection_fg = '#ECEFF4',
+    tab_bar = {
+      background = '#272C36', -- a shade darker than the terminal
+      active_tab = { bg_color = '#3B4252', fg_color = '#ECEFF4', intensity = 'Bold' },
+      inactive_tab = { bg_color = '#2E3440', fg_color = '#8A93A5' },
+      inactive_tab_hover = { bg_color = '#434C5E', fg_color = '#D8DEE9', italic = true },
+      new_tab = { bg_color = '#272C36', fg_color = '#8A93A5' },
+      new_tab_hover = { bg_color = '#434C5E', fg_color = '#D8DEE9' },
+    },
+    ansi = {
+      '#3B4252', '#BF616A', '#A3BE8C', '#EBCB8B',
+      '#81A1C1', '#B48EAD', '#88C0D0', '#E5E9F0',
+    },
+    brights = {
+      '#4C566A', '#BF616A', '#A3BE8C', '#EBCB8B',
+      '#81A1C1', '#B48EAD', '#8FBCBB', '#ECEFF4',
+    },
+  }
+  bell_bg, bell_hover_bg = '#D08770', '#E0A08A' -- Nord orange
+end
+
+-- Bell tab colors: fork-only, like the vertical tab options above
+pcall(function()
+  local colors = config.colors
+  colors.tab_bar.inactive_tab_bell = {
+    bg_color = bell_bg,
+    fg_color = is_windows and '#FFFFFF' or '#2E3440',
+  }
+  colors.tab_bar.inactive_tab_bell_hover = {
+    bg_color = bell_hover_bg,
+    fg_color = is_windows and '#FFFFFF' or '#2E3440',
+    italic = true,
+  }
+  config.colors = colors
+end)
 
 return config
