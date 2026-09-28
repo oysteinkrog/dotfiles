@@ -232,3 +232,7 @@
 	process = git-lfs filter-process
 	required = true
 	clean = git-lfs clean -- %f
+
+# Per-machine overrides (for example .gitconfig.linux on native Linux). A missing file is ignored.
+[include]
+    path = ~/.gitconfig.local

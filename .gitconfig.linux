@@ -1,0 +1,15 @@
+# Native Linux overrides, linked to ~/.gitconfig.local by install.sh.
+
+[core]
+    editor = nvim
+
+# Drop the Windows wincred helper from .gitconfig and use gh for GitHub.
+[credential]
+    helper =
+    helper = cache --timeout=28800
+[credential "https://github.com"]
+    helper =
+    helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+    helper =
+    helper = !gh auth git-credential
