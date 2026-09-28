@@ -55,9 +55,11 @@ same gate on anything about to reach a person and hands back findings on failure
 - **Verify state before assuming it.** Check `git log` and the file tree to see what is
   actually implemented rather than only planned.
 - **Clarifying questions go to Oystein**, never to colleagues over Slack or email.
-- **Ask before installing apt packages.** Passwordless sudo is configured for `apt` and
-  `apt-get` only, so you can run `sudo apt install <pkg>` yourself, but name the packages and
-  get approval first. Anything needing broader sudo goes to Oystein to run.
+- **Ask before installing system packages.** Use `pacman` (or `paru` for AUR) on
+  Arch/CachyOS and `apt` on Ubuntu/WSL. Passwordless sudo is configured for the package
+  manager (`pacman`, or `apt` and `apt-get`), so you can run `sudo pacman -S <pkg>` or
+  `sudo apt install <pkg>` yourself, but name the packages and get approval first. Anything
+  needing broader sudo goes to Oystein to run.
 - **Always use `AskUserQuestion` when you need input.** A question in plain text does not
   reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
   multiple-choice or clarifying question, and for open questions too, so there is a clear
