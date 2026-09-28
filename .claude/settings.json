@@ -160,6 +160,16 @@
             "command": "bash ~/.claude/hooks/plain-language-health.sh"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/claude-persist.sh hook-start",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -170,6 +180,16 @@
             "type": "command",
             "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/claude-persist.sh hook-end",
+            "timeout": 10
           }
         ]
       }
