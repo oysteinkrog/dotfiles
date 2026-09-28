@@ -1,52 +1,86 @@
 #!/usr/bin/env bash
 # claude-persist: keep a list of open interactive Claude Code sessions and
-# resume them in the wezterm mux after a reboot.
+# resume them in the terminal mux server (wezterm or Frankenterm) after a reboot.
 #
-#   claude-persist.sh hook-start   SessionStart hook (JSON on stdin)
-#   claude-persist.sh hook-end     SessionEnd hook (JSON on stdin)
-#   claude-persist.sh plan         print sessions to resume (cwd, title, command)
-#   claude-persist.sh restore      resume every recorded session in wezterm
-#   claude-persist.sh list         show recorded sessions
-#   claude-persist.sh forget ID    drop one session from the list
+#   claude-persist.sh hook-start      SessionStart hook (JSON on stdin)
+#   claude-persist.sh hook-end        SessionEnd hook (JSON on stdin)
+#   claude-persist.sh capture [UNIT]  record the sessions running right now,
+#                                     optionally only those inside a systemd
+#                                     user unit (e.g. wezterm-mux.service)
+#   claude-persist.sh plan            print sessions to resume (cwd, title, command)
+#   claude-persist.sh restore         resume every recorded session with `wezterm cli`
+#   claude-persist.sh list            show recorded sessions
+#   claude-persist.sh forget KEY      drop one entry (file name without .json)
 #
-# State: ~/.local/state/claude-persist/sessions/<session_id>.json
+# State: ~/.local/state/claude-persist/sessions/<session_id>@<folder>.json.
+# The key includes the folder because one session id can be open in two
+# folders (sessions copied between projects keep their id).
 # Set CLAUDE_PERSIST=0 in a session's environment to keep it off the list.
 
 set -u
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-persist"
 SESS_DIR="$STATE_DIR/sessions"
-MUX_UNIT="wezterm-mux.service"
+CLAUDE_SESSIONS="$HOME/.claude/sessions"   # Claude writes <pid>.json here per process
 WEZTERM="$HOME/.local/bin/wezterm"
+AIOLOS_RC="$HOME/.config/aiolos-rc/aiolos-rc"
 # full path: at boot the mux server may not have ~/.local/bin on PATH
 CLAUDE_BIN="${CLAUDE_PERSIST_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 
-# Walk up from the hook process to the claude process that ran it.
+# Claude's project folder name for a cwd: every non-alphanumeric char becomes '-'.
+project_slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
+
+entry_file() { printf '%s/%s@%s.json' "$SESS_DIR" "$1" "$(project_slug "$2")"; }
+
+parent_of() { awk '{print $4}' "/proc/$1/stat" 2>/dev/null; }
+
+# Walk up from the hook process to the Claude process that ran it. The process
+# name is not reliable (it is the version number, or ld-linux), so look for
+# the per-process file Claude keeps in ~/.claude/sessions.
 find_claude_pid() {
   local p=$PPID
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-    [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "claude" ] && { echo "$p"; return 0; }
-    p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+    [ -f "$CLAUDE_SESSIONS/$p.json" ] && { echo "$p"; return 0; }
+    p=$(parent_of "$p")
   done
   return 1
 }
 
-# Print the launch flags worth keeping on resume, one per line.
-# Session-picking flags (--resume, --continue, --session-id), headless
-# flags and the initial prompt are dropped.
+# Is this pid a live Claude process for the given session id?
+claude_alive() {
+  local pid=$1 sid=$2
+  [ "$pid" -gt 0 ] && [ -d "/proc/$pid" ] && [ -f "$CLAUDE_SESSIONS/$pid.json" ] \
+    && [ "$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)" = "$sid" ]
+}
+
+# The systemd user unit a process runs in, e.g. wezterm-mux.service.
+unit_of() {
+  sed -n 's#^0::.*/\([^/]*\.service\)\(/.*\)\?$#\1#p' "/proc/$1/cgroup" 2>/dev/null | tail -1
+}
+
+# Print the Claude flags worth keeping on resume, one per line. Dropped:
+# session picking (--resume, --continue, --session-id), headless flags, the
+# initial prompt, and what the aiolos-rc wrapper adds by itself on every start
+# (its temporary --settings file and --dangerously-skip-permissions).
 keep_flags() {
+  local pid=$1 via_wrapper=$2
   local -a argv
-  mapfile -d '' -t argv < "/proc/$1/cmdline"
-  local i=1 a
+  mapfile -d '' -t argv < "/proc/$pid/cmdline"
+  local i=1 a v
   while [ $i -lt ${#argv[@]} ]; do
     a=${argv[$i]}
     case "$a" in
-      --dangerously-skip-permissions|--allow-dangerously-skip-permissions|--verbose|--ide|--chrome|--no-chrome)
+      --dangerously-skip-permissions)
+        [ "$via_wrapper" = 1 ] || printf '%s\n' "$a" ;;
+      --allow-dangerously-skip-permissions|--verbose|--ide|--chrome|--no-chrome)
         printf '%s\n' "$a" ;;
-      --model|--permission-mode|--add-dir|--agent|--settings|--mcp-config|--effort|--fallback-model|--append-system-prompt|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools|--plugin-dir)
+      --settings)
+        i=$((i + 1)); v=${argv[$i]:-}
+        case "$v" in */aiolos-rc-settings.*) ;; *) printf '%s\n%s\n' "$a" "$v" ;; esac ;;
+      --model|--permission-mode|--add-dir|--agent|--mcp-config|--effort|--fallback-model|--append-system-prompt|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools|--plugin-dir)
         printf '%s\n' "$a"
         i=$((i + 1)); [ $i -lt ${#argv[@]} ] && printf '%s\n' "${argv[$i]}" ;;
-      --model=*|--permission-mode=*|--add-dir=*|--agent=*|--settings=*|--mcp-config=*|--effort=*|--fallback-model=*)
+      --model=*|--permission-mode=*|--add-dir=*|--agent=*|--mcp-config=*|--effort=*|--fallback-model=*)
         printf '%s\n' "$a" ;;
       -r|--resume|--session-id)
         # optional value: skip it unless it is another flag
@@ -56,54 +90,100 @@ keep_flags() {
   done
 }
 
-is_headless() {
-  tr '\0' '\n' < "/proc/$1/cmdline" | grep -qxE -- '-p|--print|--output-format(=.*)?|--sdk-url(=.*)?'
+# If Claude was started by the aiolos-rc wrapper, print the wrapper's routing
+# options (--no-pin, or --account X), one per line, and return 0.
+wrapper_mode() {
+  local pp; pp=$(parent_of "$1")
+  local -a argv
+  mapfile -d '' -t argv < "/proc/$pp/cmdline" 2>/dev/null || return 1
+  local i found=0
+  for ((i = 0; i < ${#argv[@]}; i++)); do
+    [ "$found" = 0 ] && { [[ "${argv[$i]}" == */aiolos-rc ]] && found=1; continue; }
+    case "${argv[$i]}" in
+      --no-pin) printf '%s\n' --no-pin ;;
+      --account) printf '%s\n%s\n' --account "${argv[$((i + 1))]:-}"; i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ "$found" = 1 ]
+}
+
+# Write the entry for one live Claude process.
+record() {
+  local pid=$1 sid=$2 cwd=$3 name=${4:-}
+  local via=0 launcher='[]' flags transcript
+  if wrapper_mode "$pid" >/dev/null; then
+    via=1
+    launcher=$( { printf '%s\n' "$AIOLOS_RC"; wrapper_mode "$pid"; } | jq -R . | jq -s .)
+  fi
+  flags=$(keep_flags "$pid" "$via" | jq -R . | jq -s .)
+  transcript="$HOME/.claude/projects/$(project_slug "$cwd")/$sid.jsonl"
+  mkdir -p "$SESS_DIR"
+  local f; f=$(entry_file "$sid" "$cwd")
+  jq -n --arg sid "$sid" --arg cwd "$cwd" --arg transcript "$transcript" --arg name "$name" \
+        --argjson pid "$pid" --argjson flags "$flags" --argjson launcher "$launcher" \
+        --arg started "$(date -Is)" \
+        '{session_id:$sid, cwd:$cwd, name:$name, transcript:$transcript, pid:$pid,
+          launcher:$launcher, flags:$flags, started:$started}' \
+    > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 hook_start() {
-  local input sid cwd transcript pid flags
+  local input sid cwd pid kind name
   input=$(cat)
   [ "${CLAUDE_PERSIST:-1}" = "0" ] && return 0
   sid=$(jq -r '.session_id // empty' <<<"$input")
   cwd=$(jq -r '.cwd // empty' <<<"$input")
-  transcript=$(jq -r '.transcript_path // empty' <<<"$input")
   [ -n "$sid" ] && [ -n "$cwd" ] || return 0
   pid=$(find_claude_pid) || return 0
-  is_headless "$pid" && return 0
-
-  mkdir -p "$SESS_DIR"
-  flags=$(keep_flags "$pid" | jq -R . | jq -s .)
-  jq -n --arg sid "$sid" --arg cwd "$cwd" --arg transcript "$transcript" \
-        --argjson pid "$pid" --argjson flags "$flags" \
-        --arg started "$(date -Is)" --arg pane "${WEZTERM_PANE:-}" \
-        '{session_id:$sid, cwd:$cwd, transcript:$transcript, pid:$pid,
-          flags:$flags, started:$started, wezterm_pane:$pane}' \
-    > "$SESS_DIR/$sid.json.tmp" && mv "$SESS_DIR/$sid.json.tmp" "$SESS_DIR/$sid.json"
+  kind=$(jq -r '.kind // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)
+  [ "$kind" = "interactive" ] || return 0
+  name=$(jq -r '.name // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)
+  record "$pid" "$sid" "$cwd" "$name"
 }
 
 hook_end() {
-  local input sid reason
+  local input sid cwd reason f unit
   input=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$input")
+  cwd=$(jq -r '.cwd // empty' <<<"$input")
   reason=$(jq -r '.reason // empty' <<<"$input")
-  [ -n "$sid" ] && [ -f "$SESS_DIR/$sid.json" ] || return 0
-  # Keep the entry when the session dies because the machine or the mux is going down.
+  [ -n "$sid" ] && [ -n "$cwd" ] || return 0
+  f=$(entry_file "$sid" "$cwd")
+  [ -f "$f" ] || return 0
+  # Keep the entry when the session dies because the machine or its mux
+  # server is going down; drop it on a normal exit.
   [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && return 0
-  if [ -n "${WEZTERM_PANE:-}" ]; then
-    case "$(systemctl --user is-active "$MUX_UNIT" 2>/dev/null)" in
+  # The hook runs in the same systemd unit (cgroup) as its Claude process.
+  # Use our own pid: Claude may already have removed ~/.claude/sessions/<pid>.json.
+  unit=$(unit_of $$)
+  if [ -n "${unit:-}" ]; then
+    case "$(systemctl --user is-active "$unit" 2>/dev/null)" in
       deactivating|inactive|failed) return 0 ;;
     esac
   fi
-  rm -f "$SESS_DIR/$sid.json"
-  echo "$(date -Is) ended $sid reason=$reason" >> "$STATE_DIR/events.log"
+  rm -f "$f"
+  echo "$(date -Is) ended $sid ($cwd) reason=$reason" >> "$STATE_DIR/events.log"
 }
 
-wait_for_mux() {
-  local n=0
-  until "$WEZTERM" cli --prefer-mux list >/dev/null 2>&1; do
-    n=$((n + 1)); [ $n -ge 60 ] && return 1
-    sleep 1
+# Record every live interactive Claude session, or only those inside UNIT.
+capture() {
+  local want=${1:-} f pid sid cwd kind name n=0
+  for f in "$CLAUDE_SESSIONS"/*.json; do
+    pid=$(basename "$f" .json)
+    [ -d "/proc/$pid" ] || continue
+    kind=$(jq -r '.kind // empty' "$f"); [ "$kind" = "interactive" ] || continue
+    [ -z "$want" ] || [ "$(unit_of "$pid")" = "$want" ] || continue
+    sid=$(jq -r '.sessionId // empty' "$f"); cwd=$(jq -r '.cwd // empty' "$f")
+    name=$(jq -r '.name // empty' "$f")
+    [ -n "$sid" ] && [ -n "$cwd" ] || continue
+    record "$pid" "$sid" "$cwd" "$name"
+    # plan restores oldest first; date the entry by when the session started
+    local started_ms; started_ms=$(jq -r '.startedAt // empty' "$f")
+    [ -n "$started_ms" ] && touch -d "@$((started_ms / 1000))" "$(entry_file "$sid" "$cwd")"
+    n=$((n + 1)); echo "recorded $sid ${name:+($name) }$cwd"
   done
+  echo "$n session(s) recorded"
 }
 
 # Print one line per session to resume: <cwd> TAB <tab title> TAB <bash command>.
@@ -113,29 +193,43 @@ wait_for_mux() {
 # SessionStart hook writes a fresh entry. Log lines go to restore.log.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
-  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd
+  local log="$STATE_DIR/restore.log" f sid cwd transcript pid name cmd a
   echo "=== plan $(date -Is)" >> "$log"
   # oldest first, so tab order matches start order
   while IFS= read -r f; do
-    sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f")
+    sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f"); name=$(jq -r '.name // empty' "$f")
     transcript=$(jq -r '.transcript // empty' "$f"); pid=$(jq -r '.pid // 0' "$f")
-    if [ "$pid" -gt 0 ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "claude" ]; then
+    if claude_alive "$pid" "$sid"; then
       echo "skip $sid: still running as pid $pid" >> "$log"; continue
     fi
     if [ -n "$transcript" ] && [ ! -s "$transcript" ]; then
-      echo "drop $sid: no transcript (session never had a message)" >> "$log"
+      echo "drop $sid ($cwd): no transcript (session never had a message)" >> "$log"
       mv "$f" "$STATE_DIR/restored/"; continue
     fi
     if [ ! -d "$cwd" ]; then
       echo "drop $sid: folder $cwd is gone" >> "$log"; mv "$f" "$STATE_DIR/restored/"; continue
     fi
 
-    cmd="cd $(printf '%q' "$cwd") && $(printf '%q' "$CLAUDE_BIN") --resume $(printf '%q' "$sid")"
+    cmd="cd $(printf '%q' "$cwd") &&"
+    if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
+      while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.launcher[]' "$f")
+    else
+      cmd+=" $(printf '%q' "$CLAUDE_BIN")"
+    fi
+    cmd+=" --resume $(printf '%q' "$sid")"
     while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.flags[]' "$f")
     mv "$f" "$STATE_DIR/restored/"
     echo "resume $sid ($cwd): $cmd" >> "$log"
-    printf '%s\t%s\t%s\n' "$cwd" "$(basename "$cwd")" "$cmd"
+    printf '%s\t%s\t%s\n' "$cwd" "${name:-$(basename "$cwd")}" "$cmd"
   done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null)
+}
+
+wait_for_mux() {
+  local n=0
+  until "$WEZTERM" cli --prefer-mux list >/dev/null 2>&1; do
+    n=$((n + 1)); [ $n -ge 60 ] && return 1
+    sleep 1
+  done
 }
 
 # Resume sessions into an already running wezterm mux with `wezterm cli`.
@@ -163,7 +257,7 @@ list() {
   for f in "$SESS_DIR"/*.json; do
     [ -e "$f" ] || continue
     found=1
-    jq -r '"\(.session_id)  \(.started)  pid=\(.pid)  \(.cwd)  \(.flags|join(" "))"' "$f"
+    jq -r '"\(.session_id)  \(.name // "-")  pid=\(.pid)  \(.cwd)  \((.launcher // []) + .flags | join(" "))"' "$f"
   done
   [ -n "$found" ] || echo "no recorded sessions"
 }
@@ -171,10 +265,11 @@ list() {
 case "${1:-}" in
   hook-start) [ -d /run/systemd/system ] && hook_start ;;
   hook-end)   [ -d /run/systemd/system ] && hook_end ;;
+  capture)    capture "${2:-}" ;;
   plan)       plan ;;
   restore)    restore ;;
   list)       list ;;
-  forget)     rm -v "$SESS_DIR/${2:?session id}.json" ;;
-  *) sed -n '2,12p' "$0"; exit 1 ;;
+  forget)     rm -v "$SESS_DIR/${2:?entry key}.json" ;;
+  *) sed -n '2,19p' "$0"; exit 1 ;;
 esac
 exit 0
