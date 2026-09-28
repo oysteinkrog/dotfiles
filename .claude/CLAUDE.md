@@ -179,8 +179,8 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
 
 | Repo | Local path | GitHub | Access |
 |------|-----------|--------|--------|
-| **ifkb** | `/c/work/ifkb` | `InitialForce/ifkb` | All employees |
-| **ifboard** | `/c/work/ifboard` | `InitialForce/ifboard` | CEO + CTO only |
+| **ifkb** | `~/work/ifkb` | `InitialForce/ifkb` | All employees |
+| **ifboard** | `~/work/ifboard` | `InitialForce/ifboard` | CEO + CTO only |
 
 Read the target repo's `CLAUDE.md` and `AGENTS.md` when working across repos.
 **ifboard can read ifkb; ifkb must never reference ifboard.**
