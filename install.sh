@@ -73,7 +73,7 @@ mkdir -p "$olddir"
 # link_one SOURCE TARGET: back up a real file at TARGET, then symlink it to SOURCE.
 link_one() {
   local src="$1" dst="$2" name
-  [ -e "$src" ] || { echo "  skip ${src#$dir/} (not in repo)"; return; }
+  [ -e "$src" ] || { echo "  skip ${src#$dir/} (missing)"; return; }
   name="${dst#$HOME/}"
   mkdir -p "$(dirname "$dst")"
   if [ -e "$dst" ] && [ ! -L "$dst" ]; then
@@ -195,12 +195,13 @@ if [ -n "$native_linux" ]; then
     link_one "$dir/$item" "$HOME/$item"
   done
 
-  # Per-machine files from hosts/<hostname>/ (see setup/lib.sh).
+  # Per-machine files from the machine profile in the private Life repo (see setup/lib.sh).
   host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
-  if [ -d "$dir/hosts/$host/pipewire" ]; then
+  host_dir="${DOTFILES_HOSTS:-$HOME/work/Life/setup/machines}/$host"
+  if [ -d "$host_dir/pipewire" ]; then
     echo ""
     echo "=== Linking PipeWire filter-chain files for $host ==="
-    for conf in "$dir/hosts/$host/pipewire"/*.conf; do
+    for conf in "$host_dir/pipewire"/*.conf; do
       [ -e "$conf" ] || continue
       link_one "$conf" "$HOME/.config/pipewire/filter-chain.conf.d/$(basename "$conf")"
     done

@@ -6,7 +6,8 @@
 #   setup/bootstrap.sh --list       list the steps
 #
 # The system step uses sudo and asks for a password, so run this in a real
-# terminal, not through an agent's shell. docs/linux-setup.md is the guide.
+# terminal, not through an agent's shell. The guide is docs/computers/linux-setup.md in
+# the private Life repo.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -45,9 +46,9 @@ fi
 
 echo "dotfiles: $DOTFILES"
 if [ "$HOST_KNOWN" = 1 ]; then
-  echo "host:     $HOST_NAME (hosts/$HOST_NAME/host.sh)"
+  echo "host:     $HOST_NAME ($HOST_DIR/host.sh)"
 else
-  echo "host:     $HOST_NAME (no hosts/$HOST_NAME/, shared settings only; copy hosts/_template to add one)"
+  echo "host:     $HOST_NAME (no profile in $HOSTS_ROOT, shared settings only)"
 fi
 
 for s in "${selected[@]}"; do

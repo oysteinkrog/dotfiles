@@ -3,14 +3,17 @@
 DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 SETUP="$DOTFILES/setup"
 
-# Host profile: hosts/<hostname>/host.sh, or DOTFILES_HOST=<name> to pick another.
+# Machine profile: <DOTFILES_HOSTS>/<hostname>/host.sh. The profiles live in a private
+# repo, cloned to ~/work/Life, because they name disks, networks and devices.
+# DOTFILES_HOST=<name> picks another profile, DOTFILES_HOSTS=<dir> another folder.
+HOSTS_ROOT="${DOTFILES_HOSTS:-$HOME/work/Life/setup/machines}"
 HOST_NAME="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
-HOST_DIR="$DOTFILES/hosts/$HOST_NAME"
+HOST_DIR="$HOSTS_ROOT/$HOST_NAME"
 
 # Defaults a host.sh can override.
 HOST_PACKAGES=()          # extra pacman packages for this machine
 HOST_AUR_PACKAGES=()      # extra AUR packages for this machine
-HOST_PIPEWIRE_CONFS=()    # files in hosts/<name>/pipewire/ to link into filter-chain.conf.d
+HOST_PIPEWIRE_CONFS=()    # files in <profile>/pipewire/ to link into filter-chain.conf.d
 HOST_UFW_LAN=""           # LAN subnet allowed to reach Sunshine and RDP, e.g. 192.168.1.0/24
 HOST_KDE_SCALE=""         # kwinrc [Xwayland] Scale, e.g. 1.1
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)

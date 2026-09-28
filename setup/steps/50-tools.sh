@@ -3,7 +3,7 @@
 # and ~/bin that are not in git.
 #
 # TOOLS_FROM=<ssh host> copies the prebuilt binaries from the other desktop, e.g.
-#   TOOLS_FROM=oystein-office-primary setup/bootstrap.sh tools
+#   TOOLS_FROM=<other-desktop> setup/bootstrap.sh tools
 # REBUILD=1 rebuilds WezTerm and cass even when they are installed.
 
 mkdir -p "$HOME/.local/bin" "$HOME/src" "$HOME/work"
@@ -105,7 +105,7 @@ else
     IFS='|' read -r name where from <<<"$row"
     warn "missing ~/$where/$name: $from"
   done
-  info "copy them from the other desktop with TOOLS_FROM=<host>, see docs/linux-setup.md"
+  info "copy them from the other desktop with TOOLS_FROM=<host>, see docs/computers/linux-setup.md in Life"
 fi
 
 # Old static binaries in ~/bin shadow newer pacman ones because ~/bin is first on PATH.

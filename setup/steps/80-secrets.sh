@@ -6,7 +6,7 @@ while read -r p flag; do
   f="$HOME/${p%/}"
   if [ ! -e "$f" ]; then
     if [ "$flag" = optional ]; then info "missing ~/$p (optional, log in instead)"
-    else warn "missing ~/$p (setup/secrets-bundle.sh unpack, see docs/secrets.md)"; fi
+    else warn "missing ~/$p (setup/secrets-bundle.sh unpack, see docs/computers/secrets.md in Life)"; fi
     continue
   fi
   if [ -d "$f" ]; then

@@ -5,7 +5,7 @@ broken=0
 for l in "$HOME"/.[!.]* "$HOME"/.config/* "$HOME"/.config/systemd/user/* "$HOME"/.local/bin/* \
          "$HOME"/.local/share/applications/* "$HOME"/.config/pipewire/filter-chain.conf.d/*; do
   [ -L "$l" ] || continue
-  case "$(readlink "$l")" in "$DOTFILES"/*) ;; *) continue ;; esac
+  case "$(readlink "$l")" in "$DOTFILES"/*|"$HOSTS_ROOT"/*) ;; *) continue ;; esac
   [ -e "$l" ] || { fail "broken link ${l#$HOME/} -> $(readlink "$l")"; broken=1; }
 done
 [ "$broken" = 0 ] && ok "no broken dotfiles links"
