@@ -5,7 +5,7 @@
 
 set -e
 
-HOME="${HOME:-/mnt/c/Users/Oystein}"
+HOME="${HOME:?HOME is not set}"
 dir="$HOME/.dotfiles"
 olddir="$HOME/.dotfiles_old"
 
@@ -70,8 +70,23 @@ claude_items=(
 
 mkdir -p "$olddir"
 
+# link_one SOURCE TARGET: back up a real file at TARGET, then symlink it to SOURCE.
+link_one() {
+  local src="$1" dst="$2" name
+  [ -e "$src" ] || { echo "  skip ${src#$dir/} (not in repo)"; return; }
+  name="${dst#$HOME/}"
+  mkdir -p "$(dirname "$dst")"
+  if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+    mv "$dst" "$olddir/$(echo "$name" | tr / _)"
+    echo "  backed up $name"
+  fi
+  ln -sfn "$src" "$dst"
+  echo "  $name -> $src"
+}
+
 echo "=== Linking dotfiles ==="
 for file in "${files[@]}"; do
+  [ -e "$dir/$file" ] || { echo "  skip $file (not in repo)"; continue; }
   if [ -e "$HOME/$file" ] && [ ! -L "$HOME/$file" ]; then
     mv "$HOME/$file" "$olddir/"
     echo "  backed up $file"
@@ -99,6 +114,7 @@ echo "=== Linking .config subdirectories ==="
 mkdir -p "$HOME/.config"
 for sub in "${config_dirs[@]}"; do
   [ -n "$sub" ] || continue
+  [ -e "$dir/.config/$sub" ] || { echo "  skip .config/$sub (not in repo)"; continue; }
   if [ -e "$HOME/.config/$sub" ] && [ ! -L "$HOME/.config/$sub" ]; then
     mv "$HOME/.config/$sub" "$olddir/config-$sub"
     echo "  backed up .config/$sub"
@@ -152,6 +168,42 @@ if [ -n "$native_linux" ]; then
   done
   if [ ${#units[@]} -gt 0 ]; then
     echo "  to start them: systemctl --user daemon-reload && systemctl --user enable --now ${units[*]}"
+  fi
+
+  echo ""
+  echo "=== Linking single files (native Linux) ==="
+  # Paths are the same under $HOME and in the repo. Whole files or dirs, so the
+  # app's other files (caches, state) stay out of the repo.
+  linux_items=(
+    .config/alacritty
+    .config/micro/settings.json
+    .config/micro/colorschemes
+    .config/dcg/config.toml
+    .config/pipewire/iem-eq
+    .config/autostart/wezterm.desktop
+    .local/share/applications/org.wezfurlong.wezterm.desktop
+    .local/share/applications/foobar2000.desktop
+    .local/share/applications/foobar2000-back.desktop
+    .local/share/applications/foobar2000-next.desktop
+    .local/share/applications/foobar2000-playpause.desktop
+    .local/share/applications/foobar2000-random.desktop
+    .local/share/icons/hicolor/256x256/apps/foobar2000.png
+    .local/bin/foobar2000
+    .local/bin/music-control
+  )
+  for item in "${linux_items[@]}"; do
+    link_one "$dir/$item" "$HOME/$item"
+  done
+
+  # Per-machine files from hosts/<hostname>/ (see setup/lib.sh).
+  host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
+  if [ -d "$dir/hosts/$host/pipewire" ]; then
+    echo ""
+    echo "=== Linking PipeWire filter-chain files for $host ==="
+    for conf in "$dir/hosts/$host/pipewire"/*.conf; do
+      [ -e "$conf" ] || continue
+      link_one "$conf" "$HOME/.config/pipewire/filter-chain.conf.d/$(basename "$conf")"
+    done
   fi
 
   echo ""
