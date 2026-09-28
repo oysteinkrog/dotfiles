@@ -2,16 +2,16 @@ function grove --description "Git worktree manager (with shell cd support)"
     set -l subcmd $argv[1]
 
     if test "$subcmd" = cd -o "$subcmd" = new -o "$subcmd" = fork -o "$subcmd" = rename -o "$subcmd" = done -o "$subcmd" = mv
-        # On Windows/WSL, directories can't be moved/deleted while any process
-        # has its CWD inside them.  cd the shell out before running the command.
+        # Directories could not be moved or deleted on Windows/WSL while a process
+        # had its CWD inside them, so cd the shell out before running the command.
         # The Python script prints __POSTCD__<path> to tell us where to land.
         set -l saved_dir (pwd -P)
 
         # Tell the Python script where we really were (for auto-detection)
         set -lx GROVE_ORIG_CWD $saved_dir
 
-        # cd to work_dir parent so the worktree directory is unlocked
-        cd /c/WORK
+        # cd out of the worktree so it is not in use while grove changes it
+        cd $HOME/work
 
         # Run the real command, streaming stdout in real-time while
         # capturing __POSTCD__ directives.  stderr goes directly to the
@@ -30,7 +30,7 @@ function grove --description "Git worktree manager (with shell cd support)"
 
         if test $cmd_status -ne 0
             # Command failed, go back
-            cd $saved_dir 2>/dev/null; or cd /c/WORK
+            cd $saved_dir 2>/dev/null; or cd $HOME/work
         else if test -n "$postcd" -a -d "$postcd"
             cd $postcd
             # Reflect the project in this tab's title (fish_title checks
@@ -38,7 +38,7 @@ function grove --description "Git worktree manager (with shell cd support)"
             # in tabs that weren't spawned by `grove launch`.
             set -gx GROVE_TAB_TITLE (basename $postcd)
         else
-            cd $saved_dir 2>/dev/null; or cd /c/WORK
+            cd $saved_dir 2>/dev/null; or cd $HOME/work
             if test "$subcmd" = done
                 set -e GROVE_TAB_TITLE
             end
