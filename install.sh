@@ -50,12 +50,14 @@ config_dirs=(
 )
 
 # Native Linux (not WSL): skip Windows-only configs and link the Linux git overrides
+native_linux=""
 if ! grep -qi microsoft /proc/version 2>/dev/null; then
+  native_linux=1
   config_dirs=("${config_dirs[@]/ConEmu}")
   linux_links=(".gitconfig.local:.gitconfig.linux")
 fi
 
-# Files inside .claude to symlink individually (not the whole dir — it has runtime state)
+# Files inside .claude to symlink individually when ~/.claude is a real dir
 claude_items=(
   CLAUDE.md
   settings.json
@@ -74,12 +76,12 @@ for file in "${files[@]}"; do
     mv "$HOME/$file" "$olddir/"
     echo "  backed up $file"
   fi
-  ln -sf "$dir/$file" "$HOME/$file"
+  ln -sfn "$dir/$file" "$HOME/$file"
   echo "  $file -> $dir/$file"
 done
 
 for pair in "${linux_links[@]}"; do
-  ln -sf "$dir/${pair#*:}" "$HOME/${pair%%:*}"
+  ln -sfn "$dir/${pair#*:}" "$HOME/${pair%%:*}"
   echo "  ${pair%%:*} -> $dir/${pair#*:}"
 done
 
@@ -89,7 +91,7 @@ if [ -e "$HOME/bin" ] && [ ! -L "$HOME/bin" ]; then
   mv "$HOME/bin" "$olddir/bin-backup"
   echo "  backed up ~/bin"
 fi
-ln -sf "$dir/bin" "$HOME/bin"
+ln -sfn "$dir/bin" "$HOME/bin"
 echo "  bin -> $dir/bin"
 
 echo ""
@@ -101,21 +103,72 @@ for sub in "${config_dirs[@]}"; do
     mv "$HOME/.config/$sub" "$olddir/config-$sub"
     echo "  backed up .config/$sub"
   fi
-  ln -sf "$dir/.config/$sub" "$HOME/.config/$sub"
+  ln -sfn "$dir/.config/$sub" "$HOME/.config/$sub"
   echo "  .config/$sub -> $dir/.config/$sub"
 done
 
 echo ""
 echo "=== Linking .claude config ==="
+# Two layouts are supported:
+#  - ~/.claude is a link to $dir/.claude (whole dir, so Claude's runtime state also
+#    lands in the repo dir). Used when ~/.claude does not exist yet.
+#  - ~/.claude is a real dir and only the items above are linked into it.
+#    Set CLAUDE_LINK_ITEMS=1 to force this layout on a fresh machine.
+if [ ! -e "$HOME/.claude" ] && [ ! -L "$HOME/.claude" ] && [ "${CLAUDE_LINK_ITEMS:-0}" != 1 ]; then
+  ln -sfn "$dir/.claude" "$HOME/.claude"
+  echo "  .claude -> $dir/.claude"
+fi
+# When ~/.claude is itself a link to $dir/.claude, the items are already in place.
+if [ "$(realpath "$HOME/.claude" 2>/dev/null)" = "$(realpath "$dir/.claude")" ]; then
+  echo "  ~/.claude -> $dir/.claude, nothing to link"
+  claude_items=()
+fi
 mkdir -p "$HOME/.claude"
 for item in "${claude_items[@]}"; do
   if [ -e "$HOME/.claude/$item" ] && [ ! -L "$HOME/.claude/$item" ]; then
     mv "$HOME/.claude/$item" "$olddir/claude-$item"
     echo "  backed up .claude/$item"
   fi
-  ln -sf "$dir/.claude/$item" "$HOME/.claude/$item"
+  ln -sfn "$dir/.claude/$item" "$HOME/.claude/$item"
   echo "  .claude/$item -> $dir/.claude/$item"
 done
+
+if [ -n "$native_linux" ]; then
+  echo ""
+  echo "=== Linking systemd user units (native Linux) ==="
+  mkdir -p "$HOME/.config/systemd/user"
+  units=()
+  for unit_path in "$dir"/.config/systemd/user/*.service; do
+    [ -e "$unit_path" ] || continue
+    unit="$(basename "$unit_path")"
+    target="$HOME/.config/systemd/user/$unit"
+    if [ -e "$target" ] && [ ! -L "$target" ]; then
+      mv "$target" "$olddir/systemd-$unit"
+      echo "  backed up .config/systemd/user/$unit"
+    fi
+    ln -sfn "$unit_path" "$target"
+    echo "  .config/systemd/user/$unit -> $unit_path"
+    units+=("$unit")
+  done
+  if [ ${#units[@]} -gt 0 ]; then
+    echo "  to start them: systemctl --user daemon-reload && systemctl --user enable --now ${units[*]}"
+  fi
+
+  echo ""
+  echo "=== Linking tools into ~/.local/bin (native Linux) ==="
+  # Claude Code hooks call dcg by bare name, and Claude may start without ~/bin on PATH.
+  mkdir -p "$HOME/.local/bin"
+  if [ -e "$dir/bin/dcg" ]; then
+    if [ -e "$HOME/.local/bin/dcg" ] && [ ! -L "$HOME/.local/bin/dcg" ]; then
+      mv "$HOME/.local/bin/dcg" "$olddir/local-bin-dcg"
+      echo "  backed up .local/bin/dcg"
+    fi
+    ln -sfn "$dir/bin/dcg" "$HOME/.local/bin/dcg"
+    echo "  .local/bin/dcg -> $dir/bin/dcg"
+  else
+    echo "  bin/dcg not found (it is not in git), skipping. Install dcg into bin/ and run again."
+  fi
+fi
 
 echo ""
 echo "=== Activating dotfiles repo hooks ==="

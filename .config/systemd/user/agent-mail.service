@@ -1,0 +1,16 @@
+[Unit]
+Description=MCP Agent Mail (am serve-http, localhost, no auth)
+After=network.target
+
+[Service]
+# The server reads STORAGE_ROOT; the am CLI reads AGENT_MAIL_STORAGE_ROOT. Keep them equal.
+Environment=STORAGE_ROOT=%h/.mcp_agent_mail_git_mailbox_repo
+Environment=AGENT_MAIL_STORAGE_ROOT=%h/.mcp_agent_mail_git_mailbox_repo
+# Port 4809 matches ~/.claude.json and .claude/hooks/agent-mail-guard.sh.
+ExecStart=%h/.local/bin/am serve-http --no-tui --no-auth --port 4809
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
