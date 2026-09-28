@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy the agent data that git does not hold from an old Windows disk, then check it.
-# Used once per machine when it moves from Windows + WSL to Linux. See
-# docs/migration-from-windows.md for where each item goes afterwards.
+# Used once per machine when it moves from Windows + WSL to Linux. Where each item
+# goes afterwards: docs/computers/migration-from-windows.md in the private Life repo.
 #
 #   copy-agent-data.sh copy   SRC [DEST]   rsync into DEST (default ~/migration/win-c)
 #   copy-agent-data.sh verify SRC [DEST]   checksum-compare DEST against SRC
