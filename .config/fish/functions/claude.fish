@@ -76,6 +76,12 @@ function claude --description 'Claude Code (native install + WSL1 p_align patch 
         return $status
     end
 
+    # Native Linux runs the binary as is; the p_align patch below is WSL1-only.
+    if not string match -qi '*microsoft*' < /proc/version
+        command "$real" $cmd
+        return $status
+    end
+
     # ELF: make it directly executable on WSL1, then run it directly so
     # process.execPath is the real binary. Fall back to ld-linux if we can't.
     if claude-wsl-elf-fix "$real"

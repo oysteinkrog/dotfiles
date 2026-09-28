@@ -39,8 +39,12 @@ set --export PATH $BUN_INSTALL/bin $PATH
 # ripgrep config
 set -x RIPGREP_CONFIG_PATH "$HOME/.ripgreprc"
 
-# WSL: use Windows browser for links (gh auth, xdg-open, etc.)
-set -x BROWSER explorer.exe
+# WSL: use Windows browser for links (gh auth, xdg-open, etc.). Native Linux uses xdg-open.
+if string match -qi '*microsoft*' < /proc/version
+    set -x BROWSER explorer.exe
+else
+    set -x BROWSER xdg-open
+end
 
 # opencode
 fish_add_path /c/users/oystein/.opencode/bin
