@@ -1,4 +1,14 @@
 local wezterm = require 'wezterm'
+
+-- On Linux, wezterm reads this file before ~/.config/wezterm/wezterm.lua.
+-- Use that one there: it has the vertical tabs and the mux-server setup.
+if not wezterm.target_triple:find('windows') then
+  local linux_config = wezterm.home_dir .. '/.config/wezterm/wezterm.lua'
+  -- wezterm only watches the file it loaded; reload when this one changes too
+  wezterm.add_to_config_reload_watch_list(linux_config)
+  return dofile(linux_config)
+end
+
 local mux = wezterm.mux
 local config = wezterm.config_builder()
 
