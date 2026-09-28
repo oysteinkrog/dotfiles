@@ -109,7 +109,11 @@ done
 CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
 REAL="$(realpath "$CLAUDE_BIN")"
 SKIP="${AIOLOS_RC_SKIP_PERMISSIONS---dangerously-skip-permissions}"
-if command -v claude-wsl-elf-fix >/dev/null 2>&1 && claude-wsl-elf-fix "$REAL" >/dev/null 2>&1; then
+# Native Linux runs the binary as is. The patch and ld-linux are WSL1-only, and
+# launching through ld-linux breaks Claude Code's bundled grep/find wrappers.
+if ! grep -qi microsoft /proc/version 2>/dev/null; then
+  LAUNCH=("$REAL")
+elif command -v claude-wsl-elf-fix >/dev/null 2>&1 && claude-wsl-elf-fix "$REAL" >/dev/null 2>&1; then
   LAUNCH=("$REAL")
 elif [ -x /lib64/ld-linux-x86-64.so.2 ]; then
   LAUNCH=(/lib64/ld-linux-x86-64.so.2 "$REAL")
