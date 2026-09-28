@@ -1,0 +1,24 @@
+#!/bin/sh
+# Send a playback command to whichever player is running: fooyin if it is open, otherwise foobar2000.
+# Usage: music-control playpause|next|random|back
+action="$1"
+
+if pgrep -x fooyin >/dev/null; then
+    case "$action" in
+        playpause) exec fooyin --play-pause ;;
+        next) exec fooyin --next ;;
+        # foobar2000's "Random" jumps to one random track; do the same without leaving shuffle on.
+        random) fooyin --shuffle random && fooyin --next && exec fooyin --shuffle off ;;
+        back) exec fooyin --previous ;;
+    esac
+else
+    case "$action" in
+        playpause) exec "$HOME/.local/bin/foobar2000" /playpause ;;
+        next) exec "$HOME/.local/bin/foobar2000" /next ;;
+        random) exec "$HOME/.local/bin/foobar2000" /rand ;;
+        back) exec "$HOME/.local/bin/foobar2000" /command:Back ;;
+    esac
+fi
+
+echo "usage: music-control playpause|next|random|back" >&2
+exit 1

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Music: Next track
+Exec=/home/oystein/.local/bin/music-control next
+Icon=foobar2000
+NoDisplay=true
+StartupNotify=false

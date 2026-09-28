@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=foobar2000
+Comment=Portable foobar2000 from the STORAGE drive (Wine)
+Exec=/home/oystein/.local/bin/foobar2000 %F
+Icon=foobar2000
+StartupWMClass=foobar2000.exe
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/flac;audio/mpeg;audio/x-wav;audio/ogg;
