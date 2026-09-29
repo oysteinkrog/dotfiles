@@ -1,0 +1,9 @@
+[Unit]
+Description=cass session index and cm reflect
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/cass-maintenance.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h
