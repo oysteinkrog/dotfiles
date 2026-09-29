@@ -1,0 +1,11 @@
+[Unit]
+Description=Show only the streamed monitor while an RDP client is connected
+After=app-org.kde.krdpserver.service plasma-core.target
+
+[Service]
+ExecStart=%h/bin/krdp-remote-mode
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=plasma-workspace.target
