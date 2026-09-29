@@ -253,8 +253,14 @@ local bell_bg, bell_hover_bg = '#8B4513', '#A0522D' -- dark orange/brown
 
 -- Linux: Nord, matching ~/.config/alacritty/alacritty.toml
 if not is_windows then
-  config.font = wezterm.font('Noto Sans Mono') -- what alacritty's "monospace" resolves to
-  config.font_size = 12
+  config.font = wezterm.font('DejaVu Sans Mono') -- same as Windows Terminal (DejaVu Sans Mono for Powerline, 11)
+  config.font_size = 11
+  -- Faint text (SGR 2). DejaVu Sans Mono has no Light weight, and its "Book"
+  -- file stops the terminal from drawing a dimmed copy, so faint text came out
+  -- at full brightness. Give it a dim grey instead. Faint italic is dimmed already.
+  config.font_rules = {
+    { intensity = 'Half', italic = false, font = wezterm.font('DejaVu Sans Mono', { foreground = '#7B8394' }) },
+  }
   config.default_cursor_style = 'SteadyUnderline'
   config.window_background_opacity = 0.97
   config.bold_brightens_ansi_colors = 'BrightAndBold'
