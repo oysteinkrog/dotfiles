@@ -1,10 +1,47 @@
 # CASS Setup (coding_agent_session_search)
 
-Complete setup for cass on a Windows + WSL1 machine. cass indexes coding-agent
-session logs (Claude Code, Codex, Cursor, ...) into a searchable archive
-(lexical + semantic). Upstream: `Dicklesworthstone/coding_agent_session_search`.
+Setup for cass, first on native Linux and then the older Windows + WSL1 layout.
+cass indexes coding-agent session logs (Claude Code, Codex, Gemini, Cursor, ...)
+into a searchable archive (lexical + semantic). Upstream:
+`Dicklesworthstone/coding_agent_session_search`.
 
-## Architecture on this setup
+## Native Linux (current)
+
+- **Binary:** `~/.local/bin/cass`, a native build (0.9.0). The `tools` step in
+  `setup/steps/50-tools.sh` builds it from a pinned upstream commit.
+  `~/.local/bin/cass-gpu` is a symlink to the same binary. The Windows GPU build
+  is not used on Linux.
+- **Data dir:** `~/.local/share/coding-agent-search` (`agent_search.db`, `index/`,
+  `vector_index/`, `models/`, `raw-mirror/`). It was copied from the Windows data
+  dir, so the archive keeps the old sessions. Their source paths point at the
+  copied session files under `~/.claude/projects`, `~/.codex` and `~/.gemini`.
+- **Indexing:** the systemd user timer `cass-maintenance.timer` runs
+  `cass-maintenance.service` 5 minutes after boot and then 30 minutes after each
+  run ends. The service runs `~/.local/bin/cass-maintenance.sh`: a capped
+  `cass index` (1 hour), then `cm reflect` on new Claude sessions. `install.sh`
+  links the script and both units, and the `services` step enables the timer.
+  Linger must be on (`loginctl enable-linger`) so the timer runs without a login.
+- **Log:** `~/.local/share/cass-maintenance.log`, and
+  `journalctl --user -u cass-maintenance`.
+- **Semantic search does not work yet.** The vector index copied from Windows was
+  built by the Windows GPU build, and cass 0.9 rejects it ("incompatible vector
+  index ... rebuild semantic vectors"). `--mode semantic` and `--mode hybrid` fall
+  back to lexical. Rebuilding means re-embedding about 2 million messages on the
+  CPU, which took about 8.5 hours on Windows for 1.3 million chunks.
+
+Check that it works:
+
+```sh
+systemctl --user list-timers cass-maintenance.timer   # next and last run
+cass status --json | jq '{healthy, fresh: .index.fresh, last: .index.last_indexed_at}'
+tail ~/.local/share/cass-maintenance.log
+```
+
+Set it up on a new Linux machine: run `setup/bootstrap.sh tools links services`,
+copy the data dir and the session folders from the old machine, then run
+`systemctl --user start cass-maintenance.service` once.
+
+## Windows + WSL1 layout (before 2026-09-28)
 
 - **cass.exe runs on the Windows side** (`C:\Users\<user>\bin\cass.exe`).
   WSL1 cannot run it natively (Tantivy needs mmap semantics WSL1 lacks).
