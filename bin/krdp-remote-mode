@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Show only the streamed monitor while an RDP client is connected.
+
+KRDP streams one monitor (see the --monitor override in
+~/.config/systemd/user/app-org.kde.krdpserver.service.d/). While a client is
+connected, this turns the other monitors off, so KWin moves every window onto
+the streamed one. When the client has been gone for a few seconds, it puts the
+saved layout back exactly: position, rotation, scale, mode and priority.
+
+Runs as the systemd user unit krdp-remote-mode.service.
+Env: KRDP_KEEP_OUTPUT (default: the primary output), KRDP_PORT (default 3389).
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PORT = os.environ.get("KRDP_PORT", "3389")
+KEEP = os.environ.get("KRDP_KEEP_OUTPUT")
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "krdp-remote-mode"
+SAVED = STATE / "layout.json"
+POLL = 2
+ON_AFTER = 3   # seconds connected before switching on (skips failed handshakes)
+OFF_AFTER = 5  # seconds disconnected before restoring (rides out quick reconnects)
+ROTATION = {1: "none", 2: "left", 4: "inverted", 8: "right"}
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def connected():
+    out = subprocess.run(
+        ["ss", "-Htn", "state", "established", f"( sport = :{PORT} )"],
+        capture_output=True, text=True,
+    ).stdout
+    return bool(out.strip())
+
+
+def layout():
+    return json.loads(subprocess.run(
+        ["kscreen-doctor", "-j"], capture_output=True, text=True, check=True).stdout)
+
+
+def doctor(args):
+    log("kscreen-doctor " + " ".join(args))
+    r = subprocess.run(["kscreen-doctor", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        log(f"kscreen-doctor failed ({r.returncode}): {r.stderr.strip()}")
+    return r.returncode == 0
+
+
+def keep_name(outputs):
+    if KEEP:
+        return KEEP
+    enabled = [o for o in outputs if o["enabled"]]
+    return min(enabled, key=lambda o: o.get("priority") or 99)["name"]
+
+
+def remote_on():
+    outputs = layout()["outputs"]
+    keep = keep_name(outputs)
+    others = [o["name"] for o in outputs if o["enabled"] and o["name"] != keep]
+    if not others:
+        return
+    STATE.mkdir(parents=True, exist_ok=True)
+    SAVED.write_text(json.dumps(outputs))
+    log(f"client connected: keeping {keep}, turning off {', '.join(others)}")
+    doctor([f"output.{n}.disable" for n in others])
+
+
+def restore_args(outputs):
+    args = []
+    for o in outputs:
+        if not o["enabled"]:
+            continue
+        n = o["name"]
+        mode = next((m for m in o.get("modes", []) if m["id"] == o.get("currentModeId")), None)
+        args.append(f"output.{n}.enable")
+        if mode:
+            args.append(f"output.{n}.mode.{mode['id']}")
+        args.append(f"output.{n}.rotation.{ROTATION.get(o['rotation'], 'none')}")
+        args.append(f"output.{n}.scale.{o['scale']}")
+        args.append(f"output.{n}.position.{o['pos']['x']},{o['pos']['y']}")
+        if o.get("priority"):
+            args.append(f"output.{n}.priority.{o['priority']}")
+    return args
+
+
+def remote_off():
+    if not SAVED.exists():
+        return
+    log("client gone: restoring saved layout")
+    if doctor(restore_args(json.loads(SAVED.read_text()))):
+        SAVED.unlink()
+
+
+def main():
+    def stop(*_):
+        if not connected():
+            remote_off()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    on = SAVED.exists()  # a layout left saved means the last run ended in remote mode
+    since = time.monotonic()
+    last = connected()
+    log(f"watching port {PORT}; remote mode {'on' if on else 'off'}")
+    while True:
+        now = connected()
+        if now != last:
+            since, last = time.monotonic(), now
+        held = time.monotonic() - since
+        try:
+            if now and not on and held >= ON_AFTER:
+                remote_on()
+                on = True
+            elif not now and on and held >= OFF_AFTER:
+                remote_off()
+                on = SAVED.exists()
+        except Exception as e:  # keep watching; a failed switch retries next poll
+            log(f"error: {e}")
+        time.sleep(POLL)
+
+
+if __name__ == "__main__":
+    main()

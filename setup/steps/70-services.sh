@@ -19,6 +19,24 @@ else
   warn "~/.local/bin/wezterm-mux-server missing; wezterm-mux not enabled (tools step)"
 fi
 
+# Multi-monitor hosts: KRDP streams one monitor, and krdp-remote-mode turns the others
+# off while a client is connected. The override is generated, not tracked, because the
+# index depends on the host.
+if [ -n "$HOST_KRDP_MONITOR" ]; then
+  dropin="$HOME/.config/systemd/user/app-org.kde.krdpserver.service.d/one-monitor.conf"
+  want="# Written by setup/steps/70-services.sh from HOST_KRDP_MONITOR in host.sh.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/krdpserver --monitor $HOST_KRDP_MONITOR"
+  if [ "$(cat "$dropin" 2>/dev/null)" != "$want" ]; then
+    mkdir -p "${dropin%/*}"
+    printf '%s\n' "$want" >"$dropin"
+    systemctl --user daemon-reload
+    info "KRDP streams monitor $HOST_KRDP_MONITOR; restart app-org.kde.krdpserver.service to apply"
+  fi
+  units+=(krdp-remote-mode.service)
+fi
+
 for u in "${units[@]}"; do
   if ! systemctl --user cat "$u" >/dev/null 2>&1; then
     warn "$u: unit not found"
