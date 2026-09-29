@@ -190,6 +190,7 @@ if [ -n "$native_linux" ]; then
     .local/share/icons/hicolor/256x256/apps/foobar2000.png
     .local/bin/foobar2000
     .local/bin/music-control
+    .local/bin/streamcam-mic-enable
   )
   for item in "${linux_items[@]}"; do
     link_one "$dir/$item" "$HOME/$item"
