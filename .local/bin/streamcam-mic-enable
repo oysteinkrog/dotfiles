@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Turn on the Logitech StreamCam's built-in mic, then relink the mic filter.
+
+The StreamCam can switch its mic off in firmware. It then still shows up as a
+USB audio device but sends only zero samples. Logi Options+ on Windows turns it
+back on through the UVC peripheral extension unit (GUID ffe52d21-...), and
+nothing on Linux does. This sends the same write: selector 17 = 1.
+
+The camera stalls that SET_CUR (EPROTO) but applies it, and GET_CUR reads 0
+afterwards, so success is judged by the audio, not by the read-back.
+
+Run by streamcam-mic.service, which a udev rule starts when the camera
+connects. Safe to run by hand at any time.
+"""
+import ctypes
+import errno
+import fcntl
+import glob
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+VID, PID = "046d", "0893"
+PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
+MIC_ENABLE_SELECTOR = 17
+UVC_SET_CUR = 0x01
+AUDIO_NODE = "alsa_input.usb-046d_Logitech_StreamCam"
+
+
+class XuQuery(ctypes.Structure):
+    _fields_ = [
+        ("unit", ctypes.c_uint8),
+        ("selector", ctypes.c_uint8),
+        ("query", ctypes.c_uint8),
+        ("size", ctypes.c_uint16),
+        ("data", ctypes.c_void_p),
+    ]
+
+
+# _IOWR('u', 0x21, struct uvc_xu_control_query)
+UVCIOC_CTRL_QUERY = (3 << 30) | (ctypes.sizeof(XuQuery) << 16) | (ord("u") << 8) | 0x21
+
+
+def find_camera():
+    """Return (/dev/videoN, peripheral unit id) for the StreamCam capture node."""
+    for node in sorted(glob.glob("/sys/class/video4linux/video*")):
+        usb_if = os.path.realpath(os.path.join(node, "device"))
+        usb_dev = os.path.dirname(usb_if)
+        try:
+            vid = open(os.path.join(usb_dev, "idVendor")).read().strip()
+            pid = open(os.path.join(usb_dev, "idProduct")).read().strip()
+            index = open(os.path.join(node, "index")).read().strip()
+        except OSError:
+            continue
+        if (vid, pid, index) != (VID, PID, "0"):
+            continue
+        unit = peripheral_unit_id(open(os.path.join(usb_dev, "descriptors"), "rb").read())
+        if unit is not None:
+            return "/dev/" + os.path.basename(node), unit
+    return None, None
+
+
+def peripheral_unit_id(desc):
+    """Find the bUnitID of the VideoControl extension unit with PERIPHERAL_GUID."""
+    guid = PERIPHERAL_GUID.bytes_le
+    i = 0
+    while i + 2 <= len(desc):
+        length, dtype = desc[i], desc[i + 1]
+        if length == 0:
+            break
+        # CS_INTERFACE (0x24), VC_EXTENSION_UNIT (0x06): bUnitID at +3, GUID at +4.
+        if dtype == 0x24 and length >= 20 and desc[i + 2] == 0x06 and desc[i + 4:i + 20] == guid:
+            return desc[i + 3]
+        i += length
+    return None
+
+
+def enable_mic(dev, unit):
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        buf = (ctypes.c_uint8 * 1)(1)
+        query = XuQuery(unit, MIC_ENABLE_SELECTOR, UVC_SET_CUR, 1, ctypes.cast(buf, ctypes.c_void_p).value)
+        try:
+            fcntl.ioctl(fd, UVCIOC_CTRL_QUERY, query)
+        except OSError as e:
+            if e.errno != errno.EPROTO:
+                raise
+    finally:
+        os.close(fd)
+
+
+def relink_filter():
+    """Restart the mic filter once PipeWire has the camera's audio node.
+
+    mic-streamcam.conf sets node.dont-reconnect, so the filter never relinks to a
+    camera that reconnected.
+    """
+    for _ in range(30):
+        out = subprocess.run(["pw-cli", "ls", "Node"], capture_output=True, text=True).stdout
+        if AUDIO_NODE in out:
+            subprocess.run(["systemctl", "--user", "try-restart", "filter-chain.service"])
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def main():
+    dev = unit = None
+    for _ in range(20):
+        dev, unit = find_camera()
+        if dev:
+            break
+        time.sleep(0.5)
+    if not dev:
+        sys.exit("StreamCam not found")
+    for attempt in range(5):
+        try:
+            enable_mic(dev, unit)
+            break
+        except OSError as e:
+            if attempt == 4:
+                sys.exit(f"mic enable failed on {dev}: {e}")
+            time.sleep(1)
+    print(f"sent mic enable to {dev} (unit {unit}, selector {MIC_ENABLE_SELECTOR})")
+    if "--no-relink" not in sys.argv and not relink_filter():
+        print("PipeWire audio node did not appear; filter-chain not restarted")
+
+
+if __name__ == "__main__":
+    main()
