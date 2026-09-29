@@ -1,0 +1,8 @@
+#!/bin/bash
+# Open a Frankenterm window attached to the Frankenterm session server,
+# starting the server first if it is not running.
+# Log: ~/.local/state/frankenterm-gui.log
+systemctl --user start frankenterm-mux.service
+export FRANKENTERM_LUA_CONFIG=1
+mkdir -p "$HOME/.local/state"
+exec "$HOME/.local/bin/frankenterm-gui" connect unix "$@" >>"$HOME/.local/state/frankenterm-gui.log" 2>&1
