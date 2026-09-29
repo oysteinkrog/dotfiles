@@ -73,13 +73,26 @@ else
   -- session: <cwd> TAB <tab title> TAB <shell command>.
   wezterm.on('mux-startup', function()
     local window
+    local login_path
+    local p = io.popen("fish -lc 'string join : $PATH' 2>/dev/null")
+    if p then
+      login_path = p:read('*l')
+      p:close()
+      if login_path == '' then login_path = nil end
+    end
     local plan = io.popen('bash ' .. wezterm.home_dir .. '/.claude/hooks/claude-persist.sh plan')
     if plan then
       for line in plan:lines() do
         local cwd, title, cmd = line:match('^([^\t]*)\t([^\t]*)\t(.*)$')
         if cwd then
           -- run claude, then keep a shell open in the tab when it exits
-          local spec = { cwd = cwd, args = { 'bash', '-c', cmd .. '; exec fish -l' } }
+          local spec = {
+            cwd = cwd,
+            args = { 'bash', '-c', cmd .. '; exec fish -l' },
+            -- the server runs under systemd with a minimal PATH; give the
+            -- resumed session the PATH a login shell would have
+            set_environment_variables = login_path and { PATH = login_path } or nil,
+          }
           local tab
           if window then
             tab = window:spawn_tab(spec)
