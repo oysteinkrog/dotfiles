@@ -1,5 +1,5 @@
 # systemd user services. The dotfiles units are linked by install.sh
-# (.config/systemd/user/*.service); the rest come from packages.
+# (.config/systemd/user/*.service and *.timer); the rest come from packages.
 
 step "services"
 systemctl --user daemon-reload
@@ -9,6 +9,7 @@ units=(
   filter-chain.service                     # pipewire: the EQ sink and mic filter
   app-dev.lizardbyte.app.Sunshine.service  # sunshine package
   app-org.kde.krdpserver.service           # krdp package
+  cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
 )
 # The WezTerm mux and the Claude restore unit need the fork binaries from the tools step.
 if [ -x "$HOME/.local/bin/wezterm-mux-server" ]; then
