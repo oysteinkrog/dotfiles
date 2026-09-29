@@ -1,116 +1,55 @@
-#!/bin/bash
-# Lab deployment + log harvest pipeline
-# Usage: lab-deploy [build-path] [deploy-to-lab] [harvest-logs]
+#!/usr/bin/env bash
+# Run commands on, push files to, and pull logs from the lab PC (Windows "Hawk").
+# Uses the "labpc" host entry in ~/.ssh/config (key login only).
+#
+# Usage:
+#   lab-deploy.sh run '<powershell>'           run PowerShell on the lab PC
+#   lab-deploy.sh push <local-path> [dir]      copy a file or folder (default dir: C:/lab-drop)
+#   lab-deploy.sh logs [N]                     pull the N newest Swing Catalyst logs (default 3)
 
-set -e
+set -euo pipefail
 
-LAB_HOST="192.168.1.143"  # key login via the "labpc" entry in ~/.ssh/config
-LAB_USER="trondheim golfsenter"
-DEPLOY_DIR="C:\\Program Files\\Initial Force\\Swing Catalyst Alpha"
-LOG_SOURCE="C:\\ProgramData\\Swing Catalyst\\logs"
-DESKTOP_SHORTCUT="C:\\Users\\${LAB_USER}\\Desktop\\Swing Catalyst Alpha.lnk"
+HOST="${LAB_SSH_HOST:-labpc}"
+DROP_DIR="C:/lab-drop"
+LOG_DIR="C:/ProgramData/Swing Catalyst/logs"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+die() { printf 'lab-deploy: %s\n' "$*" >&2; exit 1; }
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-log_success() { echo -e "${GREEN}[✓]${NC} $*"; }
-log_error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
-
-# Step 1: Build Release binary (if build-path provided)
-if [[ "$1" == "build" || -n "$1" ]]; then
-    BUILD_PATH="${1:-.}"
-    log_info "Building Release binary from $BUILD_PATH..."
-
-    if [[ -f "$BUILD_PATH/build.cmd" ]]; then
-        cd "$BUILD_PATH"
-        timeout 600 cmd.exe /c "build.cmd build -c Release" || log_error "Build failed"
-        log_success "Release build complete"
-    else
-        log_error "build.cmd not found at $BUILD_PATH"
-    fi
-fi
-
-# Step 2: Deploy to lab machine
-deploy_to_lab() {
-    log_info "Deploying to lab machine ($LAB_HOST)..."
-
-    # Create deploy directory
-    timeout 30 bash -c "ssh -o BatchMode=yes labpc \"mkdir -p '$DEPLOY_DIR'\"" || \
-        log_error "Failed to create deploy directory"
-
-    # Copy Release binary (assumes src/motioncatalyst/BUILD/x64_Release/MotionCatalyst.exe exists)
-    if [[ -f "src/motioncatalyst/BUILD/x64_Release/MotionCatalyst.exe" ]]; then
-        log_info "Copying MotionCatalyst.exe..."
-        timeout 120 bash -c "ssh -o BatchMode=yes labpc \"type src\\motioncatalyst\\BUILD\\x64_Release\\MotionCatalyst.exe > '$DEPLOY_DIR\\MotionCatalyst.exe'\"" || \
-            log_error "Failed to deploy binary"
-        log_success "Binary deployed"
-    else
-        log_error "Release binary not found at src/motioncatalyst/BUILD/x64_Release/MotionCatalyst.exe"
-    fi
-
-    # Create desktop shortcut (PowerShell script)
-    log_info "Creating desktop shortcut..."
-    SHORTCUT_SCRIPT='$WshShell = New-Object -ComObject WScript.Shell; $shortcut = $WshShell.CreateShortcut('"'$DESKTOP_SHORTCUT'"'); $shortcut.TargetPath = '"'"'"'"'"'"'$DEPLOY_DIR\\MotionCatalyst.exe'"'"'"'"'"'"'; $shortcut.Save()'
-
-    timeout 30 bash -c "ssh -o BatchMode=yes labpc \"powershell -NoProfile -Command \\\"$SHORTCUT_SCRIPT\\\"\"" || \
-        log_error "Failed to create shortcut"
-
-    log_success "Desktop shortcut created"
+# Encoding the script as UTF-16LE base64 avoids every layer of cmd.exe quoting.
+run_ps() {
+    local enc
+    enc=$(printf '%s' "\$ProgressPreference='SilentlyContinue'; $1" | iconv -t UTF-16LE | base64 -w0)
+    ssh -o BatchMode=yes "$HOST" "powershell -NoProfile -NonInteractive -EncodedCommand $enc"
 }
 
-# Step 3: Harvest logs from lab
-harvest_logs() {
-    log_info "Harvesting logs from lab machine..."
-
-    HARVEST_DIR="$HOME/.lab-logs/$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$HARVEST_DIR"
-
-    # Download latest log files
-    for logfile in log.1.txt log.20260623.txt log.20260622.txt; do
-        log_info "Downloading $logfile..."
-        timeout 120 bash -c "ssh -o BatchMode=yes labpc \"type \\\"$LOG_SOURCE\\\\$logfile\\\"\" > \"$HARVEST_DIR/$logfile\" 2>&1" && \
-            log_success "Downloaded $logfile" || true
-    done
-
-    # Analyze for errors
-    log_info "Scanning for errors..."
-    ERROR_COUNT=$(grep -c "ERROR\|FATAL" "$HARVEST_DIR"/*.txt 2>/dev/null || echo 0)
-    log_info "Found $ERROR_COUNT error/fatal entries"
-
-    # Create summary
-    cat > "$HARVEST_DIR/HARVEST_SUMMARY.txt" <<EOF
-Lab Harvest: $(date)
-Host: $LAB_HOST
-User: $LAB_USER
-Deploy Dir: $DEPLOY_DIR
-Logs harvested: $(ls -1 "$HARVEST_DIR"/*.txt 2>/dev/null | wc -l) files
-Error/Fatal count: $ERROR_COUNT
-EOF
-
-    log_success "Logs harvested to $HARVEST_DIR"
-    echo "Summary:" && cat "$HARVEST_DIR/HARVEST_SUMMARY.txt"
-}
-
-# Main
-case "$2" in
-    "deploy")
-        deploy_to_lab
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+    run)
+        [ $# -eq 1 ] || die "usage: run '<powershell>'"
+        run_ps "$1"
         ;;
-    "harvest")
-        harvest_logs
+    push)
+        [ $# -ge 1 ] || die "usage: push <local-path> [remote-dir]"
+        src="$1"; dir="${2:-$DROP_DIR}"
+        [ -e "$src" ] || die "no such file: $src"
+        run_ps "New-Item -ItemType Directory -Force -Path '$dir' | Out-Null"
+        scp -q -r -o BatchMode=yes "$src" "$HOST:/$dir/"
+        echo "copied $src to $dir"
+        ;;
+    logs)
+        n="${1:-3}"
+        out="$HOME/.lab-logs/$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$out"
+        run_ps "Get-ChildItem '$LOG_DIR' -File | Sort-Object LastWriteTime -Descending | Select-Object -First $n -ExpandProperty Name" |
+            tr -d '\r' | while IFS= read -r name; do
+                [ -n "$name" ] || continue
+                scp -q -o BatchMode=yes "$HOST:/$LOG_DIR/$name" "$out/"
+                echo "$out/$name"
+            done
         ;;
     *)
-        log_info "Lab deployment + harvest pipeline"
-        log_info "Usage: lab-deploy [build|path] [deploy|harvest]"
-        echo ""
-        echo "Examples:"
-        echo "  lab-deploy build deploy          # Build + deploy Release binary"
-        echo "  lab-deploy . deploy              # Deploy existing Release binary"
-        echo "  lab-deploy . harvest             # Harvest logs from lab"
-        echo "  lab-deploy build deploy harvest  # Build, deploy, then harvest"
+        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+        [ -z "$cmd" ] || exit 1
         ;;
 esac
