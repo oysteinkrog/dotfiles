@@ -4,9 +4,8 @@
 
 set -e
 
-LAB_HOST="192.168.1.143"
+LAB_HOST="192.168.1.143"  # key login via the "labpc" entry in ~/.ssh/config
 LAB_USER="trondheim golfsenter"
-LAB_PASS="${LAB_DEPLOY_PASSWORD:-***REMOVED***}"  # Set via env or prompt
 DEPLOY_DIR="C:\\Program Files\\Initial Force\\Swing Catalyst Alpha"
 LOG_SOURCE="C:\\ProgramData\\Swing Catalyst\\logs"
 DESKTOP_SHORTCUT="C:\\Users\\${LAB_USER}\\Desktop\\Swing Catalyst Alpha.lnk"
@@ -40,13 +39,13 @@ deploy_to_lab() {
     log_info "Deploying to lab machine ($LAB_HOST)..."
 
     # Create deploy directory
-    timeout 30 bash -c "sshpass -p '$LAB_PASS' ssh -o StrictHostKeyChecking=accept-new '$LAB_USER@$LAB_HOST' \"mkdir -p '$DEPLOY_DIR'\"" || \
+    timeout 30 bash -c "ssh -o BatchMode=yes labpc \"mkdir -p '$DEPLOY_DIR'\"" || \
         log_error "Failed to create deploy directory"
 
     # Copy Release binary (assumes src/motioncatalyst/BUILD/x64_Release/MotionCatalyst.exe exists)
     if [[ -f "src/motioncatalyst/BUILD/x64_Release/MotionCatalyst.exe" ]]; then
         log_info "Copying MotionCatalyst.exe..."
-        timeout 120 bash -c "sshpass -p '$LAB_PASS' ssh -o StrictHostKeyChecking=accept-new '$LAB_USER@$LAB_HOST' \"type src\\motioncatalyst\\BUILD\\x64_Release\\MotionCatalyst.exe > '$DEPLOY_DIR\\MotionCatalyst.exe'\"" || \
+        timeout 120 bash -c "ssh -o BatchMode=yes labpc \"type src\\motioncatalyst\\BUILD\\x64_Release\\MotionCatalyst.exe > '$DEPLOY_DIR\\MotionCatalyst.exe'\"" || \
             log_error "Failed to deploy binary"
         log_success "Binary deployed"
     else
@@ -57,7 +56,7 @@ deploy_to_lab() {
     log_info "Creating desktop shortcut..."
     SHORTCUT_SCRIPT='$WshShell = New-Object -ComObject WScript.Shell; $shortcut = $WshShell.CreateShortcut('"'$DESKTOP_SHORTCUT'"'); $shortcut.TargetPath = '"'"'"'"'"'"'$DEPLOY_DIR\\MotionCatalyst.exe'"'"'"'"'"'"'; $shortcut.Save()'
 
-    timeout 30 bash -c "sshpass -p '$LAB_PASS' ssh -o StrictHostKeyChecking=accept-new '$LAB_USER@$LAB_HOST' \"powershell -NoProfile -Command \\\"$SHORTCUT_SCRIPT\\\"\"" || \
+    timeout 30 bash -c "ssh -o BatchMode=yes labpc \"powershell -NoProfile -Command \\\"$SHORTCUT_SCRIPT\\\"\"" || \
         log_error "Failed to create shortcut"
 
     log_success "Desktop shortcut created"
@@ -73,7 +72,7 @@ harvest_logs() {
     # Download latest log files
     for logfile in log.1.txt log.20260623.txt log.20260622.txt; do
         log_info "Downloading $logfile..."
-        timeout 120 bash -c "sshpass -p '$LAB_PASS' ssh -o StrictHostKeyChecking=accept-new '$LAB_USER@$LAB_HOST' \"type \\\"$LOG_SOURCE\\\\$logfile\\\"\" > \"$HARVEST_DIR/$logfile\" 2>&1" && \
+        timeout 120 bash -c "ssh -o BatchMode=yes labpc \"type \\\"$LOG_SOURCE\\\\$logfile\\\"\" > \"$HARVEST_DIR/$logfile\" 2>&1" && \
             log_success "Downloaded $logfile" || true
     done
 
