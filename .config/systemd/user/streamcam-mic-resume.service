@@ -1,0 +1,13 @@
+[Unit]
+Description=Turn the Logitech StreamCam mic back on at login and after wake from sleep
+# The camera does not reconnect on wake, so the udev rule never starts
+# streamcam-mic.service then. This watches logind for the wake signal.
+After=pipewire.service wireplumber.service
+
+[Service]
+ExecStart=%h/.local/bin/streamcam-mic-resume-watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

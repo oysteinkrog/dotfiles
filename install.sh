@@ -191,6 +191,7 @@ if [ -n "$native_linux" ]; then
     .local/bin/foobar2000
     .local/bin/music-control
     .local/bin/streamcam-mic-enable
+    .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
   )
   for item in "${linux_items[@]}"; do
