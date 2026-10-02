@@ -5,4 +5,4 @@
 systemctl --user start frankenterm-mux.service
 export FRANKENTERM_LUA_CONFIG=1
 mkdir -p "$HOME/.local/state"
-exec "$HOME/.local/bin/frankenterm-gui" connect unix "$@" >>"$HOME/.local/state/frankenterm-gui.log" 2>&1
+exec /usr/bin/frankenterm-gui connect unix "$@" >>"$HOME/.local/state/frankenterm-gui.log" 2>&1
