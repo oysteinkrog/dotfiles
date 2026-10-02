@@ -1,10 +1,10 @@
-# Tools that no package provides: the Claude Code native build, source builds
-# (WezTerm fork, cass), aiolos-rc's preload, and prebuilt binaries in ~/.local/bin
-# and ~/bin that are not in git.
+# Tools that no package provides: the Claude Code native build, localbuilds and the
+# FrankenTerm package it builds, cass, aiolos-rc's preload, and prebuilt binaries in
+# ~/.local/bin and ~/bin that are not in git.
 #
 # TOOLS_FROM=<ssh host> copies the prebuilt binaries from the other desktop, e.g.
 #   TOOLS_FROM=<other-desktop> setup/bootstrap.sh tools
-# REBUILD=1 rebuilds WezTerm and cass even when they are installed.
+# REBUILD=1 rebuilds FrankenTerm and cass even when they are installed.
 
 mkdir -p "$HOME/.local/bin" "$HOME/src" "$HOME/work"
 
@@ -15,21 +15,25 @@ else
   curl -fsSL https://claude.ai/install.sh | bash
 fi
 
-step "tools: WezTerm fork (vertical tabs)"
-# .config/wezterm/wezterm.lua uses tab_bar_position, which only the fork has. The
-# mux unit, autostart and launcher all run ~/.local/bin/wezterm*.
-wez_src="$HOME/src/wezterm"
-if [ -x "$HOME/.local/bin/wezterm-mux-server" ] && [ -z "${REBUILD:-}" ]; then
-  ok "wezterm $("$HOME/.local/bin/wezterm" --version 2>/dev/null)"
+step "tools: localbuilds"
+# Patched and source-built upstream projects: recipes and the localbuild command.
+# See ~/src/localbuilds/README.md.
+lb_src="$HOME/src/localbuilds"
+if [ ! -d "$lb_src/.git" ]; then
+  git clone https://github.com/oysteinkrog/localbuilds.git "$lb_src"
+  git -C "$lb_src" config core.hooksPath hooks
+fi
+ln -sfn ../../src/localbuilds/bin/localbuild "$HOME/.local/bin/localbuild"
+ok "localbuild $(git -C "$lb_src" log -1 --format=%h)"
+
+step "tools: FrankenTerm (localbuilds recipe frankenterm)"
+# The terminal, its mux unit and the launcher run /usr/bin/frankenterm-*, from the
+# pacman package frankenterm-local.
+if pacman -Q frankenterm-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q frankenterm-local)"
 else
-  if [ ! -d "$wez_src/.git" ]; then
-    git clone https://github.com/oysteinkrog/wezterm.git "$wez_src"
-    git -C "$wez_src" remote add upstream https://github.com/wezterm/wezterm.git
-  fi
-  git -C "$wez_src" submodule update --init --recursive
-  (cd "$wez_src" && cargo build --release -p wezterm -p wezterm-gui -p wezterm-mux-server)
-  install -m755 "$wez_src"/target/release/{wezterm,wezterm-gui,wezterm-mux-server} "$HOME/.local/bin/"
-  ok "installed wezterm fork into ~/.local/bin"
+  "$HOME/.local/bin/localbuild" build frankenterm
+  "$HOME/.local/bin/localbuild" install frankenterm
 fi
 
 step "tools: cass"
