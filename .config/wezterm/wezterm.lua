@@ -14,6 +14,63 @@ local claude_state_colors = {
   error    = '#E74C3C', -- red: something failed
 }
 
+-- Panes that rang the bell, most recent last. The Claude hooks ring it when
+-- Claude finishes or asks a question; Alt+M jumps to the latest one.
+local bell_panes = {}
+wezterm.on('bell', function(window, pane)
+  local id = pane:pane_id()
+  for i = #bell_panes, 1, -1 do
+    if bell_panes[i] == id then table.remove(bell_panes, i) end
+  end
+  table.insert(bell_panes, id)
+end)
+
+-- Skips panes that are gone or in the tab you are already on, so pressing it
+-- again goes to the one before
+local function jump_to_last_bell(window, pane)
+  local active_tab = pane:tab() and pane:tab():tab_id()
+  while #bell_panes > 0 do
+    local ok, p = pcall(mux.get_pane, table.remove(bell_panes))
+    local tab = ok and p and p:tab()
+    if tab and tab:tab_id() ~= active_tab then
+      tab:activate()
+      p:activate()
+      return
+    end
+  end
+end
+
+-- Alt+K: fuzzy search this window's tabs by number, title, folder and Claude
+-- state. Typing filters the list live, Up/Down picks, Enter switches.
+local home_pattern = '^' .. wezterm.home_dir:gsub('%p', '%%%0')
+local function tab_search(window, pane)
+  local choices = {}
+  for i, tab in ipairs(window:mux_window():tabs()) do
+    local p = tab:active_pane()
+    local title = tab:get_title()
+    if title == '' then title = p:get_title() end
+    local label = string.format('%2d  %s', i, title)
+    local ok, cwd = pcall(function() return p:get_current_working_dir() end)
+    if ok and cwd then
+      local dir = tostring(cwd):gsub('^file://[^/]*', ''):gsub(home_pattern, '~')
+      label = label .. '   ' .. dir
+    end
+    local state = p:get_user_vars().claude_state
+    if state then label = label .. '   [' .. state .. ']' end
+    table.insert(choices, { id = tostring(tab:tab_id()), label = label })
+  end
+  window:perform_action(wezterm.action.InputSelector({
+    title = 'Switch to tab',
+    choices = choices,
+    fuzzy = true,
+    fuzzy_description = 'Tab: ',
+    action = wezterm.action_callback(function(_, _, id)
+      local tab = id and mux.get_tab(tonumber(id))
+      if tab then tab:activate() end
+    end),
+  }), pane)
+end
+
 -- Close all tabs except the active one
 wezterm.on("close_other_tabs", function(window, pane)
   local current_tab = pane:tab()
@@ -149,6 +206,10 @@ config.keys = {
     end),
   },
   { key = 'o', mods = 'CTRL|SHIFT', action = wezterm.action.EmitEvent("close_other_tabs") },
+  { key = 'm', mods = 'ALT', action = wezterm.action_callback(jump_to_last_bell) },
+  -- back to the tab you were on before (after Alt+M, or any tab switch)
+  { key = 'm', mods = 'ALT|SHIFT', action = wezterm.action.ActivateLastTab },
+  { key = 'k', mods = 'ALT', action = wezterm.action_callback(tab_search) },
   { key = 'a', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function(window, pane)
       local id = pane:tab():tab_id()
       local cur = tab_priorities[id] or 0
@@ -159,6 +220,9 @@ config.keys = {
 }
 
 config.window_close_confirmation = 'NeverPrompt'
+
+-- The bell only marks the tab orange (Claude hooks ring it); no sound
+config.audible_bell = 'Disabled'
 
 config.use_fancy_tab_bar = false
 config.tab_max_width = 32
@@ -190,6 +254,8 @@ wezterm.on('format-tab-title', function(tab)
     dot_color = priority_colors[pri + 1]
   end
   local fg = tab.is_active and '#FFFFFF' or '#AAAAAA'
+  -- grey text is unreadable on the orange bell background
+  if tab.has_bell then fg = '#FFFFFF' end
   return {
     { Foreground = { Color = fg } },
     { Text = ' ' .. idx .. ' ' },
@@ -303,7 +369,8 @@ if not is_windows then
       '#81A1C1', '#B48EAD', '#8FBCBB', '#ECEFF4',
     },
   }
-  bell_bg, bell_hover_bg = '#D08770', '#E0A08A' -- Nord orange
+  -- sienna: white text reads at 5.6:1, and it still stands out from the other tabs
+  bell_bg, bell_hover_bg = '#A0522D', '#B0603A'
 end
 
 -- Bell tab colors: fork-only, like the vertical tab options above
@@ -311,11 +378,11 @@ pcall(function()
   local colors = config.colors
   colors.tab_bar.inactive_tab_bell = {
     bg_color = bell_bg,
-    fg_color = is_windows and '#FFFFFF' or '#2E3440',
+    fg_color = '#FFFFFF',
   }
   colors.tab_bar.inactive_tab_bell_hover = {
     bg_color = bell_hover_bg,
-    fg_color = is_windows and '#FFFFFF' or '#2E3440',
+    fg_color = '#FFFFFF',
     italic = true,
   }
   config.colors = colors
