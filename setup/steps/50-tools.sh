@@ -1,5 +1,5 @@
 # Tools that no package provides: the Claude Code native build, localbuilds and the
-# FrankenTerm package it builds, cass, aiolos-rc's preload, and prebuilt binaries in
+# FrankenTerm and cass packages it builds, aiolos-rc's preload, and prebuilt binaries in
 # ~/.local/bin and ~/bin that are not in git.
 #
 # TOOLS_FROM=<ssh host> copies the prebuilt binaries from the other desktop, e.g.
@@ -35,27 +35,22 @@ else
   "$HOME/.local/bin/localbuild" build frankenterm
   "$HOME/.local/bin/localbuild" install frankenterm
 fi
+# Symlinks for scripts that still use the old ~/.local/bin paths.
+ln -sfn /usr/bin/frankenterm-gui "$HOME/.local/bin/frankenterm-gui"
+ln -sfn /usr/bin/frankenterm-mux-server "$HOME/.local/bin/frankenterm-mux-server"
 
-step "tools: cass"
-# One build serves both names. Pinned to the upstream commit that is live on the
-# office desktop; see docs/cass-setup.md before moving it.
-cass_ref=4773d03e
-cass_src="$HOME/work/cass-gpu"
-if [ -x "$HOME/.local/bin/cass" ] && [ -z "${REBUILD:-}" ]; then
-  ok "$("$HOME/.local/bin/cass" --version 2>/dev/null)"
+step "tools: cass (localbuilds recipe cass)"
+# The pacman package cass-local, pinned in ~/src/localbuilds/recipes/cass; see
+# docs/cass-setup.md before moving the pin. ~/.local/bin/cass and cass-gpu are symlinks
+# for scripts that use the old path, and they stop `cass upgrade` replacing the build.
+if pacman -Q cass-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q cass-local)"
 else
-  if [ ! -d "$cass_src/.git" ]; then
-    git clone https://github.com/Dicklesworthstone/coding_agent_session_search.git "$cass_src"
-    git -C "$cass_src" remote rename origin upstream
-    git -C "$cass_src" remote add origin git@github.com:oysteinkrog/coding_agent_session_search.git
-  fi
-  git -C "$cass_src" fetch upstream
-  git -C "$cass_src" checkout -B main-latest "$cass_ref"
-  (cd "$cass_src" && nice -n 5 cargo build --release --bin cass)
-  install -m755 "$cass_src/target/release/cass" "$HOME/.local/bin/cass"
-  ln -sfn cass "$HOME/.local/bin/cass-gpu"
-  ok "installed cass from $cass_ref"
+  "$HOME/.local/bin/localbuild" build cass
+  "$HOME/.local/bin/localbuild" install cass
 fi
+ln -sfn /usr/bin/cass "$HOME/.local/bin/cass"
+ln -sfn /usr/bin/cass "$HOME/.local/bin/cass-gpu"
 
 step "tools: aiolos-rc"
 if [ -f "$DOTFILES/.config/aiolos-rc/preload.so" ]; then

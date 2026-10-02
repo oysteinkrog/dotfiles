@@ -213,9 +213,9 @@ names customers, staff or unreleased plans. The binding company policy is
 `cass` searches 14K+ indexed agent sessions.
 
 - **Never run `cass index --semantic`, and never `cass-gpu index`.** One mixes vector
-  provenance, the other hits a memory regression. `cass` is the stock build; `cass-gpu` is a
-  custom GPU build that reports its version as 0.6.0, so do not let `cass upgrade` overwrite
-  it.
+  provenance, the other hits a memory regression. On Linux both names run `/usr/bin/cass`,
+  the localbuilds package `cass-local`; never let `cass upgrade` replace it. Move the pin
+  with `localbuild bump cass`.
 - Load `cass` for session archaeology. The full setup and recovery runbook is
   `~/.dotfiles/docs/cass-setup.md`.
 
