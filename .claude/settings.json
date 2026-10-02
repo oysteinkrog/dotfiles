@@ -200,7 +200,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state Y29tcGxldGU= && echo -e '\\007' && echo -ne '\\033]9;4;1;100\\033\\\\'",
+            "command": "bash ~/.claude/hooks/term-state.sh complete bell",
             "async": true
           },
           {
@@ -238,7 +238,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state aW5wdXQ=",
+            "command": "bash ~/.claude/hooks/term-state.sh input bell",
             "async": true
           },
           {
@@ -269,6 +269,16 @@
             "timeout": 75
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/term-state.sh working",
+            "async": true
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -277,7 +287,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state ZXJyb3I=",
+            "command": "bash ~/.claude/hooks/term-state.sh error",
             "async": true
           },
           {
@@ -298,7 +308,7 @@
           },
           {
             "type": "command",
-            "command": "printf '\\033]1337;SetUserVar=%s=%s\\007' claude_state d29ya2luZw==",
+            "command": "bash ~/.claude/hooks/term-state.sh working",
             "async": true
           },
           {
@@ -378,6 +388,16 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/plain-language-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/term-state.sh input bell",
+            "async": true
           }
         ]
       }
