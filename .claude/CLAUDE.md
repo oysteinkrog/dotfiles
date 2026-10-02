@@ -99,10 +99,10 @@ Rules, all hard:
 - **Never commit a secret.** If you see one going into a tracked file, stop and say so.
 - **Reference by env-var name** in scripts and configs, never by value, and wrap the
   consuming command in `with-secrets KEY -- ...`.
-- **Nothing proprietary goes to a non-Anthropic provider without approval.** Claude
-  subagents (Opus, Sonnet, Fable) use the same approved Anthropic boundary as this session,
-  so they need no extra approval. Codex, PAL and any other provider do. Without approval,
-  run the consultation on Fable and say why.
+- **Anthropic and OpenAI are both approved providers.** Claude subagents (Opus, Sonnet,
+  Fable) and OpenAI through Codex (GPT-6 Astra and the other OpenAI models) can receive
+  proprietary content without asking first. Any other provider, including non-OpenAI models
+  reached through PAL, still needs approval before proprietary content goes to it.
 - **Load `secret-lookup`** to add, rotate or remove a credential, or to roll back the
   loader if it breaks.
 
@@ -225,7 +225,7 @@ Whenever you look at an image a person shared, or your read of it is something t
 on, give your own read first and then run `/codex-look` for a cross-model check. Show Codex's
 reply clearly labelled and call out any disagreement, because the disagreement is the point.
 Skip it for a trivial image, when Oystein opts out, or in a tight loop, and say when you
-skip. The confidentiality rule above applies, because Codex is external.
+skip. Codex is an approved provider, so no confidentiality approval is needed.
 
 ## Beads
 
