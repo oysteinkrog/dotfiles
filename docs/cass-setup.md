@@ -7,10 +7,10 @@ into a searchable archive (lexical + semantic). Upstream:
 
 ## Native Linux (current)
 
-- **Binary:** `~/.local/bin/cass`, a native build (0.9.0). The `tools` step in
-  `setup/steps/50-tools.sh` builds it from a pinned upstream commit.
-  `~/.local/bin/cass-gpu` is a symlink to the same binary. The Windows GPU build
-  is not used on Linux.
+- **Binary:** `/usr/bin/cass` (0.9.0), the pacman package `cass-local`, built by
+  the localbuilds recipe `cass` (`~/src/localbuilds/recipes/cass`) from a pinned
+  commit. `~/.local/bin/cass` and `~/.local/bin/cass-gpu` are symlinks to it. The
+  Windows GPU build is not used on Linux.
 - **Data dir:** `~/.local/share/coding-agent-search` (`agent_search.db`, `index/`,
   `vector_index/`, `models/`, `raw-mirror/`). It was copied from the Windows data
   dir, so the archive keeps the old sessions. Their source paths point at the
