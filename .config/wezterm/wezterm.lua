@@ -253,15 +253,24 @@ wezterm.on('format-tab-title', function(tab)
     local pri = tab_priorities[tab.tab_id] or 0
     dot_color = priority_colors[pri + 1]
   end
-  local fg = tab.is_active and '#FFFFFF' or '#AAAAAA'
-  -- grey text is unreadable on the orange bell background
-  if tab.has_bell then fg = '#FFFFFF' end
+  -- A colored bar on the left edge marks the tab to look at: frost blue for
+  -- the active tab, warm yellow (with a yellow title) for a tab that rang the bell
+  local edge, edge_color, idx_color, title_color = ' ', nil, '#7B8394', '#A9B1C1'
+  if tab.is_active then
+    edge, edge_color, idx_color, title_color = '▌', '#88C0D0', '#88C0D0', '#ECEFF4'
+  elseif tab.has_bell then
+    edge, edge_color, idx_color, title_color = '▌', '#EBCB8B', '#EBCB8B', '#EBCB8B'
+  end
+  local strong = tab.is_active or tab.has_bell
   return {
-    { Foreground = { Color = fg } },
-    { Text = ' ' .. idx .. ' ' },
+    { Foreground = { Color = edge_color or idx_color } },
+    { Text = edge },
+    { Attribute = { Intensity = strong and 'Bold' or 'Normal' } },
+    { Foreground = { Color = idx_color } },
+    { Text = idx .. ' ' },
     { Foreground = { Color = dot_color } },
     { Text = '●' },
-    { Foreground = { Color = fg } },
+    { Foreground = { Color = title_color } },
     { Text = ' ' .. title .. ' ' },
   }
 end)
@@ -354,9 +363,9 @@ if not is_windows then
     selection_fg = '#ECEFF4',
     tab_bar = {
       background = '#272C36', -- a shade darker than the terminal
-      active_tab = { bg_color = '#3B4252', fg_color = '#ECEFF4', intensity = 'Bold' },
+      active_tab = { bg_color = '#4C566A', fg_color = '#ECEFF4', intensity = 'Bold' },
       inactive_tab = { bg_color = '#2E3440', fg_color = '#8A93A5' },
-      inactive_tab_hover = { bg_color = '#434C5E', fg_color = '#D8DEE9', italic = true },
+      inactive_tab_hover = { bg_color = '#3B4252', fg_color = '#D8DEE9', italic = true },
       new_tab = { bg_color = '#272C36', fg_color = '#8A93A5' },
       new_tab_hover = { bg_color = '#434C5E', fg_color = '#D8DEE9' },
     },
@@ -369,8 +378,8 @@ if not is_windows then
       '#81A1C1', '#B48EAD', '#8FBCBB', '#ECEFF4',
     },
   }
-  -- sienna: white text reads at 5.6:1, and it still stands out from the other tabs
-  bell_bg, bell_hover_bg = '#A0522D', '#B0603A'
+  -- same as a plain inactive tab: the yellow edge and title mark the bell instead
+  bell_bg, bell_hover_bg = '#2E3440', '#3B4252'
 end
 
 -- Bell tab colors: fork-only, like the vertical tab options above
