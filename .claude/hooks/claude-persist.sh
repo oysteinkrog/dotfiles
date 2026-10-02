@@ -7,12 +7,15 @@
 #   claude-persist.sh capture [UNIT]  record the sessions running right now,
 #                                     optionally only those inside a systemd
 #                                     user unit (e.g. wezterm-mux.service)
+#   claude-persist.sh snapshot        save the mux server's tab order (systemd
+#                                     timer and ExecStop run this)
 #   claude-persist.sh plan            print sessions to resume (cwd, title, command)
 #   claude-persist.sh restore         resume every recorded session with `wezterm cli`
 #   claude-persist.sh list            show recorded sessions
 #   claude-persist.sh forget KEY      drop one entry (file name without .json)
 #
-# State: ~/.local/state/claude-persist/sessions/<session_id>@<folder>.json.
+# State: ~/.local/state/claude-persist/sessions/<session_id>@<folder>.json,
+# and tab-order (the last saved tab order of the mux server).
 # The key includes the folder because one session id can be open in two
 # folders (sessions copied between projects keep their id).
 # Set CLAUDE_PERSIST=0 in a session's environment to keep it off the list.
@@ -23,6 +26,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-persist"
 SESS_DIR="$STATE_DIR/sessions"
 CLAUDE_SESSIONS="$HOME/.claude/sessions"   # Claude writes <pid>.json here per process
 WEZTERM="$HOME/.local/bin/wezterm"
+FT_CLI="$HOME/.local/bin/frankenterm-gui"
+MUX_UNIT=frankenterm-mux.service
+TAB_ORDER="$STATE_DIR/tab-order"
 AIOLOS_RC="$HOME/.config/aiolos-rc/aiolos-rc"
 # full path: at boot the mux server may not have ~/.local/bin on PATH
 CLAUDE_BIN="${CLAUDE_PERSIST_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
@@ -111,19 +117,22 @@ wrapper_mode() {
 # Write the entry for one live Claude process.
 record() {
   local pid=$1 sid=$2 cwd=$3 name=${4:-}
-  local via=0 launcher='[]' flags transcript
+  local via=0 launcher='[]' flags transcript pane
   if wrapper_mode "$pid" >/dev/null; then
     via=1
     launcher=$( { printf '%s\n' "$AIOLOS_RC"; wrapper_mode "$pid"; } | jq -R . | jq -s .)
   fi
   flags=$(keep_flags "$pid" "$via" | jq -R . | jq -s .)
   transcript="$HOME/.claude/projects/$(project_slug "$cwd")/$sid.jsonl"
+  # the mux pane the session runs in, to put its tab back in the same place
+  pane=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^WEZTERM_PANE=//p' | head -1)
   mkdir -p "$SESS_DIR"
   local f; f=$(entry_file "$sid" "$cwd")
   jq -n --arg sid "$sid" --arg cwd "$cwd" --arg transcript "$transcript" --arg name "$name" \
         --argjson pid "$pid" --argjson flags "$flags" --argjson launcher "$launcher" \
-        --arg started "$(date -Is)" \
+        --arg started "$(date -Is)" --arg pane "$pane" \
         '{session_id:$sid, cwd:$cwd, name:$name, transcript:$transcript, pid:$pid,
+          pane:(if $pane == "" then null else ($pane | tonumber) end),
           launcher:$launcher, flags:$flags, started:$started}' \
     > "$f.tmp" && mv "$f.tmp" "$f"
 }
@@ -186,6 +195,92 @@ capture() {
   echo "$n session(s) recorded"
 }
 
+mux_pid() { systemctl --user show -p MainPID --value "$MUX_UNIT" 2>/dev/null; }
+
+# Save the mux server's tab order: a header line with the server's pid, then
+# <window id> TAB <pane id> per pane, in tab order. Ask the server's own socket,
+# not a GUI's (a GUI numbers panes its own way). Keep the old file when the
+# server answers with nothing, so a dying server cannot wipe it.
+snapshot() {
+  local pid rows
+  pid=$(mux_pid); [ -n "$pid" ] && [ "$pid" != 0 ] || return 0
+  rows=$(env -u FRANKENTERM_UNIX_SOCKET "$FT_CLI" cli list --json 2>/dev/null \
+    | jq -r '.[] | "\(.window_id)\t\(.pane_id)"' 2>/dev/null)
+  [ -n "$rows" ] || return 0
+  mkdir -p "$STATE_DIR"
+  { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
+
+  # Fill in the pane of entries recorded without one (older entries, and
+  # sessions Claude keeps no ~/.claude/sessions file for, which capture misses).
+  local f epid pane
+  for f in "$SESS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    [ "$(jq -r '.pane // empty' "$f")" = "" ] || continue
+    epid=$(jq -r '.pid // 0' "$f")
+    [ "$epid" -gt 0 ] && [ -r "/proc/$epid/environ" ] || continue
+    grep -qaF -- "$(jq -r .session_id "$f")" "/proc/$epid/cmdline" 2>/dev/null \
+      || [ -f "$CLAUDE_SESSIONS/$epid.json" ] || continue
+    pane=$(tr '\0' '\n' < "/proc/$epid/environ" | sed -n 's/^WEZTERM_PANE=//p' | head -1)
+    [ -n "$pane" ] || continue
+    jq --argjson pane "$pane" '.pane = $pane' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+  done
+
+  # Save each live session's status (busy, waiting or idle) so the restore
+  # knows which sessions were cut off mid-turn. Claude deletes its
+  # ~/.claude/sessions/<pid>.json file on exit, so it has to be copied now.
+  local status
+  for f in "$SESS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    epid=$(jq -r '.pid // 0' "$f")
+    [ -f "$CLAUDE_SESSIONS/$epid.json" ] || continue
+    status=$(jq -r '.status // empty' "$CLAUDE_SESSIONS/$epid.json" 2>/dev/null)
+    [ -n "$status" ] || continue
+    [ "$(jq -r '.status // empty' "$f")" = "$status" ] && continue
+    jq --arg s "$status" '.status = $s' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+  done
+}
+
+# Print the prompt to start a resumed session with, or nothing. A restart
+# loses what lives only in the Claude process: a /goal (a session-scoped Stop
+# hook), a /loop's pending ScheduleWakeup, an open question, and the turn that
+# was running. Idle sessions get no prompt, so they stay quiet.
+resume_prompt() {
+  local transcript=$1 status=$2
+  python3 "$(dirname "${BASH_SOURCE[0]}")/claude-persist-resume.py" "$transcript" "$status" 2>/dev/null
+}
+
+# Print the entry files in the order to resume them: by their pane's place in
+# the saved tab order, then the rest oldest first. The saved order is used only
+# when it came from an earlier mux server: pane ids start over in a new server,
+# so a snapshot of the current one says nothing about the recorded panes.
+ordered_entries() {
+  local -A pos=()
+  local tag spid w p i=0 n=0 f pane
+  if [ -f "$TAB_ORDER" ]; then
+    read -r tag spid < "$TAB_ORDER"
+    if [ "$tag" = mux ] && [ "$spid" != "$(mux_pid)" ]; then
+      while IFS=$'\t' read -r w p; do
+        [ -n "${pos[$p]:-}" ] || pos[$p]=$i; i=$((i + 1))
+      done < <(tail -n +2 "$TAB_ORDER")
+    fi
+  fi
+  while IFS= read -r f; do
+    pane=$(jq -r '.pane // empty' "$f")
+    printf '%d\t%s\n' "${pos[${pane:-x}]:-$((1000000 + n))}" "$f"
+    n=$((n + 1))
+  done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null) | sort -s -n -k1,1 | cut -f2-
+}
+
+# The tab title for a session: the last name given with /rename, which Claude
+# stores in the transcript, else the folder name. The name recorded at
+# SessionStart is no good: it is often Claude's generated name with a short
+# hex suffix (manager-ci-bd), from before the session was renamed.
+tab_title() {
+  local transcript=$1 cwd=$2 t=""
+  [ -f "$transcript" ] && t=$(grep -a -F '"type":"custom-title"' "$transcript" | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
+  printf '%s' "${t:-$(basename "$cwd")}"
+}
+
 # Print one line per session to resume: <cwd> TAB <tab title> TAB <bash command>.
 # The command cds into <cwd> itself, because some spawn APIs ignore the cwd
 # they are given when a command is set (Frankenterm's Lua spawn_tab does).
@@ -193,11 +288,10 @@ capture() {
 # SessionStart hook writes a fresh entry. Log lines go to restore.log.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
-  local log="$STATE_DIR/restore.log" f sid cwd transcript pid name cmd a
+  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd a prompt
   echo "=== plan $(date -Is)" >> "$log"
-  # oldest first, so tab order matches start order
   while IFS= read -r f; do
-    sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f"); name=$(jq -r '.name // empty' "$f")
+    sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f")
     transcript=$(jq -r '.transcript // empty' "$f"); pid=$(jq -r '.pid // 0' "$f")
     if claude_alive "$pid" "$sid"; then
       echo "skip $sid: still running as pid $pid" >> "$log"; continue
@@ -218,10 +312,13 @@ plan() {
     fi
     cmd+=" --resume $(printf '%q' "$sid")"
     while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.flags[]' "$f")
+    # `--` ends the options, so a variadic flag such as --add-dir cannot take the prompt
+    prompt=$(resume_prompt "$transcript" "$(jq -r '.status // empty' "$f")")
+    [ -n "$prompt" ] && cmd+=" -- $(printf '%q' "$prompt")"
     mv "$f" "$STATE_DIR/restored/"
     echo "resume $sid ($cwd): $cmd" >> "$log"
-    printf '%s\t%s\t%s\n' "$cwd" "${name:-$(basename "$cwd")}" "$cmd"
-  done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null)
+    printf '%s\t%s\t%s\n' "$cwd" "$(tab_title "$transcript" "$cwd")" "$cmd"
+  done < <(ordered_entries)
 }
 
 wait_for_mux() {
@@ -266,10 +363,11 @@ case "${1:-}" in
   hook-start) [ -d /run/systemd/system ] && hook_start ;;
   hook-end)   [ -d /run/systemd/system ] && hook_end ;;
   capture)    capture "${2:-}" ;;
+  snapshot)   snapshot ;;
   plan)       plan ;;
   restore)    restore ;;
   list)       list ;;
   forget)     rm -v "$SESS_DIR/${2:?entry key}.json" ;;
-  *) sed -n '2,19p' "$0"; exit 1 ;;
+  *) sed -n '2,21p' "$0"; exit 1 ;;
 esac
 exit 0
