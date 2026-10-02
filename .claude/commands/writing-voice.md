@@ -138,7 +138,7 @@ Context: Reply to an external customer acknowledging a UI limitation he correctl
 
 ## How to Use This Skill
 
-Invoke with `/voice` and provide:
+Invoke with `/writing-voice` and provide:
 1. What you're writing (email, post, doc, message)
 2. The audience and channel
 3. The key points to convey
