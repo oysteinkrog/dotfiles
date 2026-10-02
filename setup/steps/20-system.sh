@@ -68,7 +68,7 @@ else
   sudo localectl set-x11-keymap us pc105 altgr-intl; ok "X11 keymap set to us altgr-intl"
 fi
 
-# Linger keeps user services (agent-mail, wezterm mux) running without a login.
+# Linger keeps user services (agent-mail, FrankenTerm mux) running without a login.
 if [ "$(loginctl show-user "$me" -p Linger --value 2>/dev/null)" = yes ]; then
   ok "linger on"
 else

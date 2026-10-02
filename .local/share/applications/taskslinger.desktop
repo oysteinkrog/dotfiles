@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TaskSlinger
+Comment=Windows task manager under Wine
+Exec=/home/oystein/.local/bin/taskslinger
+Icon=utilities-system-monitor
+Categories=System;Monitor;
+StartupWMClass=taskslinger.exe

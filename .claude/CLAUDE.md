@@ -233,11 +233,27 @@ skip. Codex is an approved provider, so no confidentiality approval is needed.
 in agent context, because it opens the TUI and hangs. Always pass a `--robot-*` flag. Load
 `beads-br` and `beads-bv` for the command surface.
 
+## Patching and building open source
+
+Every patched or source-built upstream project on this machine goes through
+`~/src/localbuilds` (public repo `oysteinkrog/localbuilds`) and its `localbuild` command.
+**Load `local-builds` before you patch, rebuild or install one.** These rules hold anyway:
+
+- Upstream clones live in `~/src/<name>` and are only fetched. Build with
+  `localbuild build <name>[@variant]`, never with `make` or `cargo` in that clone.
+- Never copy a binary into `~/.local/bin`, `/usr/local/bin` or a Wine prefix by hand. Use
+  `localbuild install`.
+- Never leave a change only in a build tree or a `~/.cache` source tree. Save it with
+  `localbuild patch-save`, or commit and push it to the fork, before you stop.
+- No hostnames, IPs, serials or company names in localbuilds. Company glue stays in the
+  company monorepo; private machine details go in `~/work/Life`.
+
 ## Dotfiles and local tools
 
-`~/.dotfiles` is a regular git repo whose work tree is `~`, remote
-`https://github.com/oysteinkrog/dotfiles`. `~/.claude` is a symlink into it, so skills,
-settings and Claude config are version controlled there. Commit with
+`~/.dotfiles` is a regular git repo (remote `https://github.com/oysteinkrog/dotfiles`).
+Its files live in `~/.dotfiles`, and `install.sh` symlinks them into `~`. `~/.claude` is one
+of those symlinks, so skills, settings and Claude config are version controlled there. A new
+file for `~` goes in `~/.dotfiles` first, with a symlink from `~`. Commit with
 `git -C ~/.dotfiles add <files> && git -C ~/.dotfiles commit`.
 
 **Load `local-tools`** for the small machine-specific commands: `git hunks` and `git addmatch`

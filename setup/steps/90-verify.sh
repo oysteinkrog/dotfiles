@@ -12,16 +12,17 @@ done
 [ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ] && ok "~/.claude -> dotfiles" || fail "~/.claude is not the dotfiles .claude"
 
 step "verify: commands"
-for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex pm2 claude cass am br docker tailscale wezterm; do
+for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex pm2 claude cass am br docker tailscale frankenterm-gui localbuild; do
   if have "$c"; then ok "$c"; else fail "$c not on PATH"; fi
 done
-case "$(command -v wezterm)" in
-  "$HOME/.local/bin/wezterm") ok "wezterm resolves to the fork in ~/.local/bin" ;;
-  *) warn "wezterm resolves to $(command -v wezterm); the config needs the fork in ~/.local/bin first on PATH" ;;
+case "$(command -v frankenterm-gui)" in
+  /usr/bin/frankenterm-gui) ok "frankenterm-gui is the frankenterm-local package" ;;
+  *) warn "frankenterm-gui resolves to $(command -v frankenterm-gui), not the package in /usr/bin" ;;
 esac
+"$HOME/.local/bin/localbuild" check
 
 step "verify: services"
-for u in agent-mail filter-chain wezterm-mux app-dev.lizardbyte.app.Sunshine app-org.kde.krdpserver; do
+for u in agent-mail filter-chain frankenterm-mux app-dev.lizardbyte.app.Sunshine app-org.kde.krdpserver; do
   if systemctl --user is-active -q "$u.service" 2>/dev/null; then ok "$u (user)"
   else warn "$u (user) not active"; fi
 done
