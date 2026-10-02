@@ -245,8 +245,10 @@ Every patched or source-built upstream project on this machine goes through
   `localbuild install`.
 - Never leave a change only in a build tree or a `~/.cache` source tree. Save it with
   `localbuild patch-save`, or commit and push it to the fork, before you stop.
-- No hostnames, IPs, serials or company names in localbuilds. Company glue stays in the
-  company monorepo; private machine details go in `~/work/Life`.
+- Changes go on a branch of a GitHub fork (oysteinkrog for my setup), not into loose patch
+  files. Changes Swing Catalyst needs go on `swing-catalyst/*` branches of the InitialForce
+  forks and are built by the monorepo.
+- No hostnames, IPs, serials or account names in localbuilds; those go in `~/work/Life`.
 
 ## Dotfiles and local tools
 

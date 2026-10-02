@@ -52,8 +52,9 @@ Then in `~/src/localbuilds`:
    `patches/` or a `PKGBUILD`.
 2. Prefer `KIND=pkg` (pacman package) for ordinary tools. Use `KIND=tree` only when the
    software needs side-by-side copies.
-3. Prefer `MODE=patches` for a few small fixes and `MODE=fork` when the change is large or
-   ongoing.
+3. Use `MODE=fork`: fork the upstream on GitHub under oysteinkrog, put each change on a
+   branch as a commit with a message that says why. Use `MODE=patches` only when there is no
+   git repository to fork.
 4. Build, install, `localbuild index`, commit.
 
 ## Never
@@ -63,9 +64,12 @@ Then in `~/src/localbuilds`:
 - Copy a binary into `~/.local/bin`, `/usr/local/bin` or a Wine prefix by hand.
 - Leave an edit only in a build tree or a `~/.cache` source tree. Save it with
   `patch-save` (or commit and push it to the fork) before you stop.
-- Put hostnames, IPs, serials, account names or company names into localbuilds. The
-  pre-commit hook checks against `~/work/Life/setup/localbuilds/private-words.txt`. Company
-  glue (prefix setup, hardware bridges, product scripts) stays in the company monorepo.
+- Put hostnames, IPs, serials or account names into localbuilds. The pre-commit hook checks
+  against `~/work/Life/setup/localbuilds/private-words.txt`. Naming or linking the company
+  forks is fine.
+- Put a change the company product (Swing Catalyst) needs into localbuilds. Those go on a
+  `swing-catalyst/*` branch of the InitialForce fork and are built by the monorepo's
+  `tools/wine` scripts.
 
 ## After a system upgrade
 
