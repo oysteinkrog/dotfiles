@@ -241,8 +241,14 @@ end)
 wezterm.on('format-tab-title', function(tab)
   local idx = string.format('%2d', tab.tab_index + 1)
   local title = tab.tab_title
-  if not title or #title == 0 then
-    title = tab.active_pane.title
+  local pane_title = tab.active_pane.title
+  -- While Claude Code runs, its own title ("✳ name", or a spinner while it
+  -- works) wins over the fixed title restored tabs get, so /rename shows up.
+  -- Claude's titles start with a non-ASCII symbol and a space.
+  local claude_title = tab.active_pane.user_vars.claude_state
+    and pane_title:match('^[\xC2-\xF4][\x80-\xBF]+ ')
+  if claude_title or not title or #title == 0 then
+    title = pane_title
   end
   -- Claude state (from hooks) takes precedence over manual priority
   local claude_state = tab.active_pane.user_vars.claude_state
