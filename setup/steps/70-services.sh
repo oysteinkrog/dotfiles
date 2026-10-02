@@ -11,12 +11,11 @@ units=(
   app-org.kde.krdpserver.service           # krdp package
   cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
 )
-# The WezTerm mux and the Claude restore unit need the fork binaries from the tools step.
-if [ -x "$HOME/.local/bin/wezterm-mux-server" ]; then
-  units+=(wezterm-mux.service)
-  [ -f "$HOME/.config/systemd/user/claude-restore.service" ] && units+=(claude-restore.service)
+# The FrankenTerm mux needs the frankenterm-local package from the tools step.
+if [ -x /usr/bin/frankenterm-mux-server ]; then
+  units+=(frankenterm-mux.service)
 else
-  warn "~/.local/bin/wezterm-mux-server missing; wezterm-mux not enabled (tools step)"
+  warn "/usr/bin/frankenterm-mux-server missing; frankenterm-mux not enabled (tools step)"
 fi
 
 # Multi-monitor hosts: KRDP streams one monitor, and krdp-remote-mode turns the others
