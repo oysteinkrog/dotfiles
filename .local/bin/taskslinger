@@ -6,8 +6,9 @@ WINE="$HOME/.local/share/taskslinger-wine/current/bin"
 export WINEPREFIX="$HOME/.local/share/wineprefixes/taskslinger"
 export WINEDEBUG=-all
 export PATH="$WINE:$PATH"
-# Decorated=N: with KDE's frame around the window, hover and clicks land above the pointer.
-if ! wine reg query 'HKCU\Software\Wine\X11 Driver' /v Decorated 2>/dev/null | grep -q REG_SZ; then
-    wine reg add 'HKCU\Software\Wine\X11 Driver' /v Decorated /t REG_SZ /d N /f >/dev/null 2>&1
+# Decorated=Y: KDE draws the border and handles maximize. The patched Wine keeps TaskSlinger's
+# own title bar visible, so hover and clicks land under the pointer.
+if ! wine reg query 'HKCU\Software\Wine\X11 Driver' /v Decorated 2>/dev/null | grep -q 'REG_SZ *Y'; then
+    wine reg add 'HKCU\Software\Wine\X11 Driver' /v Decorated /t REG_SZ /d Y /f >/dev/null 2>&1
 fi
 cd "$HOME/.local/opt/taskslinger" && exec wine TaskSlinger.exe "$@"
