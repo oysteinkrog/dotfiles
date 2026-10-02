@@ -1,0 +1,7 @@
+[Unit]
+Description=Save the Frankenterm mux tab order for Claude session restore
+After=frankenterm-mux.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash %h/.claude/hooks/claude-persist.sh snapshot
