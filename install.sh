@@ -193,6 +193,8 @@ if [ -n "$native_linux" ]; then
     .local/bin/streamcam-mic-enable
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
+    .local/bin/cass
+    .config/environment.d/cass.conf
   )
   for item in "${linux_items[@]}"; do
     link_one "$dir/$item" "$HOME/$item"
