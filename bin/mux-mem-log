@@ -1,0 +1,22 @@
+#!/bin/sh
+# Log the memory of frankenterm-mux.service once a minute, to find what grows
+# before systemd-oomd kills the unit (and every terminal session with it).
+# Each sample: a header with the unit's memory and swap, then the 8 largest
+# processes in the unit by RSS + swap. Output: ~/.local/state/mux-mem-log/log
+# Run it outside the unit: systemd-run --user --unit=mux-mem-log mux-mem-log
+set -u
+C=/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/frankenterm-mux.service
+OUT="${XDG_STATE_HOME:-$HOME/.local/state}/mux-mem-log"
+mkdir -p "$OUT"
+while :; do
+  {
+    printf '=== %s unit mem %s MB swap %s MB, system swap used %s\n' "$(date -Is)" \
+      "$(($(cat "$C/memory.current") / 1048576))" "$(($(cat "$C/memory.swap.current") / 1048576))" \
+      "$(swapon --show=USED --noheadings | tr -d ' ')"
+    for p in $(cat "$C/cgroup.procs"); do
+      awk -v p="$p" '/^VmRSS:/{r=$2} /^VmSwap:/{s=$2} END{printf "%d %d %d ", r+s, r, s}' "/proc/$p/status" 2>/dev/null \
+        && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-140 && echo
+    done | sort -rn | head -8 | awk '{printf "  %6d MB rss %6d MB swap %6d MB  ", $1/1024, $2/1024, $3/1024; $1=$2=$3=""; print}'
+  } >> "$OUT/log"
+  sleep 60
+done
