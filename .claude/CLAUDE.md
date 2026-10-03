@@ -237,10 +237,12 @@ and re-storing them.
 
 **Run every heavy build or test through `heavy-build`.** That covers cargo build, test,
 check, clippy and doc, dotnet build and test, `build.cmd`, `localbuild build`, cmake and
-ninja. Example: `heavy-build cargo test -p mux --lib`. It waits for the one machine-wide
-build lock, refuses (exit 75) when the disk has less than 60 GiB free, and runs the build in
-a memory-capped scope, so an OOM kills only the build and not every terminal tab. The wait
-can be long, so run it in the background when your tool call has a timeout. On an OOM kill
+ninja. Example: `heavy-build cargo test -p mux --lib`. Up to 3 builds run at once, one per
+build slot. A build waits for a free slot and for at least 20 GiB of available memory.
+heavy-build refuses (exit 75) when the disk has less than 60 GiB free or after 7200 s of
+waiting. It runs each build in a memory-capped scope (18G) inside `builds.slice` (36G for
+all builds), so an OOM kills only the build and not every terminal tab. The wait can be
+long, so run it in the background when your tool call has a timeout. On an OOM kill
 (exit 137), retry once, then tell the manager session.
 
 - **Never set `CARGO_BUILD_BUILD_DIR` or `build.build-dir`.** `~/.cargo/config.toml` keeps
