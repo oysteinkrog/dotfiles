@@ -1,9 +1,28 @@
 [Unit]
-Description=cass session index and cm reflect
+Description=cass session index and cm reflect (capped, own cgroup)
+Documentation=file:%h/.dotfiles/docs/cass-setup.md
 
 [Service]
 Type=oneshot
+Slice=background.slice
+# Skip this run when the box is short of memory; the timer tries again later.
+ExecCondition=%h/.local/bin/cass-memcheck
 ExecStart=%h/.local/bin/cass-maintenance.sh
+Environment=CASS_AUTO_REFRESH=0
+Environment=MALLOC_ARENA_MAX=2
+Environment=CASS_NON_WATCH_INGEST_CHUNK_SIZE=8
+Environment=CASS_TANTIVY_REBUILD_WORKERS=4
+Environment=CASS_TANTIVY_REBUILD_PAGE_PREP_WORKERS=2
+Environment=CASS_TANTIVY_REBUILD_STAGED_SHARD_BUILDERS=1
+Environment=CASS_TANTIVY_MAX_WRITER_THREADS=2
+# cass plans its memory against memory.max of its own cgroup. An OOM kill at
+# this cap kills only this unit, never the terminal mux.
+MemoryHigh=14G
+MemoryMax=16G
+MemorySwapMax=4G
+OOMPolicy=kill
+CPUWeight=20
+IOWeight=20
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=2h

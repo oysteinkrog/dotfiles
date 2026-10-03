@@ -194,6 +194,7 @@ if [ -n "$native_linux" ]; then
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
     .local/bin/cass
+    .local/bin/cass-memcheck
     .config/environment.d/cass.conf
   )
   for item in "${linux_items[@]}"; do
