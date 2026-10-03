@@ -97,10 +97,13 @@ esac
 # its shim and every command it starts. Otherwise all sessions share the terminal's
 # cgroup (frankenterm-mux.service), and when one of them fills memory, systemd-oomd
 # kills that cgroup and every session goes down with it. In its own scope, only the
-# session that grew is killed. Skipped without systemd (WSL1) and when already scoped.
+# session that grew is killed. OOMPolicy=continue: when the kernel kills one process in
+# the scope (a test runner, say), the session keeps running; the default (stop) would
+# end it. Skipped without systemd (WSL1) and when already scoped.
 if [ -z "${AIOLOS_RC_SCOPED:-}" ] && [ -d /run/systemd/system ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]; then
   export AIOLOS_RC_SCOPED=1
-  exec systemd-run --user --scope --quiet --collect --slice=claude.slice --unit="claude-$$" -- "$0" "$@"
+  exec systemd-run --user --scope --quiet --collect --slice=claude.slice --unit="claude-$$" \
+    -p OOMPolicy=continue -- "$0" "$@"
 fi
 
 # Routing mode + optional leading options.
