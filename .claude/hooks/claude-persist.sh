@@ -163,8 +163,16 @@ hook_end() {
   # Keep the entry when the session dies because the machine or its mux
   # server is going down; drop it on a normal exit.
   [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && return 0
-  # The hook runs in the same systemd unit (cgroup) as its Claude process.
-  # Use our own pid: Claude may already have removed ~/.claude/sessions/<pid>.json.
+  # The session also dies when the mux server stops, crashes or is OOM-killed,
+  # because its terminal goes away. Sessions started by aiolos-rc run in their
+  # own scope (claude-<pid>.scope), so check the mux unit itself; activating
+  # covers the wait before systemd restarts it.
+  case "$(systemctl --user is-active "$MUX_UNIT" 2>/dev/null)" in
+    deactivating|inactive|failed|activating) return 0 ;;
+  esac
+  # Older sessions run inside the mux unit itself. The hook runs in the same
+  # cgroup as its Claude process; use our own pid, because Claude may already
+  # have removed ~/.claude/sessions/<pid>.json.
   unit=$(unit_of $$)
   if [ -n "${unit:-}" ]; then
     case "$(systemctl --user is-active "$unit" 2>/dev/null)" in
