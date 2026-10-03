@@ -26,7 +26,9 @@ if [ -n "$HOST_KRDP_MONITOR" ]; then
   want="# Written by setup/steps/70-services.sh from HOST_KRDP_MONITOR in host.sh.
 [Service]
 ExecStart=
-ExecStart=/usr/bin/krdpserver --monitor $HOST_KRDP_MONITOR"
+ExecStart=/usr/bin/krdpserver --monitor $HOST_KRDP_MONITOR
+# krdp-local only: fit the streamed monitor to the client's size on connect.
+Environment=KRDP_OUTPUT_RESIZE_HOOK=$HOME/bin/krdp-remote-mode"
   if [ "$(cat "$dropin" 2>/dev/null)" != "$want" ]; then
     mkdir -p "${dropin%/*}"
     printf '%s\n' "$want" >"$dropin"
