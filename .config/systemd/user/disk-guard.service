@@ -1,0 +1,7 @@
+[Unit]
+Description=Check free disk space and btrfs metadata (disk-guard)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/disk-guard
+# Phase 3, needs Oystein's yes: Environment=DISK_GUARD_EMERGENCY=1
