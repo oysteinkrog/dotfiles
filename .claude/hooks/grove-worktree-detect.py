@@ -91,13 +91,19 @@ def blank_data_regions(text):
 
 
 def split_segments(original, blanked):
-    """Split ORIGINAL text at the separator positions found in BLANKED text."""
+    """Split ORIGINAL text at the separator positions found in BLANKED text.
+    A segment that is blank in BLANKED is data, not a command: a heredoc body
+    line or a line inside a multi-line quote. It is dropped, so `cat <<EOF`
+    followed by a line that reads like a command never counts as running it.
+    """
     segments = []
     pos = 0
     for m in SEPARATOR_RE.finditer(blanked):
-        segments.append(original[pos : m.start()])
+        if blanked[pos : m.start()].strip():
+            segments.append(original[pos : m.start()])
         pos = m.end()
-    segments.append(original[pos:])
+    if blanked[pos:].strip():
+        segments.append(original[pos:])
     return segments
 
 
@@ -175,10 +181,10 @@ def parse_git(tokens, payload_cwd):
 
 
 def finish_target(kind, args, cwd, is_clone):
-    # Candidate target = last non-flag argument. For `worktree add PATH
-    # [COMMITISH]` this is wrong if an explicit commit-ish trailer is given
-    # (PATH is second-to-last, not last) -- a known, accepted limitation;
-    # normal agent usage omits the commit-ish, so PATH is last. For `clone`,
+    # For `worktree add`, worktree_add_path skips options and their values
+    # and takes the first remaining argument, so a trailing commit-ish is
+    # never read as the path. For `clone`, the candidate is the last non-flag
+    # argument:
     # a trailing --branch/--depth style flag+value pair never displaces the
     # true positional args, because flag values don't start with '-' but
     # they're never LAST when a real destination or source follows them.
@@ -192,8 +198,33 @@ def finish_target(kind, args, cwd, is_clone):
         else:
             resolved = None
     else:
-        resolved = resolve_dir(positional[-1], cwd) if positional else None
+        path = worktree_add_path(args)
+        resolved = resolve_dir(path, cwd) if path else None
     return (kind, resolved, cwd)
+
+
+# `git worktree add` options that take a value in the next token.
+WORKTREE_VALUE_OPTS = {"-b", "-B", "--reason"}
+
+
+def worktree_add_path(args):
+    """The <path> of `git worktree add [options] <path> [<commit-ish>]`: the
+    first argument that is not an option or an option's value. A trailing
+    commit-ish such as HEAD is therefore never mistaken for the path.
+    """
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            return args[i + 1] if i + 1 < len(args) else None
+        if a in WORKTREE_VALUE_OPTS:
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        return a
+    return None
 
 
 def parse_gh(tokens, payload_cwd):
