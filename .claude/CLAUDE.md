@@ -192,6 +192,47 @@ To deploy a build or pull logs, load `lab-deploy`.
 Read the target repo's `CLAUDE.md` and `AGENTS.md` when working across repos.
 **ifboard can read ifkb; ifkb must never reference ifboard.**
 
+## One clone per repo, worktrees for everything else
+
+**Never `git clone` a repo that already exists on this machine.** Every repo in
+the index above, and the monorepo, has exactly one clone. Need a second checkout,
+for a rebase, a conflict fix, a build at another commit, or any throwaway
+experiment: add a worktree to the clone you already have.
+
+```sh
+git -C ~/work/<repo> worktree add --detach /var/tmp/claude/<task> <ref>
+git -C ~/work/<repo> worktree remove --force /var/tmp/claude/<task>   # when done
+```
+
+A worktree does not touch the main checkout's branch, index or stash, so it is
+safe even when another session is working there. The branch ban in the project
+CLAUDE.md is about the shared checkout, not about adding worktrees beside it.
+
+**Why.** Measured on `ifkb`, 2026-10-02: the repo is 1.8 GB, of which `.git` is
+1.1 GB. A fresh clone pays all of it; a worktree pays 584 MB and shares the
+object store. I cloned ifkb into a scratchpad that evening for a 16-line doc
+rebase and it cost 1.7 GB. `/home` and `/var/tmp` are btrfs here and
+`cp --reflink=always` works, so even a copy need not duplicate bytes.
+
+Three rules that come with it:
+
+- **Never clone or build in `/tmp`.** It is tmpfs, so every byte is RAM and zram
+  swap. `systemd-oomd` killed the whole terminal unit four times on 2026-10-02,
+  and a 2.4 GB scratchpad under `/tmp` was part of that pressure. Scratch work
+  goes in `/var/tmp/claude/`, which is on disk.
+- **The monorepo is grove's.** Use `grove new`, `grove fork` or
+  `grove new --ephemeral`, never a raw `git worktree add` or `git clone` under
+  `~/work/desktop`. A PreToolUse hook blocks the raw forms; `# noqa:
+  grove-worktree` bypasses it and is for genuinely outside-grove work only.
+- **Remove the worktree when the task ends**, in the same turn you finish. A
+  `git worktree list` full of dead paths is the same sprawl as a folder of
+  stale clones.
+
+When a separate object store is genuinely required, such as rewriting history
+you must not expose to the real repo, use `git clone --reference ~/work/<repo>`
+rather than a fresh fetch. That borrows the objects instead of re-downloading
+and re-storing them.
+
 ## Publishing static sites
 
 Pick the destination by **who owns the content**, not by who is typing.
