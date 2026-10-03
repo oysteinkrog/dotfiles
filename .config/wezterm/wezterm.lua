@@ -210,6 +210,9 @@ config.keys = {
   -- back to the tab you were on before (after Alt+M, or any tab switch)
   { key = 'm', mods = 'ALT|SHIFT', action = wezterm.action.ActivateLastTab },
   { key = 'k', mods = 'ALT', action = wezterm.action_callback(tab_search) },
+  { key = 'b', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateCommandPalette },
+  -- new tabs start in the home directory, not the active tab's directory
+  { key = 't', mods = 'CTRL|SHIFT', action = wezterm.action.SpawnCommandInNewTab({ cwd = wezterm.home_dir }) },
   { key = 'a', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function(window, pane)
       local id = pane:tab():tab_id()
       local cur = tab_priorities[id] or 0
@@ -401,6 +404,14 @@ pcall(function()
     italic = true,
   }
   config.colors = colors
+end)
+
+-- the tab bar + button: open the new tab in the home directory too
+wezterm.on('new-tab-button-click', function(window, pane, button, default_action)
+  if button == 'Left' then
+    window:perform_action(wezterm.action.SpawnCommandInNewTab({ cwd = wezterm.home_dir }), pane)
+    return false
+  end
 end)
 
 return config
