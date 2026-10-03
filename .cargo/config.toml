@@ -1,0 +1,11 @@
+# Machine-wide cargo settings. Linked to ~/.cargo/config.toml by install.sh.
+#
+# build-dir holds the intermediate files (deps, incremental, test binaries).
+# Pointing it at the workspace's own target dir means a CARGO_TARGET_DIR or
+# --target-dir set by an agent only moves the final binaries. The large files
+# stay in <workspace>/target, are reused by every build of that checkout, and
+# go away with the worktree. Without CARGO_TARGET_DIR this is cargo's default
+# layout. A repo's own .cargo/config.toml and the CARGO_BUILD_BUILD_DIR
+# variable override this. See ~/.claude/CLAUDE.md, section "Builds".
+[build]
+build-dir = "{workspace-root}/target"
