@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# heavy-build: run a heavy build or test one at a time, in a memory-capped
+# systemd scope, after a free-space check.
+#
+# Usage: heavy-build <cmd> [args...]
+#   heavy-build cargo test -p mux --lib
+#   heavy-build dotnet build Foo.sln
+#   heavy-build localbuild build frankenterm
+#   heavy-build bash -c 'cd sub && cargo build && cargo test'
+#
+# What it does:
+# - Waits for the machine-wide build lock $XDG_RUNTIME_DIR/heavy-build.lock,
+#   the same lock as the 2026-10-03 `flock ... systemd-run` rule, so old and
+#   new commands queue together. Gives up after HEAVY_BUILD_WAIT seconds
+#   (default 7200) with exit code 75. A wait can be long: run it in the
+#   background when your tool call has a timeout.
+# - Waits for any build scope left over from a killed heavy-build to finish.
+# - Refuses when the filesystem of the current directory has less than
+#   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
+#   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
+# - Runs the command in a transient scope in builds.slice with the rule's
+#   memory caps, so an OOM kills only the build, not frankenterm-mux.service.
+#   The command never inherits the lock, so a daemon it leaves behind cannot
+#   hold the lock. heavy-build holds it until the build exits.
+# - Exits with the command's status. A signal death gives 128 + signal
+#   (137 after an OOM kill). TERM, INT or HUP to heavy-build stop the build.
+#
+# Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
+# the command directly. Under a plain `flock heavy-build.lock` it skips the
+# lock but still makes a scope.
+#
+# It sets no target dir or build dir. ~/.cargo/config.toml sets
+# build.build-dir; see ~/.claude/CLAUDE.md "Builds".
+set -uo pipefail
+
+if [[ $# -lt 1 || $1 == -h || $1 == --help ]]; then
+  sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "${BASH_SOURCE[0]}" >&2
+  [[ $# -ge 1 ]] && exit 0
+  exit 2
+fi
+
+RUNDIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+LOCK=${HEAVY_BUILD_LOCK:-$RUNDIR/heavy-build.lock}
+WAIT=${HEAVY_BUILD_WAIT:-7200}
+REFUSE_GIB=${HEAVY_BUILD_REFUSE_GIB:-60}
+
+build_env=(
+  HEAVY_BUILD_ACTIVE=1
+  CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+  CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-8}"
+  MSBUILDDISABLENODEREUSE=1
+  DOTNET_CLI_USE_MSBUILD_SERVER=0
+)
+
+say() { echo "heavy-build: $*" >&2; }
+
+# Already inside a build scope: heavy-build in heavy-build, or the old rule.
+if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
+  exec env "${build_env[@]}" "$@"
+fi
+
+# True when a process above us holds LOCK, for example `flock heavy-build.lock
+# heavy-build ...`. Matches on inode only: on btrfs, stat's device number is
+# the subvolume's, not the one /proc/locks prints.
+ancestor_holds_lock() {
+  local ino holders pid p
+  ino=$(stat -c %i -- "$LOCK" 2>/dev/null) || return 1
+  holders=$(awk -v i="$ino" '$2 == "FLOCK" && $3 != "->" {split($6, a, ":"); if (a[3] == i) print $5}' /proc/locks 2>/dev/null)
+  [[ -n $holders ]] || return 1
+  pid=$PPID
+  while [[ -n $pid && $pid -gt 1 ]]; do
+    for p in $holders; do [[ $p == "$pid" ]] && return 0; done
+    pid=$(awk '/^PPid:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
+  done
+  return 1
+}
+
+deadline=$(( SECONDS + WAIT ))
+left() { local l=$(( deadline - SECONDS )); (( l < 1 )) && l=1; echo "$l"; }
+
+if ancestor_holds_lock; then
+  say "a parent process holds $LOCK; not taking it again"
+else
+  exec 9>>"$LOCK" || { say "cannot open $LOCK"; exit 75; }
+  if ! flock -n 9; then
+    say "waiting for the build lock ($LOCK). Other builds are running."
+    if ! flock -w "$(left)" 9; then
+      say "gave up after ${WAIT}s waiting for the build lock. Tell the manager session."
+      exit 75
+    fi
+  fi
+fi
+
+# A heavy-build killed with SIGKILL leaves its scope running without the lock.
+# Wait for such scopes before starting another build.
+leftover() { systemctl --user list-units --type=scope --state=active --plain --no-legend 'heavy-build-*.scope' 2>/dev/null | awk '{print $1}'; }
+if [[ -n $(leftover) ]]; then
+  say "waiting for a build whose heavy-build was killed: $(leftover | tr '\n' ' ')"
+  while [[ -n $(leftover) ]]; do
+    (( SECONDS < deadline )) || { say "gave up waiting for $(leftover | tr '\n' ' ')"; exit 75; }
+    sleep 5
+  done
+fi
+
+avail=$(LC_ALL=C df -B1G --output=avail -- . 2>/dev/null | tail -1 | tr -d ' ')
+if [[ $avail =~ ^[0-9]+$ ]] && (( avail < REFUSE_GIB )) && [[ ${HEAVY_BUILD_FORCE:-0} != 1 ]]; then
+  say "refused. $(df --output=target -- . | tail -1) has ${avail} GiB free; the limit is ${REFUSE_GIB} GiB."
+  say "stop and tell the manager session. Do not delete other build output to make room."
+  exit 75
+fi
+
+unit="heavy-build-$$-$RANDOM"
+systemd-run --user --scope --quiet --collect --expand-environment=no \
+  --unit="$unit" --slice=builds.slice \
+  -p MemoryHigh=16G -p MemoryMax=18G -p MemorySwapMax=2G -p OOMPolicy=kill \
+  env "${build_env[@]}" "$@" 0<&0 9>&- &
+child=$!
+
+stop_build() {
+  kill "-$1" "$child" 2>/dev/null
+  systemctl --user kill --signal="$1" "$unit.scope" 2>/dev/null
+}
+trap 'stop_build TERM' TERM HUP
+trap 'stop_build INT' INT
+while :; do
+  wait "$child"
+  rc=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+# Nothing from this build may run on once we drop the lock.
+systemctl --user stop "$unit.scope" 2>/dev/null
+exit "$rc"
