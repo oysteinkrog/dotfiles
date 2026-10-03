@@ -3,12 +3,13 @@
 
     slab-guard [LIMIT_MB]        default 2048
 
-KWin 6.7 with the NVIDIA driver can leak kmalloc-128 objects (drm_display_mode copies)
-when a monitor has an EDID override from edid-add-mode. On 2026-10-03 it grew to 54 GB
-and the kernel ran out of memory. This runs as root, checks the slab every 10 seconds
-and logs its size every 10 minutes or when it grows by 256 MB. Past LIMIT_MB it logs
-which kernel functions are allocating 128-byte objects, then removes every EDID
-override edid-add-mode made, so the monitors fall back to their own modes.
+KWin 6.7 with the NVIDIA driver can leak kmalloc-128 objects (drm_display_mode copies),
+reportedly with an EDID override. On 2026-10-03 it grew to 54 GB and the kernel ran out
+of memory; the trigger could not be reproduced afterwards. This runs as root, checks the
+slab every 10 seconds and logs its size every 10 minutes or when it grows by 256 MB.
+Past LIMIT_MB it traces 128-byte allocations for 5 seconds and saves the processes and
+full kernel call stacks to /var/log/slab-guard/, which is what a real fix needs. Then it
+removes every EDID override edid-add-mode made, so the monitors use their own modes.
 """
 
 import pathlib
@@ -17,9 +18,11 @@ import sys
 import time
 
 TRACE = pathlib.Path("/sys/kernel/tracing/events/kmem/kmalloc")
-HIST = (
-    "hist:keys=call_site.sym:vals=hitcount:sort=hitcount.descending if bytes_alloc==128"
-)
+HISTS = [
+    f"hist:keys={key}:vals=hitcount:sort=hitcount.descending if bytes_alloc==128"
+    for key in ("call_site.sym", "common_pid.execname", "common_stacktrace")
+]
+REPORTS = pathlib.Path("/var/log/slab-guard")
 KEPT = pathlib.Path("/run/edid-add-mode")
 
 
@@ -36,23 +39,30 @@ def slab_mb():
 
 
 def who_allocates():
-    """The top 128-byte allocators over 5 seconds."""
+    """Trace 128-byte allocations for 5 seconds; save the report, return the top callers."""
+    trigger = TRACE / "trigger"
     try:
-        with open(TRACE / "trigger", "a") as f:
-            f.write(HIST)
+        for h in HISTS:
+            with open(trigger, "a") as f:
+                f.write(h)
         time.sleep(5)
-        lines = [
-            ln for ln in (TRACE / "hist").read_text().splitlines() if "call_site" in ln
-        ]
-        return lines[:8]
+        report = (TRACE / "hist").read_text()
     except OSError as e:
         return [f"tracing failed: {e}"]
     finally:
-        try:
-            with open(TRACE / "trigger", "a") as f:
-                f.write("!" + HIST)
-        except OSError:
-            pass
+        for h in HISTS:
+            try:
+                with open(trigger, "a") as f:
+                    f.write("!" + h)
+            except OSError:
+                pass
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    path = REPORTS / time.strftime("%Y%m%d-%H%M%S.txt")
+    path.write_text(report)
+    lines = [ln for ln in report.splitlines() if not ln.startswith("#")]
+    sites = [ln for ln in lines if "call_site" in ln][:8]
+    procs = [ln for ln in lines if "common_pid" in ln][:5]
+    return [f"full report with call stacks: {path}", *sites, *procs]
 
 
 def remove_overrides():
