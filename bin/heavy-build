@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# heavy-build: run a heavy build or test one at a time, in a memory-capped
-# systemd scope, after a free-space check.
+# heavy-build: run a heavy build or test in one of 3 build slots, in a
+# memory-capped systemd scope, after memory and free-space checks.
 #
 # Usage: heavy-build <cmd> [args...]
 #   heavy-build cargo test -p mux --lib
@@ -9,25 +9,28 @@
 #   heavy-build bash -c 'cd sub && cargo build && cargo test'
 #
 # What it does:
-# - Waits for the machine-wide build lock $XDG_RUNTIME_DIR/heavy-build.lock,
-#   the same lock as the 2026-10-03 `flock ... systemd-run` rule, so old and
-#   new commands queue together. Gives up after HEAVY_BUILD_WAIT seconds
-#   (default 7200) with exit code 75. A wait can be long: run it in the
-#   background when your tool call has a timeout.
-# - Waits for any build scope left over from a killed heavy-build to finish.
+# - Waits for one of 3 build slots. Slot 0 is $XDG_RUNTIME_DIR/heavy-build.lock,
+#   the lock of the older `flock ... systemd-run` rule, so a build started with
+#   that rule counts as one slot. Slots 1 and 2 are heavy-build.lock.1 and .2.
+# - Also waits until MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB
+#   (default 20), checked again every HEAVY_BUILD_POLL seconds (default 5).
+# - Counts a build scope left over from a killed heavy-build as a used slot.
+# - Gives up after HEAVY_BUILD_WAIT seconds in total (default 7200) with exit
+#   code 75. A wait can be long: run it in the background when your tool call
+#   has a timeout.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
 # - Runs the command in a transient scope in builds.slice with the rule's
 #   memory caps, so an OOM kills only the build, not frankenterm-mux.service.
 #   The command never inherits the lock, so a daemon it leaves behind cannot
-#   hold the lock. heavy-build holds it until the build exits.
+#   hold a slot. heavy-build holds the slot until the build exits.
 # - Exits with the command's status. A signal death gives 128 + signal
 #   (137 after an OOM kill). TERM, INT or HUP to heavy-build stop the build.
 #
 # Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
-# the command directly. Under a plain `flock heavy-build.lock` it skips the
-# lock but still makes a scope.
+# the command directly. Under a plain `flock heavy-build.lock` it takes no
+# second slot but still makes a scope.
 #
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
@@ -43,6 +46,8 @@ RUNDIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 LOCK=${HEAVY_BUILD_LOCK:-$RUNDIR/heavy-build.lock}
 WAIT=${HEAVY_BUILD_WAIT:-7200}
 REFUSE_GIB=${HEAVY_BUILD_REFUSE_GIB:-60}
+MIN_MEM_GIB=${HEAVY_BUILD_MIN_MEM_GIB:-20}
+POLL=${HEAVY_BUILD_POLL:-5}
 
 build_env=(
   HEAVY_BUILD_ACTIVE=1
@@ -59,13 +64,19 @@ if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
   exec env "${build_env[@]}" "$@"
 fi
 
-# True when a process above us holds LOCK, for example `flock heavy-build.lock
-# heavy-build ...`. Matches on inode only: on btrfs, stat's device number is
-# the subvolume's, not the one /proc/locks prints.
+SLOTS=("$LOCK" "$LOCK.1" "$LOCK.2")
+
+# True when a process above us holds one of the slot locks, for example
+# `flock heavy-build.lock heavy-build ...`. Matches on inode only: on btrfs,
+# stat's device number is the subvolume's, not the one /proc/locks prints.
 ancestor_holds_lock() {
-  local ino holders pid p
-  ino=$(stat -c %i -- "$LOCK" 2>/dev/null) || return 1
-  holders=$(awk -v i="$ino" '$2 == "FLOCK" && $3 != "->" {split($6, a, ":"); if (a[3] == i) print $5}' /proc/locks 2>/dev/null)
+  local inos="" f ino holders pid p
+  for f in "${SLOTS[@]}"; do
+    ino=$(stat -c %i -- "$f" 2>/dev/null) && inos+=" $ino"
+  done
+  [[ -n $inos ]] || return 1
+  holders=$(awk -v is="$inos" 'BEGIN {n = split(is, a, " "); for (k = 1; k <= n; k++) want[a[k]] = 1}
+    $2 == "FLOCK" && $3 != "->" {split($6, d, ":"); if (d[3] in want) print $5}' /proc/locks 2>/dev/null)
   [[ -n $holders ]] || return 1
   pid=$PPID
   while [[ -n $pid && $pid -gt 1 ]]; do
@@ -75,30 +86,70 @@ ancestor_holds_lock() {
   return 1
 }
 
-deadline=$(( SECONDS + WAIT ))
-left() { local l=$(( deadline - SECONDS )); (( l < 1 )) && l=1; echo "$l"; }
+mem_avail_gib() { awk '/^MemAvailable:/ {print int($2 / 1048576); exit}' /proc/meminfo 2>/dev/null; }
 
+# Build scopes whose heavy-build was killed (SIGKILL) run on without a slot.
+# The unit name carries the heavy-build pid, so a dead pid marks an orphan.
+orphan_scopes() {
+  local u pid
+  systemctl --user list-units --type=scope --state=active --plain --no-legend 'heavy-build-*.scope' 2>/dev/null \
+    | awk '{print $1}' | while read -r u; do
+        pid=${u#heavy-build-}; pid=${pid%%-*}
+        [[ $pid =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null && echo "$u"
+      done
+}
+
+# Number of slot locks nobody holds, not counting the one on fd 9.
+other_free_slots() {
+  local f n=0
+  for f in "${SLOTS[@]}"; do
+    [[ $f == "$held" ]] && continue
+    if { exec 7>>"$f" && flock -n 7; } 2>/dev/null; then n=$(( n + 1 )); fi
+    exec 7>&- 2>/dev/null
+  done
+  echo "$n"
+}
+
+# Take a free slot, new slots first, so builds still waiting with the old
+# `flock heavy-build.lock` rule get slot 0 when it frees up.
+try_slot() {
+  local f
+  for f in "$LOCK.2" "$LOCK.1" "$LOCK"; do
+    exec 9>>"$f" || continue
+    if flock -n 9; then held=$f; return 0; fi
+    exec 9>&-
+  done
+  return 1
+}
+
+deadline=$(( SECONDS + WAIT ))
+held=
 if ancestor_holds_lock; then
-  say "a parent process holds $LOCK; not taking it again"
+  say "a parent process holds a build slot; not taking another"
 else
-  exec 9>>"$LOCK" || { say "cannot open $LOCK"; exit 75; }
-  if ! flock -n 9; then
-    say "waiting for the build lock ($LOCK). Other builds are running."
-    if ! flock -w "$(left)" 9; then
-      say "gave up after ${WAIT}s waiting for the build lock. Tell the manager session."
+  said=
+  while :; do
+    mem=$(mem_avail_gib)
+    if [[ ! $mem =~ ^[0-9]+$ ]] || (( mem >= MIN_MEM_GIB )); then
+      if try_slot; then
+        orphans=$(orphan_scopes | wc -l)
+        if (( orphans == 0 || orphans <= $(other_free_slots) )); then
+          break
+        fi
+        exec 9>&-; held=
+        why="a build whose heavy-build was killed is still running ($(orphan_scopes | tr '\n' ' '))"
+      else
+        why="all 3 build slots are in use"
+      fi
+    else
+      why="only ${mem} GiB of memory is available; a build starts at ${MIN_MEM_GIB} GiB"
+    fi
+    if (( SECONDS >= deadline )); then
+      say "gave up after ${WAIT}s: $why. Tell the manager session."
       exit 75
     fi
-  fi
-fi
-
-# A heavy-build killed with SIGKILL leaves its scope running without the lock.
-# Wait for such scopes before starting another build.
-leftover() { systemctl --user list-units --type=scope --state=active --plain --no-legend 'heavy-build-*.scope' 2>/dev/null | awk '{print $1}'; }
-if [[ -n $(leftover) ]]; then
-  say "waiting for a build whose heavy-build was killed: $(leftover | tr '\n' ' ')"
-  while [[ -n $(leftover) ]]; do
-    (( SECONDS < deadline )) || { say "gave up waiting for $(leftover | tr '\n' ' ')"; exit 75; }
-    sleep 5
+    if [[ ${why%% *} != "${said%% *}" ]]; then say "waiting: $why"; said=$why; fi
+    sleep "$POLL"
   done
 fi
 
