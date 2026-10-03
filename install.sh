@@ -196,6 +196,7 @@ if [ -n "$native_linux" ]; then
     .local/bin/cass
     .local/bin/cass-memcheck
     .config/environment.d/cass.conf
+    .cargo/config.toml
   )
   for item in "${linux_items[@]}"; do
     link_one "$dir/$item" "$HOME/$item"
