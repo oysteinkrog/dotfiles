@@ -120,6 +120,26 @@ WantedBy=graphical.target'
   fi
   sudo systemctl enable "edid-add-mode@$HOST_EDID_ADD_MODE.service" >/dev/null 2>&1
   ok "EDID override unit for $HOST_EDID_ADD_MODE"
+
+  # KWin 6.7 + NVIDIA can leak kernel memory with an EDID override (bin/slab-guard).
+  sudo install -m 0755 -o root -g root "$DOTFILES/bin/slab-guard" /usr/local/sbin/slab-guard
+  unit=/etc/systemd/system/slab-guard.service
+  want='[Unit]
+Description=Stop a kernel kmalloc-128 leak (KWin/NVIDIA with an EDID override)
+After=sys-kernel-debug.mount sys-kernel-tracing.mount
+
+[Service]
+ExecStart=/usr/local/sbin/slab-guard 2048
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target'
+  if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
+    printf '%s\n' "$want" | sudo tee "$unit" >/dev/null
+    sudo systemctl daemon-reload
+  fi
+  sudo systemctl enable --now slab-guard.service >/dev/null 2>&1
+  ok "slab-guard"
 fi
 
 host_system
