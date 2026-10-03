@@ -1,0 +1,5 @@
+#!/bin/sh
+# ExecCondition for cass-maintenance.service. Exit 0 when there is room for a
+# cass index run: MemAvailable >= 20 GiB and SwapFree >= 12 GiB. Exit 1 makes
+# systemd skip the run without marking it failed.
+awk '/^MemAvailable:/{a=$2} /^SwapFree:/{s=$2} END{exit !(a>=20*1048576 && s>=12*1048576)}' /proc/meminfo
