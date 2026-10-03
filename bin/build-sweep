@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""build-sweep: delete rebuildable build output that nobody has written to lately.
+
+Dry run is the default. Nothing is deleted without --apply.
+
+What it touches (and nothing else):
+  cargo   Cargo build and target dirs, found by their CACHEDIR.TAG with the cargo
+          signature, under the roots in CARGO_ROOTS. Two actions:
+            whole   the dir has no file newer than --cargo-days (default 7;
+                    dirs directly in /var/tmp or /var/tmp/claude use
+                    --scratch-days, default 2)
+            variant in <profile>/{deps,.fingerprint,build,incremental}, an entry
+                    <stem>-<16 hex> that is not the newest for its stem and is
+                    older than --variant-hours (default 24)
+  mcbuild MotionCatalyst <worktree>/src/motioncatalyst/BUILD[_*] with no file
+          newer than --mc-hours (default 48). Same scope as the WSL-era
+          purge-stale-builds that Oystein approved.
+  dump    *.dmp files under worktrees and /var/tmp/claude older than --dump-days
+          (default 3).
+  scratch Claude session scratchpads under /var/tmp/claude/claude-<uid>/: REPORT ONLY.
+
+Safety rules:
+  - Never follows symlinks. Every candidate must sit inside an allowed root and
+    match an allowed shape. Paths in ~/.config/build-sweep.exclude are skipped.
+  - Skips any candidate that a live process uses (cwd, exe or open fd under it).
+  - For cargo dirs, takes cargo's own lock files (flock, non-blocking) and holds
+    them while deleting. If cargo holds them, the dir is skipped.
+  - Never deletes a dir that contains a .git entry.
+  - ~/.cache/build belongs to localbuild and is never touched.
+"""
+import argparse, fcntl, json, os, re, shutil, sys, time
+from collections import defaultdict
+from pathlib import Path
+
+HOME = Path.home()
+UID = os.getuid()
+CARGO_SIG = "Signature: 8a477f597d28d172789f06886806bc55"
+CARGO_ROOTS = [HOME / ".cache/cargo-build", HOME / "work", HOME / "src", Path("/var/tmp")]
+NEVER = [HOME / ".cache/build", HOME / ".rustup", HOME / ".cargo"]
+WT_ROOTS = [HOME / "work/desktop", HOME / "work/desktop/.scratch", HOME / "lane-wt"]
+HASHED = re.compile(r"^(?P<stem>.+)-(?P<hash>[0-9a-f]{16})(?P<ext>\..*)?$")
+EXCLUDE_FILE = HOME / ".config/build-sweep.exclude"
+STATE = Path(os.environ.get("BUILD_SWEEP_STATE", HOME / ".local/state/build-sweep"))
+
+
+def load_excludes():
+    try:
+        return [l.strip().rstrip("/") for l in EXCLUDE_FILE.read_text().splitlines()
+                if l.strip() and not l.startswith("#")]
+    except OSError:
+        return []
+
+
+def under(p, roots):
+    s = str(p)
+    return any(s == str(r) or s.startswith(str(r) + "/") for r in roots)
+
+
+def live_paths():
+    """Every path a process of this user has as cwd, exe or open fd."""
+    out = set()
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        base = f"/proc/{pid}"
+        for link in ("cwd", "exe"):
+            try:
+                out.add(os.readlink(f"{base}/{link}"))
+            except OSError:
+                pass
+        try:
+            for fd in os.listdir(f"{base}/fd"):
+                try:
+                    out.add(os.readlink(f"{base}/fd/{fd}"))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return out
+
+
+def in_use(p, live):
+    s = str(p) + "/"
+    return any(x.startswith(s) or x == str(p) for x in live)
+
+
+def size_of(p):
+    total = 0
+    for root, dirs, files in os.walk(p, followlinks=False):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+def newest_mtime(p, stop_after=None):
+    """Newest mtime under p. Returns early once a file newer than stop_after is seen."""
+    newest = 0.0
+    for root, dirs, files in os.walk(p, followlinks=False):
+        for name in files + dirs:
+            try:
+                m = os.lstat(os.path.join(root, name)).st_mtime
+            except OSError:
+                continue
+            if m > newest:
+                newest = m
+                if stop_after and newest > stop_after:
+                    return newest
+    return newest
+
+
+def is_cargo_dir(d):
+    try:
+        tag = (d / "CACHEDIR.TAG").read_text(errors="ignore")
+        # pytest and ruff write the same signature line; only cargo adds this comment
+        return CARGO_SIG in tag and "created by cargo" in tag
+    except OSError:
+        return False
+
+
+def find_cargo_dirs():
+    found = []
+    for root in CARGO_ROOTS:
+        if not root.is_dir():
+            continue
+        depth0 = len(root.parts)
+        for cur, dirs, files in os.walk(root, followlinks=False):
+            cp = Path(cur)
+            if under(cp, NEVER):
+                dirs[:] = []
+                continue
+            if "CACHEDIR.TAG" in files and is_cargo_dir(cp):
+                found.append(cp)
+                dirs[:] = []
+                continue
+            # keep the walk shallow: a target dir sits at most 4 levels down
+            # (a "src" dir below the root is source, but ~/src itself is a root)
+            if len(cp.parts) - depth0 >= 4 or (
+                cp != root and cp.name in (".git", "node_modules", "src")
+            ):
+                dirs[:] = []
+    return sorted(set(found))
+
+
+class Locks:
+    """Hold cargo's lock files for a dir while we delete inside it."""
+    def __init__(self, d):
+        self.d, self.fds = d, []
+
+    def __enter__(self):
+        for lf in list(self.d.glob("*/.cargo-lock")) + list(self.d.glob("*/.cargo-build-lock")) \
+                + list(self.d.glob("*/.cargo-artifact-lock")):
+            fd = os.open(lf, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                self.__exit__()
+                raise BlockingIOError(str(lf))
+            self.fds.append(fd)
+        return self
+
+    def __exit__(self, *a):
+        for fd in self.fds:
+            os.close(fd)
+        self.fds = []
+
+
+def plan_cargo(args, now, live, excl):
+    plan = []
+    for d in find_cargo_dirs():
+        if any(str(d).startswith(e) for e in excl):
+            plan.append(("cargo", "skip-excluded", d, 0)); continue
+        if in_use(d, live):
+            plan.append(("cargo", "skip-live", d, 0)); continue
+        scratch_parent = d.parent in (Path("/var/tmp"), Path("/var/tmp/claude"))
+        days = args.scratch_days if scratch_parent else args.cargo_days
+        cutoff = now - days * 86400
+        if newest_mtime(d, stop_after=cutoff) <= cutoff:
+            plan.append(("cargo", f"whole>{days}d", d, size_of(d)))
+            continue
+        plan.append(("cargo", "keep", d, size_of(d)))
+        try:
+            plan += plan_variants(args, now, d)
+        except OSError:
+            pass  # the dir changed under us; the next run sees it
+    return plan
+
+
+def plan_variants(args, now, d):
+    plan = []
+    vcut = now - args.variant_hours * 3600
+    for profile in [p for p in d.iterdir() if p.is_dir() and not p.is_symlink()]:
+        for sub in ("deps", ".fingerprint", "build", "incremental"):
+            sd = profile / sub
+            if not sd.is_dir():
+                continue
+            groups = defaultdict(list)
+            for e in os.scandir(sd):
+                m = HASHED.match(e.name)
+                if not m:
+                    continue
+                st = e.stat(follow_symlinks=False)
+                groups[(m["stem"], m["ext"] or "")].append((st.st_mtime, Path(e.path)))
+            for items in groups.values():
+                items.sort(reverse=True)
+                for mt, p in items[1:]:
+                    if mt < vcut:
+                        sz = size_of(p) if p.is_dir() else os.lstat(p).st_blocks * 512
+                        plan.append(("cargo", "variant", p, sz))
+    return plan
+
+
+def plan_mcbuild(args, now, live, excl):
+    plan, cutoff = [], now - args.mc_hours * 3600
+    for root in WT_ROOTS:
+        for b in sorted(root.glob("*/src/motioncatalyst/BUILD*")):
+            if not b.is_dir() or b.is_symlink():
+                continue
+            if any(str(b).startswith(e) for e in excl):
+                plan.append(("mcbuild", "skip-excluded", b, 0)); continue
+            if in_use(b, live):
+                plan.append(("mcbuild", "skip-live", b, 0)); continue
+            if newest_mtime(b, stop_after=cutoff) <= cutoff:
+                plan.append(("mcbuild", f"whole>{args.mc_hours}h", b, size_of(b)))
+    return plan
+
+
+def plan_dumps(args, now, live, excl):
+    plan, cutoff = [], now - args.dump_days * 86400
+    roots = WT_ROOTS + [Path("/var/tmp/claude")]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for cur, dirs, files in os.walk(root, followlinks=False):
+            dirs[:] = [x for x in dirs if x not in (".git", "node_modules")]
+            for f in files:
+                if not f.lower().endswith(".dmp"):
+                    continue
+                p = Path(cur) / f
+                st = os.lstat(p)
+                if st.st_mtime > cutoff or st.st_size < 50 * 2**20:
+                    continue
+                if any(str(p).startswith(e) for e in excl) or str(p) in live:
+                    continue
+                plan.append(("dump", f">{args.dump_days}d", p, st.st_blocks * 512))
+    return plan
+
+
+def plan_scratch(args, now):
+    """Report only. A scratchpad is stale when its session log is old too."""
+    plan, cutoff = [], now - args.scratch_report_days * 86400
+    base = Path(f"/var/tmp/claude/claude-{UID}")
+    if not base.is_dir():
+        return plan
+    for proj in base.iterdir():
+        if not proj.is_dir() or not proj.name.startswith("-"):
+            continue  # bash-edit-diff and similar are Claude Code internals
+        for sess in proj.iterdir():
+            if any(str(sess).startswith(e) for e in load_excludes()):
+                continue
+            log = HOME / ".claude/projects" / proj.name / f"{sess.name}.jsonl"
+            try:
+                log_m = log.stat().st_mtime
+            except OSError:
+                log_m = 0
+            if log_m > cutoff:
+                continue
+            if newest_mtime(sess, stop_after=cutoff) > cutoff:
+                continue
+            plan.append(("scratch", "report-only", sess, size_of(sess)))
+    return plan
+
+
+def remove(p):
+    if p.is_dir() and not p.is_symlink():
+        if any(True for _ in p.glob(".git")):
+            return "refused (.git inside)"
+        shutil.rmtree(p, ignore_errors=True)
+    else:
+        p.unlink(missing_ok=True)
+    return "removed"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply", action="store_true", help="delete; without it this is a dry run")
+    ap.add_argument("--only", default="cargo,mcbuild,dump,scratch")
+    ap.add_argument("--cargo-days", type=float, default=7)
+    ap.add_argument("--scratch-days", type=float, default=2)
+    ap.add_argument("--variant-hours", type=float, default=24)
+    ap.add_argument("--mc-hours", type=float, default=48)
+    ap.add_argument("--dump-days", type=float, default=3)
+    ap.add_argument("--scratch-report-days", type=float, default=7)
+    ap.add_argument("--verbose", action="store_true", help="list every variant file")
+    args = ap.parse_args()
+    only = set(args.only.split(","))
+    now, live, excl = time.time(), live_paths(), load_excludes()
+
+    plan = []
+    if "cargo" in only: plan += plan_cargo(args, now, live, excl)
+    if "mcbuild" in only: plan += plan_mcbuild(args, now, live, excl)
+    if "dump" in only: plan += plan_dumps(args, now, live, excl)
+    if "scratch" in only: plan += plan_scratch(args, now)
+
+    totals = defaultdict(int)
+    variants = defaultdict(lambda: [0, 0])
+    for cat, why, p, sz in plan:
+        if why.startswith("skip"):
+            print(f"SKIP   {why:14} {p}")
+            continue
+        totals[(cat, why if why != "variant" else "variant")] += sz
+        if why == "variant" and not args.verbose:
+            # group variant lines per cargo dir
+            top = next((q for q in p.parents if (q / "CACHEDIR.TAG").exists()), p.parent)
+            variants[top][0] += 1; variants[top][1] += sz
+            continue
+        verb = "REPORT" if cat == "scratch" else "KEEP  " if why == "keep" else ("WOULD " if not args.apply else "DEL   ")
+        print(f"{verb} {cat:8} {why:12} {sz / 2**30:8.2f} GiB  {p}")
+    for top, (n, sz) in sorted(variants.items(), key=lambda x: -x[1][1]):
+        verb = "WOULD " if not args.apply else "DEL   "
+        print(f"{verb} cargo    variant      {sz / 2**30:8.2f} GiB  {top} ({n} stale hash variants)")
+
+    if args.apply:
+        for cat, why, p, sz in plan:
+            if why.startswith("skip") or why == "keep" or cat == "scratch":
+                continue
+            if cat == "cargo":
+                top = p if why.startswith("whole") else next(
+                    (q for q in p.parents if (q / "CACHEDIR.TAG").exists()), None)
+                if top is None or in_use(top, live_paths()):
+                    continue
+                try:
+                    with Locks(top):
+                        remove(p)
+                except BlockingIOError:
+                    print(f"SKIP   cargo-locked   {top}")
+            else:
+                remove(p)
+
+    print("\nSummary (allocated bytes before btrfs compression; reflinked data counts per copy):")
+    grand = 0
+    for (cat, why), sz in sorted(totals.items()):
+        print(f"  {cat:8} {why:12} {sz / 2**30:8.2f} GiB")
+        if cat != "scratch" and why != "keep":
+            grand += sz
+    print(f"  {'deletable':21} {grand / 2**30:8.2f} GiB  ({'deleted' if args.apply else 'dry run'})")
+    STATE.mkdir(parents=True, exist_ok=True)
+    hist = STATE / "history.jsonl"
+    try:
+        if hist.stat().st_size > 2**20:  # keep the newest half, about 1 MiB
+            lines = hist.read_text().splitlines(keepends=True)
+            hist.write_text("".join(lines[len(lines) // 2 :]))
+    except OSError:
+        pass
+    with open(hist, "a") as fh:
+        fh.write(json.dumps({"ts": int(now), "apply": args.apply,
+                             "bytes": {f"{c}/{w}": s for (c, w), s in totals.items()}}) + "\n")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

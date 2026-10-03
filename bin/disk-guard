@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# disk-guard: check free space on / and btrfs metadata, record a level, and
+# tell the user when the level gets worse. Run by disk-guard.timer every 5 min.
+#
+# Levels (free GiB on / from df):
+#   ok        >= WARN_GIB (120)
+#   warn      <  120, or metadata more than 85% used with < 1 GiB unallocated
+#   refuse    <  REFUSE_GIB (60). heavy-build refuses new builds at this level.
+#   critical  <  CRIT_GIB (30)
+#
+# Output: ~/.local/state/disk-guard/level (one word), status (one line),
+# a journal line every run, and a desktop notification when the level gets worse.
+set -euo pipefail
+export LC_ALL=C
+
+WARN_GIB=${DISK_GUARD_WARN_GIB:-120}
+REFUSE_GIB=${DISK_GUARD_REFUSE_GIB:-60}
+CRIT_GIB=${DISK_GUARD_CRIT_GIB:-30}
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/disk-guard
+mkdir -p -- "$STATE"
+
+avail=$(df -B1G --output=avail / | tail -1 | tr -d ' ')
+if [[ ! $avail =~ ^[0-9]+$ ]]; then
+  echo "disk-guard: cannot read free space from df (got '$avail')" >&2
+  printf '%s disk-guard: check failed, df output unreadable\n' "$(date -Is)" > "$STATE/status"
+  exit 1
+fi
+
+# btrfs filesystem df works as a normal user; it prints e.g.
+# "Metadata, DUP: total=17.00GiB, used=12.96GiB"
+read -r meta_total meta_used < <(btrfs filesystem df -b / 2>/dev/null \
+  | awk -F'[=, ]+' '/^Metadata/ {for (i=1;i<=NF;i++) {if ($i=="total") t=$(i+1); if ($i=="used") u=$(i+1)}} END {print t+0, u+0}')
+unalloc=$(btrfs filesystem usage -b / 2>/dev/null | awk '/Device unallocated:/ {print $3; exit}')
+[[ ${meta_total:-} =~ ^[0-9]+$ && ${meta_used:-} =~ ^[0-9]+$ ]] || meta_total=0 meta_used=0
+[[ ${unalloc:-} =~ ^[0-9]+$ ]] || unalloc=$(( 1 << 40 ))  # unknown: do not warn on metadata
+meta_pct=0
+(( meta_total > 0 )) && meta_pct=$(( meta_used * 100 / meta_total ))
+
+level=ok
+(( avail < WARN_GIB )) && level=warn
+(( meta_pct > 85 && ${unalloc:-0} < 1073741824 )) && level=warn
+(( avail < REFUSE_GIB )) && level=refuse
+(( avail < CRIT_GIB )) && level=critical
+
+status="disk-guard: level=$level free=${avail}GiB metadata=${meta_pct}% unallocated=$(( ${unalloc:-0} / 1048576 ))MiB"
+echo "$status"
+
+rank() { case $1 in ok) echo 0;; warn) echo 1;; refuse) echo 2;; critical) echo 3;; *) echo 0;; esac; }
+prev=$(cat "$STATE/level" 2>/dev/null || echo ok)
+printf '%s\n' "$level" > "$STATE/level"
+printf '%s %s\n' "$(date -Is)" "$status" > "$STATE/status"
+
+# Phase 3 only: at critical, start the emergency sweep. Off unless the unit sets it.
+if [[ $level == critical && ${DISK_GUARD_EMERGENCY:-0} == 1 ]]; then
+  systemctl --user start --no-block build-sweep-emergency.service || true
+fi
+
+if (( $(rank "$level") > $(rank "$prev") )); then
+  urgency=normal
+  [[ $level == refuse || $level == critical ]] && urgency=critical
+  notify-send -u "$urgency" -a disk-guard "Disk space: $level" \
+    "${avail} GiB free on /. Metadata ${meta_pct}% used. Run build-sweep for a report." || true
+fi

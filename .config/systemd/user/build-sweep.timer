@@ -1,0 +1,10 @@
+[Unit]
+Description=Run build-sweep twice a day
+
+[Timer]
+OnCalendar=*-*-* 04,16:30
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
