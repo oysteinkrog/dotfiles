@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Add a mode to a monitor's EDID through the kernel's DRM EDID override.
+
+    edid-add-mode CONNECTOR WxH [WxH...]     e.g. edid-add-mode DP-2 2560x1440 1440x900
+    edid-add-mode CONNECTOR_WxH[_WxH...]     the same, as one systemd instance name
+
+The NVIDIA driver only drives modes the monitor's EDID allows. This reads the
+connector's real EDID, appends a CTA-861 extension block with a 60 Hz CVT
+reduced-blanking timing for each size (at most 6), widens the range limits to
+cover them, and loads the result through /sys/kernel/debug/dri/N/CONNECTOR/
+edid_override. The monitor's own EDID is kept in /run/edid-add-mode/ so a
+re-run with other sizes starts from it. All the monitor's own modes stay. The override lasts until
+reboot; the edid-add-mode systemd unit applies it at boot.
+
+Used so KRDP can switch the streamed monitor to the RDP client's size (see
+krdp-remote-mode). The physical monitor shows "out of range" in a mode it
+cannot display, which is fine while nobody sits at it.
+
+Needs root. Does nothing when the override is already in place.
+"""
+import glob
+import pathlib
+import re
+import struct
+import subprocess
+import sys
+import time
+
+
+def cvt_rb(width, height):
+    """CVT reduced-blanking v1 timing at 60 Hz: (pixel clock kHz, h blank, v blank)."""
+    h_blank, v_min_blank_us, v_sync = 160, 460, 5
+    v_back_min = 6
+    frame_us = 1_000_000 / 60
+    h_period_us = (frame_us - v_min_blank_us) / height
+    v_blank = max(int(v_min_blank_us / h_period_us) + 1, 3 + v_sync + v_back_min)
+    total_h, total_v = width + h_blank, height + v_blank
+    pclk_khz = int(total_h * total_v * 60 / 1000 / 250) * 250  # 0.25 MHz steps
+    return pclk_khz, h_blank, v_blank
+
+
+def dtd(width, height, size_mm):
+    pclk, hb, vb = cvt_rb(width, height)
+    hso, hsw, vso, vsw = 48, 32, 3, 5
+    hmm, vmm = size_mm
+    d = bytearray(18)
+    d[0:2] = struct.pack("<H", pclk // 10)
+    d[2], d[3], d[4] = width & 0xFF, hb & 0xFF, ((width >> 8) << 4) | (hb >> 8)
+    d[5], d[6], d[7] = height & 0xFF, vb & 0xFF, ((height >> 8) << 4) | (vb >> 8)
+    d[8], d[9], d[10] = hso & 0xFF, hsw & 0xFF, ((vso & 0xF) << 4) | (vsw & 0xF)
+    d[11] = ((hso >> 8) << 6) | ((hsw >> 8) << 4) | ((vso >> 4) << 2) | (vsw >> 4)
+    d[12], d[13], d[14] = hmm & 0xFF, vmm & 0xFF, ((hmm >> 8) << 4) | (vmm >> 8)
+    d[17] = 0x1A  # digital separate sync, +hsync -vsync (CVT-RB)
+    return d, pclk
+
+
+def patch(edid, sizes):
+    """The EDID with a CTA-861 extension block that holds one timing per size."""
+    base = bytearray(edid[:128])
+    size_mm = (base[66] | ((base[68] >> 4) << 8), base[67] | ((base[68] & 0xF) << 8))
+    timings = [dtd(w, h, size_mm) for w, h in sizes]
+    if len(timings) > 6:
+        sys.exit("edid-add-mode: at most 6 sizes fit in one extension block")
+    top = max(pclk for _, pclk in timings)
+    for off in (72, 90, 108):
+        if base[off] == 0 and base[off + 1] == 0 and base[off + 3] == 0xFD:  # range limits
+            h_khz = max(pclk // (w + 160) + 1 for (w, _), (_, pclk) in zip(sizes, timings))
+            base[off + 5] = min(base[off + 5], 24)
+            base[off + 6] = max(base[off + 6], 75)
+            base[off + 7] = min(base[off + 7], 15)
+            base[off + 8] = max(base[off + 8], h_khz)
+            base[off + 9] = max(base[off + 9], top // 10000 + 1)
+    ext = bytearray(128)
+    ext[0], ext[1], ext[2], ext[3] = 0x02, 0x03, 4, 0  # CTA-861, rev 3, DTDs start at 4
+    for i, (timing, _) in enumerate(timings):
+        ext[4 + 18 * i:22 + 18 * i] = timing
+    ext[127] = (-sum(ext[:127])) & 0xFF
+    blocks = bytes(edid[128:])
+    base[126] = base[126] + 1
+    base[127] = (-sum(base[:127])) & 0xFF
+    return bytes(base) + blocks + bytes(ext)
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) == 1:  # one systemd instance name: CONNECTOR_WxH_WxH
+        args = args[0].split("_")
+    if len(args) < 2 or not all(re.fullmatch(r"\d+x\d+", a) for a in args[1:]):
+        sys.exit(__doc__.split("\n\n")[1])
+    connector = args[0]
+    sizes = [tuple(map(int, a.split("x"))) for a in args[1:]]
+
+    edid, paths = b"", []
+    for _ in range(30):  # at boot, wait for the driver to create the connector
+        paths = glob.glob(f"/sys/class/drm/card*-{connector}/edid")
+        if paths:
+            with open(paths[0], "rb") as f:  # sysfs reports size 0, so read it
+                edid = f.read()
+            if len(edid) >= 128:
+                break
+        time.sleep(1)
+    else:
+        sys.exit(f"edid-add-mode: no EDID for {connector}")
+    card = re.search(r"card(\d+)-", paths[0]).group(1)
+
+    # Once overridden, sysfs shows our EDID, so keep the monitor's own copy for re-runs.
+    keep = pathlib.Path(f"/run/edid-add-mode/{connector}.bin")
+    if keep.exists():
+        edid = keep.read_bytes()
+    else:
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_bytes(edid)
+    wanted = patch(edid, sizes)
+    with open(paths[0], "rb") as f:
+        if f.read() == wanted:
+            print(f"edid-add-mode: {connector} already has {' '.join(args[1:])}")
+            return
+    with open(f"/sys/kernel/debug/dri/{card}/{connector}/edid_override", "wb") as f:
+        f.write(wanted)
+    # Make the driver and KWin re-read the modes.
+    with open(f"/sys/class/drm/card{card}-{connector}/status", "w") as f:
+        f.write("detect")
+    subprocess.run(["udevadm", "trigger", "--action=change", f"/sys/class/drm/card{card}"], check=False)
+    print(f"edid-add-mode: {connector} now offers {' '.join(args[1:])}")
+
+
+if __name__ == "__main__":
+    main()

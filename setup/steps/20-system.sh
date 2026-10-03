@@ -97,4 +97,29 @@ if have ufw; then
   ok "ufw rules for Sunshine and RDP${HOST_UFW_LAN:+ (tailnet and $HOST_UFW_LAN)}"
 fi
 
+# EDID override: lets KRDP switch the streamed monitor to a size its own EDID lacks (see
+# bin/edid-add-mode). The script runs as root, so install a root-owned copy rather than
+# pointing a root unit at a file in the home directory.
+if [ -n "$HOST_EDID_ADD_MODE" ]; then
+  sudo install -m 0755 -o root -g root "$DOTFILES/bin/edid-add-mode" /usr/local/sbin/edid-add-mode
+  unit=/etc/systemd/system/edid-add-mode@.service
+  want='[Unit]
+Description=Add a mode to a monitor EDID: %i (connector_WxH_WxH)
+After=systemd-modules-load.service sys-kernel-debug.mount
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/edid-add-mode %i
+
+[Install]
+WantedBy=graphical.target'
+  if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
+    printf '%s\n' "$want" | sudo tee "$unit" >/dev/null
+    sudo systemctl daemon-reload
+  fi
+  sudo systemctl enable "edid-add-mode@$HOST_EDID_ADD_MODE.service" >/dev/null 2>&1
+  ok "EDID override unit for $HOST_EDID_ADD_MODE"
+fi
+
 host_system

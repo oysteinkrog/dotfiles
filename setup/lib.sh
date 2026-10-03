@@ -17,6 +17,7 @@ HOST_PIPEWIRE_CONFS=()    # files in <profile>/pipewire/ to link into filter-cha
 HOST_UFW_LAN=""           # LAN subnet allowed to reach Sunshine and RDP, e.g. 192.168.1.0/24
 HOST_KDE_SCALE=""         # kwinrc [Xwayland] Scale, e.g. 1.1
 HOST_KRDP_MONITOR=""      # monitor index KRDP streams, for multi-monitor hosts, e.g. 1
+HOST_EDID_ADD_MODE=""     # connector_sizes added to that monitor's EDID at boot, e.g. DP-2_2560x1440_1440x900
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)
 
 if [ -f "$HOST_DIR/host.sh" ]; then

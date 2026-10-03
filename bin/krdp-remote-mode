@@ -14,6 +14,13 @@ current position, through a runtime drop-in that overrides the setup one.
 
 Runs as the systemd user unit krdp-remote-mode.service.
 Env: KRDP_KEEP_OUTPUT (default: the primary output), KRDP_PORT (default 3389).
+
+`krdp-remote-mode WIDTH HEIGHT` is the resize hook for a patched KRDP (see
+KRDP_OUTPUT_RESIZE_HOOK in the localbuilds krdp recipe). KRDP calls it with the
+RDP client's window size. It saves the layout if remote mode has not already,
+turns the other monitors off, and sets the kept monitor to that size: one of its
+own modes if one matches, otherwise a KWin custom mode. The restore on
+disconnect puts the saved mode back.
 """
 import json
 import os
@@ -30,6 +37,7 @@ SAVED = STATE / "layout.json"
 POLL = 2
 ON_AFTER = 3   # seconds connected before switching on (skips failed handshakes)
 OFF_AFTER = 5  # seconds disconnected before restoring (rides out quick reconnects)
+RETRY = 60     # seconds between restore attempts when KWin rejects one
 ROTATION = {1: "none", 2: "left", 4: "inverted", 8: "right"}
 KRDP_UNIT = "app-org.kde.krdpserver.service"
 KRDP_DROPIN = (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
@@ -74,10 +82,73 @@ def remote_on():
     others = [o["name"] for o in outputs if o["enabled"] and o["name"] != keep]
     if not others:
         return
-    STATE.mkdir(parents=True, exist_ok=True)
-    SAVED.write_text(json.dumps(outputs))
+    # The resize hook may have saved first; that copy is the real layout, keep it.
+    if not SAVED.exists():
+        STATE.mkdir(parents=True, exist_ok=True)
+        SAVED.write_text(json.dumps(outputs))
     log(f"client connected: keeping {keep}, turning off {', '.join(others)}")
     doctor([f"output.{n}.disable" for n in others])
+
+
+def find_mode(output, width, height):
+    """The mode id of output with this size, preferring the refresh rate nearest 60 Hz."""
+    sized = [m for m in output.get("modes", [])
+             if m["size"]["width"] == width and m["size"]["height"] == height]
+    if not sized:
+        return None
+    return min(sized, key=lambda m: abs(m["refreshRate"] - 60))["id"]
+
+
+def best_fallback(output, width, height, exclude):
+    """The largest mode no bigger than the client; on a tie, the closest aspect ratio."""
+    want = width / height
+    modes = [m for m in output.get("modes", [])
+             if m["id"] not in exclude
+             and m["size"]["width"] <= width and m["size"]["height"] <= height
+             and m["refreshRate"] >= 50]
+    if not modes:
+        return None
+    return min(modes, key=lambda m: (-m["size"]["width"] * m["size"]["height"],
+                                     abs(m["size"]["width"] / m["size"]["height"] - want)))["id"]
+
+
+def set_mode(keep, mode):
+    """Set the mode and report whether KWin kept it. KWin reverts modes the GPU or
+    monitor cannot drive, for example a custom mode above the monitor's maximum."""
+    doctor([f"output.{keep}.mode.{mode}"])
+    time.sleep(1)
+    output = next(o for o in layout()["outputs"] if o["name"] == keep)
+    return output.get("currentModeId") == mode
+
+
+def resize(width, height):
+    """Set the kept monitor to the RDP client's size. Called by KRDP's resize hook."""
+    width = max(640, min(width, 3840)) // 8 * 8   # CVT timings want a width in steps of 8
+    height = max(480, min(height, 2160)) // 2 * 2
+    remote_on()
+    outputs = layout()["outputs"]
+    keep = keep_name(outputs)
+    output = next(o for o in outputs if o["name"] == keep)
+    mode = find_mode(output, width, height)
+    if mode is None:
+        log(f"resize: {keep} has no {width}x{height} mode; adding a custom mode")
+        doctor([f"output.{keep}.addCustomMode.{width}.{height}.60000.reduced"])
+        output = next(o for o in layout()["outputs"] if o["name"] == keep)
+        mode = find_mode(output, width, height)
+    if mode is not None and mode == output.get("currentModeId"):
+        return
+    if mode is not None:
+        log(f"resize: {keep} -> {width}x{height} (mode {mode})")
+        if set_mode(keep, mode):
+            return
+        log(f"resize: KWin rejected {width}x{height} on {keep}")
+    output = next(o for o in layout()["outputs"] if o["name"] == keep)
+    fallback = best_fallback(output, width, height, {mode})
+    if fallback is None or fallback == output.get("currentModeId"):
+        return
+    size = next(m["size"] for m in output["modes"] if m["id"] == fallback)
+    log(f"resize: {keep} -> {size['width']}x{size['height']} (mode {fallback}, closest to {width}x{height})")
+    set_mode(keep, fallback)
 
 
 def restore_args(outputs):
@@ -89,7 +160,9 @@ def restore_args(outputs):
         mode = next((m for m in o.get("modes", []) if m["id"] == o.get("currentModeId")), None)
         args.append(f"output.{n}.enable")
         if mode:
-            args.append(f"output.{n}.mode.{mode['id']}")
+            # By size, not id: KWin renumbers mode ids when the resize hook adds custom modes.
+            size = mode["size"]
+            args.append(f"output.{n}.mode.{size['width']}x{size['height']}@{round(mode['refreshRate'])}")
         args.append(f"output.{n}.rotation.{ROTATION.get(o['rotation'], 'none')}")
         args.append(f"output.{n}.scale.{o['scale']}")
         args.append(f"output.{n}.position.{o['pos']['x']},{o['pos']['y']}")
@@ -140,14 +213,35 @@ def sync_krdp_monitor():
     subprocess.run(["systemctl", "--user", "restart", KRDP_UNIT], check=True)
 
 
+def layout_matches(saved):
+    """True when every output enabled in the saved layout is on again at its saved size.
+    kscreen-doctor exits 0 even when KWin rejects a configuration, so check the result."""
+    current = {o["name"]: o for o in layout()["outputs"]}
+    for o in saved:
+        if not o["enabled"]:
+            continue
+        now = current.get(o["name"])
+        if not now or not now["enabled"]:
+            return False
+        want = next((m["size"] for m in o.get("modes", []) if m["id"] == o.get("currentModeId")), None)
+        have = next((m["size"] for m in now.get("modes", []) if m["id"] == now.get("currentModeId")), None)
+        if want and want != have:
+            return False
+    return True
+
+
 def remote_off():
     if not SAVED.exists():
         return
     log("client gone: restoring saved layout")
-    if doctor(restore_args(json.loads(SAVED.read_text()))):
-        SAVED.unlink()
-        time.sleep(1)  # let the re-enabled outputs reach the Wayland registry
-        sync_krdp_monitor()
+    saved = json.loads(SAVED.read_text())
+    doctor(restore_args(saved))
+    time.sleep(1)  # let the re-enabled outputs reach the Wayland registry
+    if not layout_matches(saved):
+        log("restore did not apply; keeping the saved layout to retry")
+        return
+    SAVED.unlink()
+    sync_krdp_monitor()
 
 
 def main():
@@ -162,6 +256,7 @@ def main():
     on = SAVED.exists()  # a layout left saved means the last run ended in remote mode
     since = time.monotonic()
     last = connected()
+    last_restore = 0.0
     log(f"watching port {PORT}; remote mode {'on' if on else 'off'}")
     if not on and not last:
         try:
@@ -172,12 +267,16 @@ def main():
         now = connected()
         if now != last:
             since, last = time.monotonic(), now
+        # The resize hook saves the layout itself, sometimes before this loop sees the
+        # client. A saved layout means remote mode is on, whoever turned it on.
+        on = on or SAVED.exists()
         held = time.monotonic() - since
         try:
             if now and not on and held >= ON_AFTER:
                 remote_on()
                 on = True
-            elif not now and on and held >= OFF_AFTER:
+            elif not now and on and held >= OFF_AFTER and time.monotonic() - last_restore >= RETRY:
+                last_restore = time.monotonic()
                 remote_off()
                 on = SAVED.exists()
         except Exception as e:  # keep watching; a failed switch retries next poll
@@ -186,4 +285,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 3:
+        resize(int(sys.argv[1]), int(sys.argv[2]))
+    else:
+        main()
