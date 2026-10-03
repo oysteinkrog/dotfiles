@@ -154,7 +154,7 @@ if [ -n "$native_linux" ]; then
   echo "=== Linking systemd user units (native Linux) ==="
   mkdir -p "$HOME/.config/systemd/user"
   units=()
-  for unit_path in "$dir"/.config/systemd/user/*.service "$dir"/.config/systemd/user/*.timer; do
+  for unit_path in "$dir"/.config/systemd/user/*.service "$dir"/.config/systemd/user/*.timer "$dir"/.config/systemd/user/*.slice; do
     [ -e "$unit_path" ] || continue
     unit="$(basename "$unit_path")"
     target="$HOME/.config/systemd/user/$unit"
