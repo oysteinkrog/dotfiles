@@ -1,0 +1,11 @@
+[Unit]
+Description=Report stale build output (build-sweep, report only)
+
+[Service]
+Type=oneshot
+# Report only. Deletion needs --apply, and turning that on needs Oystein's yes.
+# Phase 2 would be: ExecStart=%h/bin/build-sweep --apply --only cargo,mcbuild,dump
+ExecStart=%h/bin/build-sweep
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=1h
