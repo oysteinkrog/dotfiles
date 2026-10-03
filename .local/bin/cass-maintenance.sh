@@ -2,7 +2,8 @@
 # CASS maintenance: re-index session search and reflect on recent sessions.
 #
 # Run manually with `cassm`, or scheduled by the systemd user timer
-# cass-maintenance.timer (every 30 min, ~/.config/systemd/user/).
+# cass-maintenance.timer (hourly, ~/.config/systemd/user/). The unit sets
+# CASS_AUTO_REFRESH=0 and the memory caps.
 #
 # Linux port (2026-09-29): cass is the native Linux build and the data dir is
 # the platform default ~/.local/share/coding-agent-search. The Windows-only GPU
@@ -47,10 +48,12 @@ echo
 echo "===== [$( ts )] CASS maintenance start (pid=$$) ====="
 
 # 1. Incremental lexical index, capped because cass index has hung under
-#    contention. Do NOT add --semantic here: it would mix vectors of a
-#    different provenance into the vector index (see docs/cass-setup.md).
+#    contention. --quiet keeps warnings and errors only; without it cass logs
+#    a line per document (241 MB in one catch-up run). Do NOT add --semantic
+#    here: it would mix vectors of a different provenance into the vector
+#    index (see docs/cass-setup.md).
 echo "[$( ts )] cass index (incremental lexical)..."
-if timeout 3600 cass index </dev/null; then
+if timeout 5400 /usr/bin/cass --quiet index --no-progress-events </dev/null; then
   echo "[$( ts )]   cass index OK"
 else
   rc=$?
