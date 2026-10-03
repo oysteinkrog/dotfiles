@@ -25,6 +25,8 @@ cases = [
     ("rg 'bv' ~/.claude/skills", False),
     ("bvx", False),
     ("ls bv", False),
+    ("cat <<EOF\nbv\nEOF", False),
+    ("cat <<EOF\nbv\nEOF\nbv", True),
     # --- am doctor fix: blocked ---
     ("am doctor fix", True),
     ("am doctor fix --yes", True),
