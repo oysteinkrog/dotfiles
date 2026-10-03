@@ -127,9 +127,9 @@ These rules hold whether or not a skill is loaded:
 - **Never change branch or history in a shared checkout.** Execution teammates share one
   working tree and index, so a teammate must never switch branch, move HEAD, reset, rebase
   or amend there. Any such change corrupts other teammates' in-flight commits. If a task
-  truly needs its own history, clone into the session scratchpad and work there. Never clone
-  or add a worktree under a grove `work_dir`; use `grove new --ephemeral`. Putting a branch
-  back is leader-only.
+  truly needs its own history, add a worktree under `/var/tmp/claude/` (see "One clone per
+  repo" below). Never clone or add a worktree under a grove `work_dir`; use
+  `grove new --ephemeral`. Putting a branch back is leader-only.
 - **One work unit, one commit, committed before moving on.** Put explicit commit
   instructions in every autonomous teammate prompt. Commit with a pathspec,
   `git commit -m "..." -- <your files>`, never a bare `git commit`: teammates share one index
@@ -232,6 +232,35 @@ When a separate object store is genuinely required, such as rewriting history
 you must not expose to the real repo, use `git clone --reference ~/work/<repo>`
 rather than a fresh fetch. That borrows the objects instead of re-downloading
 and re-storing them.
+
+## Builds
+
+**Run every heavy build or test through `heavy-build`.** That covers cargo build, test,
+check, clippy and doc, dotnet build and test, `build.cmd`, `localbuild build`, cmake and
+ninja. Example: `heavy-build cargo test -p mux --lib`. It waits for the one machine-wide
+build lock, refuses (exit 75) when the disk has less than 60 GiB free, and runs the build in
+a memory-capped scope, so an OOM kills only the build and not every terminal tab. The wait
+can be long, so run it in the background when your tool call has a timeout. On an OOM kill
+(exit 137), retry once, then tell the manager session.
+
+- **Never set `CARGO_BUILD_BUILD_DIR` or `build.build-dir`.** `~/.cargo/config.toml` keeps
+  cargo's intermediate files (deps, incremental files, test binaries) in the workspace's own
+  `target/`. They are reused by every build of that checkout and go away with the worktree.
+  A `CARGO_TARGET_DIR` or `--target-dir` now moves only the final binaries, so a repo
+  AGENTS.md that asks for one per agent is harmless. Do not invent new ones, though. On
+  2026-10-02 per-agent target dirs added about 200 GiB to this disk in one day.
+- **Never clone, add a worktree or build in `/tmp`** (see above).
+- **Never build in an upstream clone under `~/src`.** Use `localbuild build`.
+- **Monorepo lanes go through grove:** `grove new --ephemeral --ttl 3d <tag>`, never
+  `git worktree add ~/lane-wt/...`. Run `grove done <tag>` when the lane's work is merged.
+- If `heavy-build` refuses for low disk, stop and tell Oystein or the manager session. Do
+  not delete other sessions' build output to make room.
+- A subagent prompt that builds must say "use `heavy-build`". Do not copy the long
+  `flock ... systemd-run ...` line into prompts any more.
+
+The `build-guard` PreToolUse hook blocks a build dir override, `/tmp` builds and clones,
+and monorepo worktrees outside grove. An unwrapped heavy build gets a warning. For a
+deliberate exception, append `# noqa: build-guard` to the command.
 
 ## Publishing static sites
 
