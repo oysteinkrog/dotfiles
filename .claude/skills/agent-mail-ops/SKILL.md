@@ -28,7 +28,7 @@ belongs to the `agent-mail` skill.
 | Supervisor | systemd user unit `agent-mail.service`, file `~/.dotfiles/.config/systemd/user/agent-mail.service` (symlinked into `~/.config/systemd/user/`) |
 | Logs | `journalctl --user -u agent-mail.service` |
 | Storage root | `/home/oystein/.mcp_agent_mail_git_mailbox_repo` (btrfs) |
-| Memory cap | `MemoryMax=2G` in the unit. The server peaks near 1 GB. Do not lower it (see "Why the database keeps corrupting"). |
+| Memory cap | `MemoryMax=3G` in the unit. The server peaked at 1.89 GB in a 1-hour watch. Do not lower it (see "Why the database keeps corrupting"). |
 | Restart limit | `StartLimitIntervalSec=600`, `StartLimitBurst=5`. After 5 failed starts in 10 minutes the unit stays failed. `systemctl --user reset-failed agent-mail` clears it. |
 | Old storage root | `/c/users/oystein/.mcp_agent_mail_git_mailbox_repo`, retired 2026-09-15, kept as a backup |
 | Endpoint | `http://127.0.0.1:4809/mcp/` (canonical) and `/api/` (legacy), localhost only, no bearer token |
@@ -160,7 +160,7 @@ page 9077 read back as zeros. Nothing was killed: 0 restarts, no OOM, btrfs
 reported 0 errors. On a copy, the same database stayed clean for 3.5 minutes
 without the cap. With a 512M cap, the server's guard reported an index/table
 desync (GH#214) within 9 seconds. That is one run each, so treat memory pressure
-as the strongest lead, not a proof. Keep `MemoryMax=2G`.
+as the strongest lead, not a proof. Keep `MemoryMax=3G`.
 
 Before 2026-09-15 the store lived on `/c` (drvfs under WSL1), and corruption was
 blamed on drvfs locking and fsync. That machine is retired.
