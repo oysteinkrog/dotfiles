@@ -1,6 +1,11 @@
 [Unit]
 Description=MCP Agent Mail (am serve-http, localhost, no auth)
 After=network.target
+# Give up after 5 failed starts in 10 minutes. On 2026-10-04 a corrupt database
+# made every start fail, and 6420 restarts left 234 GiB of failed rebuilds in
+# doctor/reclaimable. `systemctl --user reset-failed agent-mail` clears the limit.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 # The server reads STORAGE_ROOT; the am CLI reads AGENT_MAIL_STORAGE_ROOT. Keep them equal.
