@@ -204,7 +204,7 @@ if [ -n "$native_linux" ]; then
 
   # Per-machine files from the machine profile in the private Life repo (see setup/lib.sh).
   host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
-  host_dir="${DOTFILES_HOSTS:-$HOME/work/Life/setup/machines}/$host"
+  host_dir="${DOTFILES_HOSTS:-$HOME/work/life/setup/machines}/$host"
   if [ -d "$host_dir/pipewire" ]; then
     echo ""
     echo "=== Linking PipeWire filter-chain files for $host ==="
