@@ -15,7 +15,9 @@ Environment=AGENT_MAIL_STORAGE_ROOT=%h/.mcp_agent_mail_git_mailbox_repo
 ExecStart=%h/.local/bin/am serve-http --no-tui --no-auth --port 4809
 Restart=on-failure
 RestartSec=5
-MemoryMax=512M
+# The server peaks near 1.05 GiB. At 512M it ran into its cap and fsqlite
+# corrupted the database within seconds (2026-10-04).
+MemoryMax=2G
 
 [Install]
 WantedBy=default.target
