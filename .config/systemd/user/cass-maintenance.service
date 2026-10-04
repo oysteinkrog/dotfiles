@@ -32,3 +32,7 @@ IOWeight=20
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=2h
+# cass needs more than 10 s to act on SIGTERM during startup (measured
+# 2026-10-04). A stop that ends in SIGKILL mid-scan forces a full lexical
+# rebuild on the next run, so give a stop two minutes.
+TimeoutStopSec=120
