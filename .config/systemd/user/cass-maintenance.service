@@ -15,11 +15,17 @@ Environment=CASS_TANTIVY_REBUILD_WORKERS=4
 Environment=CASS_TANTIVY_REBUILD_PAGE_PREP_WORKERS=2
 Environment=CASS_TANTIVY_REBUILD_STAGED_SHARD_BUILDERS=1
 Environment=CASS_TANTIVY_MAX_WRITER_THREADS=2
+# Two Codex session files are over the default 100 MiB read budget; without this
+# the Codex scan never completes and every run exits 9.
+Environment=CASS_CODEX_MAX_SOURCE_BYTES=268435456
 # cass plans its memory against memory.max of its own cgroup. An OOM kill at
-# this cap kills only this unit, never the terminal mux.
-MemoryHigh=14G
-MemoryMax=16G
-MemorySwapMax=4G
+# this cap kills only this unit, never the terminal mux. A killed run that
+# ingested anything forces a full lexical rebuild on the next run, so the cap is
+# sized from measured peaks (preflight alone reached 15 GB on 2026-10-03).
+# Swap stays low so the kernel drops page cache instead of parking idle heap.
+MemoryHigh=26G
+MemoryMax=30G
+MemorySwapMax=8G
 OOMPolicy=kill
 CPUWeight=20
 IOWeight=20
