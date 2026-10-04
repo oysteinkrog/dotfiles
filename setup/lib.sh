@@ -4,9 +4,9 @@ DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 SETUP="$DOTFILES/setup"
 
 # Machine profile: <DOTFILES_HOSTS>/<hostname>/host.sh. The profiles live in a private
-# repo, cloned to ~/work/Life, because they name disks, networks and devices.
+# repo, cloned to ~/work/life, because they name disks, networks and devices.
 # DOTFILES_HOST=<name> picks another profile, DOTFILES_HOSTS=<dir> another folder.
-HOSTS_ROOT="${DOTFILES_HOSTS:-$HOME/work/Life/setup/machines}"
+HOSTS_ROOT="${DOTFILES_HOSTS:-$HOME/work/life/setup/machines}"
 HOST_NAME="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
 HOST_DIR="$HOSTS_ROOT/$HOST_NAME"
 
