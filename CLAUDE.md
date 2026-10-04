@@ -57,7 +57,7 @@ The full setup and recovery runbook for a new machine is
 
 This machine runs native CachyOS. `~/.dotfiles` is a normal repo and `install.sh` symlinks it into
 `~`. The setup and restore system is `setup/bootstrap.sh`. The guide and the machine profiles are
-in the private Life repo (`~/work/Life`): `docs/computers/linux-setup.md` and
+in the private Life repo (`~/work/life`): `docs/computers/linux-setup.md` and
 `setup/machines/<hostname>/`. This dotfiles repo is public, so never put hostnames of other
 machines, IP addresses, disk UUIDs, account names or internal repo names here.
 
