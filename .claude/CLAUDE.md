@@ -151,7 +151,7 @@ These rules hold whether or not a skill is loaded:
 
 ## Agent mail
 
-The rust `mcp-agent-mail` runs as a PM2 service on `http://127.0.0.1:4809/mcp/`, localhost
+The rust `mcp-agent-mail` runs as the systemd user unit `agent-mail.service` on `http://127.0.0.1:4809/mcp/`, localhost
 only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It answers on
 `/api/` as well, so older project configs keep working.
 
