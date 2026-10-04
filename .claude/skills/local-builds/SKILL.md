@@ -65,7 +65,7 @@ Then in `~/src/localbuilds`:
 - Leave an edit only in a build tree or a `~/.cache` source tree. Save it with
   `patch-save` (or commit and push it to the fork) before you stop.
 - Put hostnames, IPs, serials or account names into localbuilds. The pre-commit hook checks
-  against `~/work/Life/setup/localbuilds/private-words.txt`. Naming or linking the company
+  against `~/work/life/setup/localbuilds/private-words.txt`. Naming or linking the company
   forks is fine.
 - Put a change the company product (Swing Catalyst) needs into localbuilds. Those go on a
   `swing-catalyst/*` branch of the InitialForce fork and are built by the monorepo's
