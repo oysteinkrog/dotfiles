@@ -1,0 +1,11 @@
+[Unit]
+Description=Write the weekly grove gc report (dry run, deletes nothing)
+
+[Service]
+Type=oneshot
+# Report only: grove gc --dry-run never removes anything. Act on the report by
+# hand, with grove done <tag>.
+ExecStart=%h/bin/grove-gc-report
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=1h

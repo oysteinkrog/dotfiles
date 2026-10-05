@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Weekly grove gc report for the default repo, run by grove-gc.timer.
+# Report only: `grove gc --dry-run` changes nothing. The report includes the
+# "Finished" section (merged work whose owner session is gone) with the
+# `grove done <tag>` commands to run by hand.
+# Output: <work_dir>/.grove/gc-report-<date>.txt
+set -u
+grove="$HOME/.cargo/bin/grove"
+work_dir=$("$grove" repo path --default) || exit 1
+out="$work_dir/.grove/gc-report-$(date +%F).txt"
+mkdir -p "$work_dir/.grove"
+"$grove" gc --dry-run >"$out" 2>&1
+rc=$?
+echo "grove gc report written to $out (exit $rc)"
+exit "$rc"
