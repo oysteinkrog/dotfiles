@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the grove gc report weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 06:00:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
