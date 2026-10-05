@@ -446,7 +446,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed 's|^/c/users/oystein|~|'); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
+    "command": "input=$(cat); model=$(echo \"$input\" | jq -r '.model.display_name // .model.id // empty'); dir=$(echo \"$input\" | jq -r '.cwd // .workspace.current_dir // empty'); dispdir=$(echo \"$dir\" | sed \"s|^$HOME|~|\"); branch=$(git -C \"$dir\" symbolic-ref --short HEAD 2>/dev/null || git -C \"$dir\" rev-parse --short HEAD 2>/dev/null); [ -n \"$model\" ] && printf '[%s] ' \"$model\"; printf '%s' \"$dispdir\"; [ -n \"$branch\" ] && printf ' (%s)' \"$branch\"; echo"
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": false,
