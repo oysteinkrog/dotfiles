@@ -16,9 +16,12 @@ into a searchable archive (lexical + semantic). Upstream:
   dir, so the archive keeps the old sessions. Their source paths point at the
   copied session files under `~/.claude/projects`, `~/.codex` and `~/.gemini`.
 - **Indexing:** the systemd user timer `cass-maintenance.timer` runs
-  `cass-maintenance.service` 5 minutes after boot and then 30 minutes after each
-  run ends. The service runs `~/.local/bin/cass-maintenance.sh`: a capped
-  `cass index` (1 hour), then `cm reflect` on new Claude sessions. `install.sh`
+  `cass-maintenance.service` once a day at 04:00 (plus up to 15 minutes of random
+  delay, and at the next boot if the machine was off). A run takes 45 to 90
+  minutes because cass re-parses every file in a busy `subagents/` directory
+  whenever one new file lands there. The service runs
+  `~/.local/bin/cass-maintenance.sh`: a capped `cass index` (90 minutes), then
+  `cm reflect` on new Claude sessions. `install.sh`
   links the script and both units, and the `services` step enables the timer.
   Linger must be on (`loginctl enable-linger`) so the timer runs without a login.
 - **Log:** `~/.local/share/cass-maintenance.log`, and
