@@ -1,10 +1,12 @@
 [Unit]
-Description=Run cass maintenance hourly
+Description=Run cass maintenance daily at night
 
+# A run costs 45 to 90 minutes however long it has been since the last one, so
+# run once a day while sessions are quiet. systemd never starts a second copy
+# of cass-maintenance.service while one is running.
 [Timer]
-OnBootSec=15min
-OnCalendar=hourly
-RandomizedDelaySec=10min
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=15min
 Persistent=true
 
 [Install]

@@ -2,7 +2,7 @@
 # CASS maintenance: re-index session search and reflect on recent sessions.
 #
 # Run manually with `cassm`, or scheduled by the systemd user timer
-# cass-maintenance.timer (hourly, ~/.config/systemd/user/). The unit sets
+# cass-maintenance.timer (daily at 04:00, ~/.config/systemd/user/). The unit sets
 # CASS_AUTO_REFRESH=0 and the memory caps.
 #
 # Linux port (2026-09-29): cass is the native Linux build and the data dir is
