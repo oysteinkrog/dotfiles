@@ -359,7 +359,7 @@ if not is_windows then
     { intensity = 'Half', italic = false, font = wezterm.font('DejaVu Sans Mono', { foreground = '#7B8394' }) },
   }
   config.default_cursor_style = 'SteadyUnderline'
-  config.window_background_opacity = 0.97
+  config.window_background_opacity = 1.0 -- no transparency
   config.bold_brightens_ansi_colors = 'BrightAndBold'
 
   config.colors = {
