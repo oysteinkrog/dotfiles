@@ -1,0 +1,11 @@
+[Unit]
+Description=Delete superseded cargo build units in ~/work/*/target (cargo-target-prune)
+
+[Service]
+Type=oneshot
+# Live pass: deletes for real. Add --dry-run here to stop deleting.
+ExecStart=%h/bin/cargo-target-prune
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=1G
+TimeoutStartSec=30min

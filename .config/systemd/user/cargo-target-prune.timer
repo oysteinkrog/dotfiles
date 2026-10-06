@@ -1,0 +1,10 @@
+[Unit]
+Description=Run cargo-target-prune every 30 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=30min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
