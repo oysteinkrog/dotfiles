@@ -53,7 +53,7 @@ echo "===== [$( ts )] CASS maintenance start (pid=$$) ====="
 #    here: it would mix vectors of a different provenance into the vector
 #    index (see docs/cass-setup.md).
 echo "[$( ts )] cass index (incremental lexical)..."
-if timeout 5400 /usr/bin/cass --quiet index --no-progress-events </dev/null; then
+if timeout 14400 /usr/bin/cass --quiet index --no-progress-events </dev/null; then
   echo "[$( ts )]   cass index OK"
 else
   rc=$?

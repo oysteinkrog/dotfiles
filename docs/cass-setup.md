@@ -17,10 +17,10 @@ into a searchable archive (lexical + semantic). Upstream:
   copied session files under `~/.claude/projects`, `~/.codex` and `~/.gemini`.
 - **Indexing:** the systemd user timer `cass-maintenance.timer` runs
   `cass-maintenance.service` once a day at 04:00 (plus up to 15 minutes of random
-  delay, and at the next boot if the machine was off). A run takes 45 to 90
-  minutes because cass re-parses every file in a busy `subagents/` directory
-  whenever one new file lands there. The service runs
-  `~/.local/bin/cass-maintenance.sh`: a capped `cass index` (90 minutes), then
+  delay, and at the next boot if the machine was off). A run takes about 2 to
+  2.5 hours while swarm sessions are active, capped at 4 hours, because cass
+  re-parses every file in a folder when a new file lands there. The service runs
+  `~/.local/bin/cass-maintenance.sh`: a capped `cass index` (4 hours), then
   `cm reflect` on new Claude sessions. `install.sh`
   links the script and both units, and the `services` step enables the timer.
   Linger must be on (`loginctl enable-linger`) so the timer runs without a login.
