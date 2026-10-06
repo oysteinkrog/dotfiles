@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+"""cargo-target-prune: delete superseded build units from cargo target dirs.
+
+Runs every 30 minutes from cargo-target-prune.timer. This pass deletes for real
+unless --dry-run is given. build-sweep stays report-only; this is separate.
+
+Scope: every ~/work/*/target that is a cargo target dir (CACHEDIR.TAG or
+.rustc_info.json, plus a debug/ or release/ dir). Inside it, every profile dir
+(a dir with deps/ and .fingerprint/), also <triple>/<profile>.
+
+A unit is one compiled thing, named by the 16-hex hash cargo puts in its file
+names: <profile>/deps/*-<hash>*, .fingerprint/<name>-<hash>/, build/<name>-<hash>/
+and examples/*-<hash>*. A unit's age is the mtime of its newest file.
+
+Rule 1, stale units. A unit's key is built from its fingerprint JSON: unit kind
+and name, features, profile, target, source path, config, compile kind and
+rustflags, plus the keys of its dependencies (found through their fingerprint
+hashes). The rustc version is left out, so a toolchain update supersedes the old
+build. When a newer unit with the same key exists, an older one built more than
+--stale-hours ago (default 1) is deleted. Units with different features, or with
+dependencies built with different features (cargo build and cargo test often
+differ this way), get different keys and are kept.
+Incremental sessions: a session dir with nothing newer than --incr-hours
+(default 6) is deleted, except the newest session in each crate dir.
+
+Rule 2, size cap. If the target dir is still over its cap (default 60 GiB), the
+oldest units and incremental crate dirs go first, never one built in the last
+--cap-min-hours (default 2), until the dir is under the cap.
+
+Safety: holds cargo's own locks (.cargo-build-lock, .cargo-artifact-lock,
+.cargo-lock in the profile dir) while deleting, waiting up to --lock-timeout
+seconds (default 120); on timeout the profile is skipped for this run. Right
+before deleting, skips any unit with a file that a process has open, maps or
+executes. Never follows symlinks.
+
+Config: ~/.config/cargo-target-prune.conf, lines of "<repo or target path> <GiB>"
+or "<path> off". CARGO_TARGET_PRUNE_CAP_GIB sets the default cap. Paths listed in
+~/.config/build-sweep.exclude are skipped too.
+
+Log: every deleted unit with its size goes to
+~/.local/state/cargo-target-prune/deleted.log; one summary line per run goes to
+stdout (the journal).
+"""
+import argparse, fcntl, hashlib, json, os, re, shutil, sys, time
+from collections import defaultdict
+from pathlib import Path
+
+HOME = Path.home()
+G = 2**30
+HASH16 = re.compile(r"-([0-9a-f]{16})(?:\.[^/]*)?$")
+FP_DIR = re.compile(r"^(?P<name>.+)-(?P<hash>[0-9a-f]{16})$")
+CONF = HOME / ".config/cargo-target-prune.conf"
+EXCLUDE_FILE = HOME / ".config/build-sweep.exclude"
+STATE = Path(os.environ.get("CARGO_TARGET_PRUNE_STATE", HOME / ".local/state/cargo-target-prune"))
+LOCK_NAMES = (".cargo-build-lock", ".cargo-artifact-lock", ".cargo-lock")
+UNIT_SUBDIRS = ("deps", ".fingerprint", "build", "examples")
+
+
+# ---------- discovery ----------
+
+def is_target_dir(d):
+    if not d.is_dir() or d.is_symlink():
+        return False
+    marker = (d / "CACHEDIR.TAG").is_file() or (d / ".rustc_info.json").is_file()
+    return marker and ((d / "debug").is_dir() or (d / "release").is_dir())
+
+
+def is_profile_dir(p):
+    return p.is_dir() and not p.is_symlink() and (p / "deps").is_dir() and (p / ".fingerprint").is_dir()
+
+
+def profile_dirs(target):
+    out = []
+    for p in sorted(target.iterdir()):
+        if is_profile_dir(p):
+            out.append(p)
+        elif p.is_dir() and not p.is_symlink() and p.name not in ("doc", "tmp"):
+            # <triple>/<profile>
+            try:
+                out += [q for q in sorted(p.iterdir()) if is_profile_dir(q)]
+            except OSError:
+                pass
+    return out
+
+
+def load_caps(default_gib):
+    caps = {}
+    try:
+        for line in CONF.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            path, val = line.rsplit(None, 1)
+            p = Path(os.path.expanduser(path)).resolve()
+            caps[str(p)] = None if val == "off" else float(val)
+    except (OSError, ValueError):
+        pass
+
+    def cap_for(target):
+        for k in (str(target), str(target.parent)):
+            if k in caps:
+                return caps[k]
+        return default_gib
+    return cap_for
+
+
+def load_excludes():
+    try:
+        return [l.strip().rstrip("/") for l in EXCLUDE_FILE.read_text().splitlines()
+                if l.strip() and not l.startswith("#")]
+    except OSError:
+        return []
+
+
+# ---------- sizes and ages ----------
+
+def file_bytes(st):
+    # hardlinked files (cargo uplifts binaries this way) free nothing until the last link goes
+    return st.st_blocks * 512 // max(st.st_nlink, 1)
+
+
+def walk_stats(p):
+    """(bytes, newest mtime) for a file or dir, without following symlinks."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return 0, 0.0
+    if not os.path.isdir(p) or os.path.islink(p):
+        return file_bytes(st), st.st_mtime
+    total, newest = 0, st.st_mtime
+    for root, dirs, files in os.walk(p, followlinks=False):
+        for n in files + dirs:
+            try:
+                s = os.lstat(os.path.join(root, n))
+            except OSError:
+                continue
+            newest = max(newest, s.st_mtime)
+            if n in files:
+                total += file_bytes(s)
+    return total, newest
+
+
+def tree_bytes(p):
+    return walk_stats(p)[0]
+
+
+# ---------- units ----------
+
+class Unit:
+    __slots__ = ("profile", "hash", "name", "paths", "bytes", "mtime", "key", "kind")
+
+    def __init__(self, profile, h):
+        self.profile, self.hash, self.name = profile, h, None
+        self.paths, self.bytes, self.mtime, self.key, self.kind = [], 0, 0.0, None, "unit"
+
+    def label(self):
+        return f"{self.name or '?'}-{self.hash}"
+
+    def refresh(self):
+        self.bytes, self.mtime = 0, 0.0
+        for p in self.paths:
+            b, m = walk_stats(p)
+            self.bytes += b
+            self.mtime = max(self.mtime, m)
+
+
+def collect_units(profile):
+    units = {}
+    for sub in UNIT_SUBDIRS:
+        d = profile / sub
+        if not d.is_dir():
+            continue
+        for e in os.scandir(d):
+            m = HASH16.search(e.name)
+            if not m:
+                continue
+            u = units.get(m[1]) or units.setdefault(m[1], Unit(profile, m[1]))
+            u.paths.append(Path(e.path))
+            if sub == ".fingerprint":
+                fm = FP_DIR.match(e.name)
+                if fm:
+                    u.name = fm["name"]
+    for u in units.values():
+        if u.name is None:
+            u.name = HASH16.sub("", u.paths[0].name)
+        u.refresh()
+    return units
+
+
+KEY_FIELDS = ("features", "profile", "target", "path", "config", "compile_kind", "rustflags")
+
+
+def compute_keys(profile, units):
+    """Set Unit.key from fingerprint JSON. Units without readable JSON keep key None."""
+    fpdir = profile / ".fingerprint"
+    jsons = {}      # json path -> parsed
+    by_fphash = {}  # fingerprint hash (hex, as cargo writes it) -> json path
+    unit_jsons = defaultdict(list)
+    for h, u in units.items():
+        d = fpdir / f"{u.name}-{h}"
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.json")):
+            try:
+                j = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            jsons[f] = j
+            unit_jsons[h].append(f)
+            try:
+                by_fphash[f.with_suffix("").read_text().strip()] = f
+            except OSError:
+                pass
+
+    memo = {}
+
+    def key_of(f, depth=0):
+        if f in memo:
+            return memo[f]
+        j = jsons[f]
+        parts = [f.name] + [repr(j.get(k)) for k in KEY_FIELDS]
+        deps = []
+        for dep in j.get("deps", []):
+            try:
+                name, fph = dep[1], int(dep[3]).to_bytes(8, "little").hex()
+            except (IndexError, TypeError, ValueError, OverflowError):
+                deps.append("?")
+                continue
+            df = by_fphash.get(fph)
+            deps.append(f"{name}:{key_of(df, depth + 1) if df is not None and depth < 200 else '?' + fph}")
+        parts.append("|".join(sorted(deps)))
+        memo[f] = hashlib.sha1("\0".join(parts).encode()).hexdigest()
+        return memo[f]
+
+    for h, files in unit_jsons.items():
+        units[h].key = (units[h].name, tuple(sorted(key_of(f) for f in files)))
+
+
+def stale_units(units, now, stale_secs):
+    groups = defaultdict(list)
+    for u in units.values():
+        if u.key is not None:
+            groups[u.key].append(u)
+    out = []
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        g.sort(key=lambda u: u.mtime, reverse=True)
+        out += [u for u in g[1:] if u.mtime < now - stale_secs]
+    return out
+
+
+class Incr:
+    """An incremental session dir (rule 1) or a whole crate dir (rule 2)."""
+    def __init__(self, profile, paths, name, kind):
+        self.profile, self.paths, self.name, self.kind = profile, paths, name, kind
+        self.hash, self.key, self.bytes, self.mtime = "", None, 0, 0.0
+        self.refresh()
+
+    def label(self):
+        return self.name
+
+    refresh = Unit.refresh
+
+
+def incr_sessions(profile, now, incr_secs):
+    """Old incremental sessions to delete, and all crate dirs (for the cap)."""
+    stale, crates = [], []
+    inc = profile / "incremental"
+    if not inc.is_dir():
+        return stale, crates
+    for c in os.scandir(inc):
+        if not c.is_dir(follow_symlinks=False):
+            continue
+        cp = Path(c.path)
+        crates.append(Incr(profile, [cp], f"incremental/{c.name}", "incr-crate"))
+        sess = []
+        for s in os.scandir(cp):
+            if s.is_dir(follow_symlinks=False) and s.name.startswith("s-"):
+                b, m = walk_stats(s.path)
+                sess.append((m, Path(s.path)))
+        sess.sort(reverse=True)
+        for m, sp in sess[1:]:
+            if m < now - incr_secs:
+                paths = [sp]
+                lock = sp.parent / ("-".join(sp.name.split("-")[:3]) + ".lock")
+                if lock.exists():
+                    paths.append(lock)
+                stale.append(Incr(profile, paths, f"incremental/{c.name}/{sp.name}", "incr-session"))
+    return stale, crates
+
+
+# ---------- safety ----------
+
+def busy_paths(prefix):
+    """Paths under prefix that any process has as exe, open fd or memory map."""
+    pre = str(prefix) + "/"
+    out = set()
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        base = f"/proc/{pid}"
+        try:
+            x = os.readlink(f"{base}/exe")
+            if x.startswith(pre):
+                out.add(x.removesuffix(" (deleted)"))
+        except OSError:
+            pass
+        try:
+            for fd in os.listdir(f"{base}/fd"):
+                try:
+                    x = os.readlink(f"{base}/fd/{fd}")
+                except OSError:
+                    continue
+                if x.startswith(pre):
+                    out.add(x)
+        except OSError:
+            pass
+        try:
+            with open(f"{base}/maps") as fh:
+                for line in fh:
+                    i = line.find(pre)
+                    if i >= 0:
+                        out.add(line[i:].rstrip("\n").removesuffix(" (deleted)"))
+        except OSError:
+            pass
+    return out
+
+
+def unit_busy(u, busy):
+    for p in u.paths:
+        s = str(p)
+        if any(b == s or b.startswith(s + "/") for b in busy):
+            return True
+    return False
+
+
+class CargoLocks:
+    """Exclusive flock on all three cargo lock files of a profile, or nothing."""
+    def __init__(self, profile, timeout):
+        self.profile, self.timeout, self.fds = profile, timeout, []
+
+    def __enter__(self):
+        deadline = time.monotonic() + self.timeout
+        while True:
+            if self._try():
+                return self
+            if time.monotonic() >= deadline:
+                raise TimeoutError(str(self.profile))
+            time.sleep(1)
+
+    def _try(self):
+        for n in LOCK_NAMES:
+            try:
+                fd = os.open(self.profile / n, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+            except OSError:
+                self.__exit__()
+                return False
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                self.__exit__()
+                return False
+            self.fds.append(fd)
+        return True
+
+    def __exit__(self, *a):
+        for fd in self.fds:
+            os.close(fd)
+        self.fds = []
+
+
+def remove(p):
+    if p.is_dir() and not p.is_symlink():
+        shutil.rmtree(p, ignore_errors=True)
+    else:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+
+
+# ---------- main ----------
+
+def plan_target(target, args, now, cap_gib):
+    """Returns (size_before, list of (rule, item)) for one target dir."""
+    before = tree_bytes(target)
+    plan = []
+    caps_pool = []
+    for prof in profile_dirs(target):
+        units = collect_units(prof)
+        compute_keys(prof, units)
+        for u in stale_units(units, now, args.stale_hours * 3600):
+            plan.append(("stale", u))
+        sess, crates = incr_sessions(prof, now, args.incr_hours * 3600)
+        plan += [("incr", s) for s in sess]
+        doomed = {id(u) for _, u in plan}
+        caps_pool += [u for u in units.values() if id(u) not in doomed] + crates
+    if cap_gib is not None:
+        size = before - sum(u.bytes for _, u in plan)
+        cap = cap_gib * G
+        if size > cap:
+            planned_sessions = {str(p) for r, u in plan if r == "incr" for p in u.paths}
+            for u in sorted(caps_pool, key=lambda u: u.mtime):
+                if size <= cap:
+                    break
+                if u.mtime >= now - args.cap_min_hours * 3600:
+                    continue
+                b = u.bytes
+                if u.kind == "incr-crate":  # sessions already planned are counted once
+                    b -= sum(x.bytes for r, x in plan if r == "incr" and str(x.paths[0]).startswith(str(u.paths[0]) + "/"))
+                plan.append(("cap", u))
+                size -= b
+    return before, plan
+
+
+def execute(target, plan, args, now, log):
+    """Delete per profile under cargo's locks. Returns (deleted bytes, count, skipped notes)."""
+    by_prof = defaultdict(list)
+    for rule, u in plan:
+        by_prof[u.profile].append((rule, u))
+    freed, count, notes = 0, 0, []
+    for prof, items in by_prof.items():
+        try:
+            with CargoLocks(prof, args.lock_timeout):
+                busy = busy_paths(prof)
+                done = set()
+                for rule, u in items:
+                    if any(str(p) in done for p in u.paths):
+                        continue
+                    u.refresh()
+                    # re-check age under the lock: cargo may have rebuilt it since planning
+                    limit = {"stale": args.stale_hours, "incr": args.incr_hours, "cap": args.cap_min_hours}[rule]
+                    if u.mtime >= time.time() - limit * 3600:
+                        notes.append(f"rebuilt-since-plan {u.label()}")
+                        continue
+                    if unit_busy(u, busy):
+                        notes.append(f"in-use {prof}/{u.label()}")
+                        continue
+                    for p in u.paths:
+                        remove(p)
+                        done.add(str(p))
+                    freed += u.bytes
+                    count += 1
+                    log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {rule:5} {u.bytes:>12} "
+                              f"{prof}/{u.label()} age={(now - u.mtime) / 3600:.1f}h\n")
+        except TimeoutError:
+            notes.append(f"lock-timeout {prof}")
+            log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} SKIP lock-timeout {prof}\n")
+    return freed, count, notes
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true", help="report what would be deleted, delete nothing")
+    ap.add_argument("--verbose", action="store_true", help="print every unit")
+    ap.add_argument("--targets", nargs="*", help="target dirs to use instead of ~/work/*/target")
+    ap.add_argument("--stale-hours", type=float, default=1)
+    ap.add_argument("--incr-hours", type=float, default=6)
+    ap.add_argument("--cap-min-hours", type=float, default=2)
+    ap.add_argument("--cap-gib", type=float, default=float(os.environ.get("CARGO_TARGET_PRUNE_CAP_GIB", 60)))
+    ap.add_argument("--lock-timeout", type=float, default=120)
+    args = ap.parse_args()
+
+    now = time.time()
+    cap_for = load_caps(args.cap_gib)
+    excl = load_excludes()
+    targets = [Path(t).resolve() for t in args.targets] if args.targets is not None \
+        else sorted(p for p in (HOME / "work").glob("*/target"))
+    STATE.mkdir(parents=True, exist_ok=True)
+    logf = STATE / "deleted.log"
+    try:
+        if logf.stat().st_size > 8 * 2**20:
+            logf.replace(STATE / "deleted.log.1")
+    except OSError:
+        pass
+
+    summary = []
+    tot_freed = tot_n = 0
+    with open(logf, "a") as log:
+        for t in targets:
+            if not is_target_dir(t) or any(str(t).startswith(e) for e in excl):
+                continue
+            before, plan = plan_target(t, args, now, cap_for(t))
+            by_rule = defaultdict(lambda: [0, 0])
+            for rule, u in plan:
+                by_rule[rule][0] += 1
+                by_rule[rule][1] += u.bytes
+                if args.verbose:
+                    print(f"{'WOULD' if args.dry_run else 'PLAN '} {rule:5} {u.bytes / 2**20:9.1f} MiB "
+                          f"age {(now - u.mtime) / 3600:6.1f}h  {u.profile.name}/{u.label()}")
+            rules = " ".join(f"{r}={n}/{b / G:.1f}G" for r, (n, b) in sorted(by_rule.items())) or "nothing"
+            if args.dry_run:
+                print(f"{t}: {before / G:.1f} GiB, cap {cap_for(t)}, would delete {rules}")
+                tot_freed += sum(b for n, b in by_rule.values())
+                tot_n += len(plan)
+                continue
+            freed, n, notes = execute(t, plan, args, now, log)
+            after = tree_bytes(t)
+            tot_freed += freed
+            tot_n += n
+            summary.append(f"{t.parent.name} {before / G:.1f}->{after / G:.1f}G")
+            print(f"{t}: {before / G:.1f} GiB -> {after / G:.1f} GiB, deleted {n} ({rules})"
+                  + (f", skipped: {'; '.join(notes[:5])}" + (f" (+{len(notes) - 5})" if len(notes) > 5 else "") if notes else ""))
+        line = (f"{'dry run: would delete' if args.dry_run else 'deleted'} {tot_n} units, "
+                f"{tot_freed / G:.1f} GiB" + (f" ({', '.join(summary)})" if summary else ""))
+        if not args.dry_run:
+            log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} RUN {line}\n")
+    print(line)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
