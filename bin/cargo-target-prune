@@ -41,7 +41,15 @@ Log: every deleted unit with its size goes to
 ~/.local/state/cargo-target-prune/deleted.log; one summary line per run goes to
 stdout (the journal).
 """
-import argparse, fcntl, hashlib, json, os, re, shutil, sys, time
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -106,8 +114,8 @@ def load_caps(default_gib):
 
 def load_excludes():
     try:
-        return [l.strip().rstrip("/") for l in EXCLUDE_FILE.read_text().splitlines()
-                if l.strip() and not l.startswith("#")]
+        return [x.strip().rstrip("/") for x in EXCLUDE_FILE.read_text().splitlines()
+                if x.strip() and not x.startswith("#")]
     except OSError:
         return []
 
@@ -401,7 +409,6 @@ def plan_target(target, args, now, cap_gib):
         size = before - sum(u.bytes for _, u in plan)
         cap = cap_gib * G
         if size > cap:
-            planned_sessions = {str(p) for r, u in plan if r == "incr" for p in u.paths}
             for u in sorted(caps_pool, key=lambda u: u.mtime):
                 if size <= cap:
                     break
