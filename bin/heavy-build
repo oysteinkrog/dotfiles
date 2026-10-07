@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# heavy-build: run a heavy build or test in one of 3 build slots, in a
-# memory-capped systemd scope, after memory and free-space checks.
+# heavy-build: run a heavy build or test in a memory-capped systemd scope in
+# builds.slice, once the build queue lets it start.
 #
 # Usage: heavy-build <cmd> [args...]
 #   heavy-build cargo test -p mux --lib
@@ -8,23 +8,66 @@
 #   heavy-build localbuild build frankenterm
 #   heavy-build bash -c 'cd sub && cargo build && cargo test'
 #
-# What it does:
+# There are two admission rules. ~/.config/heavy-build.conf picks one with the
+# line HEAVY_BUILD_MODE=shadow (the default) or HEAVY_BUILD_MODE=live. Only that
+# file sets the mode. Waiters read it again on every poll.
+#
+# shadow mode: the old slot rule decides.
+# - Up to 3 builds run at once, one per build slot. Slot 0 is
+#   $XDG_RUNTIME_DIR/heavy-build.lock, the lock of the older `flock ...
+#   systemd-run` rule, so a build started with that rule counts as one slot.
+#   Slots 1 and 2 are heavy-build.lock.1 and .2.
+# - Waiters form a first-come, first-served line. Only the first may start.
+# - A build starts when MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB
+#   (default 12), or HEAVY_BUILD_SOLO_MEM_GIB (default 8) when no build runs.
+# - A build scope left over from a killed heavy-build counts as a used slot.
+# - The budget rule below runs beside it and only logs what it would decide,
+#   to ~/.local/state/heavy-build/shadow.log. One line each time its decision
+#   changes, and one when the old rule starts the build. Fields: time, job,
+#   decision (start or wait), reason, actual (what the old rule did), and
+#   would_start_for (seconds the budget rule had already said start).
+#
+# live mode: the budget rule decides. A waiting build may start when:
+# - fewer than HEAVY_BUILD_MAX_JOBS builds run (default 6);
+# - the cores charged to running builds plus its own estimate are at most
+#   HEAVY_BUILD_CPU_BUDGET (default 28). A running build is charged its
+#   estimate for 2 min, then what it used over the last 60 s;
+# - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
+#   (default 40). Only checked for builds estimated at 2 cores or more;
+# - MemAvailable, minus the memory running builds are still expected to take,
+#   minus its own estimate, leaves HEAVY_BUILD_MEM_RESERVE_GIB (default 8);
+# - the memory builds hold plus its estimate fits under the builds.slice cap;
+# - claude.slice and app.slice memory pressure (some avg10) are each under
+#   HEAVY_BUILD_MAX_MEM_PSI percent (default 5);
+# - no running build holds one of its lock keys.
+# When no build runs, a build starts once MemAvailable is at least
+# HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate. Order is priority, then
+# arrival. A build whose lock key is busy is skipped and keeps its place.
+# When the first build in order does not fit, a later one may start if it fits
+# now and should end before the first one could start. That stops once the
+# first one has waited HEAVY_BUILD_STARVE seconds (default 1800).
+# Decisions are logged to ~/.local/state/heavy-build/live.log.
+# The live settings above can also be set in ~/.config/heavy-build.conf as
+# KEY=VALUE lines. The environment wins over the file.
+#
+# Both modes:
 # - Stops first while $XDG_RUNTIME_DIR/heavy-build.hold exists (the manager
 #   session's pause switch; its text is the reason).
-# - Waits in a first-come, first-served line. Each waiter puts a ticket file in
-#   $XDG_RUNTIME_DIR/heavy-build.queue/, and only the oldest live ticket may
-#   try for a slot. Tickets of dead waiters are removed on every poll. The wait
-#   message shows the position in line, and says so when an identical build
-#   (same directory and command) is ahead. Identical builds still both run.
-# - Waits for one of 3 build slots. Slot 0 is $XDG_RUNTIME_DIR/heavy-build.lock,
-#   the lock of the older `flock ... systemd-run` rule, so a build started with
-#   that rule counts as one slot. Slots 1 and 2 are heavy-build.lock.1 and .2.
-# - Waits until MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB (default 12),
-#   or HEAVY_BUILD_SOLO_MEM_GIB (default 8) when no scope runs in builds.slice.
 # - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
 #   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
+# - Estimates each build's memory, cores and wall time: from the last 5 runs
+#   of the same command in the same directory, then from its class (cargo
+#   test, dotnet build, Wine run-tests and so on; the p90 of the peaks), then
+#   8 GiB, 8 cores and 600 s. History: ~/.local/state/heavy-build/history.tsv.
+# - Lock keys: cargo:<workspace root> for cargo commands, tree:<git toplevel>
+#   for dotnet and Wine commands, and wine:<prefix> for Wine runs that would
+#   share one prefix and so one wineserver (the DESKTOP-14957 guard). The guard
+#   never sets WINEPREFIX. HEAVY_BUILD_KEY=none turns lock keys off.
+# - HEAVY_BUILD_PRIORITY=high|normal|low (default normal). Agents may set high
+#   ONLY for a P0 bug or for the last local check before a PR, and must give
+#   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A low
+#   build counts as normal after 30 min of waiting. Only live mode uses it.
 # - Checks again every HEAVY_BUILD_POLL seconds (default 5).
-# - Counts a build scope left over from a killed heavy-build as a used slot.
 # - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
 #   with exit code 75. The clock starts again each time the waiter moves up
 #   in line. A wait can be long: run it in the background when your tool call
@@ -32,16 +75,22 @@
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
-# - Runs the command in a transient scope in builds.slice with the rule's
-#   memory caps, so an OOM kills only the build, not frankenterm-mux.service.
-#   The command never inherits the lock, so a daemon it leaves behind cannot
-#   hold a slot. heavy-build holds the slot until the build exits.
-# - Exits with the command's status. A signal death gives 128 + signal
-#   (137 after an OOM kill). TERM, INT or HUP to heavy-build stop the build.
+# - Runs the command in a transient scope in builds.slice, so an OOM kills only
+#   the build. MemoryHigh is 1.25 times the memory estimate, from 16G to 22G;
+#   MemoryMax is 2G above that. The command never inherits a slot lock.
+# - HEAVY_BUILD_TIMEOUT=<seconds> stops the build after that long (exit 124).
+# - Warns on stderr when the build used under 0.05 cores for 10 min (it may be
+#   hung), or when its Wine processes have lost their wineserver. Such a build
+#   stops counting against the budget. Nothing is killed by default;
+#   HEAVY_BUILD_WINE_ORPHAN=stop stops a Wine run after 2 min in that state.
+# - Exit codes: the command's own status; 128 + signal on a signal death (137
+#   after an OOM kill); 75 when refused or when the wait gave up; 124 when
+#   HEAVY_BUILD_TIMEOUT or HEAVY_BUILD_WINE_ORPHAN=stop ended it; 2 for a usage
+#   error. TERM, INT or HUP to heavy-build stop the build.
 #
 # Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
-# the command directly. Under a plain `flock heavy-build.lock` it takes no
-# second slot and skips the line, but still makes a scope.
+# the command directly. Under a plain `flock heavy-build.lock` it skips the
+# line, but still makes a scope.
 #
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
@@ -63,6 +112,26 @@ MIN_SWAP_ROOM_GIB=${HEAVY_BUILD_MIN_SWAP_ROOM_GIB:-10}
 POLL=${HEAVY_BUILD_POLL:-5}
 HOLD=$RUNDIR/heavy-build.hold
 QDIR=$RUNDIR/heavy-build.queue
+JDIR=$RUNDIR/heavy-build.jobs
+ADMIT=$RUNDIR/heavy-build.admit
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.conf
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/heavy-build
+HIST=$STATE/history.tsv
+PRIO=${HEAVY_BUILD_PRIORITY:-normal}
+TIMEOUT=${HEAVY_BUILD_TIMEOUT:-}
+# Test hooks: where /proc files, the cgroup tree and Wine's socket dirs are
+# read from, and the sampler's timings. Not for normal use.
+PROC=${HB_PROC:-/proc}
+CG=${HB_CGROUP:-/sys/fs/cgroup}
+WINE_TMP=${HB_WINE_TMP:-/tmp/.wine-$UID}
+SAMPLE=${HB_SAMPLE_SECS:-15}
+STALL_SECS=${HB_STALL_SECS:-600}
+WARMUP=${HB_WARMUP_SECS:-120}
+ORPHAN_STOP_SECS=${HB_ORPHAN_STOP_SECS:-120}
+USVC=$CG/user.slice/user-$UID.slice/user@$UID.service
+BSLICE=$USVC/builds.slice
+MEMINFO=$PROC/meminfo
+WINE_DEFAULT_LINE='${WINEPREFIX:-$HOME/.local/share/wineprefixes/motioncatalyst}'
 
 build_env=(
   HEAVY_BUILD_ACTIVE=1
@@ -79,7 +148,197 @@ if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
   exec env "${build_env[@]}" "$@"
 fi
 
+case $PRIO in
+  high|normal|low) ;;
+  *) say "HEAVY_BUILD_PRIORITY must be high, normal or low, not '$PRIO'"; exit 2 ;;
+esac
+if [[ $PRIO == high && -z ${HEAVY_BUILD_REASON:-} ]]; then
+  say "HEAVY_BUILD_PRIORITY=high needs HEAVY_BUILD_REASON. High is only for a P0 bug or the last local check before a PR."
+  exit 2
+fi
+if [[ -n $TIMEOUT && ! $TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
+  say "HEAVY_BUILD_TIMEOUT must be a whole number of seconds, not '$TIMEOUT'"
+  exit 2
+fi
+
 SLOTS=("$LOCK" "$LOCK.1" "$LOCK.2")
+
+# ---------------------------------------------------------------- settings
+
+# Reads ~/.config/heavy-build.conf. Sets MODE and the live-rule settings.
+# For each setting the environment wins, then the file, then the default.
+read_conf() {
+  local k v
+  declare -gA CONFV=()
+  if [[ -r $CONF ]]; then
+    while IFS='=' read -r k v || [[ -n $k ]]; do
+      k=${k//[[:space:]]/}
+      [[ $k == HEAVY_BUILD_* ]] || continue
+      v=${v%%#*}
+      v=${v//[[:space:]\"\']/}
+      CONFV[$k]=$v
+    done < "$CONF"
+  fi
+  MODE=shadow
+  [[ ${CONFV[HEAVY_BUILD_MODE]:-} == live ]] && MODE=live
+  setting HEAVY_BUILD_MAX_JOBS 6
+  setting HEAVY_BUILD_CPU_BUDGET 28
+  setting HEAVY_BUILD_MEM_RESERVE_GIB 8
+  setting HEAVY_BUILD_MAX_CPU_PSI 40
+  setting HEAVY_BUILD_MAX_MEM_PSI 5
+  setting HEAVY_BUILD_STARVE 1800
+}
+
+setting() {
+  local v=${!1:-}
+  [[ -n $v ]] || v=${CONFV[$1]:-}
+  [[ $v =~ ^[0-9]+$ ]] || v=$2
+  printf -v "${1#HEAVY_BUILD_}" %s "$v"
+}
+
+# ---------------------------------------------------------------- estimates
+
+classify() {
+  local c=" $* "
+  local rc='(^|[^[:alnum:]_-])cargo[[:space:]]+(\+[^[:space:]]+[[:space:]]+)?'
+  if [[ $c == *run-tests.sh* ]]; then echo wine-run-tests
+  elif [[ $c =~ ${rc}build[[:space:]].*--release || $c == *localbuild* ]]; then echo cargo-release
+  elif [[ $c =~ ${rc}clippy ]]; then echo cargo-clippy
+  elif [[ $c =~ ${rc}check ]]; then echo cargo-check
+  elif [[ $c =~ ${rc}(test|nextest) ]]; then echo cargo-test
+  elif [[ $c =~ ${rc}build ]]; then echo cargo-build
+  elif [[ $c =~ dotnet[[:space:]]+test ]]; then echo dotnet-test
+  elif [[ $c =~ dotnet[[:space:]]+(build|publish|run) ]]; then echo dotnet-build
+  elif [[ ${c,,} == *wine* ]]; then echo wine-script
+  else echo other
+  fi
+}
+
+# "mem_gib cores wall_s" per class, measured on 2026-10-07 (85 jobs): p90 peak,
+# average cores, median wall. Classes without a row use the default.
+class_table() {
+  case $1 in
+    cargo-release)  echo "16.3 3.4 4500" ;;
+    wine-script)    echo "7.4 5.6 537" ;;
+    wine-run-tests) echo "6.6 5.9 114" ;;
+    cargo-test)     echo "13.3 3.4 96" ;;
+    cargo-clippy)   echo "7.6 2.6 42" ;;
+    dotnet-build)   echo "4.7 8.0 17" ;;
+    dotnet-test)    echo "5.2 6.9 45" ;;
+    cargo-check)    echo "3.9 1.7 26" ;;
+    *)              echo "8 8 600" ;;
+  esac
+}
+
+# estimate KEY CLASS -> "mem_gib cores wall_s source".
+# history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code.
+estimate() {
+  local h=$HIST
+  [[ -r $h ]] || h=/dev/null
+  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" '
+    function srt(a, n,   i, j, x) { for (i = 2; i <= n; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
+    $4 > 0 && $7 != 75 && $7 != 124 && $7 < 128 {
+      if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5; kp[kn] = $6 }
+      if ($2 == c) { cn++; cw[cn] = $4; cc[cn] = $5; cp[cn] = $6 }
+    }
+    END {
+      split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]
+      src = (c == "other" || c == "cargo-build") ? "default" : "class"
+      if (cn >= 5) {
+        n = 0; m = 0; sc = 0; sw = 0
+        for (i = (cn > 50 ? cn - 49 : 1); i <= cn; i++) {
+          w[++n] = cw[i]
+          if (cp[i] != "NA") p[++m] = cp[i]
+          if (cc[i] != "NA") { sc += cc[i]; sw += cw[i] }
+        }
+        srt(w, n); wall = w[int((n + 1) / 2)]
+        if (m > 0) { srt(p, m); i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824 }
+        if (sw > 0) cores = sc / sw
+        src = "class-history"
+      }
+      if (kn >= 1) {
+        n = 0; m = 0; mx = -1; s = 0; nc = 0
+        for (i = (kn > 5 ? kn - 4 : 1); i <= kn; i++) {
+          w[++n] = kw[i]
+          if (kp[i] != "NA" && kp[i] > mx) mx = kp[i]
+          if (kc[i] != "NA") { s += kc[i] / kw[i]; nc++ }
+        }
+        srt(w, n); wall = w[int((n + 1) / 2)]
+        if (mx >= 0) mem = mx / 1073741824
+        if (nc > 0) cores = s / nc
+        src = "history"
+      }
+      if (mem < 0.1) mem = 0.1
+      if (cores < 0.1) cores = 0.1
+      if (wall < 1) wall = 1
+      printf "%.1f %.1f %d %s\n", mem, cores, wall, src
+    }' "$h" 2>/dev/null || echo "8.0 8.0 600 default"
+}
+
+# ---------------------------------------------------------------- lock keys
+
+# Directory of the Wine server socket for prefix $1, as wineserver names it.
+wine_server_dir() {
+  local dev ino
+  dev=$(stat -c %D -- "$1" 2>/dev/null) && ino=$(stat -c %i -- "$1" 2>/dev/null) || return 1
+  printf '%s/server-%s-%x\n' "$WINE_TMP" "$dev" "$ino"
+}
+
+# Prints "pid inside" or "pid outside" (of builds.slice) for each wineserver
+# that serves prefix $1.
+wineservers_for() {
+  local dir d comm cwd cg
+  dir=$(wine_server_dir "$1") || return 0
+  for d in "$PROC"/[0-9]*; do
+    read -r comm 2>/dev/null < "$d/comm" || continue
+    [[ $comm == wineserver ]] || continue
+    cwd=$(readlink "$d/cwd" 2>/dev/null) || continue
+    [[ $cwd == "$dir" ]] || continue
+    cg=$(<"$d/cgroup") 2>/dev/null || cg=
+    if [[ $cg == */builds.slice/* ]]; then echo "${d##*/} inside"; else echo "${d##*/} outside"; fi
+  done
+}
+
+# The DESKTOP-14957 stopgap. Runs that share one Wine prefix share one
+# wineserver, which lives in the scope of whichever run started it; when that
+# scope ends, the other runs hang. So such runs get the key wine:<prefix>.
+# It turns itself off in a worktree whose run-tests.sh picks its own prefix
+# (the fix on linux-wine's wine-test-prefix branch) or whose wine-env.sh no
+# longer has the shared default, and when a wineserver for the prefix already
+# runs outside builds.slice. It never sets WINEPREFIX.
+wine_key() {
+  local top=$1 s p
+  shift
+  s=" $* "
+  [[ ${s,,} == *wine* || $s == *run-tests.sh* ]] || return 0
+  if [[ -n ${WINEPREFIX:-} ]]; then
+    p=$WINEPREFIX
+  else
+    [[ -n $top ]] || return 0
+    if [[ $s == *run-tests.sh* ]] && grep -qF 'motioncatalyst-tests-' "$top/tools/wine/run-tests.sh" 2>/dev/null; then
+      return 0
+    fi
+    grep -qF -- "$WINE_DEFAULT_LINE" "$top/tools/wine/wine-env.sh" 2>/dev/null || return 0
+    p=$HOME/.local/share/wineprefixes/motioncatalyst
+  fi
+  [[ $(wineservers_for "$p") == *outside* ]] && return 0
+  echo "wine:$p"
+}
+
+# Lock keys for this build, one per line. Spaces in a key become %20.
+lock_keys() {
+  [[ ${HEAVY_BUILD_KEY:-} == none ]] && return 0
+  local s=" $* " ws top=
+  if [[ $s =~ [^[:alnum:]_-]cargo[[:space:]] ]]; then
+    ws=$(cargo locate-project --workspace --message-format plain 2>/dev/null) && [[ -n $ws ]] && echo "cargo:${ws%/Cargo.toml}"
+  fi
+  if [[ ${s,,} =~ dotnet|msbuild|wine|run-tests\.sh|build\.cmd ]]; then
+    top=$(git rev-parse --show-toplevel 2>/dev/null) && echo "tree:$top"
+  fi
+  wine_key "$top" "$@"
+}
+
+# ---------------------------------------------------------------- old rule
 
 # True when a process above us holds one of the slot locks, for example
 # `flock heavy-build.lock heavy-build ...`. Matches on inode only: on btrfs,
@@ -101,18 +360,18 @@ ancestor_holds_lock() {
   return 1
 }
 
-mem_avail_gib() { awk '/^MemAvailable:/ {print int($2 / 1048576); exit}' /proc/meminfo 2>/dev/null; }
+mem_avail_gib() { awk '/^MemAvailable:/ {print int($2 / 1048576); exit}' "$MEMINFO" 2>/dev/null; }
 
 # GiB of swap left before systemd-oomd's 90% limit. Empty when there is no swap.
 swap_room_gib() {
   awk '/^SwapTotal:/ {t = $2} /^SwapFree:/ {f = $2}
-    END {if (t > 0) print int((0.9 * t - (t - f)) / 1048576)}' /proc/meminfo 2>/dev/null
+    END {if (t > 0) print int((0.9 * t - (t - f)) / 1048576)}' "$MEMINFO" 2>/dev/null
 }
 
 # Number of scopes with processes in builds.slice (heavy-build or the old rule).
 active_build_scopes() {
   local e n=0
-  for e in /sys/fs/cgroup/user.slice/user-"$UID".slice/user@"$UID".service/builds.slice/*.scope/cgroup.events; do
+  for e in "$BSLICE"/*.scope/cgroup.events; do
     [[ -e $e ]] && grep -qx 'populated 1' "$e" 2>/dev/null && n=$(( n + 1 ))
   done
   echo "$n"
@@ -129,7 +388,9 @@ proc_start() {
   echo "${20}"
 }
 
-# A ticket holds "pid starttime". It is live while that process runs.
+# A ticket's first line is "pid starttime"; it is live while that process
+# runs. The second line is "prio mem cores wall keys" for the budget rule.
+# Waiters running an older heavy-build read only the first line.
 ticket_alive() {
   local pid st
   read -r pid st < "$1" 2>/dev/null || return 1
@@ -139,7 +400,8 @@ ticket_alive() {
 
 write_ticket() {
   mkdir -p "$QDIR" 2>/dev/null
-  echo "$$ $(proc_start $$)" > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
+  printf '%s %s\n%s %s %s %s %s\n' "$$" "$(proc_start $$)" "$PRIO" "$est_mem" "$est_cores" "$est_wall" "$keys_csv" \
+    > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
 }
 
 # Sets pos (our place in line, 1 = next), total, and dup (an earlier ticket has
@@ -193,6 +455,315 @@ try_slot() {
   return 1
 }
 
+# ---------------------------------------------------------------- budget rule
+
+# One line per running build. Own builds come from their state files
+# ($JDIR/<unit>: "unit pid pidstart start mem cores wall cur_bytes
+# cores60_milli stalled prio keys"); a state file whose heavy-build is gone is
+# removed. Scopes in builds.slice without a state file (orphans, the old flock
+# rule) come as "F unit cur_bytes cpu_usec age_s".
+running_lines() {
+  local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v
+  for f in "$JDIR"/heavy-build-*; do
+    [[ -e $f && $f != *.tmp ]] || continue
+    read -r u pid st start em ec ew cur c60 stl pr ks < "$f" || continue
+    if [[ $(proc_start "$pid") != "$st" ]]; then rm -f -- "$f"; continue; fi
+    seen+="$u "
+    echo "R $u $start $em $ec $(( start + ${ew%.*} )) $cur $c60 $stl $pr ${ks:--}"
+  done
+  for d in "$BSLICE"/*.scope; do
+    [[ -d $d ]] || continue
+    grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null || continue
+    u=${d##*/}; u=${u%.scope}
+    [[ $seen == *" $u "* ]] && continue
+    read -r cur 2>/dev/null < "$d/memory.current" || cur=0
+    usec=0
+    while read -r k v; do [[ $k == usage_usec ]] && { usec=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
+    age=$(( EPOCHSECONDS - $(stat -c %Z -- "$d" 2>/dev/null || echo "$EPOCHSECONDS") ))
+    echo "F $u $cur $usec $age"
+  done
+}
+
+# One line per live ticket: "W name arrival_s prio mem cores wall keys".
+# Tickets from an older heavy-build have no second line and get the defaults.
+waiter_lines() {
+  local t name l1 p m c w k
+  for t in "$QDIR"/[0-9]*; do
+    [[ -e $t && $t != *.tmp ]] || continue
+    name=${t##*/}
+    p= m= c= w= k=
+    { read -r l1; read -r p m c w k; } < "$t" 2>/dev/null
+    echo "W $name $(( ${name%%-*} / 1000000000 )) ${p:-normal} ${m:-8} ${c:-8} ${w:-600} ${k:--}"
+  done
+}
+
+# The admission walk. Input: R, F and W lines. Prints "start|wait<TAB>rank<TAB>reason"
+# for the waiter named by `me`. Each reason starts with a short kind and a colon.
+# shellcheck disable=SC2016
+ADMIT_AWK='
+function max(a, b) { return a > b ? a : b }
+function psi10(f,   l, a, b, v) {
+  v = -1
+  while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
+  close(f); return v
+}
+function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys,   n, k, i, held, tc, cc) {
+  nr++
+  if (stalled == 1) { held = cur; tc = 0; cc = 0 }
+  else {
+    held = max(cur, mem); tc = max(0, mem - cur)
+    cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
+  }
+  r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
+  r_cur[nr] = cur; r_high[nr] = (prio == "high")
+  T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high")
+  if (keys != "-") { n = split(keys, k, ","); for (i = 1; i <= n; i++) busy[k[i]] = id }
+}
+function why_not(i, nrun, cpu, tc, held, av, nhigh) {
+  if (nrun <= 0) return (av >= solo) ? "" : sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+  if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
+  if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
+  if (cpu + w_cores[i] > cpubudget) return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
+  if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
+  if (av - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available, %.1f still to come for running builds, reserve %d", w_mem[i], av, tc, reserve)
+  if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap", w_mem[i], held, slicecap)
+  return ""
+}
+function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i], w_keys[i]); picked[i] = 1 }
+# When enough running builds should have ended for waiter i to fit.
+function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
+  for (j = 1; j <= nr; j++) idx[j] = j
+  for (j = 2; j <= nr; j++) { x = idx[j]; for (k = j - 1; k >= 1 && r_end[idx[k]] > r_end[x]; k--) idx[k + 1] = idx[k]; idx[k + 1] = x }
+  nrun = T_n; cpu = T_cpu; tc = T_tc; held = T_held; av = avail; nh = T_high
+  for (j = 1; j <= nr; j++) {
+    k = idx[j]
+    nrun--; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k]
+    if (why_not(i, nrun, cpu, tc, held, av, nh) == "") return r_end[k]
+  }
+  return nr > 0 ? r_end[idx[nr]] : now
+}
+BEGIN {
+  while ((getline l < meminfo) > 0) {
+    split(l, f, " ")
+    if (f[1] == "MemAvailable:") avail = f[2] / 1048576
+    else if (f[1] == "SwapTotal:") swt = f[2]
+    else if (f[1] == "SwapFree:") swf = f[2]
+  }
+  close(meminfo)
+  slicecap = 1e9
+  if ((getline l < slicemax) > 0 && l ~ /^[0-9]+$/) slicecap = l / 1073741824
+  close(slicemax)
+  cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
+  claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
+}
+$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11) }
+$1 == "F" {
+  c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
+  addrun($2, 0, 8, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-")
+}
+$1 == "W" {
+  nw++; w_id[nw] = $2; w_arr[nw] = $3; p = $4
+  if (p == "low" && now - $3 >= lowage) p = "normal"
+  w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "low") ? 2 : 1
+  w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8
+}
+END {
+  for (i = 1; i <= nw; i++) ord[i] = i
+  for (i = 2; i <= nw; i++) {
+    x = ord[i]
+    for (j = i - 1; j >= 1 && (w_rank[ord[j]] > w_rank[x] || (w_rank[ord[j]] == w_rank[x] && w_id[ord[j]] > w_id[x])); j--) ord[j + 1] = ord[j]
+    ord[j + 1] = x
+  }
+  gate = ""
+  if (swt > 0 && (0.9 * swt - (swt - swf)) / 1048576 < minswap)
+    gate = sprintf("swap: %.1f GiB left before the oomd limit, need %d", (0.9 * swt - (swt - swf)) / 1048576, minswap)
+  else if (claudepsi >= maxmempsi) gate = sprintf("interactive: claude.slice memory pressure %.1f%%, the limit is %d%%", claudepsi, maxmempsi)
+  else if (apppsi >= maxmempsi) gate = sprintf("interactive: app.slice memory pressure %.1f%%, the limit is %d%%", apppsi, maxmempsi)
+  headi = 0; starving = 0; shadow = 0
+  for (o = 1; o <= nw; o++) {
+    i = ord[o]
+    if (gate != "") { why[i] = gate; continue }
+    bk = ""
+    if (w_keys[i] != "-") { n = split(w_keys[i], kk, ","); for (j = 1; j <= n; j++) if (kk[j] in busy) { bk = kk[j]; break } }
+    if (bk != "") { why[i] = "key: lock key " bk " is busy (" busy[bk] ")"; continue }
+    if (!headi) {
+      r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+      if (r == "") { pick(i); why[i] = "fits: next in order"; continue }
+      headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve)
+      continue
+    }
+    if (starving) { why[i] = sprintf("starve: %s has waited %d min, so nothing may pass it", w_id[headi], (now - w_arr[headi]) / 60); continue }
+    r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+    if (r != "") { why[i] = r; continue }
+    if (now + 1.5 * w_wall[i] > shadow) { why[i] = sprintf("behind: it would not end before %s can start, in about %d min", w_id[headi], (shadow - now) / 60); continue }
+    pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
+  }
+  for (o = 1; o <= nw; o++) if (w_id[ord[o]] == me) { printf "%s\t%d\t%s\n", (picked[ord[o]] ? "start" : "wait"), o, why[ord[o]]; exit }
+  printf "wait\t0\tqueue: no ticket for this build\n"
+}'
+
+# Runs the budget rule for this waiter. Sets dec (start or wait), rank and why.
+decide() {
+  local out
+  if [[ -e $HOLD ]]; then
+    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
+    return
+  fi
+  out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
+    -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v cpupsifile="$PROC/pressure/cpu" \
+    -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
+    -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
+    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 "$ADMIT_AWK")
+  IFS=$'\t' read -r dec rank why <<< "$out"
+  if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
+}
+
+# ---------------------------------------------------------------- logging
+
+# Appends one line to the decision log of the current mode.
+log_line() {
+  local f=$STATE/$MODE.log sz
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  {
+    flock 6
+    printf '%(%Y-%m-%dT%H:%M:%S%z)T mode=%s job=%s %s\n' -1 "$MODE" "$jobid" "$*" >&6
+    sz=$(stat -c %s -- "$f" 2>/dev/null || echo 0)
+    if (( sz > 20000000 )); then tail -n 50000 -- "$f" > "$f.tmp" && mv -f -- "$f.tmp" "$f"; fi
+  } 6>>"$f"
+}
+
+# Logs the budget decision when it, its reason kind or the actual outcome
+# changes. $1 is what actually happened: wait or start.
+log_decision() {
+  local k="$dec|${why%%:*}|$1|$MODE" since=
+  if [[ $dec == start ]]; then
+    [[ -n $would_since ]] || would_since=$EPOCHSECONDS
+  else
+    would_since=
+  fi
+  [[ $k == "$last_log" ]] && return
+  last_log=$k
+  [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
+  log_line "decision=$dec reason=\"$why\" actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
+}
+
+# ---------------------------------------------------------------- job state
+
+write_state() {
+  mkdir -p "$JDIR" 2>/dev/null
+  printf '%s %s %s %s %s %s %s %s %s %s %s %s\n' "$unit" "$$" "$mystart" "$start_ts" "$est_mem" "$est_cores" \
+    "$est_wall" "$1" "$2" "$3" "$PRIO" "$keys_csv" > "$JDIR/$unit.tmp" && mv -f "$JDIR/$unit.tmp" "$JDIR/$unit"
+}
+
+now_us() { local t=${EPOCHREALTIME//[!0-9]/}; echo "${t#0}"; }
+
+# Prefixes used by Wine processes in our scope that have no wineserver.
+wine_orphans() {
+  local d=$1 pid comm files=() p exe=0
+  while read -r pid; do
+    read -r comm 2>/dev/null < "$PROC/$pid/comm" || continue
+    [[ $comm == *.exe || $comm == wine || $comm == wine64 || $comm == wine*-preloader ]] || continue
+    files+=("$PROC/$pid/environ")
+    exe=1
+  done 2>/dev/null < "$d/cgroup.procs"
+  (( exe )) || return 0
+  {
+    grep -a -z -h '^WINEPREFIX=' "${files[@]}" 2>/dev/null | tr '\0' '\n' | sed 's/^WINEPREFIX=//'
+    grep -a -z -L '^WINEPREFIX=' "${files[@]}" 2>/dev/null | grep -q . && echo "$HOME/.wine"
+  } | sort -u | while read -r p; do
+    [[ -n $p && -d $p ]] || continue
+    [[ -n $(wineservers_for "$p") ]] || echo "$p"
+  done
+}
+
+# Reads our scope's cgroup: memory, CPU time, the 60 s core average, the stall
+# test and the Wine orphan test. Rewrites the state file.
+sample_scope() {
+  local d=$BSLICE/$unit.scope cur=0 pk u= now k v c60=- n rate orph
+  [[ -d $d ]] || return 0
+  read -r cur 2>/dev/null < "$d/memory.current" || cur=0
+  [[ $cur =~ ^[0-9]+$ ]] || cur=0
+  if read -r pk 2>/dev/null < "$d/memory.peak" && [[ $pk =~ ^[0-9]+$ ]] && (( pk > peak )); then peak=$pk; fi
+  (( cur > peak )) && peak=$cur
+  while read -r k v; do [[ $k == usage_usec ]] && { u=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
+  [[ $u =~ ^[0-9]+$ ]] || return 0
+  now=$(now_us)
+  usec_last=$u
+  S_t+=("$now"); S_u+=("$u")
+  n=${#S_t[@]}
+  while (( n - s_lo > 2 )) && (( now - S_t[s_lo + 1] >= 60000000 )); do s_lo=$(( s_lo + 1 )); done
+  if (( now - S_t[s_lo] >= 1000000 )); then
+    c60=$(( (u - S_u[s_lo]) * 1000 / (now - S_t[s_lo]) ))
+  fi
+  if (( n >= 2 )) && (( now > S_t[n - 2] )); then
+    rate=$(( (u - S_u[n - 2]) * 1000 / (now - S_t[n - 2]) ))
+    if (( rate >= 50 )); then
+      last_active=$now
+      stalled_cpu=0
+    elif (( now - last_active >= STALL_SECS * 1000000 )) && (( ! stalled_cpu )); then
+      stalled_cpu=1
+      if [[ -z $stall_warned ]]; then
+        stall_warned=1
+        say "warning: this build used under 0.05 cores for $(( STALL_SECS / 60 )) min ($STALL_SECS s); it may be hung. It no longer counts against the build budget."
+        log_line "event=stall unit=$unit cmd=\"$cmdline\""
+      fi
+    fi
+  fi
+  orph=$(wine_orphans "$d" | head -1)
+  if [[ -n $orph ]]; then
+    orphan_seen=$(( orphan_seen + 1 ))
+    [[ -n $orphan_since ]] || orphan_since=$EPOCHSECONDS
+    if (( orphan_seen >= 2 )); then
+      stalled_wine=1
+      if [[ -z $orphan_warned ]]; then
+        orphan_warned=1
+        say "warning: the wineserver for $orph is gone (DESKTOP-14957). This run will hang. Stop it and run it again."
+        log_line "event=wine-orphan unit=$unit prefix=$orph cmd=\"$cmdline\""
+      fi
+      if [[ ${HEAVY_BUILD_WINE_ORPHAN:-} == stop && -z $orphan_stopped ]] && (( EPOCHSECONDS - orphan_since >= ORPHAN_STOP_SECS )); then
+        orphan_stopped=1
+        say "stopping this Wine run: its wineserver has been gone for ${ORPHAN_STOP_SECS} s (HEAVY_BUILD_WINE_ORPHAN=stop)"
+        systemctl --user stop "$unit.scope" 2>/dev/null
+      fi
+    fi
+  else
+    orphan_seen=0 orphan_since= stalled_wine=0
+  fi
+  write_state "$cur" "$c60" "$(( stalled_cpu || stalled_wine ))"
+}
+
+append_history() {
+  local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
+  (( wall < 1 )) && wall=1
+  [[ -n $usec_last ]] && cpu=$(printf '%d.%03d' $(( usec_last / 1000000 )) $(( usec_last % 1000000 / 1000 )))
+  (( peak > 0 )) && pk=$peak
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  {
+    flock 6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" >&6
+    if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
+  } 6>>"$HIST"
+}
+
+# ---------------------------------------------------------------- main
+
+hash=$(printf '%s\0' "$PWD" "$@" | md5sum | cut -c1-8)
+cmdline="$*"
+cmdline=${cmdline//\"/\'}
+(( ${#cmdline} > 160 )) && cmdline="${cmdline:0:157}..."
+cls=$(classify "$@")
+read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls")"
+keys_csv=$(lock_keys "$@" | sed 's/ /%20/g' | paste -sd, -)
+[[ -n $keys_csv ]] || keys_csv=-
+unit="heavy-build-$$-$RANDOM"
+jobid=$unit
+mystart=$(proc_start $$)
+start_ts=$EPOCHSECONDS
+ticket=
+trap 'rm -f -- ${ticket:+"$ticket" "$ticket.tmp"} "$JDIR/$unit" "$JDIR/$unit.tmp"' EXIT
+read_conf
+
 deadline=$(( SECONDS + WAIT ))
 held=
 if ancestor_holds_lock; then
@@ -200,44 +771,71 @@ if ancestor_holds_lock; then
 else
   # Lexical order of ticket names is arrival order: time in ns (fixed width),
   # then pid, then a short hash of the directory and command.
-  hash=$(printf '%s\0' "$PWD" "$@" | md5sum | cut -c1-8)
   ticket=$QDIR/$(date +%s%N)-$$-$hash
-  trap 'rm -f -- "$ticket" "$ticket.tmp"' EXIT
+  jobid=${ticket##*/}
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
   write_ticket
-  said= best=
+  said= best= last_log= would_since=
   while :; do
     [[ -e $ticket ]] || write_ticket
+    read_conf
     queue_scan
+    started=
+    if [[ $MODE == live ]]; then
+      exec 8>>"$ADMIT"
+      flock 8
+      decide
+      if [[ $dec == start ]]; then
+        start_ts=$EPOCHSECONDS
+        write_state 0 - 0   # our reservation, written while we hold the mutex
+        rm -f -- "$ticket"
+        started=1
+      fi
+      exec 8>&-
+      log_decision "$dec"
+      (( rank > 0 )) && pos=$rank
+      [[ -n $started ]] && break
+    else
+      if [[ -e $HOLD ]]; then
+        why="new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
+      elif (( pos > 1 )); then
+        why="earlier builds go first"
+      else
+        mem=$(mem_avail_gib)
+        room=$(swap_room_gib)
+        need=$MIN_MEM_GIB
+        (( $(active_build_scopes) == 0 )) && need=$SOLO_MEM_GIB
+        if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
+          why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
+        elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then
+          why="swap is near the systemd-oomd limit (${room} GiB left before 90%, need ${MIN_SWAP_ROOM_GIB})"
+        elif try_slot; then
+          orphans=$(orphan_scopes | wc -l)
+          if (( orphans == 0 || orphans <= $(other_free_slots) )); then
+            started=1
+          else
+            exec 9>&-; held=
+            why="a build whose heavy-build was killed is still running ($(orphan_scopes | tr '\n' ' '))"
+          fi
+        else
+          why="all 3 build slots are in use"
+        fi
+      fi
+      # The budget rule only watches in shadow mode.
+      oldwhy=${why:-}
+      decide
+      if [[ -n $started ]]; then
+        log_decision start
+        break
+      fi
+      log_decision wait
+      why=$oldwhy
+    fi
     if [[ -n $best ]] && (( pos > 0 && pos < best )); then deadline=$(( SECONDS + WAIT )); fi
     (( pos > 0 )) && { [[ -z $best ]] || (( pos < best )); } && best=$pos
     line="in line: position $pos of $total${dup:+ (an identical build is ahead)}"
-    if [[ -e $HOLD ]]; then
-      why="new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
-    elif (( pos > 1 )); then
-      why="earlier builds go first"
-    else
-      mem=$(mem_avail_gib)
-      room=$(swap_room_gib)
-      need=$MIN_MEM_GIB
-      (( $(active_build_scopes) == 0 )) && need=$SOLO_MEM_GIB
-      if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
-        why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
-      elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then
-        why="swap is near the systemd-oomd limit (${room} GiB left before 90%, need ${MIN_SWAP_ROOM_GIB})"
-      elif try_slot; then
-        orphans=$(orphan_scopes | wc -l)
-        if (( orphans == 0 || orphans <= $(other_free_slots) )); then
-          break
-        fi
-        exec 9>&-; held=
-        why="a build whose heavy-build was killed is still running ($(orphan_scopes | tr '\n' ' '))"
-      else
-        why="all 3 build slots are in use"
-      fi
-    fi
     if (( SECONDS >= deadline )); then
       say "gave up after ${WAIT}s without moving up: $why; $line. Tell the manager session."
       exit 75
@@ -257,11 +855,20 @@ if [[ $avail =~ ^[0-9]+$ ]] && (( avail < REFUSE_GIB )) && [[ ${HEAVY_BUILD_FORC
   exit 75
 fi
 
-unit="heavy-build-$$-$RANDOM"
+# Memory caps scale with the estimate: MemoryHigh = 1.25 x estimate, 16G to 22G.
+mem10=${est_mem/./}
+cap_high=$(( (10#$mem10 * 125 + 999) / 1000 ))
+(( cap_high < 16 )) && cap_high=16
+(( cap_high > 22 )) && cap_high=22
+props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="$(( cap_high + 2 ))G" -p MemorySwapMax=2G -p OOMPolicy=kill -p TimeoutStopSec=3s)
+[[ -n $TIMEOUT ]] && props+=(-p RuntimeMaxSec="$TIMEOUT")
+desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REASON}"
+
+start_ts=$EPOCHSECONDS
+write_state 0 - 0
 systemd-run --user --scope --quiet --collect --expand-environment=no \
-  --unit="$unit" --slice=builds.slice \
-  -p MemoryHigh=16G -p MemoryMax=18G -p MemorySwapMax=2G -p OOMPolicy=kill \
-  env "${build_env[@]}" "$@" 0<&0 9>&- &
+  --unit="$unit" --slice=builds.slice --description="$desc" "${props[@]}" \
+  env "${build_env[@]}" "$@" 0<&0 8>&- 9>&- &
 child=$!
 
 stop_build() {
@@ -270,11 +877,39 @@ stop_build() {
 }
 trap 'stop_build TERM' TERM HUP
 trap 'stop_build INT' INT
+
+S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
+stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
+rc=
 while :; do
-  wait "$child"
-  rc=$?
-  kill -0 "$child" 2>/dev/null || break
+  iv=$SAMPLE
+  (( EPOCHSECONDS - start_ts < 60 && iv > 2 )) && iv=2
+  sleep "$iv" &
+  sp=$!
+  done_pid=
+  wait -n -p done_pid "$child" "$sp"
+  r=$?
+  if [[ ${done_pid:-} == "$child" ]]; then
+    rc=$r
+    kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+    break
+  fi
+  if [[ -z ${done_pid:-} ]]; then
+    # A trap ran. Go round again; the build ends soon if it was stopped.
+    kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+    continue
+  fi
+  sample_scope
 done
-# Nothing from this build may run on once we drop the lock.
+sample_scope
+# Nothing from this build may run on once it ends.
 systemctl --user stop "$unit.scope" 2>/dev/null
+
+if [[ -n $orphan_stopped ]]; then
+  rc=124
+elif [[ -n $TIMEOUT ]] && (( rc > 128 && EPOCHSECONDS - start_ts >= TIMEOUT - 1 )); then
+  say "stopped after HEAVY_BUILD_TIMEOUT=${TIMEOUT}s"
+  rc=124
+fi
+append_history "$rc"
 exit "$rc"
