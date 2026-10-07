@@ -476,14 +476,13 @@ local function read_theme()
   if name and #name > 0 then return name end
 end
 
--- Tab bar colors built from a scheme's background, foreground and yellow, in
--- the same pattern as the Nord ones: inactive tabs on the terminal background,
--- the bar behind them a shade darker, the active tab a step toward the text color.
+-- Tab bar colors built from a scheme's background and foreground, in the same
+-- pattern as the Nord ones: inactive and bell tabs on the terminal background,
+-- the bar behind them a shade darker, the active tab a faint step toward the text color.
 local function scheme_tab_bar(s)
   local bar = mix(s.bg, '#000000', 0.15)
   local muted = mix(s.fg, s.bg, 0.45)
   local hover = mix(s.bg, s.fg, 0.02)
-  local yellow = s.yellow or '#c08000'
   return {
     background = bar,
     -- A faint lift only: the colored edge mark and bold title already show the active tab
@@ -492,8 +491,9 @@ local function scheme_tab_bar(s)
     inactive_tab_hover = { bg_color = hover, fg_color = s.fg, italic = true },
     new_tab = { bg_color = bar, fg_color = muted },
     new_tab_hover = { bg_color = hover, fg_color = s.fg },
-    inactive_tab_bell = { bg_color = mix(s.bg, yellow, 0.2), fg_color = s.fg },
-    inactive_tab_bell_hover = { bg_color = mix(s.bg, yellow, 0.3), fg_color = s.fg, italic = true },
+    -- Same as a plain inactive tab: the yellow edge and title mark the bell instead
+    inactive_tab_bell = { bg_color = s.bg, fg_color = s.fg },
+    inactive_tab_bell_hover = { bg_color = hover, fg_color = s.fg, italic = true },
   }
 end
 
