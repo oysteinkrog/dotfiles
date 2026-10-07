@@ -392,8 +392,7 @@ if not is_windows then
   -- 11.5: between the old 11 and 12 (12 felt too big at scale 1.0)
   config.font_size = 11.5
   -- The terminal ignores fontconfig, so match KDE here: slight hinting, RGB subpixel.
-  -- The Dell U2412M panels are horizontal RGB. The portrait one (DP-3) is vertical,
-  -- but one process has one setting, so text there gets slight colour fringes.
+  -- All three Dell U2412M panels are landscape with a horizontal RGB stripe.
   config.freetype_load_target = 'Light'
   config.freetype_render_target = 'HorizontalLcd'
   -- Faint text (SGR 2). DejaVu Sans Mono has no Light weight, and its "Book"
