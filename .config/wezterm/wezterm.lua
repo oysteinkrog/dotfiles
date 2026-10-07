@@ -351,7 +351,13 @@ local bell_bg, bell_hover_bg = '#8B4513', '#A0522D' -- dark orange/brown
 -- Linux: Nord, matching ~/.config/alacritty/alacritty.toml
 if not is_windows then
   config.font = wezterm.font('DejaVu Sans Mono') -- same as Windows Terminal (DejaVu Sans Mono for Powerline, 11)
-  config.font_size = 11
+  -- 12, not 11: the monitors run at scale 1.0 now (was 1.1), so this keeps the old size
+  config.font_size = 12
+  -- The terminal ignores fontconfig, so match KDE here: slight hinting, RGB subpixel.
+  -- The Dell U2412M panels are horizontal RGB. The portrait one (DP-3) is vertical,
+  -- but one process has one setting, so text there gets slight colour fringes.
+  config.freetype_load_target = 'Light'
+  config.freetype_render_target = 'HorizontalLcd'
   -- Faint text (SGR 2). DejaVu Sans Mono has no Light weight, and its "Book"
   -- file stops the terminal from drawing a dimmed copy, so faint text came out
   -- at full brightness. Give it a dim grey instead. Faint italic is dimmed already.
