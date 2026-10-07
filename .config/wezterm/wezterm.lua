@@ -241,7 +241,38 @@ end)
 -- Pad tab index to fixed width so titles align
 -- Prefer explicitly set tab title (from `wezterm cli set-tab-title`)
 -- Priority dot: Ctrl+Shift+I cycles normal(gray) → important(amber) → urgent(red)
-wezterm.on('format-tab-title', function(tab)
+-- Tab text colors come from the active color scheme, so the tab bar follows
+-- the theme: the scheme's cyan marks the active tab, its yellow a tab that
+-- rang the bell, and other tabs use a blend of its foreground and background.
+local function hex_rgb(color)
+  local r, g, b = color:match('^#(%x%x)(%x%x)(%x%x)')
+  if r then return tonumber(r, 16), tonumber(g, 16), tonumber(b, 16) end
+end
+
+-- t of `to` mixed into `from`; both are #RRGGBB
+local function mix(from, to, t)
+  local r1, g1, b1 = hex_rgb(from)
+  local r2, g2, b2 = hex_rgb(to)
+  if not (r1 and r2) then return from end
+  local function ch(a, b) return math.floor(a + (b - a) * t + 0.5) end
+  return string.format('#%02x%02x%02x', ch(r1, r2), ch(g1, g2), ch(b1, b2))
+end
+
+local function tab_colors(palette)
+  local ansi = palette and palette.ansi or {}
+  local fg = palette and palette.foreground or '#D8DEE9'
+  local bg = palette and palette.background or '#2E3440'
+  return {
+    accent = ansi[7] or '#88C0D0',
+    bell = ansi[4] or '#EBCB8B',
+    title = mix(fg, bg, 0.2),
+    muted = mix(fg, bg, 0.45),
+    active_title = fg,
+  }
+end
+
+wezterm.on('format-tab-title', function(tab, tabs, panes, config)
+  local c = tab_colors(config.resolved_palette)
   local idx = string.format('%2d', tab.tab_index + 1)
   local title = tab.tab_title
   local pane_title = tab.active_pane.title
@@ -262,13 +293,13 @@ wezterm.on('format-tab-title', function(tab)
     local pri = tab_priorities[tab.tab_id] or 0
     dot_color = priority_colors[pri + 1]
   end
-  -- A colored bar on the left edge marks the tab to look at: frost blue for
-  -- the active tab, warm yellow (with a yellow title) for a tab that rang the bell
-  local edge, edge_color, idx_color, title_color = ' ', nil, '#7B8394', '#A9B1C1'
+  -- A colored bar on the left edge marks the tab to look at: the accent for
+  -- the active tab, yellow (with a yellow title) for a tab that rang the bell
+  local edge, edge_color, idx_color, title_color = ' ', nil, c.muted, c.title
   if tab.is_active then
-    edge, edge_color, idx_color, title_color = '▌', '#88C0D0', '#88C0D0', '#ECEFF4'
+    edge, edge_color, idx_color, title_color = '▌', c.accent, c.accent, c.active_title
   elseif tab.has_bell then
-    edge, edge_color, idx_color, title_color = '▌', '#EBCB8B', '#EBCB8B', '#EBCB8B'
+    edge, edge_color, idx_color, title_color = '▌', c.bell, c.bell, c.bell
   end
   local strong = tab.is_active or tab.has_bell
   return {
@@ -419,5 +450,78 @@ wezterm.on('new-tab-button-click', function(window, pane, button, default_action
     return false
   end
 end)
+
+-- Theme browser. Alt+Shift+K picks a built-in color scheme by fuzzy search;
+-- Alt+PageDown / Alt+PageUp step to the next or previous one. The choice is
+-- saved in ~/.local/state/frankenterm-theme so it survives restarts; an empty
+-- or missing file means the Nord colors above. The tab bar takes its colors
+-- from the scheme: FrankenTerm fills in tab bar colors a scheme leaves unset.
+local theme_file = wezterm.home_dir .. '/.local/state/frankenterm-theme'
+local scheme_lists = dofile(wezterm.home_dir .. '/.config/wezterm/color_schemes.lua')
+local all_schemes = {}
+for _, name in ipairs(scheme_lists.dark) do table.insert(all_schemes, name) end
+for _, name in ipairs(scheme_lists.light) do table.insert(all_schemes, name) end
+
+local function read_theme()
+  local f = io.open(theme_file, 'r')
+  if not f then return nil end
+  local name = f:read('*l')
+  f:close()
+  if name and #name > 0 then return name end
+end
+
+local current_theme = read_theme()
+if current_theme then
+  config.color_scheme = current_theme
+  -- drop the Nord palette and tab bar colors, which would paint over the scheme
+  config.colors = nil
+end
+
+local function set_theme(window, name)
+  local f = io.open(theme_file, 'w')
+  if not f then return end
+  f:write(name or '')
+  f:close()
+  window:toast_notification('Theme', name or 'Nord (default)', nil, 2000)
+  wezterm.reload_configuration()
+end
+
+local function step_theme(delta)
+  return wezterm.action_callback(function(window)
+    local idx = 0
+    for i, name in ipairs(all_schemes) do
+      if name == current_theme then idx = i break end
+    end
+    if idx == 0 then
+      idx = delta > 0 and 1 or #all_schemes
+    else
+      idx = (idx + delta - 1) % #all_schemes + 1
+    end
+    set_theme(window, all_schemes[idx])
+  end)
+end
+
+local function theme_picker(window, pane)
+  local choices = { { id = '', label = 'Nord (default)' } }
+  for _, name in ipairs(scheme_lists.dark) do
+    table.insert(choices, { id = name, label = name })
+  end
+  for _, name in ipairs(scheme_lists.light) do
+    table.insert(choices, { id = name, label = name .. '   (light)' })
+  end
+  window:perform_action(wezterm.action.InputSelector({
+    title = 'Color scheme' .. (current_theme and (' (now: ' .. current_theme .. ')') or ''),
+    choices = choices,
+    fuzzy = true,
+    fuzzy_description = 'Theme: ',
+    action = wezterm.action_callback(function(win, _, id)
+      if id then set_theme(win, id ~= '' and id or nil) end
+    end),
+  }), pane)
+end
+
+table.insert(config.keys, { key = 'k', mods = 'ALT|SHIFT', action = wezterm.action_callback(theme_picker) })
+table.insert(config.keys, { key = 'PageDown', mods = 'ALT', action = step_theme(1) })
+table.insert(config.keys, { key = 'PageUp', mods = 'ALT', action = step_theme(-1) })
 
 return config
