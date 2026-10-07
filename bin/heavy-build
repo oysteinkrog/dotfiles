@@ -9,14 +9,25 @@
 #   heavy-build bash -c 'cd sub && cargo build && cargo test'
 #
 # What it does:
+# - Stops first while $XDG_RUNTIME_DIR/heavy-build.hold exists (the manager
+#   session's pause switch; its text is the reason).
+# - Waits in a first-come, first-served line. Each waiter puts a ticket file in
+#   $XDG_RUNTIME_DIR/heavy-build.queue/, and only the oldest live ticket may
+#   try for a slot. Tickets of dead waiters are removed on every poll. The wait
+#   message shows the position in line, and says so when an identical build
+#   (same directory and command) is ahead. Identical builds still both run.
 # - Waits for one of 3 build slots. Slot 0 is $XDG_RUNTIME_DIR/heavy-build.lock,
 #   the lock of the older `flock ... systemd-run` rule, so a build started with
 #   that rule counts as one slot. Slots 1 and 2 are heavy-build.lock.1 and .2.
-# - Also waits until MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB
-#   (default 20), checked again every HEAVY_BUILD_POLL seconds (default 5).
+# - Waits until MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB (default 12),
+#   or HEAVY_BUILD_SOLO_MEM_GIB (default 8) when no scope runs in builds.slice.
+# - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
+#   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
+# - Checks again every HEAVY_BUILD_POLL seconds (default 5).
 # - Counts a build scope left over from a killed heavy-build as a used slot.
-# - Gives up after HEAVY_BUILD_WAIT seconds in total (default 7200) with exit
-#   code 75. A wait can be long: run it in the background when your tool call
+# - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
+#   with exit code 75. The clock starts again each time the waiter moves up
+#   in line. A wait can be long: run it in the background when your tool call
 #   has a timeout.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
@@ -30,7 +41,7 @@
 #
 # Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
 # the command directly. Under a plain `flock heavy-build.lock` it takes no
-# second slot but still makes a scope.
+# second slot and skips the line, but still makes a scope.
 #
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
@@ -46,8 +57,12 @@ RUNDIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 LOCK=${HEAVY_BUILD_LOCK:-$RUNDIR/heavy-build.lock}
 WAIT=${HEAVY_BUILD_WAIT:-7200}
 REFUSE_GIB=${HEAVY_BUILD_REFUSE_GIB:-60}
-MIN_MEM_GIB=${HEAVY_BUILD_MIN_MEM_GIB:-20}
+MIN_MEM_GIB=${HEAVY_BUILD_MIN_MEM_GIB:-12}
+SOLO_MEM_GIB=${HEAVY_BUILD_SOLO_MEM_GIB:-8}
+MIN_SWAP_ROOM_GIB=${HEAVY_BUILD_MIN_SWAP_ROOM_GIB:-10}
 POLL=${HEAVY_BUILD_POLL:-5}
+HOLD=$RUNDIR/heavy-build.hold
+QDIR=$RUNDIR/heavy-build.queue
 
 build_env=(
   HEAVY_BUILD_ACTIVE=1
@@ -88,6 +103,62 @@ ancestor_holds_lock() {
 
 mem_avail_gib() { awk '/^MemAvailable:/ {print int($2 / 1048576); exit}' /proc/meminfo 2>/dev/null; }
 
+# GiB of swap left before systemd-oomd's 90% limit. Empty when there is no swap.
+swap_room_gib() {
+  awk '/^SwapTotal:/ {t = $2} /^SwapFree:/ {f = $2}
+    END {if (t > 0) print int((0.9 * t - (t - f)) / 1048576)}' /proc/meminfo 2>/dev/null
+}
+
+# Number of scopes with processes in builds.slice (heavy-build or the old rule).
+active_build_scopes() {
+  local e n=0
+  for e in /sys/fs/cgroup/user.slice/user-"$UID".slice/user@"$UID".service/builds.slice/*.scope/cgroup.events; do
+    [[ -e $e ]] && grep -qx 'populated 1' "$e" 2>/dev/null && n=$(( n + 1 ))
+  done
+  echo "$n"
+}
+
+# Start time of a process (field 22 of /proc/PID/stat), to tell a live waiter
+# from a new process that got the same pid.
+proc_start() {
+  local s
+  { s=$(<"/proc/$1/stat"); } 2>/dev/null || return 1
+  s=${s##*) }
+  # shellcheck disable=SC2086
+  set -- $s
+  echo "${20}"
+}
+
+# A ticket holds "pid starttime". It is live while that process runs.
+ticket_alive() {
+  local pid st
+  read -r pid st < "$1" 2>/dev/null || return 1
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  [[ $(proc_start "$pid") == "$st" ]]
+}
+
+write_ticket() {
+  mkdir -p "$QDIR" 2>/dev/null
+  echo "$$ $(proc_start $$)" > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
+}
+
+# Sets pos (our place in line, 1 = next), total, and dup (an earlier ticket has
+# our hash). Removes tickets whose waiter is gone.
+queue_scan() {
+  local LC_ALL=C t
+  pos=0 total=0 dup=
+  for t in "$QDIR"/[0-9]*; do
+    [[ -e $t && $t != *.tmp ]] || continue
+    if [[ $t != "$ticket" ]] && ! ticket_alive "$t"; then rm -f -- "$t"; continue; fi
+    total=$(( total + 1 ))
+    if [[ $t == "$ticket" ]]; then
+      pos=$total
+    elif (( pos == 0 )) && [[ ${t##*-} == "$hash" ]]; then
+      dup=1
+    fi
+  done
+}
+
 # Build scopes whose heavy-build was killed (SIGKILL) run on without a slot.
 # The unit name carries the heavy-build pid, so a dead pid marks an orphan.
 orphan_scopes() {
@@ -127,14 +198,36 @@ held=
 if ancestor_holds_lock; then
   say "a parent process holds a build slot; not taking another"
 else
-  said=
+  # Lexical order of ticket names is arrival order: time in ns (fixed width),
+  # then pid, then a short hash of the directory and command.
+  hash=$(printf '%s\0' "$PWD" "$@" | md5sum | cut -c1-8)
+  ticket=$QDIR/$(date +%s%N)-$$-$hash
+  trap 'rm -f -- "$ticket" "$ticket.tmp"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  write_ticket
+  said= best=
   while :; do
-    mem=$(mem_avail_gib)
-    # The manager session can pause new builds by creating this file (its text is the reason).
-    if [[ -e ${XDG_RUNTIME_DIR:-/run/user/$UID}/heavy-build.hold ]]; then
-      why="new builds are on hold: $(head -c 200 "${XDG_RUNTIME_DIR:-/run/user/$UID}/heavy-build.hold" 2>/dev/null)"
-    elif [[ ! $mem =~ ^[0-9]+$ ]] || (( mem >= MIN_MEM_GIB )); then
-      if try_slot; then
+    [[ -e $ticket ]] || write_ticket
+    queue_scan
+    if [[ -n $best ]] && (( pos > 0 && pos < best )); then deadline=$(( SECONDS + WAIT )); fi
+    (( pos > 0 )) && { [[ -z $best ]] || (( pos < best )); } && best=$pos
+    line="in line: position $pos of $total${dup:+ (an identical build is ahead)}"
+    if [[ -e $HOLD ]]; then
+      why="new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
+    elif (( pos > 1 )); then
+      why="earlier builds go first"
+    else
+      mem=$(mem_avail_gib)
+      room=$(swap_room_gib)
+      need=$MIN_MEM_GIB
+      (( $(active_build_scopes) == 0 )) && need=$SOLO_MEM_GIB
+      if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
+        why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
+      elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then
+        why="swap is near the systemd-oomd limit (${room} GiB left before 90%, need ${MIN_SWAP_ROOM_GIB})"
+      elif try_slot; then
         orphans=$(orphan_scopes | wc -l)
         if (( orphans == 0 || orphans <= $(other_free_slots) )); then
           break
@@ -144,16 +237,17 @@ else
       else
         why="all 3 build slots are in use"
       fi
-    else
-      why="only ${mem} GiB of memory is available; a build starts at ${MIN_MEM_GIB} GiB"
     fi
     if (( SECONDS >= deadline )); then
-      say "gave up after ${WAIT}s: $why. Tell the manager session."
+      say "gave up after ${WAIT}s without moving up: $why; $line. Tell the manager session."
       exit 75
     fi
-    if [[ ${why%% *} != "${said%% *}" ]]; then say "waiting: $why"; said=$why; fi
+    key="${why%% *} $pos"
+    if [[ $key != "$said" ]]; then say "waiting: $why; $line"; said=$key; fi
     sleep "$POLL"
   done
+  rm -f -- "$ticket"
+  trap - HUP INT TERM
 fi
 
 avail=$(LC_ALL=C df -B1G --output=avail -- . 2>/dev/null | tail -1 | tr -d ' ')
