@@ -10,6 +10,10 @@ ExecStart=/usr/bin/frankenterm-mux-server
 # save the tab order while the tabs still exist, for claude-persist.sh plan
 ExecStop=/bin/bash %h/.claude/hooks/claude-persist.sh snapshot
 Restart=on-failure
+# Each pane holds about 9 file descriptors. The default soft limit (2048) ran
+# out at about 220 panes on 2026-10-07: spawns failed with EMFILE and the
+# server could barely accept client connections.
+LimitNOFILE=65536
 RestartSec=2
 TimeoutStopSec=20
 

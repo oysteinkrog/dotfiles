@@ -150,13 +150,20 @@ else
             -- resumed session the PATH a login shell would have
             set_environment_variables = login_path and { PATH = login_path } or nil,
           }
-          local tab
-          if window then
-            tab = window:spawn_tab(spec)
-          else
-            tab, _, window = mux.spawn_window(spec)
+          -- One failed spawn (e.g. out of file descriptors) must not abort the
+          -- loop: an error here used to leave plan blocked on a full pipe.
+          local ok, err = pcall(function()
+            local tab
+            if window then
+              tab = window:spawn_tab(spec)
+            else
+              tab, _, window = mux.spawn_window(spec)
+            end
+            tab:set_title(title)
+          end)
+          if not ok then
+            wezterm.log_error('claude-persist: could not reopen ' .. cwd .. ': ' .. tostring(err))
           end
-          tab:set_title(title)
         end
       end
       plan:close()
