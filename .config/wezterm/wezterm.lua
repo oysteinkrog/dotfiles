@@ -382,8 +382,8 @@ local bell_bg, bell_hover_bg = '#8B4513', '#A0522D' -- dark orange/brown
 -- Linux: Nord, matching ~/.config/alacritty/alacritty.toml
 if not is_windows then
   config.font = wezterm.font('DejaVu Sans Mono') -- same as Windows Terminal (DejaVu Sans Mono for Powerline, 11)
-  -- 12, not 11: the monitors run at scale 1.0 now (was 1.1), so this keeps the old size
-  config.font_size = 12
+  -- 11.5: between the old 11 and 12 (12 felt too big at scale 1.0)
+  config.font_size = 11.5
   -- The terminal ignores fontconfig, so match KDE here: slight hinting, RGB subpixel.
   -- The Dell U2412M panels are horizontal RGB. The portrait one (DP-3) is vertical,
   -- but one process has one setting, so text there gets slight colour fringes.
@@ -470,11 +470,36 @@ local function read_theme()
   if name and #name > 0 then return name end
 end
 
+-- Tab bar colors built from a scheme's background, foreground and yellow, in
+-- the same pattern as the Nord ones: inactive tabs on the terminal background,
+-- the bar behind them a shade darker, the active tab a step toward the text color.
+local function scheme_tab_bar(s)
+  local bar = mix(s.bg, '#000000', 0.15)
+  local muted = mix(s.fg, s.bg, 0.45)
+  local hover = mix(s.bg, s.fg, 0.08)
+  local yellow = s.yellow or '#c08000'
+  return {
+    background = bar,
+    active_tab = { bg_color = mix(s.bg, s.fg, 0.18), fg_color = s.fg, intensity = 'Bold' },
+    inactive_tab = { bg_color = s.bg, fg_color = muted },
+    inactive_tab_hover = { bg_color = hover, fg_color = s.fg, italic = true },
+    new_tab = { bg_color = bar, fg_color = muted },
+    new_tab_hover = { bg_color = hover, fg_color = s.fg },
+    inactive_tab_bell = { bg_color = mix(s.bg, yellow, 0.2), fg_color = s.fg },
+    inactive_tab_bell_hover = { bg_color = mix(s.bg, yellow, 0.3), fg_color = s.fg, italic = true },
+  }
+end
+
 local current_theme = read_theme()
 if current_theme then
   config.color_scheme = current_theme
-  -- drop the Nord palette and tab bar colors, which would paint over the scheme
+  -- Drop the Nord palette, which would paint over the scheme, and build the
+  -- tab bar from the scheme's colors unless the scheme sets its own.
   config.colors = nil
+  local s = scheme_lists.colors and scheme_lists.colors[current_theme]
+  if s and not s.tab_bar then
+    config.colors = { tab_bar = scheme_tab_bar(s) }
+  end
 end
 
 local function set_theme(window, name)
