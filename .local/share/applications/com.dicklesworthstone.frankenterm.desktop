@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Frankenterm
+GenericName=Terminal
+Comment=Terminal attached to the Frankenterm session server
+Exec=/home/oystein/.local/bin/frankenterm
+Icon=com.dicklesworthstone.frankenterm
+Categories=System;TerminalEmulator;
+Terminal=false
+StartupWMClass=com.dicklesworthstone.frankenterm
