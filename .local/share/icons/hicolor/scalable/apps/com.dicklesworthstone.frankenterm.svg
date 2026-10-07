@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a3038"/><stop offset="1" stop-color="#0e1116"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".22"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".04"/><stop offset="1" stop-color="#000" stop-opacity=".3"/>
+    </linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b8f56a"/><stop offset="1" stop-color="#4ade80"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect x="72" y="72" width="880" height="880" rx="200" fill="url(#bg)"/>
+  <rect x="74" y="74" width="876" height="876" rx="198" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <g opacity=".55" filter="url(#glow)">
+    <path d="M300 380 L460 512 L300 644" fill="none" stroke="#7ee787" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="520" y="604" width="220" height="80" rx="40" fill="#7ee787"/>
+  </g>
+  <path d="M300 380 L460 512 L300 644" fill="none" stroke="url(#g)" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="520" y="604" width="220" height="80" rx="40" fill="url(#g)"/>
+</svg>
