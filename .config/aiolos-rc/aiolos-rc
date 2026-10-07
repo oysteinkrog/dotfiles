@@ -264,6 +264,9 @@ fi
 # host to this session's shim (cert trusted via NODE_EXTRA_CA_CERTS). Drop
 # non-login auth sources so Claude uses your stored claude.ai login (needed for RC).
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_UNIX_SOCKET
+# A launch from inside a Claude Code Bash tool carries these markers; with
+# CLAUDE_CODE_CHILD_SESSION set, Claude turns transcript saving off.
+unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 export LD_PRELOAD="$PRELOAD"
 export AIOLOS_RC_PORT="$PORT"
 export NODE_EXTRA_CA_CERTS="$CA"

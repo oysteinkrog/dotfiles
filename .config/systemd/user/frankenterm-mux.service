@@ -6,6 +6,7 @@ Documentation=https://github.com/oysteinkrog/frankenterm
 Type=simple
 # read ~/.config/wezterm/wezterm.lua (Frankenterm only reads Lua config when this is set)
 Environment=FRANKENTERM_LUA_CONFIG=1
+Environment=CLAUDE_PERSIST_MAX=80
 ExecStart=/usr/bin/frankenterm-mux-server
 # save the tab order while the tabs still exist, for claude-persist.sh plan
 ExecStop=/bin/bash %h/.claude/hooks/claude-persist.sh snapshot
