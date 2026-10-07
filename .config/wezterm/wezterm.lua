@@ -482,11 +482,12 @@ end
 local function scheme_tab_bar(s)
   local bar = mix(s.bg, '#000000', 0.15)
   local muted = mix(s.fg, s.bg, 0.45)
-  local hover = mix(s.bg, s.fg, 0.08)
+  local hover = mix(s.bg, s.fg, 0.04)
   local yellow = s.yellow or '#c08000'
   return {
     background = bar,
-    active_tab = { bg_color = mix(s.bg, s.fg, 0.18), fg_color = s.fg, intensity = 'Bold' },
+    -- A faint lift only: the colored edge mark and bold title already show the active tab
+    active_tab = { bg_color = mix(s.bg, s.fg, 0.07), fg_color = s.fg, intensity = 'Bold' },
     inactive_tab = { bg_color = s.bg, fg_color = muted },
     inactive_tab_hover = { bg_color = hover, fg_color = s.fg, italic = true },
     new_tab = { bg_color = bar, fg_color = muted },
