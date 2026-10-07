@@ -1,11 +1,12 @@
 [Unit]
-Description=Heavy builds started by heavy-build (up to 3 at a time)
+Description=Heavy builds started by heavy-build
 
-# heavy-build puts each build in its own scope here, capped at 18G. This slice
-# caps all builds together, so they cannot take the memory that the terminal
-# and the agent sessions need. CPUWeight 50 (default 100) keeps interactive
-# work responsive while builds run.
+# heavy-build puts each build in its own scope here, capped at 16G to 22G high
+# (2G more for the hard max) by its memory estimate. This slice caps all builds
+# together, so they cannot take the memory that the terminal and the agent
+# sessions need. CPUWeight 50 (default 100) keeps interactive work responsive
+# while builds run.
 [Slice]
-MemoryMax=36G
+MemoryMax=42G
 MemorySwapMax=6G
 CPUWeight=50
