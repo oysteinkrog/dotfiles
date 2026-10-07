@@ -130,7 +130,10 @@ else
   said=
   while :; do
     mem=$(mem_avail_gib)
-    if [[ ! $mem =~ ^[0-9]+$ ]] || (( mem >= MIN_MEM_GIB )); then
+    # The manager session can pause new builds by creating this file (its text is the reason).
+    if [[ -e ${XDG_RUNTIME_DIR:-/run/user/$UID}/heavy-build.hold ]]; then
+      why="new builds are on hold: $(head -c 200 "${XDG_RUNTIME_DIR:-/run/user/$UID}/heavy-build.hold" 2>/dev/null)"
+    elif [[ ! $mem =~ ^[0-9]+$ ]] || (( mem >= MIN_MEM_GIB )); then
       if try_slot; then
         orphans=$(orphan_scopes | wc -l)
         if (( orphans == 0 || orphans <= $(other_free_slots) )); then
