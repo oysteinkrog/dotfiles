@@ -19,6 +19,10 @@
 # The key includes the folder because one session id can be open in two
 # folders (sessions copied between projects keep their id).
 # Set CLAUDE_PERSIST=0 in a session's environment to keep it off the list.
+# Only sessions a person started in a terminal are kept: Agent SDK sessions
+# (entrypoint sdk-cli, e.g. the smart-translation tool) are skipped. On
+# 2026-10-07 about 1000 of those were on the list and a reboot resumed 209.
+# plan resumes at most CLAUDE_PERSIST_MAX sessions (default 40).
 
 set -u
 
@@ -50,6 +54,19 @@ find_claude_pid() {
     p=$(parent_of "$p")
   done
   return 1
+}
+
+# Was this Claude process started by a person in a terminal? Agent SDK runs
+# (entrypoint sdk-cli or sdk-*) also report kind=interactive, but they belong
+# to the program that drove them and must never get their own tab back.
+started_in_terminal() {
+  local e; e=$(jq -r '.entrypoint // empty' "$CLAUDE_SESSIONS/$1.json" 2>/dev/null)
+  [ -z "$e" ] || [ "$e" = cli ]
+}
+
+# The entrypoint of the first message in a transcript (cli, sdk-cli, ...).
+transcript_entrypoint() {
+  grep -a -m1 -o '"entrypoint":"[^"]*"' "$1" 2>/dev/null | cut -d'"' -f4
 }
 
 # Is this pid a live Claude process for the given session id?
@@ -147,6 +164,7 @@ hook_start() {
   pid=$(find_claude_pid) || return 0
   kind=$(jq -r '.kind // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)
   [ "$kind" = "interactive" ] || return 0
+  started_in_terminal "$pid" || return 0
   name=$(jq -r '.name // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)
   record "$pid" "$sid" "$cwd" "$name"
 }
@@ -190,6 +208,7 @@ capture() {
     pid=$(basename "$f" .json)
     [ -d "/proc/$pid" ] || continue
     kind=$(jq -r '.kind // empty' "$f"); [ "$kind" = "interactive" ] || continue
+    started_in_terminal "$pid" || continue
     [ -z "$want" ] || [ "$(unit_of "$pid")" = "$want" ] || continue
     sid=$(jq -r '.sessionId // empty' "$f"); cwd=$(jq -r '.cwd // empty' "$f")
     name=$(jq -r '.name // empty' "$f")
@@ -231,6 +250,19 @@ snapshot() {
     pane=$(tr '\0' '\n' < "/proc/$epid/environ" | sed -n 's/^WEZTERM_PANE=//p' | head -1)
     [ -n "$pane" ] || continue
     jq --argjson pane "$pane" '.pane = $pane' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+  done
+
+  # Stamp each live session with this server's pid. plan resumes only the
+  # sessions stamped by the server that just went away, which are the ones
+  # still open at its last snapshot (at most 30 s before it stopped). An entry
+  # whose tab was closed without a SessionEnd hook keeps an old stamp and is
+  # dropped instead of coming back.
+  for f in "$SESS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    epid=$(jq -r '.pid // 0' "$f")
+    claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
+    [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] && continue
+    jq --argjson m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
   # Save each live session's status (busy, waiting or idle) so the restore
@@ -296,7 +328,28 @@ tab_title() {
 # SessionStart hook writes a fresh entry. Log lines go to restore.log.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
-  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd a prompt
+  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd a prompt ep
+  local max=${CLAUDE_PERSIST_MAX:-40} n=0 last_mux="" tag spid
+  local -A newest=() mt=()
+  # The pid of the server that wrote the last snapshot, when that server is
+  # gone (the normal case at boot). Run by hand against a live server, the
+  # stamp check is skipped.
+  if [ -f "$TAB_ORDER" ]; then
+    read -r tag spid < "$TAB_ORDER"
+    [ "$tag" = mux ] && [ "$spid" != "$(mux_pid)" ] && last_mux=$spid
+  fi
+  # A pane holds one session at a time. When several entries from the last
+  # server claim the same pane, resume only the newest of them.
+  local p_ m_
+  if [ -n "$last_mux" ]; then
+    for f in "$SESS_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      [ "$(jq -r '.mux // empty' "$f")" = "$last_mux" ] || continue
+      p_=$(jq -r '.pane // empty' "$f"); [ -n "$p_" ] || continue
+      m_=$(stat -c %Y "$f")
+      if [ -z "${newest[$p_]:-}" ] || [ "$m_" -gt "${mt[$p_]}" ]; then newest[$p_]=$f; mt[$p_]=$m_; fi
+    done
+  fi
   echo "=== plan $(date -Is)" >> "$log"
   while IFS= read -r f; do
     sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f")
@@ -311,6 +364,26 @@ plan() {
     if [ ! -d "$cwd" ]; then
       echo "drop $sid: folder $cwd is gone" >> "$log"; mv "$f" "$STATE_DIR/restored/"; continue
     fi
+    if [ -n "$last_mux" ] && [ "$(jq -r '.mux // empty' "$f")" != "$last_mux" ]; then
+      echo "drop $sid ($cwd): not open at the last snapshot of mux $last_mux" >> "$log"
+      mv "$f" "$STATE_DIR/restored/"; continue
+    fi
+    ep=$(transcript_entrypoint "$transcript")
+    if [ -n "$ep" ] && [ "$ep" != cli ]; then
+      echo "drop $sid ($cwd): started by the Agent SDK ($ep), not in a terminal" >> "$log"
+      mv "$f" "$STATE_DIR/restored/"; continue
+    fi
+    p_=$(jq -r '.pane // empty' "$f")
+    if [ -n "$p_" ] && [ -n "${newest[$p_]:-}" ] && [ "${newest[$p_]}" != "$f" ]; then
+      echo "drop $sid ($cwd): a newer session was in the same pane $p_" >> "$log"
+      mv "$f" "$STATE_DIR/restored/"; continue
+    fi
+    # Leave the rest on the list, so a runaway list cannot fill memory at boot.
+    # Resume them by hand with `claude-persist.sh restore` once you have looked.
+    if [ "$n" -ge "$max" ]; then
+      echo "hold $sid ($cwd): over the limit of $max sessions" >> "$log"; continue
+    fi
+    n=$((n + 1))
 
     cmd="cd $(printf '%q' "$cwd") &&"
     if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
