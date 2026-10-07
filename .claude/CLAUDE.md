@@ -237,15 +237,31 @@ and re-storing them.
 
 **Run every heavy build or test through `heavy-build`.** That covers cargo build, test,
 check, clippy and doc, dotnet build and test, `build.cmd`, `localbuild build`, cmake and
-ninja. Example: `heavy-build cargo test -p mux --lib`. Up to 3 builds run at once, one per
-build slot. Waiters form a first-come, first-served line. A build starts when it is first
-in line, a slot is free, at least 12 GiB of memory is available (8 GiB when no build runs),
-and swap has at least 10 GiB of room below the systemd-oomd limit (90%). heavy-build
-refuses (exit 75) when the disk has less than 60 GiB free or after 7200 s of waiting
-without moving up in line. It runs each build in a memory-capped scope (18G) inside
-`builds.slice` (36G for all builds), so an OOM kills only the build and not every terminal
-tab. The wait can be long, so run it in the background when your tool call has a timeout.
-On an OOM kill (exit 137), retry once, then tell the manager session.
+ninja. Example: `heavy-build cargo test -p mux --lib`.
+
+heavy-build has two admission rules, and `~/.config/heavy-build.conf` picks one. **It is in
+shadow mode until the manager session switches it to live.** In shadow mode the old rule
+decides: up to 3 builds at once, first come, first served, at least 12 GiB of memory
+available (8 GiB when no build runs). The new rule only logs what it would decide, to
+`~/.local/state/heavy-build/shadow.log`. In live mode the new rule decides. It estimates
+each build's memory, cores and run time from its last 5 runs, and starts it when it fits
+the budget: at most 6 builds, 28 cores, 8 GiB of memory left over, and low memory pressure
+in the agent sessions. A build that shares a cargo workspace, a worktree (dotnet and Wine)
+or a Wine prefix with a running build waits, and does not block builds behind it.
+
+Both modes wait for 10 GiB of swap room below the systemd-oomd limit (90%), and refuse
+(exit 75) when the disk has less than 60 GiB free or after 7200 s of waiting without moving
+up in line. Each build runs in its own memory-capped scope (16G to 22G, from its estimate)
+inside `builds.slice` (42G for all builds), so an OOM kills only the build and not every
+terminal tab. The wait can be long, so run it in the background when your tool call has a
+timeout. On an OOM kill (exit 137), retry once, then tell the manager session.
+
+- **`HEAVY_BUILD_PRIORITY=high` is only for a P0 bug or the last local check before a PR.**
+  Set `HEAVY_BUILD_REASON` with it. Everything else stays at the default, `normal`; use
+  `low` for builds that can wait.
+- `HEAVY_BUILD_TIMEOUT=<seconds>` stops a build after that long (exit 124). heavy-build warns
+  on stderr when a build has used almost no CPU for 10 minutes, or when its wineserver is
+  gone, but it does not kill it. `heavy-build --help` has the full rules.
 
 - **Never set `CARGO_BUILD_BUILD_DIR` or `build.build-dir`.** `~/.cargo/config.toml` keeps
   cargo's intermediate files (deps, incremental files, test binaries) in the workspace's own
