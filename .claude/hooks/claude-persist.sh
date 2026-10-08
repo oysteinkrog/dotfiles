@@ -186,8 +186,19 @@ hook_end() {
   cwd=$(jq -r '.cwd // empty' <<<"$input")
   reason=$(jq -r '.reason // empty' <<<"$input")
   [ -n "$sid" ] && [ -n "$cwd" ] || return 0
-  f=$(entry_file "$sid" "$cwd")
-  [ -f "$f" ] || return 0
+  # The entry for this cwd, plus any other entry of this session and Claude
+  # process: a session that changed folder has one per folder, and the one
+  # left behind would come back at boot.
+  local cpid g; cpid=$(find_claude_pid) || cpid=""
+  local -a files=()
+  f=$(entry_file "$sid" "$cwd"); [ -f "$f" ] && files+=("$f")
+  if [ -n "$cpid" ]; then
+    for g in "$SESS_DIR/$sid"@*.json; do
+      [ -e "$g" ] && [ "$g" != "$f" ] || continue
+      [ "$(jq -r '.pid // 0' "$g")" = "$cpid" ] && files+=("$g")
+    done
+  fi
+  [ ${#files[@]} -gt 0 ] || return 0
   # Keep the entry when the session dies because the machine or its mux
   # server is going down; drop it on a normal exit.
   [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && return 0
@@ -207,12 +218,16 @@ hook_end() {
       deactivating|inactive|failed) return 0 ;;
     esac
   fi
-  rm -f "$f"
-  # Claude is still running while this hook runs. Leave a marker with its pid,
-  # so a snapshot in that gap does not record the session again.
-  local cpid; cpid=$(find_claude_pid) || cpid=""
-  [ -n "$cpid" ] && mkdir -p "$STATE_DIR/ended" && echo "$cpid" > "$STATE_DIR/ended/$(basename "$f" .json)"
-  echo "$(date -Is) ended $sid ($cwd) reason=$reason" >> "$STATE_DIR/events.log"
+  # Hold the lock so a running snapshot cannot write an entry back between
+  # its jq and its mv.
+  lock_state
+  for g in "${files[@]}"; do
+    rm -f "$g"
+    # Claude is still running while this hook runs. Leave a marker with its
+    # pid, so a snapshot in that gap does not record the session again.
+    [ -n "$cpid" ] && mkdir -p "$STATE_DIR/ended" && echo "$cpid" > "$STATE_DIR/ended/$(basename "$g" .json)"
+    echo "$(date -Is) ended $(basename "$g" .json) reason=$reason" >> "$STATE_DIR/events.log"
+  done
 }
 
 # Record every live interactive Claude session, or only those inside UNIT.
@@ -236,6 +251,15 @@ capture() {
   echo "$n session(s) recorded"
 }
 
+# Serialize snapshot and hook_end on the entries. The lock lasts until the
+# process exits. After 6 s go on anyway: the hook has 10 s in all, and a late
+# write is better than none.
+lock_state() {
+  mkdir -p "$STATE_DIR"
+  exec 9> "$STATE_DIR/.lock"
+  flock -w 6 9 || true
+}
+
 # Which mux server is running: <boot id>:<pid>, or nothing. The pid alone is
 # not enough: the server starts early at boot with a low pid (1213 on
 # 2026-10-07) that the next boot can hand out again. Then plan would take the
@@ -256,7 +280,7 @@ snapshot() {
   rows=$(env -u FRANKENTERM_UNIX_SOCKET "$FT_CLI" cli list --json 2>/dev/null \
     | jq -r '.[] | "\(.window_id)\t\(.pane_id)"' 2>/dev/null)
   [ -n "$rows" ] || return 0
-  mkdir -p "$STATE_DIR"
+  lock_state
   { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
 
   local f epid pane sf ssid scwd em
