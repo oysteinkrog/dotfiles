@@ -76,9 +76,15 @@ claude_alive() {
     && [ "$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)" = "$sid" ]
 }
 
-# The systemd user unit a process runs in, e.g. wezterm-mux.service.
+# The systemd user unit a process runs in, e.g. frankenterm-mux.service, or
+# nothing for a process in a scope (claude.slice/claude-<pid>.scope). Look only
+# below user@<uid>.service: that segment is the user manager itself, and
+# `systemctl --user is-active user@1000.service` says inactive, which made
+# hook_end keep every entry from 2026-10-03 on.
 unit_of() {
-  sed -n 's#^0::.*/\([^/]*\.service\)\(/.*\)\?$#\1#p' "/proc/$1/cgroup" 2>/dev/null | tail -1
+  local cg; cg=$(sed -n 's#^0::##p' "/proc/$1/cgroup" 2>/dev/null)
+  cg=${cg#*/user@*.service/}
+  [[ "/$cg" =~ /([^/]+\.service)(/|$) ]] && printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 # Print the Claude flags worth keeping on resume, one per line. Dropped:
@@ -237,9 +243,32 @@ snapshot() {
   mkdir -p "$STATE_DIR"
   { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
 
+  local f epid pane sf ssid scwd
+  local -A row_pane=()
+  local w_ p_
+  while IFS=$'\t' read -r w_ p_; do row_pane[$p_]=1; done <<<"$rows"
+
+  # Record live terminal sessions in this server that have no entry. Their
+  # SessionStart hook can miss: at boot about 40 sessions start at once, and
+  # the hook has 10 s. A session missing here would not come back.
+  for sf in "$CLAUDE_SESSIONS"/*.json; do
+    [ -e "$sf" ] || continue
+    epid=$(basename "$sf" .json)
+    [ -d "/proc/$epid" ] || continue
+    [ "$(jq -r '.kind // empty' "$sf" 2>/dev/null)" = interactive ] || continue
+    started_in_terminal "$epid" || continue
+    pane=$(tr '\0' '\n' < "/proc/$epid/environ" 2>/dev/null | sed -n 's/^WEZTERM_PANE=//p' | head -1)
+    [ -n "$pane" ] && [ -n "${row_pane[$pane]:-}" ] || continue
+    tr '\0' '\n' < "/proc/$epid/environ" 2>/dev/null | grep -qx 'CLAUDE_PERSIST=0' && continue
+    ssid=$(jq -r '.sessionId // empty' "$sf"); scwd=$(jq -r '.cwd // empty' "$sf")
+    [ -n "$ssid" ] && [ -n "$scwd" ] || continue
+    [ -f "$(entry_file "$ssid" "$scwd")" ] && continue
+    record "$epid" "$ssid" "$scwd" "$(jq -r '.name // empty' "$sf")"
+    echo "$(date -Is) recorded $ssid ($scwd) from snapshot: pane $pane had no entry" >> "$STATE_DIR/events.log"
+  done
+
   # Fill in the pane of entries recorded without one (older entries, and
   # sessions Claude keeps no ~/.claude/sessions file for, which capture misses).
-  local f epid pane
   for f in "$SESS_DIR"/*.json; do
     [ -e "$f" ] || continue
     [ "$(jq -r '.pane // empty' "$f")" = "" ] || continue
@@ -263,6 +292,22 @@ snapshot() {
     claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
     [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] && continue
     jq --argjson m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+  done
+
+  # Retire the entries of closed tabs: stamped by this server, Claude no longer
+  # running, and the pane gone from this server's list. Closing a tab can kill
+  # Claude before its SessionEnd hook runs, and those entries used to come back
+  # at the next boot. Pane ids are never reused within one server, and a tab
+  # whose Claude exited still has its pane (the fish shell after it).
+  mkdir -p "$STATE_DIR/restored"
+  for f in "$SESS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] || continue
+    pane=$(jq -r '.pane // empty' "$f"); [ -n "$pane" ] || continue
+    [ -n "${row_pane[$pane]:-}" ] && continue
+    claude_alive "$(jq -r '.pid // 0' "$f")" "$(jq -r .session_id "$f")" && continue
+    mv "$f" "$STATE_DIR/restored/"
+    echo "$(date -Is) closed $(basename "$f" .json): pane $pane is gone from mux $pid" >> "$STATE_DIR/events.log"
   done
 
   # Save each live session's status (busy, waiting or idle) so the restore
@@ -340,12 +385,17 @@ plan() {
   fi
   # A pane holds one session at a time. When several entries from the last
   # server claim the same pane, resume only the newest of them.
-  local p_ m_
+  local p_ m_ t_
   if [ -n "$last_mux" ]; then
     for f in "$SESS_DIR"/*.json; do
       [ -e "$f" ] || continue
       [ "$(jq -r '.mux // empty' "$f")" = "$last_mux" ] || continue
       p_=$(jq -r '.pane // empty' "$f"); [ -n "$p_" ] || continue
+      # Only an entry that can be resumed may claim the pane. A session that
+      # starts again in another folder (same pid and pane) writes a second
+      # entry whose transcript does not exist; it must not push out the real one.
+      t_=$(jq -r '.transcript // empty' "$f")
+      { [ -z "$t_" ] || [ -s "$t_" ]; } && [ -d "$(jq -r .cwd "$f")" ] || continue
       m_=$(stat -c %Y "$f")
       if [ -z "${newest[$p_]:-}" ] || [ "$m_" -gt "${mt[$p_]}" ]; then newest[$p_]=$f; mt[$p_]=$m_; fi
     done
