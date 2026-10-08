@@ -23,7 +23,9 @@ belongs to the `agent-mail` skill.
 
 | Thing | Where |
 |---|---|
-| Server binary | `~/.local/bin/am`, run as `am serve-http --no-tui --no-auth --port 4809` |
+| Server binary | `~/.local/bin/am`, run as `am serve-http --no-tui --no-auth --port 4809`. It is a symlink to `/usr/bin/am` from the pacman package `mcp-agent-mail-local`, built by the localbuilds recipe `mcp-agent-mail` (0.3.38 since 2026-10-09). Upgrade with `localbuild bump`/`build`/`install`, never by hand or with the upstream installer. |
+| ATC | Off: `AM_ATC_ENABLED=false` in the unit. On 0.3.30 it kept one core busy all day (upstream #264). |
+| Archive symlinks | None allowed under `projects/`. 0.3.38 failed every `send_message` with "symlinks are not authoritative archive entries" until the alias `projects/mocap3` was removed (2026-10-09). |
 | Operator CLI | the same `am` binary |
 | Supervisor | systemd user unit `agent-mail.service`, file `~/.dotfiles/.config/systemd/user/agent-mail.service` (symlinked into `~/.config/systemd/user/`) |
 | Logs | `journalctl --user -u agent-mail.service` |
@@ -149,8 +151,10 @@ after restart is real confirmation. A stale one means it is still refusing.
 
 ## Why the database keeps corrupting
 
-The server does not use the C SQLite library. am 0.3.30 is built on fsqlite 0.3.8,
-a Rust reimplementation, and its own writes are what break the file. The C
+The server does not use the C SQLite library. It is built on fsqlite, a Rust
+reimplementation (0.3.8 in am 0.3.30, 0.4.10 in am 0.3.38), and up to 0.3.30 its own
+writes are what broke the file. 0.4.10 fixes several write-path corruption bugs; whether
+that ends the corruption here is not yet known. The C
 `sqlite3` tool is the trusted second opinion.
 
 On 2026-10-04 the unit ran with `MemoryMax=512M` while the server needs about 1 GB.
