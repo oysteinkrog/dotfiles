@@ -11,6 +11,10 @@ StartLimitBurst=5
 # The server reads STORAGE_ROOT; the am CLI reads AGENT_MAIL_STORAGE_ROOT. Keep them equal.
 Environment=STORAGE_ROOT=%h/.mcp_agent_mail_git_mailbox_repo
 Environment=AGENT_MAIL_STORAGE_ROOT=%h/.mcp_agent_mail_git_mailbox_repo
+# ATC (Air Traffic Control liveness) kept one fsqlite-worker thread at about 97% CPU all
+# day and flooded the journal with "pending effect queue at capacity" (upstream #264, #258).
+# The maintainer's workaround is to turn it off. Measured 2026-10-08 on am 0.3.30.
+Environment=AM_ATC_ENABLED=false
 # Port 4809 matches ~/.claude.json and .claude/hooks/agent-mail-guard.sh.
 ExecStart=%h/.local/bin/am serve-http --no-tui --no-auth --port 4809
 Restart=on-failure
