@@ -69,10 +69,14 @@ transcript_entrypoint() {
   grep -a -m1 -o '"entrypoint":"[^"]*"' "$1" 2>/dev/null | cut -d'"' -f4
 }
 
-# Is this pid a live Claude process for the given session id?
+# Is this pid a live Claude process for the given session id? A sessions file
+# older than this boot is left over from a killed Claude, and its pid may now
+# belong to another process, so it does not count.
+BOOT_TIME=$(awk '/^btime/{print $2}' /proc/stat)
 claude_alive() {
   local pid=$1 sid=$2
   [ "$pid" -gt 0 ] && [ -d "/proc/$pid" ] && [ -f "$CLAUDE_SESSIONS/$pid.json" ] \
+    && [ "$(stat -c %Y "$CLAUDE_SESSIONS/$pid.json")" -ge "$BOOT_TIME" ] \
     && [ "$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)" = "$sid" ]
 }
 
@@ -204,6 +208,10 @@ hook_end() {
     esac
   fi
   rm -f "$f"
+  # Claude is still running while this hook runs. Leave a marker with its pid,
+  # so a snapshot in that gap does not record the session again.
+  local cpid; cpid=$(find_claude_pid) || cpid=""
+  [ -n "$cpid" ] && mkdir -p "$STATE_DIR/ended" && echo "$cpid" > "$STATE_DIR/ended/$(basename "$f" .json)"
   echo "$(date -Is) ended $sid ($cwd) reason=$reason" >> "$STATE_DIR/events.log"
 }
 
@@ -228,22 +236,30 @@ capture() {
   echo "$n session(s) recorded"
 }
 
-mux_pid() { systemctl --user show -p MainPID --value "$MUX_UNIT" 2>/dev/null; }
+# Which mux server is running: <boot id>:<pid>, or nothing. The pid alone is
+# not enough: the server starts early at boot with a low pid (1213 on
+# 2026-10-07) that the next boot can hand out again. Then plan would take the
+# new server for the old one and skip both the saved order and the stamp check.
+mux_pid() {
+  local p; p=$(systemctl --user show -p MainPID --value "$MUX_UNIT" 2>/dev/null)
+  [ -n "$p" ] && [ "$p" != 0 ] || return 0
+  printf '%s:%s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$p"
+}
 
-# Save the mux server's tab order: a header line with the server's pid, then
+# Save the mux server's tab order: a header line with the server's id, then
 # <window id> TAB <pane id> per pane, in tab order. Ask the server's own socket,
 # not a GUI's (a GUI numbers panes its own way). Keep the old file when the
 # server answers with nothing, so a dying server cannot wipe it.
 snapshot() {
   local pid rows
-  pid=$(mux_pid); [ -n "$pid" ] && [ "$pid" != 0 ] || return 0
+  pid=$(mux_pid); [ -n "$pid" ] || return 0
   rows=$(env -u FRANKENTERM_UNIX_SOCKET "$FT_CLI" cli list --json 2>/dev/null \
     | jq -r '.[] | "\(.window_id)\t\(.pane_id)"' 2>/dev/null)
   [ -n "$rows" ] || return 0
   mkdir -p "$STATE_DIR"
   { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
 
-  local f epid pane sf ssid scwd
+  local f epid pane sf ssid scwd em
   local -A row_pane=()
   local w_ p_
   while IFS=$'\t' read -r w_ p_; do row_pane[$p_]=1; done <<<"$rows"
@@ -263,6 +279,8 @@ snapshot() {
     ssid=$(jq -r '.sessionId // empty' "$sf"); scwd=$(jq -r '.cwd // empty' "$sf")
     [ -n "$ssid" ] && [ -n "$scwd" ] || continue
     [ -f "$(entry_file "$ssid" "$scwd")" ] && continue
+    em="$STATE_DIR/ended/$(basename "$(entry_file "$ssid" "$scwd")" .json)"
+    [ "$(cat "$em" 2>/dev/null)" = "$epid" ] && continue
     record "$epid" "$ssid" "$scwd" "$(jq -r '.name // empty' "$sf")"
     echo "$(date -Is) recorded $ssid ($scwd) from snapshot: pane $pane had no entry" >> "$STATE_DIR/events.log"
   done
@@ -281,7 +299,7 @@ snapshot() {
     jq --argjson pane "$pane" '.pane = $pane' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
-  # Stamp each live session with this server's pid. plan resumes only the
+  # Stamp each live session with this server's id. plan resumes only the
   # sessions stamped by the server that just went away, which are the ones
   # still open at its last snapshot (at most 30 s before it stopped). An entry
   # whose tab was closed without a SessionEnd hook keeps an old stamp and is
@@ -291,7 +309,7 @@ snapshot() {
     epid=$(jq -r '.pid // 0' "$f")
     claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
     [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] && continue
-    jq --argjson m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+    jq --arg m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
   # Retire the entries of closed tabs: stamped by this server, Claude no longer
@@ -299,8 +317,14 @@ snapshot() {
   # Claude before its SessionEnd hook runs, and those entries used to come back
   # at the next boot. Pane ids are never reused within one server, and a tab
   # whose Claude exited still has its pane (the fish shell after it).
+  # Never during shutdown: sessions and panes are going away then, and their
+  # entries must stay for the next boot.
+  local stopping=""
+  [ "$(systemctl is-system-running 2>/dev/null)" = stopping ] && stopping=1
+  [ "$(systemctl --user is-active "$MUX_UNIT" 2>/dev/null)" = active ] || stopping=1
   mkdir -p "$STATE_DIR/restored"
   for f in "$SESS_DIR"/*.json; do
+    [ -z "$stopping" ] || break
     [ -e "$f" ] || continue
     [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] || continue
     pane=$(jq -r '.pane // empty' "$f"); [ -n "$pane" ] || continue
@@ -308,6 +332,11 @@ snapshot() {
     claude_alive "$(jq -r '.pid // 0' "$f")" "$(jq -r .session_id "$f")" && continue
     mv "$f" "$STATE_DIR/restored/"
     echo "$(date -Is) closed $(basename "$f" .json): pane $pane is gone from mux $pid" >> "$STATE_DIR/events.log"
+  done
+  # Drop ended markers once their Claude process is gone.
+  for em in "$STATE_DIR"/ended/*; do
+    [ -e "$em" ] || continue
+    [ -d "/proc/$(cat "$em" 2>/dev/null)" ] || rm -f "$em"
   done
 
   # Save each live session's status (busy, waiting or idle) so the restore
@@ -357,12 +386,17 @@ ordered_entries() {
 }
 
 # The tab title for a session: the last name given with /rename, which Claude
-# stores in the transcript, else the folder name. The name recorded at
+# stores in the transcript, else the last title Claude generated, else the
+# folder name. The name recorded at
 # SessionStart is no good: it is often Claude's generated name with a short
 # hex suffix (manager-ci-bd), from before the session was renamed.
 tab_title() {
   local transcript=$1 cwd=$2 t=""
-  [ -f "$transcript" ] && t=$(grep -a -F '"type":"custom-title"' "$transcript" | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
+  if [ -f "$transcript" ]; then
+    t=$(grep -a -F '"type":"custom-title"' "$transcript" | tail -1 | jq -r '.customTitle // empty' 2>/dev/null)
+    # else the title Claude generated, which the live tab shows
+    [ -n "$t" ] || t=$(grep -a -F '"type":"ai-title"' "$transcript" | tail -1 | jq -r '.aiTitle // empty' 2>/dev/null)
+  fi
   printf '%s' "${t:-$(basename "$cwd")}"
 }
 
