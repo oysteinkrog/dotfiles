@@ -239,15 +239,15 @@ and re-storing them.
 check, clippy and doc, dotnet build and test, `build.cmd`, `localbuild build`, cmake and
 ninja. Example: `heavy-build cargo test -p mux --lib`.
 
-heavy-build has two admission rules, and `~/.config/heavy-build.conf` picks one. **It is in
-shadow mode until the manager session switches it to live.** In shadow mode the old rule
-decides: up to 3 builds at once, first come, first served, at least 12 GiB of memory
-available (8 GiB when no build runs). The new rule only logs what it would decide, to
-`~/.local/state/heavy-build/shadow.log`. In live mode the new rule decides. It estimates
-each build's memory, cores and run time from its last 5 runs, and starts it when it fits
-the budget: at most 6 builds, 28 cores, 8 GiB of memory left over, and low memory pressure
-in the agent sessions. A build that shares a cargo workspace, a worktree (dotnet and Wine)
-or a Wine prefix with a running build waits, and does not block builds behind it.
+heavy-build has two admission rules, and `~/.config/heavy-build.conf` picks one. **It runs
+in live mode (since 2026-10-08), so the budget rule decides.** It estimates each build's
+memory, cores and run time from its last 5 runs, and starts it when it fits the budget: at
+most 6 builds, 28 cores, 6 GiB of memory left over, and low memory pressure in the agent
+sessions. A build that shares a cargo workspace, a worktree (dotnet and Wine) or a Wine
+prefix with a running build waits, and does not block builds behind it. Decisions go to
+`~/.local/state/heavy-build/live.log`. Only the manager session changes the mode. Setting
+`HEAVY_BUILD_MODE=shadow` there brings back the old rule: up to 3 builds at once, first
+come, first served, at least 12 GiB of memory available (8 GiB when no build runs).
 
 Both modes wait for 10 GiB of swap room below the systemd-oomd limit (90%), and refuse
 (exit 75) when the disk has less than 60 GiB free or after 7200 s of waiting without moving

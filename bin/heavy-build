@@ -35,7 +35,11 @@
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
 #   (default 40). Only checked for builds estimated at 2 cores or more;
 # - MemAvailable, minus the memory running builds are still expected to take,
-#   minus its own estimate, leaves HEAVY_BUILD_MEM_RESERVE_GIB (default 8);
+#   minus its own estimate, leaves HEAVY_BUILD_MEM_RESERVE_GIB (default 8).
+#   A running build is expected to take HEAVY_BUILD_TC_PCT percent (default
+#   50) of its estimate, minus what it holds now. A scope in builds.slice with
+#   no heavy-build state file is expected to take 2 GiB more than it holds now,
+#   and its unit name is logged as untracked=unit:GiB;
 # - the memory builds hold plus its estimate fits under the builds.slice cap;
 # - claude.slice and app.slice memory pressure (some avg10) are each under
 #   HEAVY_BUILD_MAX_MEM_PSI percent (default 5);
@@ -186,6 +190,7 @@ read_conf() {
   setting HEAVY_BUILD_MEM_RESERVE_GIB 8
   setting HEAVY_BUILD_MAX_CPU_PSI 40
   setting HEAVY_BUILD_MAX_MEM_PSI 5
+  setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_STARVE 1800
 }
 
@@ -497,8 +502,10 @@ waiter_lines() {
   done
 }
 
-# The admission walk. Input: R, F and W lines. Prints "start|wait<TAB>rank<TAB>reason"
-# for the waiter named by `me`. Each reason starts with a short kind and a colon.
+# The admission walk. Input: R, F and W lines. Prints
+# "start|wait<TAB>rank<TAB>reason<TAB>untracked" for the waiter named by `me`.
+# Each reason starts with a short kind and a colon. untracked lists the F scopes
+# as unit:GiB, comma separated, or "-".
 # shellcheck disable=SC2016
 ADMIT_AWK='
 function max(a, b) { return a > b ? a : b }
@@ -507,11 +514,11 @@ function psi10(f,   l, a, b, v) {
   while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
   close(f); return v
 }
-function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys,   n, k, i, held, tc, cc) {
+function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct,   n, k, i, held, tc, cc) {
   nr++
   if (stalled == 1) { held = cur; tc = 0; cc = 0 }
   else {
-    held = max(cur, mem); tc = max(0, mem - cur)
+    held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
     cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
   }
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
@@ -529,7 +536,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap", w_mem[i], held, slicecap)
   return ""
 }
-function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i], w_keys[i]); picked[i] = 1 }
+function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i], w_keys[i], tcpct); picked[i] = 1 }
 # When enough running builds should have ended for waiter i to fit.
 function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
   for (j = 1; j <= nr; j++) idx[j] = j
@@ -556,10 +563,12 @@ BEGIN {
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
   claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
 }
-$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11) }
+$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct) }
+# A scope without a state file: charged its current memory plus 2 GiB still to come.
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
-  addrun($2, 0, 8, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-")
+  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-", 100)
+  untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 $1 == "W" {
   nw++; w_id[nw] = $2; w_arr[nw] = $3; p = $4
@@ -598,15 +607,16 @@ END {
     if (now + 1.5 * w_wall[i] > shadow) { why[i] = sprintf("behind: it would not end before %s can start, in about %d min", w_id[headi], (shadow - now) / 60); continue }
     pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
   }
-  for (o = 1; o <= nw; o++) if (w_id[ord[o]] == me) { printf "%s\t%d\t%s\n", (picked[ord[o]] ? "start" : "wait"), o, why[ord[o]]; exit }
-  printf "wait\t0\tqueue: no ticket for this build\n"
+  if (untracked == "") untracked = "-"
+  for (o = 1; o <= nw; o++) if (w_id[ord[o]] == me) { printf "%s\t%d\t%s\t%s\n", (picked[ord[o]] ? "start" : "wait"), o, why[ord[o]], untracked; exit }
+  printf "wait\t0\tqueue: no ticket for this build\t%s\n", untracked
 }'
 
 # Runs the budget rule for this waiter. Sets dec (start or wait), rank and why.
 decide() {
   local out
   if [[ -e $HOLD ]]; then
-    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
+    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=-
     return
   fi
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
@@ -614,9 +624,10 @@ decide() {
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
-    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 "$ADMIT_AWK")
-  IFS=$'\t' read -r dec rank why <<< "$out"
+    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" "$ADMIT_AWK")
+  IFS=$'\t' read -r dec rank why untracked <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
+  untracked=${untracked:--}
 }
 
 # ---------------------------------------------------------------- logging
@@ -645,7 +656,7 @@ log_decision() {
   [[ $k == "$last_log" ]] && return
   last_log=$k
   [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
-  log_line "decision=$dec reason=\"$why\" actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
+  log_line "decision=$dec reason=\"$why\" actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
 }
 
 # ---------------------------------------------------------------- job state
