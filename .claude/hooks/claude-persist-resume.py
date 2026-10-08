@@ -108,6 +108,9 @@ def main():
         prompt = loop[1].strip()
         if not prompt or prompt.startswith("<<autonomous-loop"):
             print("/loop")
+        elif prompt == "/loop" or prompt.startswith("/loop "):
+            # ScheduleWakeup often stores the /loop command itself
+            print(prompt)
         else:
             print("/loop " + prompt)
     elif status in ("busy", "waiting", "shell"):
