@@ -164,9 +164,36 @@ test_slab_silent_uses_sudo_rarely() {
 test_oom_lines() {
   setup oom
   MM_NOW=1000; check_oom
-  mm_journal() { printf '1001.0 h kernel: Out of memory: Killed process 42 (cc1plus)\n999.0 h kernel: Out of memory: Killed process 7 (old)\n1002.0 h foo[1]: unrelated\n'; }
+  mm_journal() { [[ $1 == -k ]] && printf '1001.0 h kernel: Out of memory: Killed process 42 (cc1plus)\n999.0 h kernel: Out of memory: Killed process 7 (old)\n1002.0 h kernel: unrelated\n'; }
   MM_NOW=1030; check_oom
   [[ $(nevents 'crit OOM') == 1 && $(nevents 'cc1plus') == 1 && $(nevents '(old)') == 0 ]]
+}
+test_oom_ignores_own_alert_line() {
+  setup oom_self
+  MM_NOW=1000; check_oom
+  # Every source returns the kill plus machine-monitor's own alert about it.
+  mm_journal() {
+    printf '1001.0 h kernel: Out of memory: Killed process 42 (chrome)\n'
+    printf '1010.0 h machine-monitor[9]: OOM crit: kernel: Out of memory: Killed process 42 (chrome)\n'
+  }
+  local t; for t in 1030 1060 1090 1120; do MM_NOW=$t; check_oom; done
+  [[ $(nevents 'crit OOM') == 1 ]]
+}
+test_oom_same_kill_seen_twice() {
+  setup oom_dedupe
+  MM_NOW=1000; check_oom
+  mm_journal() { [[ $1 == -k ]] && printf '1001.0 h kernel: Out of memory: Killed process 42 (chrome)\n'; }
+  MM_NOW=1030; check_oom
+  # The since window can repeat a line (restart, clock): still once.
+  state_set oom_since 1000; MM_NOW=1060; check_oom
+  [[ $(nevents 'crit OOM') == 1 ]]
+}
+test_oom_oomd_kill() {
+  setup oom_oomd
+  MM_NOW=1000; check_oom
+  mm_journal() { [[ $2 == systemd-oomd.service ]] && printf '1005.0 h systemd-oomd[5]: Killed /user.slice/app.slice/chrome.scope due to memory pressure\n'; }
+  MM_NOW=1030; check_oom; MM_NOW=1060; check_oom
+  [[ $(nevents 'crit OOM systemd-oomd') == 1 ]]
 }
 
 # ---- agent-mail ----
