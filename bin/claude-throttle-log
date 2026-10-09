@@ -5,9 +5,10 @@
 #
 # One tab-separated line per cgroup (claude.slice itself, then each claude-*.scope):
 #   time  cgroup  memory.high  high_events  max_events  ram_bytes  swap_bytes
-#   mem_some_avg60  mem_full_avg60  cpu_usage_usec
-# high_events counts every time the cgroup went over memory.high since it started, so
-# compare runs to see new throttling. Log: ~/.local/state/claude-throttle/log.tsv
+#   mem_some_avg60  mem_full_avg60  cpu_usage_usec  swap_max  swap_max_events
+# high_events counts every time the cgroup went over memory.high since it started, and
+# swap_max_events every time it hit memory.swap.max, so compare runs to see new hits.
+# A log with the older 10-column header is moved to log.v1.tsv. Log: ~/.local/state/claude-throttle/log.tsv
 set -euo pipefail
 export LC_ALL=C
 
@@ -16,11 +17,15 @@ STATE=${XDG_STATE_HOME:-$HOME/.local/state}/claude-throttle
 LOG=$STATE/log.tsv
 mkdir -p -- "$STATE"
 [ -d "$SLICE" ] || { echo "claude-throttle-log: no claude.slice" >&2; exit 0; }
-[ -s "$LOG" ] || printf 'time\tcgroup\tmemory_high\thigh_events\tmax_events\tram_bytes\tswap_bytes\tmem_some_avg60\tmem_full_avg60\tcpu_usage_usec\n' >> "$LOG"
+HEADER='time	cgroup	memory_high	high_events	max_events	ram_bytes	swap_bytes	mem_some_avg60	mem_full_avg60	cpu_usage_usec	swap_max	swap_max_events'
+if [ -s "$LOG" ] && [ "$(head -1 "$LOG")" != "$(printf '%b' "$HEADER")" ]; then
+  mv -- "$LOG" "$STATE/log.v1.tsv"
+fi
+[ -s "$LOG" ] || printf '%b\n' "$HEADER" >> "$LOG"
 
 now=$(date -Is)
 row() {
-  local d=$1 high events_high events_max ram swap some full cpu
+  local d=$1 high events_high events_max ram swap some full cpu swap_max swap_events
   # A scope can end between the glob and the reads; skip it then.
   high=$(cat "$d/memory.high" 2>/dev/null) || return 0
   events_high=$(awk '$1=="high"{print $2}' "$d/memory.events" 2>/dev/null) || return 0
@@ -30,8 +35,10 @@ row() {
   some=$(awk '$1=="some"{sub("avg60=","",$3); print $3}' "$d/memory.pressure" 2>/dev/null) || return 0
   full=$(awk '$1=="full"{sub("avg60=","",$3); print $3}' "$d/memory.pressure" 2>/dev/null) || return 0
   cpu=$(awk '$1=="usage_usec"{print $2}' "$d/cpu.stat" 2>/dev/null) || return 0
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${d##*/}" "$high" "$events_high" \
-    "$events_max" "$ram" "$swap" "$some" "$full" "$cpu"
+  swap_max=$(cat "$d/memory.swap.max" 2>/dev/null) || return 0
+  swap_events=$(awk '$1=="max"{print $2}' "$d/memory.swap.events" 2>/dev/null) || return 0
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${d##*/}" "$high" "$events_high" \
+    "$events_max" "$ram" "$swap" "$some" "$full" "$cpu" "$swap_max" "$swap_events"
 }
 
 {
