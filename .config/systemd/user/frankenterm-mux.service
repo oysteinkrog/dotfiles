@@ -17,6 +17,11 @@ Restart=on-failure
 LimitNOFILE=65536
 RestartSec=2
 TimeoutStopSec=20
+# oomd: pick this unit last. Today this has no effect. oomd watches user-1000.slice,
+# which root owns, for swap and memory pressure, and then ignores avoid on cgroups the
+# user owns (man systemd.resource-control, systemd 262). It would count only for a
+# ManagedOOMMemoryPressure=kill rule set on a slice inside the user manager.
+ManagedOOMPreference=avoid
 
 [Install]
 WantedBy=default.target

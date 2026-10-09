@@ -100,10 +100,23 @@ esac
 # session that grew is killed. OOMPolicy=continue: when the kernel kills one process in
 # the scope (a test runner, say), the session keeps running; the default (stop) would
 # end it. Skipped without systemd (WSL1) and when already scoped.
+#
+# scope_props prints extra systemd-run arguments for the scope, one per line. It is off
+# unless AIOLOS_RC_SCOPE_LIMITS=1 (in the environment or in config.env). When on, it sets
+# MemoryHigh (default 8G, AIOLOS_RC_SCOPE_MEMORY_HIGH): above it the kernel reclaims and
+# slows the session down, but never kills it. Never add MemoryMax here. On 2026-10-09,
+# 4 of 37 sessions had peaked above 8 GiB and 11 above 3 GiB, mostly page cache and
+# tests run inside the session. Hook point for per-session classes: add CPUWeight or
+# ManagedOOMPreference lines here, keyed on the session's arguments ("$@").
+scope_props() {
+  [ "${AIOLOS_RC_SCOPE_LIMITS:-0}" = 1 ] || return 0
+  printf '%s\n' -p "MemoryHigh=${AIOLOS_RC_SCOPE_MEMORY_HIGH:-8G}"
+}
 if [ -z "${AIOLOS_RC_SCOPED:-}" ] && [ -d /run/systemd/system ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]; then
   export AIOLOS_RC_SCOPED=1
+  mapfile -t SCOPE_PROPS < <(scope_props "$@")
   exec systemd-run --user --scope --quiet --collect --slice=claude.slice --unit="claude-$$" \
-    -p OOMPolicy=continue -- "$0" "$@"
+    -p OOMPolicy=continue "${SCOPE_PROPS[@]}" -- "$0" "$@"
 fi
 
 # Routing mode + optional leading options.
