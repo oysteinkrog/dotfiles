@@ -20,11 +20,14 @@ USVC = f"user.slice/user-{UID}.slice/user@{UID}.service"
 
 REGISTRY = """
 default = "normal"
+ephemeral_lanes = "pausable"
 [sessions]
 boss = "critical"
 idler = "pausable"
+pinned = "normal"
 [lanes]
 lane-a = "pausable"
+eph-held = "critical"
 """
 
 
@@ -43,7 +46,25 @@ class World:
             json.dumps({"repos": {"desktop": {"work_dir": str(self.work)}}})
         )
         (self.work / ".grove/registry.json").write_text(
-            json.dumps({"projects": {"lane-a": {"path": str(self.work / "lane-a")}}})
+            json.dumps(
+                {
+                    "projects": {
+                        "lane-a": {
+                            "path": str(self.work / "lane-a"),
+                            "expires_at": None,
+                        },
+                        "long": {"path": str(self.work / "long"), "expires_at": None},
+                        "eph": {
+                            "path": str(self.work / ".scratch/eph"),
+                            "expires_at": "2026-10-20T00:00:00Z",
+                        },
+                        "eph-held": {
+                            "path": str(self.work / ".scratch/eph-held"),
+                            "expires_at": "2026-10-20T00:00:00Z",
+                        },
+                    }
+                }
+            )
         )
 
     def env(self, **extra):
@@ -139,6 +160,10 @@ class Tests(unittest.TestCase):
         w.session(501, "termbound", launcher=None)
         w.session(601, "twin", launcher=600)
         w.session(701, "twin", launcher=700)
+        w.session(801, "scratcher", launcher=800, cwd=str(w.work / ".scratch/eph/src"))
+        w.session(811, "pinned", launcher=810, cwd=str(w.work / ".scratch/eph"))
+        w.session(821, "held", launcher=820, cwd=str(w.work / ".scratch/eph-held"))
+        w.session(831, "longlane", launcher=830, cwd=str(w.work / "long"))
 
     def tearDown(self):
         shutil.rmtree(self.w.root)
@@ -152,6 +177,33 @@ class Tests(unittest.TestCase):
         self.assertTrue(out.startswith("pausable"), out)
         self.assertIn("lane lane-a", out)
         self.assertTrue(self.w.run("class", "worker").stdout.startswith("normal"))
+
+    def test_ephemeral_lane_rule(self):
+        out = self.w.run("class", "scratcher").stdout
+        self.assertTrue(out.startswith("pausable"), out)
+        self.assertIn("ephemeral lane eph", out)
+        # A lane without expires_at is not ephemeral.
+        self.assertTrue(self.w.run("class", "longlane").stdout.startswith("normal"))
+        # A session name wins over the ephemeral rule, and so does a lane tag.
+        self.assertTrue(self.w.run("class", "pinned").stdout.startswith("normal"))
+        self.assertTrue(self.w.run("class", "held").stdout.startswith("critical"))
+        # Its builds see the class through --pid, and pause needs no --force.
+        self.w.proc_entry(805, 801, f"/{USVC}/claude.slice/claude-800.scope")
+        self.assertEqual(self.w.run("class", "--pid", "805").stdout.strip(), "pausable")
+        self.assertEqual(self.w.run("pause", "scratcher").returncode, 0)
+        self.assertEqual(self.w.freeze_file(800), "1")
+
+    def test_ephemeral_rule_off_without_the_key(self):
+        reg = REGISTRY.replace('ephemeral_lanes = "pausable"\n', "")
+        (self.w.root / "sessions.toml").write_text(reg)
+        out = self.w.run("class", "scratcher").stdout
+        self.assertTrue(out.startswith("normal"), out)
+
+    def test_bad_ephemeral_class_is_an_error(self):
+        (self.w.root / "sessions.toml").write_text('ephemeral_lanes = "maybe"\n')
+        r = self.w.run("class", "scratcher")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ephemeral_lanes is 'maybe'", r.stderr)
 
     def test_class_by_pid_walks_ancestors(self):
         # A build process two levels under the idler session.
