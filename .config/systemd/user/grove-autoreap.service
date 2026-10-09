@@ -1,0 +1,14 @@
+[Unit]
+Description=Remove grove scratch lanes past their TTL (grove-autoreap)
+
+[Service]
+Type=oneshot
+# report: write what it would remove, change nothing. live: notify alive
+# owners, then run grove done on clean, pushed, idle lanes.
+Environment=GROVE_AUTOREAP_MODE=report
+Environment=PATH=%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/bin/grove-autoreap
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=2G
+TimeoutStartSec=1h
