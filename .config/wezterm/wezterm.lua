@@ -395,6 +395,10 @@ if not is_windows then
   -- All three Dell U2412M panels are landscape with a horizontal RGB stripe.
   config.freetype_load_target = 'Light'
   config.freetype_render_target = 'HorizontalLcd'
+  -- Blend glyph edges in linear light, so light text on a dark background is not
+  -- drawn too thin. Only builds with the text_gamma option know the key, and
+  -- config_builder raises on an unknown key, so older builds skip it.
+  pcall(function() config.text_gamma = 1.45 end)
   -- Faint text (SGR 2). DejaVu Sans Mono has no Light weight, and its "Book"
   -- file stops the terminal from drawing a dimmed copy, so faint text came out
   -- at full brightness. Give it a dim grey instead. Faint italic is dimmed already.
