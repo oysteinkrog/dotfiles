@@ -1,0 +1,10 @@
+[Unit]
+Description=Run claude-throttle-log every 5 minutes
+
+# Turn on with the claude.slice soft limits, and off again after about 2 days.
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

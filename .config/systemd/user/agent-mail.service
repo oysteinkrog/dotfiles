@@ -22,6 +22,11 @@ RestartSec=5
 # The server peaked at 1.89 GiB in a 1-hour watch. At 512M it ran into its cap and fsqlite
 # corrupted the database within seconds (2026-10-04).
 MemoryMax=3G
+# oomd: pick this unit last. Today this has no effect. oomd watches user-1000.slice,
+# which root owns, for swap and memory pressure, and then ignores avoid on cgroups the
+# user owns (man systemd.resource-control, systemd 262). It would count only for a
+# ManagedOOMMemoryPressure=kill rule set on a slice inside the user manager.
+ManagedOOMPreference=avoid
 
 [Install]
 WantedBy=default.target
