@@ -1,0 +1,16 @@
+[Unit]
+Description=Claude Code sessions started by aiolos-rc
+
+# aiolos-rc starts each session as claude-<pid>.scope in this slice. These are soft
+# limits only: above MemoryHigh the kernel reclaims and slows the sessions down, but
+# kills nothing. There is deliberately no MemoryMax.
+#
+# Measured 2026-10-09 13:40, 37 sessions: 10.8 GiB RAM and 7.9 GiB swap in total;
+# per session median 0.18 GiB RAM, p90 0.42, max 1.74. The slice peaked at 41 GiB
+# (probably the mass restart at 09:15). 28G is 2.6 times the steady use and leaves
+# room for the desktop (app.slice, about 14 GiB) and builds (builds.slice, 42G max).
+# CPUWeight 80 sits between builds (50) and the desktop (100): sessions used 3.8
+# cores in total, median 0.01 per session, so this only matters under contention.
+[Slice]
+MemoryHigh=28G
+CPUWeight=80

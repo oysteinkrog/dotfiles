@@ -1,0 +1,7 @@
+[Unit]
+Description=Log MemoryHigh throttling of Claude sessions (claude-throttle-log)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/claude-throttle-log
+Nice=10
