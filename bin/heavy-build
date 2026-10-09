@@ -33,13 +33,17 @@
 #   HEAVY_BUILD_CPU_BUDGET (default 28). A running build is charged its
 #   estimate for 2 min, then what it used over the last 60 s;
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
-#   (default 40). Only checked for builds estimated at 2 cores or more;
+#   (default 40), and has stayed at or under it for HEAVY_BUILD_CPU_PSI_SECS
+#   seconds (default 30), as sampled by waiters and running builds. Only
+#   checked for builds estimated at 2 cores or more;
 # - MemAvailable, minus the memory running builds are still expected to take,
 #   minus its own estimate, leaves HEAVY_BUILD_MEM_RESERVE_GIB (default 8).
 #   A running build is expected to take HEAVY_BUILD_TC_PCT percent (default
 #   50) of its estimate, minus what it holds now. A scope in builds.slice with
 #   no heavy-build state file is expected to take 2 GiB more than it holds now,
-#   and its unit name is logged as untracked=unit:GiB;
+#   and its unit name is logged as untracked=unit:GiB. When such a scope used
+#   under 0.05 cores over the last 2 min, it is logged as unit:GiB:idle and
+#   is not counted as a running build, for the job limit or for cores;
 # - the memory builds hold plus its estimate fits under the builds.slice cap;
 # - claude.slice and app.slice memory pressure (some avg10) are each under
 #   HEAVY_BUILD_MAX_MEM_PSI percent (default 5);
@@ -62,7 +66,18 @@
 # - Estimates each build's memory, cores and wall time: from the last 5 runs
 #   of the same command in the same directory, then from its class (cargo
 #   test, dotnet build, Wine run-tests and so on; the p90 of the peaks), then
-#   8 GiB, 8 cores and 600 s. History: ~/.local/state/heavy-build/history.tsv.
+#   8 GiB, 8 cores and 600 s. History: ~/.local/state/heavy-build/history.tsv,
+#   one line per finished build, tab separated, with no header line. Columns:
+#   1 end time (epoch s), 2 class, 3 key (hash of directory and command),
+#   4 wall time in seconds (not the exit code), 5 CPU seconds, 6 peak memory
+#   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
+#   INT or HUP), timeout (exit 124) or oom (the scope's memory.events shows an
+#   oom_kill). Lines written before 2026-10-09 have no column 8.
+# - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
+#   heavy-build is gone is stopped when it holds only Wine leftovers
+#   (winedevice.exe, wineserver, services.exe and the like) or used under
+#   0.05 cores over the last 2 min. A scope still doing work is left alone.
+#   Each sweep is logged as event=sweep with the unit and its processes.
 # - Lock keys: cargo:<workspace root> for cargo commands, tree:<git toplevel>
 #   for dotnet and Wine commands, and wine:<prefix> for Wine runs that would
 #   share one prefix and so one wineserver (the DESKTOP-14957 guard). The guard
@@ -90,7 +105,10 @@
 # - Exit codes: the command's own status; 128 + signal on a signal death (137
 #   after an OOM kill); 75 when refused or when the wait gave up; 124 when
 #   HEAVY_BUILD_TIMEOUT or HEAVY_BUILD_WINE_ORPHAN=stop ended it; 2 for a usage
-#   error. TERM, INT or HUP to heavy-build stop the build.
+#   error. TERM, INT or HUP to heavy-build stop the build. heavy-build stops
+#   its scope on every exit it can catch. When the command ends and only Wine
+#   leftovers remain in the scope, they get SIGKILL before the scope stops
+#   (logged as event=stop-kill).
 #
 # Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
 # the command directly. Under a plain `flock heavy-build.lock` it skips the
@@ -132,6 +150,16 @@ SAMPLE=${HB_SAMPLE_SECS:-15}
 STALL_SECS=${HB_STALL_SECS:-600}
 WARMUP=${HB_WARMUP_SECS:-120}
 ORPHAN_STOP_SECS=${HB_ORPHAN_STOP_SECS:-120}
+IDLE_SECS=${HB_IDLE_SECS:-120}
+PSI_GAP=${HB_PSI_GAP_SECS:-20}
+CPUDIR=$RUNDIR/heavy-build.cpu
+PSIF=$RUNDIR/heavy-build.cpupsi
+# comm names (as /proc shows them, 15 characters at most) of the Wine
+# processes that stay behind when a Wine run ends. From the user journal,
+# 2026-10-07 to 10-09: winedevice.exe in almost every stop, and now and then
+# wineserver, services.exe, plugplay.exe, explorer.exe, rpcss.exe,
+# svchost.exe, lsass.exe and conhost.exe.
+WINE_LEFTOVERS=" winedevice.exe wineserver services.exe plugplay.exe explorer.exe rpcss.exe svchost.exe lsass.exe conhost.exe winemenubuilder wineboot.exe "
 USVC=$CG/user.slice/user-$UID.slice/user@$UID.service
 BSLICE=$USVC/builds.slice
 MEMINFO=$PROC/meminfo
@@ -189,6 +217,7 @@ read_conf() {
   setting HEAVY_BUILD_CPU_BUDGET 28
   setting HEAVY_BUILD_MEM_RESERVE_GIB 8
   setting HEAVY_BUILD_MAX_CPU_PSI 40
+  setting HEAVY_BUILD_CPU_PSI_SECS 30
   setting HEAVY_BUILD_MAX_MEM_PSI 5
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_STARVE 1800
@@ -236,7 +265,8 @@ class_table() {
 }
 
 # estimate KEY CLASS -> "mem_gib cores wall_s source".
-# history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code.
+# history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code
+# reason. Only columns 1 to 7 are read here.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
@@ -460,15 +490,138 @@ try_slot() {
   return 1
 }
 
+# ---------------------------------------------------------------- stale scopes
+
+# "pid:comm" for each process in the scope cgroup $1 whose comm can be read.
+scope_procs() {
+  local pid comm
+  while read -r pid; do
+    read -r comm 2>/dev/null < "$PROC/$pid/comm" || continue
+    printf '%s:%s\n' "$pid" "$comm"
+  done 2>/dev/null < "$1/cgroup.procs"
+}
+
+# True when $1 (scope_procs output) is not empty and lists only Wine leftovers.
+only_wine_leftovers() {
+  local l
+  [[ -n $1 ]] || return 1
+  while read -r l; do [[ $WINE_LEFTOVERS == *" ${l#*:} "* ]] || return 1; done <<< "$1"
+}
+
+# cpu_rate UNIT USAGE_USEC: the scope's CPU use in millicores over the last
+# full window of HB_IDLE_SECS (default 120), or "-" until the first window
+# ends. Samples ("start_epoch usage_usec rate") live in $CPUDIR/<unit>, shared
+# by every heavy-build, so the window spans waiters that come and go.
+cpu_rate() {
+  local f=$CPUDIR/$1 t0= u0= r=- now=$EPOCHSECONDS
+  read -r t0 u0 r 2>/dev/null < "$f"
+  if [[ ! $t0 =~ ^[0-9]+$ || ! $u0 =~ ^[0-9]+$ ]] || (( $2 < u0 )); then
+    mkdir -p "$CPUDIR" 2>/dev/null
+    printf '%s %s -\n' "$now" "$2" > "$f.$$" && mv -f "$f.$$" "$f"
+    echo -
+    return
+  fi
+  if (( now > t0 && now - t0 >= IDLE_SECS )); then
+    r=$(( ($2 - u0) / (now - t0) / 1000 ))
+    printf '%s %s %s\n' "$now" "$2" "$r" > "$f.$$" && mv -f "$f.$$" "$f"
+  fi
+  echo "${r:--}"
+}
+
+# True while the heavy-build (pid $2) that made scope $1 still runs: its
+# state file names the pid and start time, or, with no state file, the pid
+# still runs heavy-build.
+hb_alive() {
+  local u p st rest
+  if read -r u p st rest 2>/dev/null < "$JDIR/$1"; then
+    [[ $(proc_start "$2") == "$st" ]]
+    return
+  fi
+  tr '\0' ' ' < "/proc/$2/cmdline" 2>/dev/null | grep -q heavy-build
+}
+
+# Stops heavy-build scopes whose heavy-build is gone, for example killed with
+# SIGKILL so its own cleanup never ran. Only a scope that holds nothing but
+# Wine leftovers, or that used under 0.05 cores over the last HB_IDLE_SECS,
+# is stopped. A scope that still does work is left alone and logged once.
+sweep_stale() {
+  local d u pid procs list k v usec r why f n
+  for d in "$BSLICE"/heavy-build-*.scope; do
+    [[ -d $d ]] || continue
+    grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null || continue
+    u=${d##*/}; u=${u%.scope}
+    pid=${u#heavy-build-}; pid=${pid%%-*}
+    [[ $pid =~ ^[0-9]+$ ]] || continue
+    hb_alive "$u" "$pid" && continue
+    procs=$(scope_procs "$d")
+    [[ -n $procs ]] || continue
+    list=$(paste -sd, - <<< "$procs")
+    usec=0
+    while read -r k v; do [[ $k == usage_usec ]] && { usec=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
+    [[ $usec =~ ^[0-9]+$ ]] || usec=0
+    r=$(cpu_rate "$u" "$usec")
+    if only_wine_leftovers "$procs"; then
+      why=wine-leftovers
+    elif [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )); then
+      why=idle
+    else
+      if [[ ! -e $CPUDIR/$u.noted ]]; then
+        : > "$CPUDIR/$u.noted" 2>/dev/null
+        log_line "event=stale-keep unit=$u heavy_build_pid=$pid cpu_milli=$r procs=$list reason=\"its heavy-build is gone but the scope still does work, so it stays\""
+      fi
+      continue
+    fi
+    log_line "event=sweep unit=$u reason=$why heavy_build_pid=$pid cpu_milli=$r procs=$list"
+    [[ $why == wine-leftovers ]] && systemctl --user kill --signal=KILL "$u.scope" 2>/dev/null
+    systemctl --user stop "$u.scope" 2>/dev/null
+    rm -f -- "$JDIR/$u" "$CPUDIR/$u" "$CPUDIR/$u.noted"
+  done
+  # Forget the samples of scopes that are gone.
+  for f in "$CPUDIR"/*; do
+    [[ -e $f ]] || continue
+    n=${f##*/}; n=${n%.noted}
+    [[ $n == *.* ]] && continue
+    [[ -d $BSLICE/$n.scope ]] || rm -f -- "$f"
+  done
+}
+
+# Keeps $PSIF ("under_since last_sample"): since when CPU pressure (some
+# avg10) has stayed at or under HEAVY_BUILD_MAX_CPU_PSI, as seen by waiters
+# and running builds. A gap over HB_PSI_GAP_SECS between samples starts the
+# count again. Sets cpu_quiet to the seconds it has stayed under (0 while
+# over). Without a pressure file the rule is off.
+psi_watch() {
+  local v= l ip fp since= last= now=$EPOCHSECONDS
+  cpu_quiet=999999
+  while read -r l; do [[ $l == some\ * ]] && { v=${l#*avg10=}; v=${v%% *}; break; }; done 2>/dev/null < "$PROC/pressure/cpu"
+  [[ $v =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
+  cpu_quiet=0
+  ip=${v%%.*}; fp=00
+  [[ $v == *.* ]] && fp=${v#*.}00
+  fp=${fp:0:2}
+  {
+    flock 5
+    read -r since last 2>/dev/null < "$PSIF"
+    if (( 10#$ip * 100 + 10#$fp > MAX_CPU_PSI * 100 )); then
+      since=-
+    elif [[ ! $since =~ ^[0-9]+$ || ! $last =~ ^[0-9]+$ ]] || (( now - last > PSI_GAP )); then
+      since=$now
+    fi
+    printf '%s %s\n' "$since" "$now" > "$PSIF.tmp" && mv -f "$PSIF.tmp" "$PSIF"
+  } 5>>"$PSIF.lock" 2>/dev/null
+  [[ $since =~ ^[0-9]+$ ]] && cpu_quiet=$(( now - since ))
+}
+
 # ---------------------------------------------------------------- budget rule
 
 # One line per running build. Own builds come from their state files
 # ($JDIR/<unit>: "unit pid pidstart start mem cores wall cur_bytes
 # cores60_milli stalled prio keys"); a state file whose heavy-build is gone is
 # removed. Scopes in builds.slice without a state file (orphans, the old flock
-# rule) come as "F unit cur_bytes cpu_usec age_s".
+# rule) come as "F unit cur_bytes cpu_usec age_s idle", where idle is 1 when
+# the scope used under 0.05 cores over the last HB_IDLE_SECS.
 running_lines() {
-  local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v
+  local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v r idle
   for f in "$JDIR"/heavy-build-*; do
     [[ -e $f && $f != *.tmp ]] || continue
     read -r u pid st start em ec ew cur c60 stl pr ks < "$f" || continue
@@ -485,7 +638,11 @@ running_lines() {
     usec=0
     while read -r k v; do [[ $k == usage_usec ]] && { usec=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
     age=$(( EPOCHSECONDS - $(stat -c %Z -- "$d" 2>/dev/null || echo "$EPOCHSECONDS") ))
-    echo "F $u $cur $usec $age"
+    [[ $usec =~ ^[0-9]+$ ]] || usec=0
+    r=$(cpu_rate "$u" "$usec")
+    idle=0
+    [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )) && idle=1
+    echo "F $u $cur $usec $age $idle"
   done
 }
 
@@ -532,6 +689,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
   if (cpu + w_cores[i] > cpubudget) return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
+  if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
   if (av - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available, %.1f still to come for running builds, reserve %d", w_mem[i], av, tc, reserve)
   if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap", w_mem[i], held, slicecap)
   return ""
@@ -565,6 +723,12 @@ BEGIN {
 }
 $1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct) }
 # A scope without a state file: charged its current memory plus 2 GiB still to come.
+# An idle one only holds its current memory; it is not a running build.
+$1 == "F" && $6 == 1 {
+  T_held += $3 / 1073741824
+  untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:idle", $2, $3 / 1073741824)
+  next
+}
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
   addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-", 100)
@@ -615,11 +779,14 @@ END {
 # Runs the budget rule for this waiter. Sets dec (start or wait), rank and why.
 decide() {
   local out
+  sweep_stale
   if [[ -e $HOLD ]]; then
     dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=-
     return
   fi
+  psi_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
+    -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v cpupsifile="$PROC/pressure/cpu" \
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
@@ -742,8 +909,10 @@ sample_scope() {
     orphan_seen=0 orphan_since= stalled_wine=0
   fi
   write_state "$cur" "$c60" "$(( stalled_cpu || stalled_wine ))"
+  psi_watch
 }
 
+# append_history EXIT_CODE REASON. Columns: see the help text at the top.
 append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
   (( wall < 1 )) && wall=1
@@ -752,7 +921,7 @@ append_history() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" >&6
     if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
@@ -772,7 +941,19 @@ jobid=$unit
 mystart=$(proc_start $$)
 start_ts=$EPOCHSECONDS
 ticket=
-trap 'rm -f -- ${ticket:+"$ticket" "$ticket.tmp"} "$JDIR/$unit" "$JDIR/$unit.tmp"' EXIT
+scope_up= child= cancel_sig=
+# Runs on every exit bash can catch, signals included: removes the ticket and
+# state file and, once the scope exists, stops it, so nothing from this build
+# runs on without a heavy-build to account for it.
+on_exit() {
+  rm -f -- ${ticket:+"$ticket" "$ticket.tmp"} "$JDIR/$unit" "$JDIR/$unit.tmp"
+  [[ -n $scope_up ]] && systemctl --user stop "$unit.scope" 2>/dev/null
+}
+trap on_exit EXIT
+# While waiting no scope exists yet, so a signal just ends heavy-build.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 read_conf
 
 deadline=$(( SECONDS + WAIT ))
@@ -784,9 +965,6 @@ else
   # then pid, then a short hash of the directory and command.
   ticket=$QDIR/$(date +%s%N)-$$-$hash
   jobid=${ticket##*/}
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
   write_ticket
   said= best= last_log= would_since=
   while :; do
@@ -856,7 +1034,6 @@ else
     sleep "$POLL"
   done
   rm -f -- "$ticket"
-  trap - HUP INT TERM
 fi
 
 avail=$(LC_ALL=C df -B1G --output=avail -- . 2>/dev/null | tail -1 | tr -d ' ')
@@ -875,19 +1052,25 @@ props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="$(( cap_high + 2 ))G" -p Memor
 [[ -n $TIMEOUT ]] && props+=(-p RuntimeMaxSec="$TIMEOUT")
 desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REASON}"
 
-start_ts=$EPOCHSECONDS
-write_state 0 - 0
-systemd-run --user --scope --quiet --collect --expand-environment=no \
-  --unit="$unit" --slice=builds.slice --description="$desc" "${props[@]}" \
-  env "${build_env[@]}" "$@" 0<&0 8>&- 9>&- &
-child=$!
-
+# The signal traps go in before the scope exists, so no signal can end
+# heavy-build between making the scope and watching it.
 stop_build() {
-  kill "-$1" "$child" 2>/dev/null
+  cancel_sig=$1
+  [[ -n $child ]] && kill "-$1" "$child" 2>/dev/null
   systemctl --user kill --signal="$1" "$unit.scope" 2>/dev/null
 }
 trap 'stop_build TERM' TERM HUP
 trap 'stop_build INT' INT
+
+start_ts=$EPOCHSECONDS
+write_state 0 - 0
+scope_up=1
+systemd-run --user --scope --quiet --collect --expand-environment=no \
+  --unit="$unit" --slice=builds.slice --description="$desc" "${props[@]}" \
+  env "${build_env[@]}" "$@" 0<&0 8>&- 9>&- &
+child=$!
+# A signal that came while the scope was being made may have missed it.
+[[ -n $cancel_sig ]] && stop_build "$cancel_sig"
 
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
@@ -913,8 +1096,20 @@ while :; do
   sample_scope
 done
 sample_scope
+d=$BSLICE/$unit.scope
+oom=0
+while read -r k v; do [[ $k == oom_kill ]] && { oom=$v; break; }; done 2>/dev/null < "$d/memory.events"
+[[ $oom =~ ^[0-9]+$ ]] || oom=0
+# Wine leftovers (winedevice.exe and the like) ignore SIGTERM, so a plain
+# stop waits TimeoutStopSec and ends in "Stopping timed out. Killing".
+left=$(scope_procs "$d")
+if only_wine_leftovers "$left"; then
+  log_line "event=stop-kill unit=$unit procs=$(paste -sd, - <<< "$left")"
+  systemctl --user kill --signal=KILL "$unit.scope" 2>/dev/null
+fi
 # Nothing from this build may run on once it ends.
 systemctl --user stop "$unit.scope" 2>/dev/null
+scope_up=
 
 if [[ -n $orphan_stopped ]]; then
   rc=124
@@ -922,5 +1117,11 @@ elif [[ -n $TIMEOUT ]] && (( rc > 128 && EPOCHSECONDS - start_ts >= TIMEOUT - 1 
   say "stopped after HEAVY_BUILD_TIMEOUT=${TIMEOUT}s"
   rc=124
 fi
-append_history "$rc"
+if (( oom > 0 )); then reason=oom
+elif (( rc == 124 )); then reason=timeout
+elif [[ -n $cancel_sig ]]; then reason=cancelled
+elif (( rc == 0 )); then reason=ok
+else reason=fail
+fi
+append_history "$rc" "$reason"
 exit "$rc"

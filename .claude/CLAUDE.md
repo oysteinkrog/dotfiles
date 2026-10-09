@@ -243,7 +243,8 @@ heavy-build has two admission rules, and `~/.config/heavy-build.conf` picks one.
 in live mode (since 2026-10-08), so the budget rule decides.** It estimates each build's
 memory, cores and run time from its last 5 runs, and starts it when it fits the budget: at
 most 6 builds, 28 cores, 6 GiB of memory left over, and low memory pressure in the agent
-sessions. A build that shares a cargo workspace, a worktree (dotnet and Wine) or a Wine
+sessions. CPU pressure must stay under its limit for 30 s before a build starts next to
+others. A build that shares a cargo workspace, a worktree (dotnet and Wine) or a Wine
 prefix with a running build waits, and does not block builds behind it. Decisions go to
 `~/.local/state/heavy-build/live.log`. Only the manager session changes the mode. Setting
 `HEAVY_BUILD_MODE=shadow` there brings back the old rule: up to 3 builds at once, first
@@ -255,6 +256,13 @@ up in line. Each build runs in its own memory-capped scope (16G to 22G, from its
 inside `builds.slice` (42G for all builds), so an OOM kills only the build and not every
 terminal tab. The wait can be long, so run it in the background when your tool call has a
 timeout. On an OOM kill (exit 137), retry once, then tell the manager session.
+
+`~/.local/state/heavy-build/history.tsv` has one line per finished build, tab separated:
+end time, class, key, wall seconds, CPU seconds, peak memory bytes, exit code, and reason
+(`ok`, `fail`, `cancelled`, `timeout` or `oom`). Column 4 is wall time, not the exit code,
+and older lines have no reason. heavy-build stops its own scope on every exit it can catch.
+When a killed heavy-build leaves a scope behind, the next build that asks to start stops it
+if the scope is idle or holds only Wine leftovers, and logs `event=sweep` in `live.log`.
 
 - **`HEAVY_BUILD_PRIORITY=high` is only for a P0 bug or the last local check before a PR.**
   Set `HEAVY_BUILD_REASON` with it. Everything else stays at the default, `normal`; use
