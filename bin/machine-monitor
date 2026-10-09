@@ -19,8 +19,11 @@
 #              stopped or silent slab-guard. sudo only as a fallback, <= 1/5 min.
 #   SUNRECLAIM SUnreclaim every 4 GiB step from 4 GiB.
 #   SWAP       75 warn, 85 crit, 8-point hysteresis (oomd kills at 90).
-#   PSI_CPU    some avg60 60 warn, 85 crit, 15-point hysteresis.
-#   PSI_MEM    some avg60 10 warn, 30 crit, 5-point hysteresis.
+#   PSI_CPU    some avg60 >= 80 for 5 min (or avg300 >= 70) warn, avg60 >= 90
+#              for 2 min crit, 15-point hysteresis. heavy-build admits builds
+#              up to 60, so short peaks on a busy machine stay quiet.
+#   PSI_MEM    some avg60 >= 10 for 5 min (or avg300 >= 10) warn, avg60 >= 30
+#              for 2 min crit, 5-point hysteresis.
 #   DISK       free on / below 200/150 info, 100 warn, 75/60 crit, 5 GiB hysteresis.
 #   BTRFS      metadata >= 85% with < 2 GiB unallocated (every 5 min, no sudo).
 #   OOM        kernel OOM kills and systemd-oomd kills from the journal.
@@ -49,9 +52,15 @@ MM_WATCHED_UNITS=${MM_WATCHED_UNITS:-cass-maintenance disk-guard cargo-target-pr
 
 MM_SWAP_BANDS=${MM_SWAP_BANDS:-75 85}
 MM_SWAP_HYST=${MM_SWAP_HYST:-8}
-MM_PSI_CPU_BANDS=${MM_PSI_CPU_BANDS:-60 85}
+# PSI: thresholds, how long avg60 must stay at each one (seconds), the avg300
+# level that counts as the first band at once, and the hysteresis.
+MM_PSI_CPU_BANDS=${MM_PSI_CPU_BANDS:-80 90}
+MM_PSI_CPU_HOLD=${MM_PSI_CPU_HOLD:-300 120}
+MM_PSI_CPU_AVG300=${MM_PSI_CPU_AVG300:-70}
 MM_PSI_CPU_HYST=${MM_PSI_CPU_HYST:-15}
 MM_PSI_MEM_BANDS=${MM_PSI_MEM_BANDS:-10 30}
+MM_PSI_MEM_HOLD=${MM_PSI_MEM_HOLD:-300 120}
+MM_PSI_MEM_AVG300=${MM_PSI_MEM_AVG300:-10}
 MM_PSI_MEM_HYST=${MM_PSI_MEM_HYST:-5}
 MM_DISK_BANDS=${MM_DISK_BANDS:-200 150 100 75 60}
 MM_DISK_HYST=${MM_DISK_HYST:-5}
@@ -132,7 +141,8 @@ level_for() {
 
 # ---- readers (fakeable through MM_PROC and the mm_* wrappers) ----
 meminfo_kb() { awk -v k="$1:" '$1 == k {print $2; exit}' "$MM_PROC/meminfo"; }
-psi_some_avg60() { awk '/^some/ {for (i=1;i<=NF;i++) if ($i ~ /^avg60=/) {sub(/avg60=/,"",$i); print int($i); exit}}' "$MM_PROC/pressure/$1" 2>/dev/null; }
+# psi_some RESOURCE: prints "avg60 avg300" as integers.
+psi_some() { awk '/^some/ {for (i=1;i<=NF;i++) {if ($i ~ /^avg60=/) a=substr($i,7); if ($i ~ /^avg300=/) b=substr($i,8)} print int(a), int(b); exit}' "$MM_PROC/pressure/$1" 2>/dev/null; }
 mm_df_avail_gib() { df -B1G --output=avail / | tail -1 | tr -dc 0-9; }
 mm_btrfs_meta() { btrfs filesystem df -b / 2>/dev/null | awk -F'[=, ]+' '/^Metadata/ {for (i=1;i<=NF;i++) {if ($i=="total") t=$(i+1); if ($i=="used") u=$(i+1)}} END {print t+0, u+0}'; }
 mm_btrfs_unalloc() { btrfs filesystem usage -b / 2>/dev/null | awk '/Device unallocated:/ {print $3; exit}'; }
@@ -171,16 +181,34 @@ check_sunreclaim() {
   fi
 }
 
+# check_psi RES TAG "BANDS" "HOLDS" AVG300 HYST. A band counts only after
+# avg60 has stayed at or above it for its hold time, or (first band only)
+# when avg300 reaches AVG300. It falls when avg60 drops below band - HYST.
 check_psi() {
-  local res=$1 tag=$2 bands=$3 hyst=$4 v
-  v=$(psi_some_avg60 "$res")
-  [[ -n $v ]] || return 0
+  local res=$1 tag=$2 bands=$3 holds=$4 a300=$5 hyst=$6 v v300 t cur ok=0 i
+  read -r v v300 < <(psi_some "$res")
+  [[ -n ${v:-} ]] || return 0
   printf -v "PSI_${res^^}" '%s' "$v"
-  band_up "psi_$res" "$v" "$bands" "$hyst"
-  case $BAND_CHANGE in
-    up) emit "$(level_for "$BAND" "$bands")" "$tag" "$res pressure some avg60 ${v}% (band ${BAND}%)" ;;
-    down) emit info "$tag" "$res pressure back to ${v}%" ;;
-  esac
+  t=$(now)
+  local ths=($bands) hs=($holds) since
+  for i in "${!ths[@]}"; do
+    if (( v >= ths[i] )); then
+      since=$(state_get "psi_${res}_since_${ths[i]}")
+      [[ -n $since ]] || { since=$t; state_set "psi_${res}_since_${ths[i]}" "$t"; }
+      (( t - since >= ${hs[i]:-0} )) && ok=${ths[i]}
+    else
+      state_del "psi_${res}_since_${ths[i]}"
+    fi
+  done
+  (( v300 >= a300 && ok < ths[0] )) && ok=${ths[0]}
+  cur=$(state_get "psi_$res" 0)
+  if (( ok > cur )); then
+    state_set "psi_$res" "$ok"
+    emit "$(level_for "$ok" "$bands")" "$tag" "$res pressure some avg60 ${v}%, avg300 ${v300}% (band ${ok}%, sustained)"
+  elif (( cur > 0 && v < cur - hyst && ok < cur )); then
+    state_set "psi_$res" "$ok"
+    emit info "$tag" "$res pressure back to ${v}%"
+  fi
 }
 
 check_disk() {
@@ -509,8 +537,8 @@ main() {
     check_agent_mail
     if (( n % 2 == 0 )); then
       check_swap; check_sunreclaim
-      check_psi cpu PSI_CPU "$MM_PSI_CPU_BANDS" "$MM_PSI_CPU_HYST"
-      check_psi memory PSI_MEM "$MM_PSI_MEM_BANDS" "$MM_PSI_MEM_HYST"
+      check_psi cpu PSI_CPU "$MM_PSI_CPU_BANDS" "$MM_PSI_CPU_HOLD" "$MM_PSI_CPU_AVG300" "$MM_PSI_CPU_HYST"
+      check_psi memory PSI_MEM "$MM_PSI_MEM_BANDS" "$MM_PSI_MEM_HOLD" "$MM_PSI_MEM_AVG300" "$MM_PSI_MEM_HYST"
       check_disk; check_oom; check_cass; check_procs; check_tasks; check_dup_sessions
     fi
     (( n % 4 == 0 )) && check_slab
