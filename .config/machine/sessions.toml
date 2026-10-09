@@ -1,0 +1,23 @@
+# Session classes for this machine. Read by `machine-session` and `heavy-build`.
+#
+# Classes:
+#   critical  never paused, not even with --force.
+#   normal    the default. Paused only with `machine-session pause --force`.
+#   pausable  may be paused with `machine-session pause`. Its heavy-build
+#             builds default to HEAVY_BUILD_PRIORITY=low.
+#
+# A session is matched first by its Claude session name (as shown in
+# ~/.claude/sessions/<pid>.json and by `machine-session list`), then by the
+# grove lane tag of its working directory, then falls back to `default`.
+#
+# Oystein confirms every class change. A session may propose one, but only
+# Oystein edits this file.
+
+default = "normal"
+
+[sessions]
+manager-machine = "critical"
+
+# Grove lane tag = class. The tag is the grove project whose path holds the
+# session's working directory, for example "kpp" for ~/work/desktop/kpp.
+[lanes]

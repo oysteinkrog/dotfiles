@@ -41,6 +41,7 @@ config_dirs=(
   ConEmu
   fish
   fisher
+  machine
   nvim
   omf
   pm2
