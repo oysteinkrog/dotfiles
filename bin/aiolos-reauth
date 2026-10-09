@@ -1,0 +1,3 @@
+#!/bin/sh
+# Sign an aiolos account in again. Script lives in the life repo.
+exec "$HOME/work/life/scripts/aiolos-reauth/reauth.sh" "$@"
