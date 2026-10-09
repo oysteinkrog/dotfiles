@@ -1,0 +1,524 @@
+#!/usr/bin/env bash
+# machine-monitor: watch this desktop's health and report problems.
+# Runs as machine-monitor.service (a systemd user unit) and checks every 15 s.
+# It only reads and reports. It never stops, kills or changes anything.
+#
+# Each problem is reported once when it enters a worse band, and again only
+# after it has recovered past the band's hysteresis and got worse again.
+# Every event goes to:
+#   1. the journal, as one line from SyslogIdentifier=machine-monitor
+#      ("TAG level: message"), with the matching syslog priority,
+#   2. notify-send, for warn and crit only,
+#   3. ~/.local/state/machine-monitor/events.log (append only), one line:
+#      "<ISO time> <level> <TAG> <message>". Tail it with a Monitor.
+# An info line with the main numbers is written once an hour as a heartbeat.
+#
+# Checks and bands (all thresholds can be overridden with MM_* env vars):
+#   SLAB       kmalloc-128 growth >= 200 MB/min (re-arms under 50), read from
+#              slab-guard's own journal lines; any slab-guard crit line; a
+#              stopped or silent slab-guard. sudo only as a fallback, <= 1/5 min.
+#   SUNRECLAIM SUnreclaim every 4 GiB step from 4 GiB.
+#   SWAP       75 warn, 85 crit, 8-point hysteresis (oomd kills at 90).
+#   PSI_CPU    some avg60 60 warn, 85 crit, 15-point hysteresis.
+#   PSI_MEM    some avg60 10 warn, 30 crit, 5-point hysteresis.
+#   DISK       free on / below 200/150 info, 100 warn, 75/60 crit, 5 GiB hysteresis.
+#   BTRFS      metadata >= 85% with < 2 GiB unallocated (every 5 min, no sudo).
+#   OOM        kernel OOM kills and systemd-oomd kills from the journal.
+#   AGENT_MAIL agent-mail.service state changes, new doctor/reclaimable entries.
+#   CASS       cass running without the CASS_AUTO_REFRESH=0 wrapper, or
+#              indexing outside its own unit.
+#   PROCS      gpg-agent 10/50, git 48/96, wine* and *.exe 200/400 processes.
+#   TASKS      tasks per claude-*.scope 1000 warn, 2000 crit.
+#   DUP_SESSION two live Claude processes resuming the same session id.
+#   TIMER      watched units skipped or failed, watched timers not active,
+#              slab-guard not active (every 5 min); other failed units (info).
+#
+# Test hooks: MM_PROC, MM_CGROUP, MM_STATE replace /proc, the claude.slice
+# cgroup dir and the state dir. MM_LIB=1 defines the functions without running.
+set -uo pipefail
+export LC_ALL=C
+
+MM_PROC=${MM_PROC:-/proc}
+MM_CGROUP=${MM_CGROUP:-/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/claude.slice}
+MM_STATE=${MM_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/machine-monitor}
+MM_EVENTS=${MM_EVENTS:-$MM_STATE/events.log}
+MM_NOTIFY=${MM_NOTIFY:-1}
+MM_TICK=${MM_TICK:-15}
+MM_RECLAIMABLE=${MM_RECLAIMABLE:-$HOME/.mcp_agent_mail_git_mailbox_repo/doctor/reclaimable}
+MM_WATCHED_UNITS=${MM_WATCHED_UNITS:-cass-maintenance disk-guard cargo-target-prune build-sweep grove-gc}
+
+MM_SWAP_BANDS=${MM_SWAP_BANDS:-75 85}
+MM_SWAP_HYST=${MM_SWAP_HYST:-8}
+MM_PSI_CPU_BANDS=${MM_PSI_CPU_BANDS:-60 85}
+MM_PSI_CPU_HYST=${MM_PSI_CPU_HYST:-15}
+MM_PSI_MEM_BANDS=${MM_PSI_MEM_BANDS:-10 30}
+MM_PSI_MEM_HYST=${MM_PSI_MEM_HYST:-5}
+MM_DISK_BANDS=${MM_DISK_BANDS:-200 150 100 75 60}
+MM_DISK_HYST=${MM_DISK_HYST:-5}
+MM_GPG_BANDS=${MM_GPG_BANDS:-10 50}
+MM_GIT_BANDS=${MM_GIT_BANDS:-48 96}
+MM_WINE_BANDS=${MM_WINE_BANDS:-200 400}
+MM_TASKS_BANDS=${MM_TASKS_BANDS:-1000 2000}
+MM_SLAB_RATE_WARN=${MM_SLAB_RATE_WARN:-200}
+MM_SLAB_RATE_REARM=${MM_SLAB_RATE_REARM:-50}
+
+mkdir -p -- "$MM_STATE/s"
+
+# ---- state: one small file per key, so a restart does not repeat alerts ----
+state_get() { local v; v=$(cat -- "$MM_STATE/s/$1" 2>/dev/null) || v=; echo "${v:-${2:-}}"; }
+state_set() { printf '%s\n' "$2" > "$MM_STATE/s/$1"; }
+state_del() { rm -f -- "$MM_STATE/s/$1"; }
+now() { echo "${MM_NOW:-$(date +%s)}"; }
+
+# ---- output ----
+# emit LEVEL TAG MESSAGE. LEVEL is info, warn or crit.
+emit() {
+  local level=$1 tag=$2 msg=$3 prio=6
+  case $level in warn) prio=4 ;; crit) prio=2 ;; esac
+  printf '<%d>%s %s: %s\n' "$prio" "$tag" "$level" "$msg"
+  printf '%s %s %s %s\n' "$(date -Is)" "$level" "$tag" "$msg" >> "$MM_EVENTS"
+  if [[ $level != info && $MM_NOTIFY == 1 ]]; then
+    local urgency=normal
+    [[ $level == crit ]] && urgency=critical
+    notify-send -u "$urgency" -a machine-monitor "Machine monitor: $tag" "$msg" 2>/dev/null || true
+  fi
+}
+
+# ---- band logic ----
+# band_up KEY VALUE "T1 T2 ..." HYST: higher is worse (thresholds ascending).
+# Sets BAND (current band, 0 = none) and BAND_CHANGE (up, down or none).
+# The band rises as soon as VALUE reaches a higher threshold. It falls only
+# when VALUE drops below the current band minus HYST.
+band_up() {
+  local key=$1 v=$2 ths=$3 hy=$4 cur new=0 t
+  cur=$(state_get "$key" 0)
+  for t in $ths; do (( v >= t )) && new=$t; done
+  BAND_CHANGE=none
+  if (( new > cur )); then
+    BAND_CHANGE=up; cur=$new
+  elif (( new < cur && v < cur - hy )); then
+    BAND_CHANGE=down; cur=$new
+  fi
+  state_set "$key" "$cur"
+  BAND=$cur
+}
+
+# band_down KEY VALUE "T1 T2 ..." HYST: lower is worse (thresholds descending).
+# BAND is the lowest threshold VALUE is under, 0 = above all of them.
+band_down() {
+  local key=$1 v=$2 ths=$3 hy=$4 cur new=0 t
+  cur=$(state_get "$key" 0)
+  for t in $ths; do (( v < t )) && new=$t; done
+  BAND_CHANGE=none
+  # 0 means "no band", which ranks as better than any threshold.
+  local rc=$cur rn=$new
+  (( rc == 0 )) && rc=999999
+  (( rn == 0 )) && rn=999999
+  if (( rn < rc )); then
+    BAND_CHANGE=up; cur=$new
+  elif (( rn > rc && v >= rc + hy )); then
+    BAND_CHANGE=down; cur=$new
+  fi
+  state_set "$key" "$cur"
+  BAND=$cur
+}
+
+# level_for BAND "T1 T2 ...": warn for the first threshold, crit for the last.
+level_for() {
+  local b=$1 ths=($2)
+  [[ $b == "${ths[-1]}" ]] && { echo crit; return; }
+  echo warn
+}
+
+# ---- readers (fakeable through MM_PROC and the mm_* wrappers) ----
+meminfo_kb() { awk -v k="$1:" '$1 == k {print $2; exit}' "$MM_PROC/meminfo"; }
+psi_some_avg60() { awk '/^some/ {for (i=1;i<=NF;i++) if ($i ~ /^avg60=/) {sub(/avg60=/,"",$i); print int($i); exit}}' "$MM_PROC/pressure/$1" 2>/dev/null; }
+mm_df_avail_gib() { df -B1G --output=avail / | tail -1 | tr -dc 0-9; }
+mm_btrfs_meta() { btrfs filesystem df -b / 2>/dev/null | awk -F'[=, ]+' '/^Metadata/ {for (i=1;i<=NF;i++) {if ($i=="total") t=$(i+1); if ($i=="used") u=$(i+1)}} END {print t+0, u+0}'; }
+mm_btrfs_unalloc() { btrfs filesystem usage -b / 2>/dev/null | awk '/Device unallocated:/ {print $3; exit}'; }
+mm_journal() { journalctl -q --no-pager -o short-unix "$@" 2>/dev/null; }
+mm_user_show() { systemctl --user show "$@" 2>/dev/null; }
+mm_user_active() { systemctl --user is-active "$1" 2>/dev/null; }
+mm_system_active() { systemctl is-active "$1" 2>/dev/null; }
+mm_user_failed() { systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}'; }
+mm_system_failed() { systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}'; }
+mm_sudo_slab_mb() { sudo -n awk '/^kmalloc-128 /{print int($2*$4/1048576)}' /proc/slabinfo 2>/dev/null; }
+
+# ---- checks ----
+
+check_swap() {
+  local total free p
+  total=$(meminfo_kb SwapTotal); free=$(meminfo_kb SwapFree)
+  (( ${total:-0} > 0 )) || return 0
+  p=$(( (total - free) * 100 / total ))
+  SWAP_PCT=$p
+  band_up swap "$p" "$MM_SWAP_BANDS" "$MM_SWAP_HYST"
+  case $BAND_CHANGE in
+    up) emit "$(level_for "$BAND" "$MM_SWAP_BANDS")" SWAP "swap ${p}% used (band ${BAND}%, oomd kills at 90%)" ;;
+    down) emit info SWAP "swap back to ${p}% used" ;;
+  esac
+}
+
+check_sunreclaim() {
+  local gib b cur
+  gib=$(( $(meminfo_kb SUnreclaim) / 1048576 ))
+  b=$(( gib / 4 * 4 )); cur=$(state_get sunreclaim 0)
+  if (( gib >= 4 && b > cur )); then
+    emit warn SUNRECLAIM "unreclaimable slab now ${gib} GiB"
+    state_set sunreclaim "$b"
+  elif (( b < cur - 4 )); then
+    state_set sunreclaim "$b"
+  fi
+}
+
+check_psi() {
+  local res=$1 tag=$2 bands=$3 hyst=$4 v
+  v=$(psi_some_avg60 "$res")
+  [[ -n $v ]] || return 0
+  printf -v "PSI_${res^^}" '%s' "$v"
+  band_up "psi_$res" "$v" "$bands" "$hyst"
+  case $BAND_CHANGE in
+    up) emit "$(level_for "$BAND" "$bands")" "$tag" "$res pressure some avg60 ${v}% (band ${BAND}%)" ;;
+    down) emit info "$tag" "$res pressure back to ${v}%" ;;
+  esac
+}
+
+check_disk() {
+  local f lvl
+  f=$(mm_df_avail_gib)
+  [[ $f =~ ^[0-9]+$ ]] || return 0
+  DISK_FREE=$f
+  band_down disk "$f" "$MM_DISK_BANDS" "$MM_DISK_HYST"
+  case $BAND_CHANGE in
+    up)
+      lvl=info
+      (( BAND <= 100 )) && lvl=warn
+      (( BAND <= 75 )) && lvl=crit
+      emit "$lvl" DISK "${f} GiB free on / (below ${BAND} GiB)" ;;
+    down) emit info DISK "${f} GiB free on / again" ;;
+  esac
+}
+
+check_btrfs() {
+  local total used unalloc pct un_gib warned
+  read -r total used < <(mm_btrfs_meta)
+  unalloc=$(mm_btrfs_unalloc)
+  [[ ${total:-0} =~ ^[0-9]+$ && $total -gt 0 && ${unalloc:-} =~ ^[0-9]+$ ]] || return 0
+  pct=$(( used * 100 / total )); un_gib=$(( unalloc / 1073741824 ))
+  warned=$(state_get btrfs_meta 0)
+  if (( pct >= 85 && un_gib < 2 )); then
+    if (( warned == 0 )); then
+      emit warn BTRFS "metadata ${pct}% full, ${un_gib} GiB unallocated"
+      state_set btrfs_meta 1
+    fi
+  elif (( warned == 1 && (pct < 80 || un_gib >= 4) )); then
+    emit info BTRFS "metadata ${pct}% full, ${un_gib} GiB unallocated, back to normal"
+    state_set btrfs_meta 0
+  fi
+}
+
+# slab-guard logs "kmalloc-128 N MB" every 10 minutes and on every 256 MB of
+# growth, so the growth rate comes from its lines without reading slabinfo.
+check_slab() {
+  local t last lines ts mb pts pmb rate warned
+  t=$(now); last=$(state_get slab_since "$t")
+  lines=$(mm_journal -u slab-guard.service --since "@$last" | awk -v l="$last" '$1 > l')
+  state_set slab_since "$t"
+  while read -r ts mb; do
+    [[ -n $ts ]] || continue
+    pts=$(state_get slab_ts); pmb=$(state_get slab_mb)
+    state_set slab_ts "${ts%.*}"; state_set slab_mb "$mb"; state_set slab_seen "${ts%.*}"
+    [[ -n $pts ]] || continue
+    (( ${ts%.*} > pts )) || continue
+    rate=$(( (mb - pmb) * 60 / (${ts%.*} - pts) ))
+    warned=$(state_get slab_rate 0)
+    if (( rate >= MM_SLAB_RATE_WARN && warned == 0 )); then
+      emit crit SLAB "kmalloc-128 growing ${rate} MB/min, now ${mb} MB"
+      state_set slab_rate 1
+    elif (( rate < MM_SLAB_RATE_REARM && warned == 1 )); then
+      state_set slab_rate 0
+    fi
+  done < <(awk '{for (i=1;i<=NF;i++) if ($i=="kmalloc-128" && $(i+2)=="MB") print $1, $(i+1)}' <<< "$lines")
+
+  local crit
+  crit=$(mm_journal -u slab-guard.service -p crit --since "@$last" | awk -v l="$last" '$1 > l' | tail -1 | cut -d' ' -f4-)
+  [[ -n $crit ]] && emit crit SLAB "slab-guard: $crit"
+
+  # A silent slab-guard (no line for 15 min) means the numbers above are stale.
+  local seen silent
+  seen=$(state_get slab_seen "$t"); [[ -n $(state_get slab_seen) ]] || state_set slab_seen "$t"
+  silent=$(state_get slab_silent 0)
+  if (( t - seen > 900 )); then
+    if (( silent == 0 )); then
+      emit warn SLAB "no slab-guard line for $(( (t - seen) / 60 )) min"
+      state_set slab_silent 1
+    fi
+    slab_fallback "$t"
+  elif (( silent == 1 )); then
+    state_set slab_silent 0
+  fi
+}
+
+# Read slabinfo directly when slab-guard is silent: as the user if readable,
+# else through sudo at most once every 5 minutes.
+slab_fallback() {
+  local t=$1 mb lastsudo
+  if [[ -r $MM_PROC/slabinfo ]]; then
+    mb=$(awk '/^kmalloc-128 /{print int($2*$4/1048576)}' "$MM_PROC/slabinfo")
+  else
+    lastsudo=$(state_get slab_sudo 0)
+    (( t - lastsudo >= 300 )) || return 0
+    state_set slab_sudo "$t"
+    mb=$(mm_sudo_slab_mb)
+  fi
+  [[ $mb =~ ^[0-9]+$ ]] || return 0
+  local pts pmb rate
+  pts=$(state_get slab_fb_ts); pmb=$(state_get slab_fb_mb)
+  state_set slab_fb_ts "$t"; state_set slab_fb_mb "$mb"
+  [[ -n $pts ]] && (( t > pts )) || return 0
+  rate=$(( (mb - pmb) * 60 / (t - pts) ))
+  if (( rate >= MM_SLAB_RATE_WARN && $(state_get slab_rate 0) == 0 )); then
+    emit crit SLAB "kmalloc-128 growing ${rate} MB/min, now ${mb} MB (read directly)"
+    state_set slab_rate 1
+  elif (( rate < MM_SLAB_RATE_REARM )); then
+    state_set slab_rate 0
+  fi
+}
+
+check_oom() {
+  local t last k
+  t=$(now); last=$(state_get oom_since "$t")
+  k=$(mm_journal --since "@$last" | awk -v l="$last" '$1 > l' \
+    | grep -E 'systemd-oomd.*(Marked|Killed)|Out of memory: Killed|out of memory: Killed' | tail -3 | cut -d' ' -f3-)
+  state_set oom_since "$t"
+  [[ -n $k ]] && emit crit OOM "$(tr '\n' ' ' <<< "$k")"
+  return 0
+}
+
+check_agent_mail() {
+  local s prev rc rc0
+  s=$(mm_user_active agent-mail.service); prev=$(state_get am_state)
+  [[ -n $s ]] || s=unknown
+  if [[ -n $prev && $s != "$prev" ]]; then
+    local lvl=info; [[ $s != active ]] && lvl=warn
+    emit "$lvl" AGENT_MAIL "agent-mail.service now $s (was $prev)"
+  fi
+  state_set am_state "$s"
+  rc=$(find "$MM_RECLAIMABLE" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+  rc0=$(state_get am_reclaimable "$rc")
+  (( rc > rc0 )) && emit warn AGENT_MAIL "new doctor/reclaimable entries: $rc0 -> $rc"
+  state_set am_reclaimable "$rc"
+}
+
+check_cass() {
+  local pid comm args cg env_ok seen
+  seen=" $(state_get cass_seen) "
+  local keep=""
+  for d in "$MM_PROC"/[0-9]*; do
+    read -r comm 2>/dev/null < "$d/comm" || continue
+    [[ $comm == cass || $comm == cass2 ]] || continue
+    pid=${d##*/}; keep+=" $pid"
+    [[ $seen == *" $pid "* ]] && continue
+    args=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+    env_ok=$(tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -c '^CASS_AUTO_REFRESH=0')
+    cg=$(cut -c1-110 "$d/cgroup" 2>/dev/null)
+    if grep -qE ' index|--full|--force-rebuild|--refresh|doctor|forget' <<< " $args"; then
+      case $cg in
+        *cass-*|*background.slice*|*run-*|*heavy-build*) ;;
+        *) emit warn CASS "index run outside its unit: pid $pid: $args ($cg)" ;;
+      esac
+    elif [[ $env_ok == 0 ]]; then
+      emit warn CASS "running without the wrapper: pid $pid: $args ($cg)"
+    fi
+  done
+  state_set cass_seen "${keep# }"
+}
+
+# Count processes by name: gpg-agent, git, and Wine (wine* plus *.exe).
+check_procs() {
+  local gpg=0 git=0 wine=0 comm d
+  for d in "$MM_PROC"/[0-9]*; do
+    read -r comm 2>/dev/null < "$d/comm" || continue
+    case $comm in
+      gpg-agent) gpg=$((gpg + 1)) ;;
+      git) git=$((git + 1)) ;;
+      wine*|*.exe) wine=$((wine + 1)) ;;
+    esac
+  done
+  PROC_COUNTS="gpg-agent=$gpg git=$git wine=$wine"
+  proc_band gpg-agent "$gpg" "$MM_GPG_BANDS" 5
+  proc_band git "$git" "$MM_GIT_BANDS" 16
+  proc_band wine "$wine" "$MM_WINE_BANDS" 50
+}
+
+proc_band() {
+  local name=$1 n=$2 bands=$3 hyst=$4
+  band_up "procs_$name" "$n" "$bands" "$hyst"
+  case $BAND_CHANGE in
+    up) emit "$(level_for "$BAND" "$bands")" PROCS "$n $name processes (band $BAND)" ;;
+    down) emit info PROCS "$name processes back to $n" ;;
+  esac
+}
+
+check_tasks() {
+  local s name n live=" "
+  for s in "$MM_CGROUP"/claude-*.scope; do
+    [[ -r $s/pids.current ]] || continue
+    name=${s##*/}; name=${name%.scope}; live+="$name "
+    read -r n 2>/dev/null < "$s/pids.current" || continue
+    band_up "tasks_$name" "$n" "$MM_TASKS_BANDS" 200
+    case $BAND_CHANGE in
+      up) emit "$(level_for "$BAND" "$MM_TASKS_BANDS")" TASKS "$name has $n tasks (band $BAND)" ;;
+      down) emit info TASKS "$name back to $n tasks" ;;
+    esac
+  done
+  # Forget scopes that are gone.
+  local f
+  for f in "$MM_STATE"/s/tasks_claude-*; do
+    [[ -e $f ]] || continue
+    name=${f##*/tasks_}
+    [[ $live == *" $name "* ]] || rm -f -- "$f"
+  done
+}
+
+# Two live Claude processes resuming the same session id write to one
+# transcript. Wrappers (bash aiolos-rc) and child processes are not counted.
+check_dup_sessions() {
+  local d comm pid ppid id argv a next
+  declare -A owners=()
+  for d in "$MM_PROC"/[0-9]*; do
+    read -r comm 2>/dev/null < "$d/comm" || continue
+    [[ $comm == claude || $comm =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    mapfile -d "" -t argv 2>/dev/null < "$d/cmdline" || continue
+    id=""; next=0
+    for a in "${argv[@]}"; do
+      if (( next )); then id=$a; break; fi
+      case $a in --resume|-r|--session-id) next=1 ;; --resume=*|--session-id=*) id=${a#*=}; break ;; esac
+    done
+    [[ $id =~ ^[0-9a-f-]{36}$ ]] || continue
+    pid=${d##*/}
+    ppid=$(awk '{print $4}' "$d/stat" 2>/dev/null)
+    # A child of a process with the same id is the same session.
+    if [[ -n $ppid && -r $MM_PROC/$ppid/cmdline ]] && tr '\0' ' ' < "$MM_PROC/$ppid/cmdline" | grep -q -- "$id"; then
+      read -r comm 2>/dev/null < "$MM_PROC/$ppid/comm" || comm=
+      [[ $comm == claude || $comm =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
+    fi
+    owners[$id]+=" $pid"
+  done
+  local live=" " pids scope p scopes
+  for id in "${!owners[@]}"; do
+    pids=(${owners[$id]})
+    (( ${#pids[@]} > 1 )) || continue
+    live+="${id} "
+    [[ -n $(state_get "dup_$id") ]] && continue
+    scopes=""
+    for p in "${pids[@]}"; do
+      scope=$(grep -o 'claude-[0-9]*\.scope' "$MM_PROC/$p/cgroup" 2>/dev/null | head -1)
+      scopes+=" $p(${scope:-no scope})"
+    done
+    emit warn DUP_SESSION "session $id runs ${#pids[@]} times:$scopes"
+    state_set "dup_$id" 1
+  done
+  local f
+  for f in "$MM_STATE"/s/dup_*; do
+    [[ -e $f ]] || continue
+    id=${f##*/dup_}
+    if [[ $live != *" $id "* ]]; then
+      emit info DUP_SESSION "session $id runs once again"
+      rm -f -- "$f"
+    fi
+  done
+}
+
+# Watched oneshot units: report each run that was skipped by a condition or
+# did not succeed, once per run. Also report a watched timer that stopped.
+check_timers() {
+  local u props res cond active ct it run prev
+  for u in $MM_WATCHED_UNITS; do
+    props=$(mm_user_show "$u.service" -p Result -p ConditionResult -p ActiveState \
+      -p ConditionTimestampMonotonic -p InactiveExitTimestampMonotonic)
+    res=$(sed -n 's/^Result=//p' <<< "$props")
+    cond=$(sed -n 's/^ConditionResult=//p' <<< "$props")
+    active=$(sed -n 's/^ActiveState=//p' <<< "$props")
+    ct=$(sed -n 's/^ConditionTimestampMonotonic=//p' <<< "$props")
+    it=$(sed -n 's/^InactiveExitTimestampMonotonic=//p' <<< "$props")
+    run="${ct:-0}:${it:-0}"
+    if [[ $run != 0:0 && ( $active == inactive || $active == failed ) ]]; then
+      prev=$(state_get "run_$u")
+      if [[ $run != "$prev" ]]; then
+        if [[ $res != success ]]; then
+          emit warn TIMER "$u.service did not run cleanly: result $res"
+        elif [[ $cond == no ]]; then
+          emit warn TIMER "$u.service was skipped: a condition failed"
+        fi
+        state_set "run_$u" "$run"
+      fi
+    fi
+    timer_state "$u.timer" "$(mm_user_active "$u.timer")"
+  done
+
+  local sg; sg=$(mm_system_active slab-guard.service)
+  if [[ $sg != active ]]; then
+    [[ -z $(state_get down_slab-guard) ]] && emit crit TIMER "slab-guard.service is ${sg:-unknown}" && state_set down_slab-guard 1
+  elif [[ -n $(state_get down_slab-guard) ]]; then
+    emit info TIMER "slab-guard.service active again"; state_del down_slab-guard
+  fi
+
+  # Other failed units, user and system: info once per unit. Transient
+  # run-*.service and *.scope units from systemd-run are left out.
+  local name live=" " k
+  while read -r name; do
+    [[ -n $name ]] || continue
+    case $name in *.scope|run-*) continue ;; esac
+    live+="$name "
+    k="failed_$name"
+    [[ -n $(state_get "$k") ]] && continue
+    emit info TIMER "$name is in the failed state"
+    state_set "$k" 1
+  done < <(mm_user_failed; mm_system_failed)
+  local f
+  for f in "$MM_STATE"/s/failed_*; do
+    [[ -e $f ]] || continue
+    name=${f##*/failed_}
+    [[ $live == *" $name "* ]] || rm -f -- "$f"
+  done
+}
+
+timer_state() {
+  local t=$1 s=$2 k="down_$1"
+  if [[ $s != active ]]; then
+    if [[ -z $(state_get "$k") ]]; then
+      emit warn TIMER "$t is ${s:-unknown}, so its job will not run"
+      state_set "$k" 1
+    fi
+  elif [[ -n $(state_get "$k") ]]; then
+    emit info TIMER "$t active again"
+    state_del "$k"
+  fi
+}
+
+heartbeat() {
+  emit info HEARTBEAT "swap ${SWAP_PCT:-?}%, disk ${DISK_FREE:-?} GiB free, psi cpu ${PSI_CPU:-?}% mem ${PSI_MEMORY:-?}%, kmalloc-128 $(state_get slab_mb '?') MB, ${PROC_COUNTS:-}"
+}
+
+main() {
+  local n=0 t
+  emit info START "machine-monitor started, pid $$"
+  while true; do
+    t=$(now)
+    check_agent_mail
+    if (( n % 2 == 0 )); then
+      check_swap; check_sunreclaim
+      check_psi cpu PSI_CPU "$MM_PSI_CPU_BANDS" "$MM_PSI_CPU_HYST"
+      check_psi memory PSI_MEM "$MM_PSI_MEM_BANDS" "$MM_PSI_MEM_HYST"
+      check_disk; check_oom; check_cass; check_procs; check_tasks; check_dup_sessions
+    fi
+    (( n % 4 == 0 )) && check_slab
+    (( n % 20 == 0 )) && { check_btrfs; check_timers; }
+    if (( t - $(state_get heartbeat 0) >= 3600 )); then heartbeat; state_set heartbeat "$t"; fi
+    n=$((n + 1))
+    sleep "$MM_TICK"
+  done
+}
+
+[[ ${MM_LIB:-0} == 1 ]] || main
