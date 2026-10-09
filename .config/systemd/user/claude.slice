@@ -1,16 +1,20 @@
 [Unit]
 Description=Claude Code sessions started by aiolos-rc
 
-# aiolos-rc starts each session as claude-<pid>.scope in this slice. These are soft
-# limits only: above MemoryHigh the kernel reclaims and slows the sessions down, but
-# kills nothing. There is deliberately no MemoryMax.
+# aiolos-rc starts each session as claude-<pid>.scope in this slice.
 #
-# Measured 2026-10-09 13:40, 37 sessions: 10.8 GiB RAM and 7.9 GiB swap in total;
-# per session median 0.18 GiB RAM, p90 0.42, max 1.74. The slice peaked at 41 GiB
-# (probably the mass restart at 09:15). 28G is 2.6 times the steady use and leaves
-# room for the desktop (app.slice, about 14 GiB) and builds (builds.slice, 42G max).
-# CPUWeight 80 sits between builds (50) and the desktop (100): sessions used 3.8
-# cores in total, median 0.01 per session, so this only matters under contention.
+# No MemoryHigh here or on the scopes. vm.swappiness is 150 (the CachyOS zram default),
+# so reclaim under MemoryHigh swaps anonymous memory before it drops page cache, and
+# systemd-oomd kills on swap at 90%. On 2026-10-09 a per-session MemoryHigh=8G pushed
+# 2.3 GiB of one session (VBCSCompiler) into swap in 10 minutes while 23 GiB RAM was free.
+#
+# MemorySwapMax caps how much of the oomd swap budget all sessions together can take.
+# Above it nothing is killed: anonymous memory stays in RAM and reclaim drops page cache
+# or swaps other cgroups instead. At 14:05 the sessions held 15.5 GiB of swap, so 20G
+# leaves room.
+#
+# CPUWeight 80 sits between builds (50) and the desktop (100). Sessions used 3.8 cores
+# in total at 13:40, median 0.01 per session, so this matters only under contention.
 [Slice]
-MemoryHigh=28G
 CPUWeight=80
+MemorySwapMax=20G

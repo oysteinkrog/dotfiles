@@ -103,14 +103,21 @@ esac
 #
 # scope_props prints extra systemd-run arguments for the scope, one per line. It is off
 # unless AIOLOS_RC_SCOPE_LIMITS=1 (in the environment or in config.env). When on, it sets
-# MemoryHigh (default 8G, AIOLOS_RC_SCOPE_MEMORY_HIGH): above it the kernel reclaims and
-# slows the session down, but never kills it. Never add MemoryMax here. On 2026-10-09,
-# 4 of 37 sessions had peaked above 8 GiB and 11 above 3 GiB, mostly page cache and
-# tests run inside the session. Hook point for per-session classes: add CPUWeight or
-# ManagedOOMPreference lines here, keyed on the session's arguments ("$@").
+# MemorySwapMax (default 2G, AIOLOS_RC_SCOPE_SWAP_MAX), so one session cannot fill the
+# swap that systemd-oomd kills on. Above it nothing is killed or slowed; the session's
+# memory stays in RAM. On 2026-10-09 sessions held median 0.24 GiB swap, p90 0.34.
+# AIOLOS_RC_SCOPE_MEMORY_LOW (unset by default, e.g. 1G) protects that much of the
+# session from reclaim; meant for critical sessions only.
+# Never add MemoryHigh or MemoryMax here: with vm.swappiness 150, MemoryHigh reclaim
+# pushed a session's memory into swap (2026-10-09), and MemoryMax kills.
+# Hook point for per-session classes: add CPUWeight, MemoryLow or ManagedOOMPreference
+# lines here, keyed on the session's arguments ("$@").
 scope_props() {
   [ "${AIOLOS_RC_SCOPE_LIMITS:-0}" = 1 ] || return 0
-  printf '%s\n' -p "MemoryHigh=${AIOLOS_RC_SCOPE_MEMORY_HIGH:-8G}"
+  printf '%s\n' -p "MemorySwapMax=${AIOLOS_RC_SCOPE_SWAP_MAX:-2G}"
+  if [ -n "${AIOLOS_RC_SCOPE_MEMORY_LOW:-}" ]; then
+    printf '%s\n' -p "MemoryLow=$AIOLOS_RC_SCOPE_MEMORY_LOW"
+  fi
 }
 if [ -z "${AIOLOS_RC_SCOPED:-}" ] && [ -d /run/systemd/system ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]; then
   export AIOLOS_RC_SCOPED=1
