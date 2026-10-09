@@ -1,0 +1,6 @@
+[Unit]
+Description=Notify when an aiolos account needs a new sign-in
+
+[Service]
+Type=oneshot
+ExecStart=%h/work/life/scripts/aiolos-reauth/check.sh
