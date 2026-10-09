@@ -141,11 +141,19 @@ def _scorer():
     return _SCORER
 
 
+# Only the head of a very long text is scored. Some pattern rules are quadratic
+# on long whitespace runs, which masked code blocks produce: a 256 KB .rst file
+# took 69 seconds and a 1 MB one over 8 minutes. 128 KB takes at most about 6
+# seconds, and ordinary documents are far below it.
+MAX_CHARS = int(os.environ.get("PLAINLANG_MAX_CHARS", str(128 << 10)))
+
+
 def gate(text: str, *, min_score: float | None = None) -> dict | None:
     """Score text. Returns a report dict, or None when the scorer is unavailable."""
     scorer = _scorer()
     if scorer is None:
         return None
+    text = text[:MAX_CHARS]
     try:
         rep = scorer.score(text)
     except Exception as exc:  # noqa: BLE001
@@ -496,28 +504,62 @@ def from_tool(name: str, ti: dict) -> tuple[str, str] | None:
 
 # --- the Stop path ----------------------------------------------------------
 
+# How far back from the end of the transcript the Stop path looks for the reply.
+# The reply is the last entry, so a few kilobytes is normally enough; the cap is
+# there for a reply followed by large tool results.
+TRANSCRIPT_TAIL = int(os.environ.get("PLAINLANG_TRANSCRIPT_TAIL", str(32 << 20)))
+
+
+def _lines_from_end(path: str, limit: int = TRANSCRIPT_TAIL, chunk: int = 1 << 20):
+    """Yield the file's lines last first, reading at most `limit` bytes from the end.
+
+    This used to read the whole transcript and split it. Transcripts reach 600 MB
+    in long sessions, and that one read peaked at 5.2 GB RSS for 9 seconds on
+    every Stop, in every such session at once.
+    """
+    with open(path, "rb") as fh:
+        pos = fh.seek(0, os.SEEK_END)
+        buf = b""
+        while pos > 0 and limit > 0:
+            n = min(chunk, pos, limit)
+            pos -= n
+            limit -= n
+            fh.seek(pos)
+            buf = fh.read(n) + buf
+            parts = buf.split(b"\n")
+            buf = parts[0]
+            yield from reversed(parts[1:])
+        if pos == 0:
+            yield buf
+
+
 def last_assistant_text(transcript: str) -> str:
     try:
-        lines = Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines()
+        for raw in _lines_from_end(transcript):
+            if b'"assistant"' not in raw:
+                continue
+            text = _assistant_text(raw.decode("utf-8", errors="replace"))
+            if text:
+                return text
     except OSError:
         return ""
-    for line in reversed(lines):
-        if '"assistant"' not in line:
-            continue
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        if d.get("type") != "assistant":
-            continue
-        msg = d.get("message") or {}
-        parts = msg.get("content")
-        if not isinstance(parts, list):
-            continue
-        text = "\n".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
-        if text.strip():
-            return text
     return ""
+
+
+def _assistant_text(line: str) -> str:
+    """The reply text in one transcript line, or "" when it carries none."""
+    try:
+        d = json.loads(line)
+    except Exception:
+        return ""
+    if not isinstance(d, dict) or d.get("type") != "assistant":
+        return ""
+    msg = d.get("message") or {}
+    parts = msg.get("content")
+    if not isinstance(parts, list):
+        return ""
+    text = "\n".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+    return text if text.strip() else ""
 
 
 def blocked_recently(session: str, seconds: int = 90) -> bool:
