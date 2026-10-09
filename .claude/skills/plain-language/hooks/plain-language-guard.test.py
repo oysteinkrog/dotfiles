@@ -239,6 +239,39 @@ def run(payload: dict, env: dict | None = None) -> int:
                           capture_output=True, text=True, env=e).returncode
 
 
+def stop_cases() -> list[tuple[str, int, int]]:
+    """The Stop path reads the reply from the end of the transcript.
+
+    It used to read the whole file, which for a 600 MB transcript peaked at 5.2 GB.
+    Each line here is a transcript entry; the reply is followed by a tool result
+    larger than the 1 MB read chunk, so the reply sits across a chunk boundary.
+    """
+    import tempfile
+    import time
+
+    def entry(kind: str, text: str) -> str:
+        return json.dumps({"type": kind, "message": {"content": [{"type": "text", "text": text}]}})
+
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, reply, want in (("Stop: slop reply before a big tool result", SLOP + " " + SLOP, 2),
+                                  ("Stop: plain reply before a big tool result", PLAIN + " " + PLAIN, 0)):
+            path = Path(tmp) / "t.jsonl"
+            path.write_text("\n".join([entry("user", "hi"), entry("assistant", reply),
+                                        entry("user", "x" * (3 << 20))]) + "\n")
+            got = run({"hook_event_name": "Stop", "transcript_path": str(path),
+                       "session_id": f"test-{os.getpid()}-{time.time_ns()}"}, {"TMPDIR": tmp})
+            out.append((name, got, want))
+    # Only the first 128 KB is scored, so the same defect blocks before the cap
+    # and passes after it.
+    for name, n, want in (("Write: defect inside the 128 KB cap", 10, 2),
+                          ("Write: defect past the 128 KB cap", 1000, 0)):
+        text = (PLAIN + "\n\n") * n + "Signed, [your name]"
+        out.append((name, run({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                               "tool_input": {"file_path": "/tmp/long.md", "content": text}}), want))
+    return out
+
+
 def main() -> int:
     failures = 0
     # Run the cases concurrently. Each one is a real subprocess, which is the
@@ -266,7 +299,13 @@ def main() -> int:
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name:<40} exit={got} want=0")
 
-    print(f"\n{len(CASES) + 2} cases, {failures} failure(s)")
+    extra = stop_cases()
+    for name, got, want in extra:
+        ok = got == want
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name:<40} exit={got} want={want}")
+
+    print(f"\n{len(CASES) + 2 + len(extra)} cases, {failures} failure(s)")
     return 1 if failures else 0
 
 

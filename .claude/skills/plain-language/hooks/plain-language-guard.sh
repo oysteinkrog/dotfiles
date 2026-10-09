@@ -64,5 +64,10 @@ for cand in "${PLAINLANG_PYTHON:-}" python3.13 python3.12 python3; do
 done
 [ -n "$PY" ] || exit 0
 
+# A backstop on memory. This hook runs in every session at once, and one run once
+# reached 5.2 GB on a large transcript. A normal run stays under 60 MB of RSS.
+# Past the cap Python raises MemoryError, and the detector lets the call through.
+ulimit -v "${PLAINLANG_VMEM_KB:-2097152}" 2>/dev/null || true
+
 PLAINLANG_SKILL_DIR="$SKILL" PYTHONPATH="$SKILL/tool/src${PYTHONPATH:+:$PYTHONPATH}" \
   exec "$PY" "$DETECT"
