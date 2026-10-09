@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch machine health and report problems (machine-monitor)
+Documentation=file://%h/bin/machine-monitor
+
+[Service]
+Type=simple
+ExecStart=%h/bin/machine-monitor
+Restart=on-failure
+RestartSec=30
+SyslogIdentifier=machine-monitor
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target
