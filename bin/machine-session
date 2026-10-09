@@ -94,8 +94,12 @@ def load_registry():
     default = reg.get("default", "normal")
     sessions = reg.get("sessions", {})
     lanes = reg.get("lanes", {})
+    # Class for every session whose lane is a grove ephemeral lane (made with
+    # `grove new --ephemeral`, so its registry entry has an expires_at).
+    ephemeral = reg.get("ephemeral_lanes")
     for where, value in (
         [("default", default)]
+        + ([("ephemeral_lanes", ephemeral)] if ephemeral is not None else [])
         + [(f"sessions.{k}", v) for k, v in sessions.items()]
         + [(f"lanes.{k}", v) for k, v in lanes.items()]
     ):
@@ -103,11 +107,11 @@ def load_registry():
             die(
                 f"{REGISTRY}: {where} is '{value}', must be one of {', '.join(CLASSES)}"
             )
-    return default, sessions, lanes
+    return default, sessions, lanes, ephemeral
 
 
 def grove_projects():
-    """(path, tag) for every grove project, longest path first."""
+    """(path, tag, ephemeral) for every grove project, longest path first."""
     out = []
     try:
         repos = json.loads(GROVE_REPOS.read_text()).get("repos", {})
@@ -123,27 +127,32 @@ def grove_projects():
             continue
         for tag, proj in reg.get("projects", {}).items():
             if proj.get("path"):
-                out.append((proj["path"].rstrip("/"), tag))
+                out.append(
+                    (proj["path"].rstrip("/"), tag, bool(proj.get("expires_at")))
+                )
     out.sort(key=lambda p: len(p[0]), reverse=True)
     return out
 
 
 def lane_of(cwd, projects):
+    """(tag, ephemeral) of the grove lane that holds cwd, or (None, False)."""
     if not cwd:
-        return None
-    for path, tag in projects:
+        return None, False
+    for path, tag, ephemeral in projects:
         if cwd == path or cwd.startswith(path + "/"):
-            return tag
-    return None
+            return tag, ephemeral
+    return None, False
 
 
 def classify(sess, registry):
     """(class, source) for a session dict with name and lane."""
-    default, by_name, by_lane = registry
+    default, by_name, by_lane, ephemeral = registry
     if sess.get("name") in by_name:
         return by_name[sess["name"]], f"name {sess['name']}"
     if sess.get("lane") in by_lane:
         return by_lane[sess["lane"]], f"lane {sess['lane']}"
+    if ephemeral is not None and sess.get("lane_ephemeral"):
+        return ephemeral, f"ephemeral lane {sess['lane']}"
     return default, "default"
 
 
@@ -202,13 +211,15 @@ def live_sessions():
         rest = stat_fields(pid)
         if d.get("procStart") and len(rest) > 19 and rest[19] != str(d["procStart"]):
             continue
+        lane, lane_ephemeral = lane_of(d.get("cwd"), projects)
         out.append(
             {
                 "pid": pid,
                 "name": d.get("name") or f"pid-{pid}",
                 "status": d.get("status", "-"),
                 "cwd": d.get("cwd"),
-                "lane": lane_of(d.get("cwd"), projects),
+                "lane": lane,
+                "lane_ephemeral": lane_ephemeral,
                 "cgroup": cg,
                 "scope": scope_name(cg),
             }
