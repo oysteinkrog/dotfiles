@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""machine-session: list Claude sessions, show their class, pause and resume them.
+
+Each Claude session started by aiolos-rc runs in its own systemd scope,
+claude-<launcher pid>.scope in claude.slice. A session is found by its name in
+~/.claude/sessions/<pid>.json. Its scope is the cgroup of that pid.
+
+Classes come from ~/.config/machine/sessions.toml (critical, normal,
+pausable). Oystein confirms every class change; this tool only reads it.
+
+Usage:
+  machine-session list [--json]
+  machine-session class <session>          class and where it came from
+  machine-session class --pid <pid>        class of the session that owns pid
+  machine-session pause <session> [--force] [--reason TEXT]
+  machine-session resume <session>
+
+<session> is a session name, a session pid, or a scope name (claude-123 or
+claude-123.scope). A name that matches more than one live session must be
+given as a pid or scope.
+
+pause writes 1 to the scope's cgroup.freeze. It refuses a critical session
+always, a normal session unless --force is given, a session with no scope of
+its own (one running inside the terminal's cgroup), and the caller's own
+session. A frozen session that was waiting on an API call may see that call
+time out when it is resumed. resume writes 0.
+
+Every pause and resume is logged to ~/.local/state/machine-session/actions.log
+and to the journal (tag machine-session).
+
+Exit codes: 0 done, 1 refused or not found, 2 usage error.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+HOME = Path.home()
+UID = os.getuid()
+REGISTRY = Path(
+    os.environ.get("MACHINE_SESSION_REGISTRY", HOME / ".config/machine/sessions.toml")
+)
+SESSIONS_DIR = Path(
+    os.environ.get("MACHINE_SESSION_SESSIONS_DIR", HOME / ".claude/sessions")
+)
+STATE = Path(
+    os.environ.get(
+        "MACHINE_SESSION_STATE",
+        Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
+        / "machine-session",
+    )
+)
+GROVE_REPOS = Path(
+    os.environ.get("MACHINE_SESSION_GROVE_REPOS", HOME / ".config/grove/repos.json")
+)
+# Test hooks: a fake /proc and cgroup tree, the freeze wait, and the journal.
+PROC = Path(os.environ.get("MACHINE_SESSION_PROC", "/proc"))
+CGROUP = Path(os.environ.get("MACHINE_SESSION_CGROUP", "/sys/fs/cgroup"))
+FREEZE_WAIT = float(os.environ.get("MACHINE_SESSION_FREEZE_WAIT", "5"))
+SAMPLE_SECS = float(os.environ.get("MACHINE_SESSION_SAMPLE_SECS", "1"))
+JOURNAL = os.environ.get("MACHINE_SESSION_JOURNAL", "1") == "1"
+
+CLASSES = ("critical", "normal", "pausable")
+USVC = f"user.slice/user-{UID}.slice/user@{UID}.service"
+CLAUDE_SLICE = f"/{USVC}/claude.slice/"
+
+
+def die(msg, code=1):
+    print(f"machine-session: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def warn(msg):
+    print(f"machine-session: {msg}", file=sys.stderr)
+
+
+# ------------------------------------------------------------------ registry
+
+
+def load_registry():
+    try:
+        with open(REGISTRY, "rb") as f:
+            reg = tomllib.load(f)
+    except FileNotFoundError:
+        reg = {}
+    except tomllib.TOMLDecodeError as e:
+        die(f"{REGISTRY}: {e}")
+    default = reg.get("default", "normal")
+    sessions = reg.get("sessions", {})
+    lanes = reg.get("lanes", {})
+    for where, value in (
+        [("default", default)]
+        + [(f"sessions.{k}", v) for k, v in sessions.items()]
+        + [(f"lanes.{k}", v) for k, v in lanes.items()]
+    ):
+        if value not in CLASSES:
+            die(
+                f"{REGISTRY}: {where} is '{value}', must be one of {', '.join(CLASSES)}"
+            )
+    return default, sessions, lanes
+
+
+def grove_projects():
+    """(path, tag) for every grove project, longest path first."""
+    out = []
+    try:
+        repos = json.loads(GROVE_REPOS.read_text()).get("repos", {})
+    except (OSError, ValueError):
+        return out
+    for repo in repos.values():
+        work_dir = repo.get("work_dir")
+        if not work_dir:
+            continue
+        try:
+            reg = json.loads((Path(work_dir) / ".grove/registry.json").read_text())
+        except (OSError, ValueError):
+            continue
+        for tag, proj in reg.get("projects", {}).items():
+            if proj.get("path"):
+                out.append((proj["path"].rstrip("/"), tag))
+    out.sort(key=lambda p: len(p[0]), reverse=True)
+    return out
+
+
+def lane_of(cwd, projects):
+    if not cwd:
+        return None
+    for path, tag in projects:
+        if cwd == path or cwd.startswith(path + "/"):
+            return tag
+    return None
+
+
+def classify(sess, registry):
+    """(class, source) for a session dict with name and lane."""
+    default, by_name, by_lane = registry
+    if sess.get("name") in by_name:
+        return by_name[sess["name"]], f"name {sess['name']}"
+    if sess.get("lane") in by_lane:
+        return by_lane[sess["lane"]], f"lane {sess['lane']}"
+    return default, "default"
+
+
+# ------------------------------------------------------------------ discovery
+
+
+def cgroup_of(pid):
+    try:
+        for line in (PROC / str(pid) / "cgroup").read_text().splitlines():
+            if line.startswith("0::"):
+                return line[3:]
+    except OSError:
+        pass
+    return None
+
+
+def stat_fields(pid):
+    """Fields of /proc/<pid>/stat after the comm field, so rest[1] is ppid."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return []
+    # The comm field is in parentheses and may hold spaces.
+    return stat[stat.rfind(")") + 2 :].split()
+
+
+def ppid_of(pid):
+    rest = stat_fields(pid)
+    return int(rest[1]) if len(rest) > 1 else None
+
+
+def scope_name(cg):
+    """claude-123.scope when cg is a scope directly in claude.slice."""
+    if cg and cg.startswith(CLAUDE_SLICE):
+        name = cg[len(CLAUDE_SLICE) :]
+        if "/" not in name and name.endswith(".scope"):
+            return name
+    return None
+
+
+def live_sessions():
+    """Every session json whose pid is alive, with name, lane, cgroup and scope."""
+    projects = grove_projects()
+    out = []
+    for f in sorted(SESSIONS_DIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text())
+            pid = int(d["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        cg = cgroup_of(pid)
+        if cg is None:
+            continue
+        # procStart is the process start time (stat field 22). A mismatch
+        # means the session ended and its pid now belongs to another process.
+        rest = stat_fields(pid)
+        if d.get("procStart") and len(rest) > 19 and rest[19] != str(d["procStart"]):
+            continue
+        out.append(
+            {
+                "pid": pid,
+                "name": d.get("name") or f"pid-{pid}",
+                "status": d.get("status", "-"),
+                "cwd": d.get("cwd"),
+                "lane": lane_of(d.get("cwd"), projects),
+                "cgroup": cg,
+                "scope": scope_name(cg),
+            }
+        )
+    return out
+
+
+def session_of_pid(pid, sessions):
+    """The session that owns pid: an ancestor that is a session, else a
+    session in the same claude scope."""
+    by_pid = {s["pid"]: s for s in sessions}
+    p, seen = pid, set()
+    while p and p > 1 and p not in seen:
+        if p in by_pid:
+            return by_pid[p]
+        seen.add(p)
+        p = ppid_of(p)
+    scope = scope_name(cgroup_of(pid))
+    if scope:
+        for s in sessions:
+            if s["scope"] == scope:
+                return s
+    return None
+
+
+def resolve(target, sessions):
+    if target.isdigit():
+        hits = [s for s in sessions if s["pid"] == int(target)]
+    else:
+        unit = target if target.endswith(".scope") else target + ".scope"
+        hits = [s for s in sessions if s["scope"] == unit]
+        if not hits:
+            hits = [s for s in sessions if s["name"] == target]
+    if not hits:
+        die(f"no live session named '{target}'. Run `machine-session list`.")
+    if len(hits) > 1:
+        lines = ", ".join(f"pid {s['pid']} ({s['scope'] or s['cgroup']})" for s in hits)
+        die(
+            f"'{target}' matches {len(hits)} live sessions: {lines}. Give a pid or scope."
+        )
+    return hits[0]
+
+
+def scope_dir(sess):
+    return CGROUP / USVC / "claude.slice" / sess["scope"]
+
+
+# ------------------------------------------------------------------ cgroup reads
+
+
+def read_int(path):
+    try:
+        return int(path.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def cpu_usec(d):
+    try:
+        for line in (d / "cpu.stat").read_text().splitlines():
+            k, _, v = line.partition(" ")
+            if k == "usage_usec":
+                return int(v)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def frozen(d):
+    try:
+        for line in (d / "cgroup.events").read_text().splitlines():
+            k, _, v = line.partition(" ")
+            if k == "frozen":
+                return v.strip() == "1"
+    except OSError:
+        pass
+    return None
+
+
+def freeze_requested(d):
+    return read_int(d / "cgroup.freeze") == 1
+
+
+def gib(n):
+    return "-" if n is None else f"{n / 1073741824:.1f}G"
+
+
+# ------------------------------------------------------------------ logging
+
+
+def log_action(action, sess, cls, result, force=False, reason=""):
+    caller = caller_name()
+    line = (
+        f"{datetime.datetime.now().astimezone().isoformat(timespec='seconds')} "
+        f"action={action} session={sess['name']} pid={sess['pid']} "
+        f"scope={sess['scope']} class={cls} force={int(force)} "
+        f'by={caller} result={result} reason="{reason}"'
+    )
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "actions.log", "a") as f:
+        f.write(line + "\n")
+    if JOURNAL:
+        subprocess.run(["logger", "-t", "machine-session", line], check=False)
+
+
+def caller_name():
+    s = session_of_pid(os.getpid(), live_sessions())
+    return s["name"] if s else os.environ.get("USER", "?")
+
+
+# ------------------------------------------------------------------ commands
+
+
+def cmd_list(args):
+    registry = load_registry()
+    sessions = live_sessions()
+    rows = []
+    for s in sessions:
+        cls, src = classify(s, registry)
+        row = dict(s, **{"class": cls, "class_source": src})
+        if s["scope"]:
+            d = scope_dir(s)
+            row.update(
+                mem=read_int(d / "memory.current"),
+                swap=read_int(d / "memory.swap.current"),
+                cpu_usec=cpu_usec(d),
+                frozen=frozen(d),
+                freeze_requested=freeze_requested(d),
+            )
+        rows.append(row)
+    if SAMPLE_SECS > 0:
+        time.sleep(SAMPLE_SECS)
+        for row in rows:
+            if row["scope"] and row.get("cpu_usec") is not None:
+                now = cpu_usec(scope_dir(row))
+                if now is not None:
+                    row["cores"] = (now - row["cpu_usec"]) / 1e6 / SAMPLE_SECS
+    if args.json:
+        print(json.dumps(rows, indent=1))
+        return
+    hdr = f"{'SCOPE':<22} {'PID':>8} {'NAME':<28} {'CLASS':<9} {'MEM':>6} {'SWAP':>6} {'CORES':>5} {'CPU-H':>6} {'FROZEN':<6} STATUS"
+    print(hdr)
+    for r in sorted(rows, key=lambda r: (r["scope"] is None, r["name"])):
+        if r["scope"]:
+            fz = (
+                "yes"
+                if r.get("frozen")
+                else ("req" if r.get("freeze_requested") else "no")
+            )
+            cores = f"{r['cores']:.2f}" if "cores" in r else "-"
+            cpuh = "-" if r.get("cpu_usec") is None else f"{r['cpu_usec'] / 3.6e9:.1f}"
+            print(
+                f"{r['scope']:<22} {r['pid']:>8} {r['name'][:28]:<28} {r['class']:<9} "
+                f"{gib(r.get('mem')):>6} {gib(r.get('swap')):>6} {cores:>5} {cpuh:>6} {fz:<6} {r['status']}"
+            )
+        else:
+            unit = r["cgroup"].rsplit("/", 1)[-1]
+            print(
+                f"{'(' + unit[:20] + ')':<22} {r['pid']:>8} {r['name'][:28]:<28} {r['class']:<9} "
+                f"{'-':>6} {'-':>6} {'-':>5} {'-':>6} {'-':<6} {r['status']}  no own scope"
+            )
+
+
+def cmd_class(args):
+    registry = load_registry()
+    sessions = live_sessions()
+    if args.pid is not None:
+        s = session_of_pid(args.pid, sessions)
+        # A process outside any session gets the default class.
+        print(classify(s, registry)[0] if s else registry[0])
+        return
+    if not args.session:
+        die("class needs a session or --pid", 2)
+    s = resolve(args.session, sessions)
+    cls, src = classify(s, registry)
+    print(f"{cls}\t(from {src}; lane {s['lane'] or '-'})")
+
+
+def cmd_pause(args):
+    registry = load_registry()
+    sessions = live_sessions()
+    s = resolve(args.session, sessions)
+    cls, src = classify(s, registry)
+    if not s["scope"]:
+        log_action("pause", s, cls, "refused-no-scope", args.force, args.reason)
+        die(
+            f"{s['name']} has no scope of its own (it runs in {s['cgroup']}). "
+            "Freezing that cgroup would freeze other sessions too."
+        )
+    if cls == "critical":
+        log_action("pause", s, cls, "refused-critical", args.force, args.reason)
+        die(
+            f"{s['name']} is critical (from {src}). Critical sessions are never paused."
+        )
+    if cls != "pausable" and not args.force:
+        log_action("pause", s, cls, "refused-class", args.force, args.reason)
+        die(
+            f"{s['name']} is {cls} (from {src}), not pausable. Use --force to pause it anyway."
+        )
+    me = session_of_pid(os.getpid(), sessions)
+    if me and me["pid"] == s["pid"]:
+        die(
+            "refusing to pause the session that runs this command: nothing would resume it."
+        )
+    d = scope_dir(s)
+    if frozen(d):
+        print(f"{s['name']} ({s['scope']}) is already frozen.")
+        return
+    warn(
+        f"freezing {s['name']} ({s['scope']}, status {s['status']}). Every process in it "
+        "stops, including its builds and tools. An API call in flight may time out "
+        "when it is resumed. Resume with `machine-session resume "
+        f"{s['name'] if args.session == s['name'] else args.session}`."
+    )
+    if s["status"] == "busy":
+        warn(f"{s['name']} is busy right now, so a call in flight is likely.")
+    try:
+        (d / "cgroup.freeze").write_text("1")
+    except OSError as e:
+        log_action("pause", s, cls, f"error:{e.strerror}", args.force, args.reason)
+        die(f"cannot write {d / 'cgroup.freeze'}: {e.strerror}")
+    end = time.monotonic() + FREEZE_WAIT
+    while not frozen(d) and time.monotonic() < end:
+        time.sleep(0.1)
+    result = "frozen" if frozen(d) else "requested"
+    log_action("pause", s, cls, result, args.force, args.reason)
+    if result == "frozen":
+        print(f"paused {s['name']} ({s['scope']}).")
+    else:
+        print(
+            f"freeze requested for {s['name']} ({s['scope']}); cgroup.events does not show frozen yet."
+        )
+
+
+def cmd_resume(args):
+    registry = load_registry()
+    s = resolve(args.session, live_sessions())
+    cls, _ = classify(s, registry)
+    if not s["scope"]:
+        die(f"{s['name']} has no scope of its own, so it was not paused by this tool.")
+    d = scope_dir(s)
+    try:
+        (d / "cgroup.freeze").write_text("0")
+    except OSError as e:
+        log_action("resume", s, cls, f"error:{e.strerror}")
+        die(f"cannot write {d / 'cgroup.freeze'}: {e.strerror}")
+    log_action("resume", s, cls, "thawed")
+    print(f"resumed {s['name']} ({s['scope']}).")
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="machine-session",
+        description=__doc__.split("\n\n", 1)[0],
+        epilog=__doc__.split("\n\n", 1)[1],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pl = sub.add_parser("list")
+    pl.add_argument("--json", action="store_true")
+    pc = sub.add_parser("class")
+    pc.add_argument("session", nargs="?")
+    pc.add_argument("--pid", type=int)
+    pp = sub.add_parser("pause")
+    pp.add_argument("session")
+    pp.add_argument("--force", action="store_true", help="pause a normal session")
+    pp.add_argument("--reason", default="")
+    pr = sub.add_parser("resume")
+    pr.add_argument("session")
+    args = p.parse_args()
+    {"list": cmd_list, "class": cmd_class, "pause": cmd_pause, "resume": cmd_resume}[
+        args.cmd
+    ](args)
+
+
+if __name__ == "__main__":
+    main()
