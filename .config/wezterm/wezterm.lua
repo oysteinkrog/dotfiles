@@ -179,6 +179,9 @@ else
       local ok, gw = pcall(function() return w:gui_window() end)
       if ok and gw then reposition_window(gw) end
     end
+    -- A new GUI client has no user vars, so every Claude tab would lose its
+    -- state dot until its next hook. Have each session's tty send it again.
+    os.execute('bash ' .. wezterm.home_dir .. '/.claude/hooks/term-state-replay.sh >/dev/null 2>&1 &')
   end)
 end
 

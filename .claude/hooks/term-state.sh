@@ -29,4 +29,9 @@ done
   printf '\033]1337;SetUserVar=claude_state=%s\007' "$(printf %s "$state" | base64)"
   [ "$bell" = bell ] && printf '\007'
 } >>"$tty"
+
+# Remember the state per terminal. A GUI that attaches later starts with no
+# user vars, so term-state-replay.sh sends these again from gui-attached.
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-tab-state"
+mkdir -p "$dir" && printf '%s\n' "$state" > "$dir/${tty#/dev/pts/}"
 exit 0
