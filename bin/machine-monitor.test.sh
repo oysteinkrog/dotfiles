@@ -81,13 +81,45 @@ test_sunreclaim_steps() {
   meminfo 1 1 $((9 * 1048576)); check_sunreclaim
   [[ $(nevents SUNRECLAIM) == 2 ]]
 }
-test_psi_bands() {
-  setup psi
-  printf 'some avg10=1.00 avg60=65.30 avg300=10.00 total=1\nfull avg10=0 avg60=0 avg300=0 total=0\n' > "$MM_PROC/pressure/cpu"
-  printf 'some avg10=1.00 avg60=31.00 avg300=1.00 total=1\nfull avg10=0 avg60=0 avg300=0 total=0\n' > "$MM_PROC/pressure/memory"
-  check_psi cpu PSI_CPU "60 85" 15; check_psi cpu PSI_CPU "60 85" 15
-  check_psi memory PSI_MEM "10 30" 5
-  [[ $(nevents 'warn PSI_CPU cpu pressure some avg60 65%') == 1 && $(nevents 'crit PSI_MEM') == 1 && $PSI_CPU == 65 ]]
+psi() { printf 'some avg10=1.00 avg60=%s avg300=%s total=1\nfull avg10=0 avg60=0 avg300=0 total=0\n' "$2" "$3" > "$MM_PROC/pressure/$1"; }
+cpu() { check_psi cpu PSI_CPU "80 90" "300 120" 70 15; }
+test_psi_cpu_short_peaks_quiet() {
+  setup psi_peaks
+  # 85% for 4.5 min, a dip, 85% again for 4.5 min: never 5 min straight.
+  local t
+  for t in 0 30 60 90 120 150 180 210 240 270; do MM_NOW=$t; psi cpu 85.10 40.00; cpu; done
+  MM_NOW=300; psi cpu 50.00 40.00; cpu
+  for t in 330 360 390 420 450 480 510 540 570 600; do MM_NOW=$t; psi cpu 85.10 40.00; cpu; done
+  [[ $(nevents PSI_CPU) == 0 && $PSI_CPU == 85 ]]
+}
+test_psi_cpu_sustained_warn_then_crit() {
+  setup psi_sust
+  local t
+  for t in 0 60 120 180 240 300 330; do MM_NOW=$t; psi cpu 82.00 50.00; cpu; done   # warn at 300
+  for t in 360 420 480; do MM_NOW=$t; psi cpu 93.00 60.00; cpu; done                # crit at 480
+  MM_NOW=510; psi cpu 70.00 60.00; cpu                                              # 70 >= 90-15? no: drops
+  [[ $(nevents 'warn PSI_CPU cpu pressure some avg60 82%') == 1 && $(nevents 'crit PSI_CPU cpu pressure some avg60 93%') == 1 \
+     && $(grep -n 'warn PSI_CPU' "$MM_EVENTS" | cut -d: -f1) == 1 && $(nevents 'info PSI_CPU') == 1 && $(state_get psi_cpu) == 0 ]]
+}
+test_psi_cpu_avg300_warns_at_once() {
+  setup psi_300
+  MM_NOW=0; psi cpu 75.00 71.00; cpu; MM_NOW=30; cpu
+  [[ $(nevents 'warn PSI_CPU') == 1 && $(state_get psi_cpu) == 80 ]]
+}
+test_psi_cpu_hysteresis() {
+  setup psi_hyst
+  MM_NOW=0; psi cpu 75.00 71.00; cpu                    # warn via avg300
+  MM_NOW=30; psi cpu 66.00 60.00; cpu                   # 66 >= 80-15: stays
+  MM_NOW=60; psi cpu 64.00 60.00; cpu                   # 64 < 65: back
+  [[ $(nevents 'warn PSI_CPU') == 1 && $(nevents 'info PSI_CPU cpu pressure back to 64%') == 1 ]]
+}
+test_psi_mem_sustained() {
+  setup psi_mem
+  local t
+  for t in 0 30 60 90; do MM_NOW=$t; psi memory 12.00 3.00; check_psi memory PSI_MEM "10 30" "300 120" 10 5; done
+  MM_NOW=120; psi memory 2.00 3.00; check_psi memory PSI_MEM "10 30" "300 120" 10 5   # under 2 min: quiet
+  for t in 150 210 270 330 390 450; do MM_NOW=$t; psi memory 12.00 3.00; check_psi memory PSI_MEM "10 30" "300 120" 10 5; done
+  [[ $(nevents 'warn PSI_MEM memory pressure some avg60 12%') == 1 && $(grep -c PSI_MEM "$MM_EVENTS") == 1 ]]
 }
 test_disk_levels() {
   setup disk
