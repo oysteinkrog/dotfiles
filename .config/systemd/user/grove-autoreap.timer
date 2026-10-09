@@ -1,0 +1,10 @@
+[Unit]
+Description=Run grove-autoreap daily
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

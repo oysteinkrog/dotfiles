@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# grove-autoreap: remove grove scratch lanes whose TTL has ended.
+#
+# Runs daily from grove-autoreap.timer. grove marks lanes made with
+# `grove new --ephemeral` with an expires_at in the registry, but nothing removes
+# them when it passes. `grove gc --yes` can, but it also applies its other
+# bookkeeping categories in the same run, deletes the branch without
+# `grove done`, and has no owner notice. So this script does its own checks and
+# then calls `grove done`.
+#
+# Candidates: registry entries with expires_at in the past whose path is under
+# <work_dir>/.scratch/ and still exists. A candidate is kept when any of these
+# hold, and the first one found is the reason in the report:
+#   frozen       the lane is frozen in grove
+#   in-use       a process has its cwd, executable or an open file inside
+#   heavy-build  a running or queued heavy-build job has a lock key on it
+#   dirty        `git status --porcelain` prints anything (untracked included)
+#   unpushed     HEAD or the lane's branch is not reachable from a remote ref
+#   git-error    git failed or timed out, so the lane's state is unknown
+# A lane that passes every check and whose owner session is alive (`grove who`)
+# gets a notice first, and is removed on a run at least GRACE_HOURS later.
+# Removal is `grove done <tag> --keep-remote`, never --force: grove checks
+# dirty and unpushed state again itself, and the fork branch stays, since an
+# open pull request may use it.
+#
+# Settings (environment, or Environment= in grove-autoreap.service):
+#   GROVE_AUTOREAP_MODE   report (default): change nothing, write the report.
+#                         live: send notices and run grove done.
+#   GROVE_AUTOREAP_REPO   grove repo id (default: grove's default repo)
+#   GROVE_AUTOREAP_GRACE_HOURS  wait after a notice (default 20, so a daily
+#                         timer with jitter reaps on the next run)
+#   GROVE_AUTOREAP_STATE  state dir (default ~/.local/state/grove-autoreap)
+#   GROVE_AUTOREAP_GROVE  grove binary (default: grove on PATH)
+#   GROVE_AUTOREAP_NOW    override the current time, epoch seconds (tests)
+#
+# Output, in the state dir:
+#   report-<date>.tsv   one row per candidate: tag, verdict, reason, GiB, ...
+#   notices.log         one line per notice sent to an alive owner
+#   notices.tsv         tag and epoch of the first notice (grace tracking)
+#   reaped.log          one line per lane removed, or grove done's refusal
+# One summary line goes to stdout, so to the journal under systemd.
+set -uo pipefail
+
+MODE=${GROVE_AUTOREAP_MODE:-report}
+GRACE_HOURS=${GROVE_AUTOREAP_GRACE_HOURS:-20}
+STATE=${GROVE_AUTOREAP_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/grove-autoreap}
+GROVE=${GROVE_AUTOREAP_GROVE:-grove}
+NOW=${GROVE_AUTOREAP_NOW:-$(date +%s)}
+RUNDIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+HB_DIRS=("$RUNDIR/heavy-build.jobs" "$RUNDIR/heavy-build.queue")
+GIT_TIMEOUT=300
+export GIT_NO_LAZY_FETCH=1
+
+case $MODE in
+  report|live) ;;
+  *) echo "grove-autoreap: GROVE_AUTOREAP_MODE must be report or live, not '$MODE'" >&2; exit 2 ;;
+esac
+
+repo_args=()
+[[ -n ${GROVE_AUTOREAP_REPO:-} ]] && repo_args=(--repo "$GROVE_AUTOREAP_REPO")
+
+mkdir -p "$STATE"
+exec 9>"$STATE/.lock"
+if ! flock -n 9; then
+  echo "grove-autoreap: another run holds $STATE/.lock, skipping"
+  exit 0
+fi
+
+if [[ -n ${GROVE_AUTOREAP_REPO:-} ]]; then
+  work_dir=$("$GROVE" repo path "$GROVE_AUTOREAP_REPO") || exit 1
+else
+  work_dir=$("$GROVE" repo path --default) || exit 1
+fi
+work_dir=${work_dir%/}
+scratch=$work_dir/.scratch
+registry=$work_dir/.grove/registry.json
+[[ -r $registry ]] || { echo "grove-autoreap: no registry at $registry" >&2; exit 1; }
+
+report=$STATE/report-$(date -d "@$NOW" +%F).tsv
+notices=$STATE/notices.tsv
+touch "$notices"
+
+# Candidates as "tag<TAB>path<TAB>branch<TAB>expires_at<TAB>frozen". jq's
+# fromdate does not take fractional seconds, so they are cut off first.
+candidates=$(jq -r --argjson now "$NOW" --arg scratch "$scratch/" '
+  .projects | to_entries[]
+  | select(.value.expires_at != null)
+  | select((.value.expires_at | sub("\\.[0-9]+"; "") | fromdate) < $now)
+  | select(.value.path | startswith($scratch))
+  | [.key, .value.path, (.value.branch // ""), .value.expires_at, (.value.frozen // false)]
+  | @tsv' "$registry") || { echo "grove-autoreap: could not read $registry" >&2; exit 1; }
+
+# Paths under .scratch that a process uses as cwd, executable or open file.
+# One pass over /proc, read again just before each removal.
+in_use_paths() {
+  find /proc/[0-9]*/cwd /proc/[0-9]*/exe /proc/[0-9]*/fd -maxdepth 1 \
+    -lname "$scratch/*" -printf '%l\n' 2>/dev/null | sort -u
+}
+
+# True when a path in $1 (newline separated) is the lane $2 or inside it.
+lane_in_use() {
+  local used=$1 lane=$2 p
+  while IFS= read -r p; do
+    [[ $p == "$lane" || $p == "$lane"/* ]] && return 0
+  done <<<"$used"
+  return 1
+}
+
+# True when a heavy-build job or waiter has a lock key on the lane. Keys look
+# like tree:<path>, cargo:<path> or wine:<path>, comma separated.
+heavy_build_on() {
+  local lane=$1 d f
+  for d in "${HB_DIRS[@]}"; do
+    for f in "$d"/*; do
+      [[ -f $f ]] || continue
+      grep -qE "(^|[ ,])(tree|cargo|wine):${lane//./\\.}(/[^ ,]*)?([ ,]|$)" "$f" 2>/dev/null && return 0
+    done
+  done
+  return 1
+}
+
+# Prints the reason the lane must stay, or nothing when it is clean and pushed.
+git_reason() {
+  local lane=$1 branch=$2 out refs
+  if ! out=$(timeout "$GIT_TIMEOUT" git -C "$lane" status --porcelain </dev/null 2>/dev/null); then
+    echo git-error; return
+  fi
+  [[ -n $out ]] && { echo dirty; return; }
+  refs=(HEAD)
+  [[ -n $branch ]] && git -C "$lane" show-ref --verify --quiet "refs/heads/$branch" && refs+=("refs/heads/$branch")
+  if ! out=$(timeout "$GIT_TIMEOUT" git -C "$lane" rev-list -n1 "${refs[@]}" --not --remotes </dev/null 2>/dev/null); then
+    echo git-error; return
+  fi
+  [[ -n $out ]] && echo unpushed
+}
+
+# Exclusive bytes on btrfs; apparent size elsewhere.
+lane_bytes() {
+  local b
+  b=$(btrfs filesystem du -s --raw "$1" 2>/dev/null | awk 'NR==2 {print $2}')
+  [[ $b =~ ^[0-9]+$ ]] || b=$(du -sb "$1" 2>/dev/null | cut -f1)
+  echo "${b:-0}"
+}
+
+# "status<TAB>session<TAB>agent" from `grove who <tag>`.
+owner_of() {
+  "$GROVE" "${repo_args[@]}" who "$1" </dev/null 2>/dev/null | awk -F': *' '
+    $1 == "status" {s = $2} $1 == "session" {n = $2} $1 == "agent" {a = $2}
+    END {printf "%s\t%s\t%s\n", (s ? s : "unknown"), (n ? n : "-"), (a ? a : "-")}'
+}
+
+notice_epoch() { awk -F'\t' -v t="$1" '$1 == t {print $2; exit}' "$notices"; }
+
+gib() { awk -v b="$1" 'BEGIN {printf "%.2f", b / 1073741824}'; }
+
+used=$(in_use_paths)
+printf 'tag\tverdict\treason\tgib\texclusive_bytes\texpired_at\towner_status\towner_session\towner_agent\tpath\n' >"$report.tmp"
+
+n_total=0 n_reap=0 n_notice=0 n_keep=0 n_done=0 n_failed=0
+b_reap=0 b_notice=0 b_done=0
+declare -A kept_by=()
+live_tags=()
+
+while IFS=$'\t' read -r tag path branch expires frozen; do
+  [[ -n $tag ]] || continue
+  [[ -d $path ]] || continue
+  n_total=$(( n_total + 1 ))
+  reason=
+  if [[ $frozen == true ]]; then reason=frozen
+  elif lane_in_use "$used" "$path"; then reason=in-use
+  elif heavy_build_on "$path"; then reason=heavy-build
+  else reason=$(git_reason "$path" "$branch")
+  fi
+  IFS=$'\t' read -r o_status o_session o_agent < <(owner_of "$tag")
+  bytes=$(lane_bytes "$path")
+
+  if [[ -n $reason ]]; then
+    verdict=keep
+  elif [[ $o_status == alive ]]; then
+    first=$(notice_epoch "$tag")
+    if [[ -n $first ]] && (( NOW - first >= GRACE_HOURS * 3600 )); then
+      verdict=reap reason=grace-over
+    elif [[ -n $first ]]; then
+      verdict=wait reason=owner-alive-notified
+    else
+      verdict=notice reason=owner-alive
+    fi
+  else
+    verdict=reap reason=owner-$o_status
+  fi
+
+  case $verdict in
+    keep) n_keep=$(( n_keep + 1 )); kept_by[$reason]=$(( ${kept_by[$reason]:-0} + 1 )) ;;
+    reap) n_reap=$(( n_reap + 1 )); b_reap=$(( b_reap + bytes )); live_tags+=("$tag"$'\t'"$path"$'\t'"$bytes") ;;
+    notice|wait) n_notice=$(( n_notice + 1 )); b_notice=$(( b_notice + bytes )) ;;
+  esac
+
+  if [[ $verdict == notice && $MODE == live ]]; then
+    printf '%s\t%s\n' "$tag" "$NOW" >>"$notices"
+    printf '%s notice: grove lane %s (%s, %s GiB) expired %s and is clean and pushed; owner session %s (agent %s) is alive. It will be removed with grove done on a run after %s hours.\n' \
+      "$(date -d "@$NOW" -Is)" "$tag" "$path" "$(gib "$bytes")" "$expires" "$o_session" "$o_agent" "$GRACE_HOURS" >>"$STATE/notices.log"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tag" "$verdict" "$reason" "$(gib "$bytes")" "$bytes" \
+    "$expires" "$o_status" "$o_session" "$o_agent" "$path" >>"$report.tmp"
+done <<<"$candidates"
+
+mv "$report.tmp" "$report"
+
+if [[ $MODE == live ]]; then
+  for row in "${live_tags[@]}"; do
+    IFS=$'\t' read -r tag path bytes <<<"$row"
+    # Check processes again: the scan above can be minutes old.
+    if lane_in_use "$(in_use_paths)" "$path" || heavy_build_on "$path"; then
+      printf '%s skipped %s: in use at removal time\n' "$(date -Is)" "$tag" >>"$STATE/reaped.log"
+      n_failed=$(( n_failed + 1 )); continue
+    fi
+    if out=$(cd "$work_dir" && "$GROVE" "${repo_args[@]}" done "$tag" --keep-remote </dev/null 2>&1); then
+      n_done=$(( n_done + 1 )); b_done=$(( b_done + bytes ))
+      printf '%s removed %s (%s GiB): %s\n' "$(date -Is)" "$tag" "$(gib "$bytes")" "${out//$'\n'/ }" >>"$STATE/reaped.log"
+      sed -i "/^$(printf '%s' "$tag" | sed 's/[][\.*^$/]/\\&/g')\t/d" "$notices"
+    else
+      n_failed=$(( n_failed + 1 ))
+      printf '%s grove done refused %s: %s\n' "$(date -Is)" "$tag" "${out//$'\n'/ }" >>"$STATE/reaped.log"
+    fi
+  done
+fi
+
+kept=
+for k in "${!kept_by[@]}"; do kept+=", $k ${kept_by[$k]}"; done
+kept=${kept#, }
+if [[ $MODE == report ]]; then
+  echo "grove-autoreap report: $n_total expired lanes; would remove $n_reap ($(gib "$b_reap") GiB); $n_notice need an owner notice first ($(gib "$b_notice") GiB); keep $n_keep (${kept:-none}). Report: $report"
+else
+  echo "grove-autoreap live: $n_total expired lanes; removed $n_done ($(gib "$b_done") GiB), $n_failed refused or skipped; $n_notice waiting on an owner notice ($(gib "$b_notice") GiB); kept $n_keep (${kept:-none}). Report: $report"
+fi
