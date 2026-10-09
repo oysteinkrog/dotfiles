@@ -398,7 +398,7 @@ if not is_windows then
   -- Blend glyph edges in linear light, so light text on a dark background is not
   -- drawn too thin. Only builds with the text_gamma option know the key, and
   -- config_builder raises on an unknown key, so older builds skip it.
-  pcall(function() config.text_gamma = 1.45 end)
+  pcall(function() config.text_gamma = 0.3 end)
   -- Faint text (SGR 2). DejaVu Sans Mono has no Light weight, and its "Book"
   -- file stops the terminal from drawing a dimmed copy, so faint text came out
   -- at full brightness. Give it a dim grey instead. Faint italic is dimmed already.
