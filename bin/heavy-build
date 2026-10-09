@@ -86,6 +86,9 @@
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
 #   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A low
 #   build counts as normal after 30 min of waiting. Only live mode uses it.
+#   When HEAVY_BUILD_PRIORITY is unset and the calling Claude session is
+#   pausable in ~/.config/machine/sessions.toml (asked with `machine-session
+#   class --pid`), the default is low instead of normal.
 # - Checks again every HEAVY_BUILD_POLL seconds (default 5).
 # - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
 #   with exit code 75. The clock starts again each time the waiter moves up
@@ -178,6 +181,15 @@ say() { echo "heavy-build: $*" >&2; }
 # Already inside a build scope: heavy-build in heavy-build, or the old rule.
 if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
   exec env "${build_env[@]}" "$@"
+fi
+
+# A pausable session's builds default to low. HB_MACHINE_SESSION is a test hook.
+if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
+  SESSION_CLASS=$(timeout 5 "${HB_MACHINE_SESSION:-machine-session}" class --pid $$ 2> /dev/null)
+  if [[ $SESSION_CLASS == pausable ]]; then
+    PRIO=low
+    say "priority low: this session is pausable in ~/.config/machine/sessions.toml"
+  fi
 fi
 
 case $PRIO in
