@@ -313,13 +313,30 @@ slab_fallback() {
   fi
 }
 
+# Kernel OOM kills come from the kernel ring (-k) and oomd kills from its own
+# unit. Never scan the whole journal: this script's own OOM lines would match
+# and alert again on every pass. Each kill is reported once, keyed by the
+# kernel's killed pid (or the oomd cgroup) and its timestamp.
 check_oom() {
-  local t last k
+  local t last lines line ts key seen out=""
   t=$(now); last=$(state_get oom_since "$t")
-  k=$(mm_journal --since "@$last" | awk -v l="$last" '$1 > l' \
-    | grep -E 'systemd-oomd.*(Marked|Killed)|Out of memory: Killed|out of memory: Killed' | tail -3 | cut -d' ' -f3-)
+  lines=$( { mm_journal -k --since "@$last" | grep -E '(O|o)ut of memory: Killed process'
+             mm_journal -u systemd-oomd.service --since "@$last" | grep -E 'Killed|Marked'; } \
+           | awk -v l="$last" '$1 > l' | grep -v 'machine-monitor')
   state_set oom_since "$t"
-  [[ -n $k ]] && emit crit OOM "$(tr '\n' ' ' <<< "$k")"
+  seen=" $(state_get oom_seen) "
+  while read -r line; do
+    [[ -n $line ]] || continue
+    ts=${line%% *}
+    if [[ $line =~ Killed\ process\ ([0-9]+) ]]; then key="${BASH_REMATCH[1]}@${ts%.*}"
+    elif [[ $line =~ Killed\ ([^ ]+) ]]; then key="${BASH_REMATCH[1]##*/}@${ts%.*}"
+    else key="${ts%.*}"; fi
+    [[ $seen == *" $key "* ]] && continue
+    seen+="$key "; out+="$(cut -d' ' -f3- <<< "$line") "
+  done <<< "$lines"
+  # Keep the last 50 keys.
+  state_set oom_seen "$(tr ' ' '\n' <<< "$seen" | grep . | tail -50 | tr '\n' ' ')"
+  [[ -n $out ]] && emit crit OOM "${out% }"
   return 0
 }
 
