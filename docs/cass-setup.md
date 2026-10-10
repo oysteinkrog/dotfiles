@@ -17,9 +17,15 @@ into a searchable archive (lexical + semantic). Upstream:
   copied session files under `~/.claude/projects`, `~/.codex` and `~/.gemini`.
 - **Indexing:** the systemd user timer `cass-maintenance.timer` runs
   `cass-maintenance.service` once a day at 04:00 (plus up to 15 minutes of random
-  delay, and at the next boot if the machine was off). A run takes about 2 to
-  2.5 hours while swarm sessions are active, capped at 4 hours, because cass
-  re-parses every file in a folder when a new file lands there. The service runs
+  delay, and at the next boot if the machine was off). A normal run takes about
+  1 hour, capped at 4 hours. cass skips a file when its source ledger entry
+  (size, mtime, inode, ctime) still matches the file. Upstream cass also compares
+  the device number, and btrfs gives `/home` a new device number at some boots
+  (36 to 54 on 2026-10-07). After such a boot about 60,000 unchanged transcripts
+  looked changed and every run timed out at 4 hours. The local build ignores the
+  device number since 2026-10-10 (third local commit in the recipe README). Do not
+  set `CASS_EXCLUDE_PATHS`: it turns the ledger skip off for every source, so every
+  run parses the whole corpus again. The service runs
   `~/.local/bin/cass-maintenance.sh`: a capped `cass index` (4 hours), then
   `cm reflect` on new Claude sessions. `install.sh`
   links the script and both units, and the `services` step enables the timer.
