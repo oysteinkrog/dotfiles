@@ -629,15 +629,22 @@ psi_watch() {
 # One line per running build. Own builds come from their state files
 # ($JDIR/<unit>: "unit pid pidstart start mem cores wall cur_bytes
 # cores60_milli stalled prio keys"); a state file whose heavy-build is gone is
-# removed. Scopes in builds.slice without a state file (orphans, the old flock
-# rule) come as "F unit cur_bytes cpu_usec age_s idle", where idle is 1 when
-# the scope used under 0.05 cores over the last HB_IDLE_SECS.
+# removed once its scope is empty. Scopes in builds.slice without a live
+# heavy-build (orphans, the old flock rule) come as "F unit cur_bytes cpu_usec
+# age_s idle keys", where idle is 1 when the scope used under 0.05 cores over
+# the last HB_IDLE_SECS, and keys come from a state file its heavy-build left
+# behind (a SIGKILL skips the cleanup), so its lock keys stay held.
 running_lines() {
   local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v r idle
+  local -A left=()
   for f in "$JDIR"/heavy-build-*; do
     [[ -e $f && $f != *.tmp ]] || continue
     read -r u pid st start em ec ew cur c60 stl pr ks < "$f" || continue
-    if [[ $(proc_start "$pid") != "$st" ]]; then rm -f -- "$f"; continue; fi
+    if [[ $(proc_start "$pid") != "$st" ]]; then
+      if grep -qx 'populated 1' "$BSLICE/$u.scope/cgroup.events" 2>/dev/null; then left[$u]=${ks:--}
+      else rm -f -- "$f"; fi
+      continue
+    fi
     seen+="$u "
     echo "R $u $start $em $ec $(( start + ${ew%.*} )) $cur $c60 $stl $pr ${ks:--}"
   done
@@ -654,7 +661,7 @@ running_lines() {
     r=$(cpu_rate "$u" "$usec")
     idle=0
     [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )) && idle=1
-    echo "F $u $cur $usec $age $idle"
+    echo "F $u $cur $usec $age $idle ${left[$u]:--}"
   done
 }
 
@@ -734,16 +741,17 @@ BEGIN {
   claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
 }
 $1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct) }
-# A scope without a state file: charged its current memory plus 2 GiB still to come.
-# An idle one only holds its current memory; it is not a running build.
+# A scope without a live heavy-build: charged its current memory plus 2 GiB still to come.
+# An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
   T_held += $3 / 1073741824
+  if ($7 != "" && $7 != "-") { n = split($7, k, ","); for (i = 1; i <= n; i++) busy[k[i]] = $2 }
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:idle", $2, $3 / 1073741824)
   next
 }
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
-  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-", 100)
+  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100)
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 $1 == "W" {
