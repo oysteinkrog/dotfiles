@@ -266,7 +266,10 @@ if the scope is idle or holds only Wine leftovers, and logs `event=sweep` in `li
 
 - **`HEAVY_BUILD_PRIORITY=high` is only for a P0 bug or the last local check before a PR.**
   Set `HEAVY_BUILD_REASON` with it. Everything else stays at the default, `normal`; use
-  `low` for builds that can wait.
+  `low` for builds that can wait. Builds from a critical session in
+  `~/.config/machine/sessions.toml`, or from a grove lane it owns or works in (kpp and its
+  swarm lanes), default to `critical`: after `high`, before `normal`, and still held by
+  every memory, swap, disk and lock-key check.
 - `HEAVY_BUILD_TIMEOUT=<seconds>` stops a build after that long (exit 124). heavy-build warns
   on stderr when a build has used almost no CPU for 10 minutes, or when its wineserver is
   gone, but it does not kill it. `heavy-build --help` has the full rules.
