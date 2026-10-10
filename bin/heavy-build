@@ -130,6 +130,12 @@
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
 set -uo pipefail
+# The whole script is one { } block, so bash parses all of it before running
+# any of it. bash reads a script as it goes: if the file is rewritten in place
+# while a heavy-build runs, a plain script goes on at its old byte offset in
+# the new text. On 2026-10-10 two running heavy-builds jumped back into the
+# wait loop that way and their stale charge held the queue for 76 min.
+{
 
 if [[ $# -lt 1 || $1 == -h || $1 == --help ]]; then
   sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "${BASH_SOURCE[0]}" >&2
@@ -164,6 +170,8 @@ STALL_SECS=${HB_STALL_SECS:-600}
 WARMUP=${HB_WARMUP_SECS:-120}
 ORPHAN_STOP_SECS=${HB_ORPHAN_STOP_SECS:-120}
 IDLE_SECS=${HB_IDLE_SECS:-120}
+NO_SCOPE_SECS=${HB_NO_SCOPE_SECS:-60}
+SCOPE_GONE_SECS=${HB_SCOPE_GONE_SECS:-120}
 PSI_GAP=${HB_PSI_GAP_SECS:-20}
 CPUDIR=$RUNDIR/heavy-build.cpu
 PSIF=$RUNDIR/heavy-build.cpupsi
@@ -540,6 +548,7 @@ ticket_alive() {
 }
 
 write_ticket() {
+  rm -f -- "$JDIR/$unit"
   mkdir -p "$QDIR" 2>/dev/null
   printf '%s %s\n%s %s %s %s %s\n' "$$" "$(proc_start $$)" "$PRIO" "$est_mem" "$est_cores" "$est_wall" "$keys_csv" \
     > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
@@ -728,9 +737,17 @@ psi_watch() {
 # age_s idle keys", where idle is 1 when the scope used under 0.05 cores over
 # the last HB_IDLE_SECS, and keys come from a state file its heavy-build left
 # behind (a SIGKILL skips the cleanup), so its lock keys stay held.
+# A state file is removed (event=sweep) and charges nothing when its
+# heavy-build is in the queue as a waiter, or when its scope has not run for
+# HB_NO_SCOPE_SECS (60) since the build was let in: such a heavy-build runs no
+# build, and its charge could hold the queue for good.
 running_lines() {
-  local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v r idle
+  local f u pid st start em ec ew cur c60 stl pr ks seen=" " d age usec k v r idle t waiting=" "
   local -A left=()
+  for t in "$QDIR"/[0-9]*; do
+    [[ -e $t && $t != *.tmp ]] || continue
+    t=${t##*/}; t=${t#*-}; waiting+="${t%%-*} "
+  done
   for f in "$JDIR"/heavy-build-*; do
     [[ -e $f && $f != *.tmp ]] || continue
     read -r u pid st start em ec ew cur c60 stl pr ks < "$f" || continue
@@ -738,6 +755,18 @@ running_lines() {
       if grep -qx 'populated 1' "$BSLICE/$u.scope/cgroup.events" 2>/dev/null; then left[$u]=${ks:--}
       else rm -f -- "$f"; fi
       continue
+    fi
+    if ! grep -qx 'populated 1' "$BSLICE/$u.scope/cgroup.events" 2>/dev/null; then
+      if [[ $waiting == *" $pid "* ]]; then
+        rm -f -- "$f"
+        log_line "event=sweep unit=$u reason=waiting heavy_build_pid=$pid cores=$ec"
+        continue
+      fi
+      if [[ $start =~ ^[0-9]+$ ]] && (( EPOCHSECONDS - start > NO_SCOPE_SECS )); then
+        rm -f -- "$f"
+        log_line "event=sweep unit=$u reason=no-scope heavy_build_pid=$pid cores=$ec age_s=$(( EPOCHSECONDS - start ))"
+        continue
+      fi
     fi
     seen+="$u "
     echo "R $u $start $em $ec $(( start + ${ew%.*} )) $cur $c60 $stl $pr ${ks:--}"
@@ -1027,7 +1056,7 @@ sample_scope() {
   else
     orphan_seen=0 orphan_since= stalled_wine=0
   fi
-  write_state "$cur" "$c60" "$(( stalled_cpu || stalled_wine ))"
+  grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null && write_state "$cur" "$c60" "$(( stalled_cpu || stalled_wine ))"
   psi_watch
 }
 
@@ -1212,7 +1241,7 @@ child=$!
 
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
-rc=
+rc= gone_since=
 while :; do
   iv=$SAMPLE
   (( EPOCHSECONDS - start_ts < 60 && iv > 2 )) && iv=2
@@ -1232,6 +1261,24 @@ while :; do
     continue
   fi
   sample_scope
+  # wait -n can miss a child that bash already reaped, so check it directly.
+  if ! kill -0 "$child" 2>/dev/null; then
+    wait "$child"; rc=$?
+    break
+  fi
+  # A scope that has stopped while its command still runs here: give it
+  # HB_SCOPE_GONE_SECS (120), then end, so this heavy-build never loops on.
+  if grep -qx 'populated 1' "$BSLICE/$unit.scope/cgroup.events" 2>/dev/null || (( EPOCHSECONDS - start_ts < NO_SCOPE_SECS )); then
+    gone_since=
+  elif [[ -z $gone_since ]]; then
+    gone_since=$EPOCHSECONDS
+  elif (( EPOCHSECONDS - gone_since >= SCOPE_GONE_SECS )); then
+    log_line "event=scope-gone unit=$unit gone_s=$(( EPOCHSECONDS - gone_since )) cmd=\"$cmdline\""
+    say "the build scope stopped ${SCOPE_GONE_SECS}s ago but its command did not end; ending"
+    kill -KILL "$child" 2>/dev/null
+    wait "$child"; rc=$?
+    break
+  fi
 done
 sample_scope
 d=$BSLICE/$unit.scope
@@ -1263,3 +1310,4 @@ else reason=fail
 fi
 append_history "$rc" "$reason"
 exit "$rc"
+}
