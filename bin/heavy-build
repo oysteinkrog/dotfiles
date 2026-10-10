@@ -86,9 +86,19 @@
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
 #   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A low
 #   build counts as normal after 30 min of waiting. Only live mode uses it.
-#   When HEAVY_BUILD_PRIORITY is unset and the calling Claude session is
-#   pausable in ~/.config/machine/sessions.toml (asked with `machine-session
-#   class --pid`), the default is low instead of normal.
+#   When HEAVY_BUILD_PRIORITY is unset, the default comes from the sessions in
+#   ~/.config/machine/sessions.toml:
+#   - critical when the calling Claude session is critical (asked with
+#     `machine-session class --pid`), or when the current directory or a lock
+#     key's directory is in a grove lane that belongs to a critical session:
+#     the lane is critical in [lanes], its grove registry owner is a critical
+#     session, or a live critical session works in it. Order is high, then
+#     critical, then normal, then low. A critical build passes no safety gate:
+#     memory, swap, interactive pressure, disk and lock keys all still apply.
+#     While a critical build waits for job slots, cores or CPU pressure, no
+#     normal or low build may start ahead of it (no backfill past it);
+#   - low when the calling session is pausable.
+#   HEAVY_BUILD_PRIORITY=critical cannot be set by hand.
 # - Checks again every HEAVY_BUILD_POLL seconds (default 5).
 # - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
 #   with exit code 75. The clock starts again each time the waiter moves up
@@ -181,15 +191,6 @@ say() { echo "heavy-build: $*" >&2; }
 # Already inside a build scope: heavy-build in heavy-build, or the old rule.
 if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
   exec env "${build_env[@]}" "$@"
-fi
-
-# A pausable session's builds default to low. HB_MACHINE_SESSION is a test hook.
-if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
-  SESSION_CLASS=$(timeout 5 "${HB_MACHINE_SESSION:-machine-session}" class --pid $$ 2> /dev/null)
-  if [[ $SESSION_CLASS == pausable ]]; then
-    PRIO=low
-    say "priority low: this session is pausable in ~/.config/machine/sessions.toml"
-  fi
 fi
 
 case $PRIO in
@@ -383,6 +384,99 @@ lock_keys() {
     top=$(git rev-parse --show-toplevel 2>/dev/null) && echo "tree:$top"
   fi
   wine_key "$top" "$@"
+}
+
+# Directories of the cargo: and tree: lock keys, one per line.
+key_dirs() {
+  local k
+  [[ $keys_csv == - ]] && return 0
+  tr ',' '\n' <<< "$keys_csv" | while read -r k; do
+    [[ $k == cargo:* || $k == tree:* ]] && echo "${k#*:}"
+  done | sed 's/%20/ /g'
+}
+
+# critical_lane DIR...: prints why a build in one of these directories belongs
+# to a critical session, or nothing. A directory counts when the grove lane
+# that holds it is critical in [lanes] of sessions.toml, when the lane's grove
+# registry owner is a critical session (a swarm lane such as .scratch/vac2,
+# owner kpp), or when a live critical session works in that lane (~/work/
+# desktop/kpp for kpp). Reads the same files as machine-session, with the
+# same MACHINE_SESSION_* overrides.
+critical_lane() {
+  timeout 5 python3 -I - "$@" 2> /dev/null <<'PY'
+import json, os, sys, tomllib
+from pathlib import Path
+
+home = Path.home()
+env = os.environ.get
+try:
+    with open(env("MACHINE_SESSION_REGISTRY", home / ".config/machine/sessions.toml"), "rb") as f:
+        reg = tomllib.load(f)
+except (OSError, ValueError):
+    sys.exit()
+crit = {k for k, v in reg.get("sessions", {}).items() if v == "critical"}
+crit_lanes = {k for k, v in reg.get("lanes", {}).items() if v == "critical"}
+if not crit and not crit_lanes:
+    sys.exit()
+lanes = []
+try:
+    repos = json.loads(Path(env("MACHINE_SESSION_GROVE_REPOS", home / ".config/grove/repos.json")).read_text())
+    repos = repos.get("repos", {})
+except (OSError, ValueError):
+    repos = {}
+for repo in repos.values():
+    try:
+        projects = json.loads((Path(repo["work_dir"]) / ".grove/registry.json").read_text())["projects"]
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    for tag, p in projects.items():
+        if p.get("path"):
+            lanes.append((p["path"].rstrip("/"), tag, (p.get("owner") or {}).get("session_name")))
+lanes.sort(key=lambda l: len(l[0]), reverse=True)
+
+def lane_of(d):
+    for path, tag, owner in lanes:
+        if d == path or d.startswith(path + "/"):
+            return tag, owner
+    return None, None
+
+# Lanes where a live critical session works.
+proc = Path(env("MACHINE_SESSION_PROC", "/proc"))
+worked = {}
+for f in Path(env("MACHINE_SESSION_SESSIONS_DIR", home / ".claude/sessions")).glob("*.json"):
+    try:
+        s = json.loads(f.read_text())
+        pid = int(s["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    if s.get("name") not in crit:
+        continue
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+    except OSError:
+        continue
+    rest = stat[stat.rfind(")") + 2 :].split()
+    if s.get("procStart") and len(rest) > 19 and rest[19] != str(s["procStart"]):
+        continue
+    tag, _ = lane_of(s.get("cwd") or "")
+    if tag:
+        worked.setdefault(tag, s["name"])
+
+for d in sys.argv[1:]:
+    for d in dict.fromkeys([d.rstrip("/"), os.path.realpath(d)]):
+        tag, owner = lane_of(d)
+        if not tag:
+            continue
+        if tag in crit_lanes:
+            print(f"grove lane {tag} is critical in ~/.config/machine/sessions.toml")
+        elif owner in crit:
+            print(f"grove lane {tag} belongs to critical session {owner}")
+        elif tag in worked:
+            print(f"grove lane {tag} is where critical session {worked[tag]} works")
+        else:
+            continue
+        sys.exit()
+PY
 }
 
 # ---------------------------------------------------------------- old rule
@@ -757,7 +851,7 @@ $1 == "F" {
 $1 == "W" {
   nw++; w_id[nw] = $2; w_arr[nw] = $3; p = $4
   if (p == "low" && now - $3 >= lowage) p = "normal"
-  w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "low") ? 2 : 1
+  w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "critical") ? 1 : (p == "low") ? 3 : 2
   w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8
 }
 END {
@@ -772,21 +866,26 @@ END {
     gate = sprintf("swap: %.1f GiB left before the oomd limit, need %d", (0.9 * swt - (swt - swf)) / 1048576, minswap)
   else if (claudepsi >= maxmempsi) gate = sprintf("interactive: claude.slice memory pressure %.1f%%, the limit is %d%%", claudepsi, maxmempsi)
   else if (apppsi >= maxmempsi) gate = sprintf("interactive: app.slice memory pressure %.1f%%, the limit is %d%%", apppsi, maxmempsi)
-  headi = 0; starving = 0; shadow = 0
+  # critw: the first critical waiter that waits for job slots, cores or CPU
+  # pressure. Normal and low builds may not start ahead of it.
+  headi = 0; starving = 0; shadow = 0; critw = 0
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
     bk = ""
     if (w_keys[i] != "-") { n = split(w_keys[i], kk, ","); for (j = 1; j <= n; j++) if (kk[j] in busy) { bk = kk[j]; break } }
     if (bk != "") { why[i] = "key: lock key " bk " is busy (" busy[bk] ")"; continue }
+    if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (!headi) {
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
       if (r == "") { pick(i); why[i] = "fits: next in order"; continue }
       headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve)
+      if (w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
       continue
     }
     if (starving) { why[i] = sprintf("starve: %s has waited %d min, so nothing may pass it", w_id[headi], (now - w_arr[headi]) / 60); continue }
     r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+    if (r != "" && !critw && w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
     if (r != "") { why[i] = r; continue }
     if (now + 1.5 * w_wall[i] > shadow) { why[i] = sprintf("behind: it would not end before %s can start, in about %d min", w_id[headi], (shadow - now) / 60); continue }
     pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
@@ -956,6 +1055,25 @@ cls=$(classify "$@")
 read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls")"
 keys_csv=$(lock_keys "$@" | sed 's/ /%20/g' | paste -sd, -)
 [[ -n $keys_csv ]] || keys_csv=-
+# The default priority comes from the calling session's class, or from the
+# grove lane the build runs in. HB_MACHINE_SESSION is a test hook.
+if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
+  SESSION_CLASS=$(timeout 5 "${HB_MACHINE_SESSION:-machine-session}" class --pid $$ 2> /dev/null)
+  crit_why=
+  if [[ $SESSION_CLASS == critical ]]; then
+    crit_why="this session is critical in ~/.config/machine/sessions.toml"
+  else
+    mapfile -t kdirs < <(key_dirs)
+    crit_why=$(critical_lane "$PWD" "${kdirs[@]}")
+  fi
+  if [[ -n $crit_why ]]; then
+    PRIO=critical
+    say "priority critical: $crit_why"
+  elif [[ $SESSION_CLASS == pausable ]]; then
+    PRIO=low
+    say "priority low: this session is pausable in ~/.config/machine/sessions.toml"
+  fi
+fi
 unit="heavy-build-$$-$RANDOM"
 jobid=$unit
 mystart=$(proc_start $$)
