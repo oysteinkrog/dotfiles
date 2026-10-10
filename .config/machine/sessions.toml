@@ -28,7 +28,7 @@ manager-machine = "critical"
 # Named here so they stay normal even if they move into an ephemeral lane.
 manager-CI = "normal"
 manager-CTO = "normal"
-kpp = "normal"
+kpp = "critical"
 
 # Grove lane tag = class. The tag is the grove project whose path holds the
 # session's working directory, for example "kpp" for ~/work/desktop/kpp.
