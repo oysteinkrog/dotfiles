@@ -118,8 +118,10 @@
 # - Exit codes: the command's own status; 128 + signal on a signal death (137
 #   after an OOM kill); 75 when refused or when the wait gave up; 124 when
 #   HEAVY_BUILD_TIMEOUT or HEAVY_BUILD_WINE_ORPHAN=stop ended it; 2 for a usage
-#   error. TERM, INT or HUP to heavy-build stop the build. heavy-build stops
-#   its scope on every exit it can catch. When the command ends and only Wine
+#   error; 70 when it came back to the queue after its build started (the
+#   script was changed in place under an older heavy-build). TERM, INT or
+#   HUP to heavy-build stop the build. heavy-build stops its scope on every
+#   exit it can catch. When the command ends and only Wine
 #   leftovers remain in the scope, they get SIGKILL before the scope stops
 #   (logged as event=stop-kill).
 #
@@ -1104,6 +1106,16 @@ if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
   fi
 fi
 unit="heavy-build-$$-$RANDOM"
+script_id=$(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)
+# Ends this heavy-build if it comes back to the wait section after its build
+# started. Only a script rewritten in place under an older heavy-build (one
+# without the { } block) can do that; on 2026-10-10 it ran a build twice.
+reentry_guard() {
+  [[ -n ${build_started:-} ]] || return 0
+  say "stopping: this heavy-build came back to the queue after its build started (script was ${script_id:-?}, now $(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)). The file was changed in place under it."
+  log_line "event=reentry unit=$unit script_was=\"${script_id:-?}\" cmd=\"$cmdline\""
+  exit 70
+}
 jobid=$unit
 mystart=$(proc_start $$)
 start_ts=$EPOCHSECONDS
@@ -1123,6 +1135,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 read_conf
 
+reentry_guard
 deadline=$(( SECONDS + WAIT ))
 held=
 if ancestor_holds_lock; then
@@ -1135,6 +1148,7 @@ else
   write_ticket
   said= best= last_log= would_since=
   while :; do
+    reentry_guard
     [[ -e $ticket ]] || write_ticket
     read_conf
     queue_scan
@@ -1231,6 +1245,7 @@ trap 'stop_build INT' INT
 
 start_ts=$EPOCHSECONDS
 write_state 0 - 0
+build_started=1
 scope_up=1
 systemd-run --user --scope --quiet --collect --expand-environment=no \
   --unit="$unit" --slice=builds.slice --description="$desc" "${props[@]}" \
