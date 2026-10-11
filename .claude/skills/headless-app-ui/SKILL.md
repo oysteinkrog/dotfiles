@@ -48,8 +48,10 @@ screen was locked.
 driven through its own UI broker, with its own licence mock. Its docs are in
 `tools/wine/README.md`, section "Headless MC on its own display".
 
-**It is only on branch `kpp` for now** (commit `111c94051d7b`, worktree
-`~/work/desktop/kpp`). A PR to master is still to come. From another lane, run it by
+**It is only on branch `kpp` for now** (commit `d2c9a4fdf3bb`, worktree
+`~/work/desktop/kpp`). It does not stand alone on master yet, because the licence
+mock tests need the kpp-only `ANALYSIS_PROFILER` flag. kpp is preparing a trimmed
+master PR. From another lane, run it by
 its path in the kpp worktree and pass your own build with `--build-dir`, or wait
 until it is merged. Do not cherry-pick it into other branches. The kpp copy starts
 kpp's broker build unless you export `MC_BROKER_DIR` first.
@@ -59,10 +61,10 @@ K=~/work/desktop/kpp/tools
 $K/qa/hive/setup-hive.sh /var/tmp/claude/<hive> --profile minimal
 $K/wine/headless-mc.sh start one --hive /var/tmp/claude/<hive> --licence profiler \
     --build-dir <your src/motioncatalyst/BUILD/x64_Debug>
-eval "$($K/wine/headless-mc.sh env one)"    # MC_UI_URL and XDG_RUNTIME_DIR for mcpc.py
+eval "$($K/wine/headless-mc.sh env one)"    # broker, prefix, display and D-Bus for this shell
 $K/wine/mcpc.py call mc_navigate_to '{"screenName":"UserSelection"}'
 $K/wine/headless-mc.sh shot one --refresh /var/tmp/claude/<task>/one.png
-$K/wine/headless-mc.sh stop one
+$K/wine/headless-mc.sh stop --rm one   # --rm also deletes the prefix and runtime folder
 ```
 
 `start` brings up Xvfb, a D-Bus session bus and the broker. With `--hive` it also
@@ -100,10 +102,13 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
   folder, and do not use a `.dev-hive` copied from another checkout.
   `AppRegistry.json` holds absolute paths to the hive it came from, so MC reads and
   writes the original instead.
-- Run MC's CLI (`MotionCatalyst-cli.exe install-license`, `import-takes`) with this
-  instance's prefix: `export WINEPREFIX=~/.local/share/wineprefixes/motioncatalyst-ui-<name>`
-  first. `headless-mc.sh env` does not export it, and without it the CLI runs in the
-  shared prefix.
+- Run `eval "$(headless-mc.sh env <name>)"` before any CLI or Wine call
+  (`MotionCatalyst-cli.exe install-license`, `import-takes`, `wine reg add`). It
+  exports `MC_UI_URL`, `XDG_RUNTIME_DIR`, `WINEPREFIX`, `DISPLAY`,
+  `WAYLAND_DISPLAY=no-such-wl`, `XAUTHORITY=/dev/null` and the D-Bus address.
+  Without it the call runs in the shared prefix. kpp checked this on 2026-10-11:
+  after the `eval`, `wine reg add` and `install-license` wrote into
+  `motioncatalyst-ui-<name>` (`/var/tmp/claude/impl-licmock/impl-licmock-envcheck.sh`).
 - Release and ReleaseInternal builds cannot use the licence mock.
 - Each MC opens the hardware its hive enables, and a USB camera or serial port
   serves one process. In a second hive, turn off what the first one owns in
@@ -133,16 +138,9 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
 
 Each prefix is a reflink copy, so it starts near 0 B but grows as MC writes to it.
 Reuse one instance name per lane rather than inventing new ones. When the lane ends,
-stop the instance and delete its prefix. kpp plans a `stop --rm` option; until it
-exists:
-
-```bash
-$K/wine/headless-mc.sh stop <name>
-rm -r ~/.local/share/wineprefixes/motioncatalyst-ui-<name>
-```
-
-Check first that `stop` printed `stopped` and that `pgrep -af motioncatalyst-ui-<name>`
-shows nothing, so no wineserver is still using the prefix.
+run `headless-mc.sh stop --rm <name>`. It deletes the instance's prefix and runtime
+folder, but only when each is at the script's own path, is a real directory, and
+holds the `.headless-mc` marker that `start` writes. Do not delete them by hand.
 
 ## Other apps: plain Xvfb
 
