@@ -59,10 +59,12 @@
 # Aging slot: a normal or low build that has waited HEAVY_BUILD_AGE_SECS
 # (default 3600) goes ahead of critical builds, the oldest first, while fewer
 # than HEAVY_BUILD_AGE_SLOTS (default 1) builds let in this way still run. It
-# then ranks after high builds and before critical ones, and the starve and
-# backfill rules treat it like any build in that place. Every memory, swap,
-# CPU pressure, disk and lock key check still applies. Its start is logged
-# with aged=1. HEAVY_BUILD_AGE_SLOTS=0 turns it off.
+# then ranks after high builds and before critical ones. When it is first in
+# order and does not fit, the starve rule does not apply to it and high or
+# critical builds that fit may pass it, so it takes only the first slot it
+# fits into. Normal and low builds still follow the backfill rule. Every
+# memory, swap, CPU pressure, disk and lock key check still applies. Its start
+# is logged with aged=1. HEAVY_BUILD_AGE_SLOTS=0 turns it off.
 # When the first build in order does not fit, a later one may start if it fits
 # now and should end before the first one could start. That stops once the
 # first one has waited HEAVY_BUILD_STARVE seconds (default 1800).
@@ -1025,7 +1027,9 @@ END {
     if (!headi) {
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
       if (r == "") { pick(i); why[i] = "fits: next in order"; continue }
-      headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve)
+      # An aged head never starves the queue: high and critical builds that
+      # fit pass it, so it holds only the slot it gets next.
+      headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve && !w_aged[i])
       if (w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
       continue
     }
@@ -1033,6 +1037,7 @@ END {
     r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
     if (r != "" && !critw && w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
     if (r != "") { why[i] = r; continue }
+    if (w_aged[headi] && w_rank[i] <= 1) { pick(i); why[i] = "fits: the aged build " w_id[headi] " does not fit yet, and " w_pr[i] " builds may pass it"; continue }
     if (now + 1.5 * w_wall[i] > shadow) { why[i] = sprintf("behind: it would not end before %s can start, in about %d min", w_id[headi], (shadow - now) / 60); continue }
     pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
   }
