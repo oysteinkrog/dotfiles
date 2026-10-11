@@ -22,6 +22,7 @@ setup() {
   mm_system_active() { echo active; }
   mm_user_failed() { :; }
   mm_system_failed() { :; }
+  mm_session_class() { cat "$T/class.$1" 2>/dev/null; }
   mm_sudo_slab_mb() { echo "SUDO CALLED" >> "$T/sudo"; echo 5; }
 }
 events() { cat "$MM_EVENTS" 2>/dev/null; }
@@ -232,6 +233,20 @@ test_tasks_per_scope() {
   check_tasks; check_tasks
   rm -r "$MM_CGROUP/claude-1.scope"; check_tasks
   [[ $(nevents 'crit TASKS claude-1 has 2100 tasks') == 1 && $(nevents TASKS) == 1 && ! -e $MM_STATE/s/tasks_claude-1 ]]
+}
+test_tasks_critical_bands() {
+  setup tasks_crit
+  mkdir -p "$MM_CGROUP/claude-1.scope" "$MM_CGROUP/claude-2.scope" "$MM_CGROUP/claude-3.scope"
+  echo critical > "$T/class.claude-1"; echo normal > "$T/class.claude-2"
+  echo 2100 > "$MM_CGROUP/claude-1.scope/pids.current"
+  echo 2100 > "$MM_CGROUP/claude-2.scope/pids.current"
+  echo 2100 > "$MM_CGROUP/claude-3.scope/pids.current"   # lookup fails: default bands
+  check_tasks
+  [[ $(nevents 'TASKS claude-1 ') == 0 && $(nevents 'crit TASKS claude-2 ') == 1 && $(nevents 'crit TASKS claude-3 ') == 1 ]] || return 1
+  echo 4500 > "$MM_CGROUP/claude-1.scope/pids.current"; check_tasks
+  [[ $(nevents 'warn TASKS claude-1 has 4500') == 1 ]] || return 1
+  echo 8100 > "$MM_CGROUP/claude-1.scope/pids.current"; check_tasks
+  [[ $(nevents 'crit TASKS claude-1 has 8100') == 1 ]]
 }
 
 # ---- duplicate sessions ----
