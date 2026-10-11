@@ -1248,6 +1248,12 @@ if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
   fi
 fi
 unit="heavy-build-$$-$RANDOM"
+# Each build gets its own Roslyn compiler server. Without an id, every C#
+# compile uses one server per SDK, and the first one started (often outside
+# heavy-build) runs on outside builds.slice with all the compile work. On
+# 2026-10-11 one such server held 12.7 GB and 4.3 cores. This one starts in the
+# scope and stops with it.
+build_env+=(SharedCompilationId="${SharedCompilationId:-hb-$unit}")
 # PRIO in the state file; <prio>:aged for a build let in by the aging slot.
 state_prio=$PRIO
 script_id=$(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)
