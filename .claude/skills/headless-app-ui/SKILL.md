@@ -12,11 +12,23 @@ description: >-
 
 # Headless App UI Runbook
 
+**DRAFT (2026-10-11).** The kpp session is building an `xvfb-run` harness for
+MotionCatalyst in lane impl-licmock. It will prove screenshots and drop-down picks
+while the screen is locked, with 2 instances at once. When it lands, its scripts
+replace the hand recipes below. Until then, treat the recipes as tested only where
+this file says so.
+
 Agent shells here have `DISPLAY=:0`, and libwayland falls back to `wayland-0` when
 `WAYLAND_DISPLAY` is unset. Both are Oystein's real screen. Any window you start
 without changing them opens on his desktop, takes keyboard focus, and can catch
 what he types. That happened on 2026-10-07. So every app window an agent starts
 goes on a private display.
+
+A private display also matters when the screen is locked. On 2026-10-11 the kpp
+lanes ran MC on `:0` while the screen was locked. KWin hid MC's window, WPF stopped
+rendering, and every capture route came back blank. Drop-down picks had no effect.
+Do not use `loginctl ... LockedHint` to check for a lock: it said `no` while the
+screen was locked.
 
 ## Hard rules
 
@@ -40,13 +52,14 @@ goes on a private display.
 | | Nested KWin (`kwin_wayland --virtual`) | Xvfb |
 |---|---|---|
 | What you get | A full KWin with Xwayland, a window manager, KWin scripting, `kscreen-doctor`, spectacle | A bare X server, no window manager |
-| Works while locked | Yes, verified 2026-10-04 by the qa-deferred-ui lane (`LockedHint=yes`) | Yes. It does not talk to the session at all |
+| Works while locked | Reported yes by a QA lane on 2026-10-04, not re-tested | Expected yes, since it never talks to the desktop session. Not yet shown with MC; the kpp harness will test it |
 | GPU | Not checked | No. Vulkan and GL are llvmpipe (software), checked 2026-10-11 |
-| Status on 2026-10-11 | **Broken**, see Known limits | Works, tested with 3 parallel Wine instances |
+| Status on 2026-10-11 | **Broken** until `kwin-local` is rebuilt, see Known limits | Works, tested with 3 parallel Wine instances |
 
-Use nested KWin when the app needs a window manager (focus, title bars, window
-placement, fractional scale) or KWin scripting. Use Xvfb for everything else, and
-whenever nested KWin fails to start.
+**Xvfb is the main path for Wine and other X11 apps.** Use nested KWin once the
+`kwin-local` rebuild has landed, and only when the app needs a window manager
+(focus, title bars, window placement, fractional scale) or KWin scripting. Do not
+try to fix KWin yourself; another session owns that rebuild.
 
 ## Recipe: Xvfb
 
@@ -91,6 +104,7 @@ Inside the session:
 ## MotionCatalyst under Wine
 
 The scripts live in the monorepo at `tools/wine/` (read `tools/wine/README.md`).
+Use the kpp branch's copy until its changes reach master.
 `run-mc.sh` starts MC, `run-broker.sh [PORT]` starts the UI broker, `mcpc.py`
 talks to the broker, `mcshot.sh` screenshots MC's window. All of them source
 `wine-env.sh`, which fills in `DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0` and the
@@ -107,9 +121,32 @@ tools/wine/run-broker.sh <free port> &      # not 8767 if another lane uses it
 MC_UI_URL=http://127.0.0.1:<port>/ python3 tools/wine/mcpc.py list
 ```
 
+Always clone the shared prefix as above. Never make a new one with `wineboot`: the
+shared prefix carries settings from `tools/wine/setup-prefix.sh` (for example the
+`windows.storage.applicationdata` DLL override that SQLite tests need), and a fresh
+prefix lacks them.
+
 `mcpc.py` keeps its MCP session in `$XDG_RUNTIME_DIR/mc-ui-wine`, so give each
 instance its own `XDG_RUNTIME_DIR` for the client (the qa lanes used
 `/var/tmp/claude/<lane>-rt`).
+
+Use a fresh hive: `tools/qa/hive/setup-hive.sh <dir> --profile minimal`. Do not
+use a worktree's `.dev-hive` that was copied from another checkout. Its
+`AppRegistry.json` can point `DataPath` at `C:\WORK\desktop\master\.dev-hive`,
+so under Wine every such worktree reads and writes the same folder inside the prefix.
+MC's single-instance lock is per hive, so separate hives let instances coexist.
+
+**Licence.** A fresh hive stops at the licence dialog. A Debug MC can get its
+licence from the Linux licence mock instead. See "A licence from the mock" in
+`tools/wine/README.md`: `tools/wine/mock-license.sh --hive <dir> --profile <name>`
+starts `tools/qa/hive/license_mock_server.py` on 127.0.0.1:8797 and installs a test
+key. Then start MC with `--license-server http://127.0.0.1:8797` (through the broker:
+`"extraArgsJson":"[\"--license-server\",\"http://127.0.0.1:8797\"]"` on
+`mc_connect`). Profiles live in `tools/qa/hive/license-profiles/` (`profiler`,
+`all-features`). Release and ReleaseInternal builds cannot use the mock. Give a second
+mock its own `--port`, and stop yours with `mock-license.sh --down`. The worked
+example, with its own broker port 8792 and its own `XDG_RUNTIME_DIR`, is
+`/var/tmp/claude/impl-licmock-report.md`.
 
 A hive seeded from the QA profile can turn `UseAxioForce` on and open the real
 force plate (seen 2026-10-04). Check the hive before you start MC when real
@@ -129,7 +166,9 @@ each captured on its own.
   `ffmpeg -loglevel error -y -f x11grab -video_size 1920x1200 -i "$DISPLAY" -frames:v 1 out.png`
 - One window under nested KWin: `ffmpeg -f x11grab -window_id <id> -i "$DISPLAY" ...`
   with the id from `xprop -root _NET_CLIENT_LIST`, or `tools/wine/mcshot.sh` with
-  your `DISPLAY` exported. Under Xvfb there is no window manager, so
+  your `DISPLAY` exported. `mcshot.sh` matches the window title, which shows the
+  worktree name rather than the hive, so it can grab another lane's MC. Match
+  `_NET_WM_PID` against your own MC's PID instead. Under Xvfb there is no window manager, so
   `_NET_CLIENT_LIST` does not exist and `mcshot.sh` finds nothing. Grab the whole
   display instead.
 - Wayland windows under nested KWin: `spectacle -b -n -f -o out.png` inside the
@@ -175,5 +214,5 @@ Then check nothing of yours is left: `pgrep -af "<your prefix or tag>"`.
   "Application lost focus". It happened on the real desktop and on a
   private display alike.
 - Whether nested KWin gets the NVIDIA GPU is not checked.
-- The kpp session is building a harness for this. When it lands in
-  `tools/wine/`, prefer it over the recipes here and update this skill.
+- The kpp harness is not landed yet (see the DRAFT note at the top). The MC-specific
+  parts of this file come from kpp's lane notes and are not re-run by the author.
