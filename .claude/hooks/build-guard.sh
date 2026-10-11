@@ -14,7 +14,8 @@
 # Warns, without blocking:
 #   no_wrapper   a heavy cargo or dotnet command, or build.cmd/build.sh, that
 #                does not run under heavy-build. The warning reaches the agent
-#                as additional context.
+#                as additional context. For dotnet it also says that the
+#                Roslyn compiler server would escape heavy-build's budget.
 #
 # Detection lives in build-detect.py, which reuses the shell segmentation in
 # grove-worktree-detect.py. Test matrix in build-guard.test.py. Run the tests
@@ -94,6 +95,13 @@ fi
 warn=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "no_wrapper"' | head -1 | cut -f3-)
 if [[ -n $warn ]]; then
   msg="build-guard: this looks like a heavy build without heavy-build ($warn). Machine rule (~/.claude/CLAUDE.md, \"Builds\"): run every cargo build/test/check/clippy and dotnet build/test as \`heavy-build <command>\`. It takes the shared build lock, so it may wait; run it in the background if your tool call has a timeout. The command was allowed this time."
+  # dotnet run/build/test start a Roslyn compiler server (VBCSCompiler) that
+  # outlives the command, and later heavy-build builds can end up using it.
+  # On 2026-10-11 one started by an unwrapped `dotnet run` held 12.7 GB and
+  # 4.3 cores in a session scope for 22 h.
+  if [[ $warn == dotnet* ]]; then
+    msg+=" For dotnet this matters more: the compile starts a Roslyn compiler server (VBCSCompiler) in your session's cgroup. It stays alive after the command ends and does compile work outside heavy-build's memory cap and budget. Under heavy-build it runs in the build scope and stops with it."
+  fi
   jq -cn --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' 2>/dev/null || true
 fi
 exit 0
