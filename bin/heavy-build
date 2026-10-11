@@ -82,6 +82,14 @@
 #   for dotnet and Wine commands, and wine:<prefix> for Wine runs that would
 #   share one prefix and so one wineserver (the DESKTOP-14957 guard). The guard
 #   never sets WINEPREFIX. HEAVY_BUILD_KEY=none turns lock keys off.
+#   A dotnet or Wine build with AgentOutputSuffix=<s> (in its environment, or
+#   in its args as AgentOutputSuffix=, -p: or /p:) gets tree:<top>#<s>, and
+#   build.sh and build.cmd also get tree:<top>#buildcli (BuildCli's output has
+#   no suffix). Two different suffixes run side by side. The same suffix twice,
+#   or the plain tree:<top> next to any suffix, still waits. The split happens
+#   only when the tree has the suffix blocks (apps/online/src/web/client/
+#   Directory.Build.props names AgentOutputSuffix). Without them the key stays
+#   plain and live.log gets locksplit=off reason=no-blocks.
 # - HEAVY_BUILD_PRIORITY=high|normal|low (default normal). Agents may set high
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
 #   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A low
@@ -384,24 +392,65 @@ wine_key() {
 }
 
 # Lock keys for this build, one per line. Spaces in a key become %20.
+# A line starting with ! is a note for live.log, not a key.
 lock_keys() {
   [[ ${HEAVY_BUILD_KEY:-} == none ]] && return 0
-  local s=" $* " ws top=
+  local s=" $* " ws top= tree= suf
   if [[ $s =~ [^[:alnum:]_-]cargo[[:space:]] ]]; then
     ws=$(cargo locate-project --workspace --message-format plain 2>/dev/null) && [[ -n $ws ]] && echo "cargo:${ws%/Cargo.toml}"
   fi
   if [[ ${s,,} =~ dotnet|msbuild|wine|run-tests\.sh|build\.cmd ]]; then
-    top=$(git rev-parse --show-toplevel 2>/dev/null) && echo "tree:$top"
+    top=$(git rev-parse --show-toplevel 2>/dev/null) && tree=1
+  elif [[ $s =~ [[:space:]/]build\.sh[[:space:]] ]]; then
+    top=$(git rev-parse --show-toplevel 2>/dev/null) && [[ -d $top/tools/BuildCli ]] && tree=1
+  fi
+  if [[ -n $tree ]]; then
+    suf=$(agent_suffix "$@")
+    if [[ -z $suf || $top == *#* ]]; then
+      echo "tree:$top"
+    elif ! grep -qsF AgentOutputSuffix "$top/$SPLIT_MARK"; then
+      echo "tree:$top"
+      echo "!locksplit=off reason=no-blocks suffix=$suf"
+    else
+      echo "tree:$top#$suf"
+      [[ $s =~ [[:space:]/]build\.(sh|cmd)[[:space:]] && -d $top/tools/BuildCli ]] && echo "tree:$top#buildcli"
+    fi
   fi
   wine_key "$top" "$@"
 }
 
-# Directories of the cargo: and tree: lock keys, one per line.
+# The suffix blocks kpp added last (df22e584067d). A tree without this one may
+# still write shared outputs, so a suffixed build there keeps the plain key.
+SPLIT_MARK=apps/online/src/web/client/Directory.Build.props
+
+# The build's AgentOutputSuffix, trimmed, or nothing. A value in the args
+# (AgentOutputSuffix=, -p:, /p:, also inside sh -c) wins over the environment,
+# as an MSBuild global property does. Two different values in the args, or a
+# value with characters other than letters, digits, _ . and -, give nothing,
+# so the build keeps the plain tree key.
+agent_suffix() {
+  local a v= n=0 re='(^|[^[:alnum:]_])AgentOutputSuffix=([^;[:space:]"'\'']*)'
+  for a; do
+    while [[ $a =~ $re ]]; do
+      if (( n == 0 )); then v=${BASH_REMATCH[2]}; n=1
+      elif [[ ${BASH_REMATCH[2]} != "$v" ]]; then return 0; fi
+      a=${a#*"${BASH_REMATCH[0]}"}
+    done
+  done
+  (( n )) || v=${AgentOutputSuffix-}
+  v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+  [[ $v =~ ^[A-Za-z0-9_.-]+$ ]] && echo "$v"
+}
+
+# Directories of the cargo: and tree: lock keys, one per line. A tree key's
+# #suffix is not part of the directory.
 key_dirs() {
-  local k
+  local k d
   [[ $keys_csv == - ]] && return 0
   tr ',' '\n' <<< "$keys_csv" | while read -r k; do
-    [[ $k == cargo:* || $k == tree:* ]] && echo "${k#*:}"
+    d=${k#*:}
+    [[ $k == tree:*#* ]] && d=${d%#*}
+    [[ $k == cargo:* || $k == tree:* ]] && echo "$d"
   done | sed 's/%20/ /g'
 }
 
@@ -815,6 +864,26 @@ function psi10(f,   l, a, b, v) {
   while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
   close(f); return v
 }
+# Lock keys a build holds. A tree key tree:<top>#<suffix> also marks <top>
+# as held by a suffixed build, so a plain tree:<top> waits for it.
+function hold(keys, id,   n, k, i, b) {
+  if (keys == "" || keys == "-") return
+  n = split(keys, k, ",")
+  for (i = 1; i <= n; i++) { busy[k[i]] = id; if ((b = index(k[i], "#")) > 0) subheld[substr(k[i], 1, b - 1)] = k[i] }
+}
+# The held key that blocks these keys, or "". The same key blocks. A plain
+# tree:<top> and any tree:<top>#<suffix> block each other. Two different
+# suffixes do not.
+function clash(keys,   n, k, i, b) {
+  if (keys == "" || keys == "-") return ""
+  n = split(keys, k, ",")
+  for (i = 1; i <= n; i++) {
+    if (k[i] in busy) return k[i]
+    if ((b = index(k[i], "#")) > 0) { if (substr(k[i], 1, b - 1) in busy) return substr(k[i], 1, b - 1) }
+    else if (k[i] in subheld) return subheld[k[i]]
+  }
+  return ""
+}
 function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct,   n, k, i, held, tc, cc) {
   nr++
   if (stalled == 1) { held = cur; tc = 0; cc = 0 }
@@ -825,7 +894,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_cur[nr] = cur; r_high[nr] = (prio == "high")
   T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high")
-  if (keys != "-") { n = split(keys, k, ","); for (i = 1; i <= n; i++) busy[k[i]] = id }
+  hold(keys, id)
 }
 function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (nrun <= 0) return (av >= solo) ? "" : sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
@@ -870,7 +939,7 @@ $1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct)
 # An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
   T_held += $3 / 1073741824
-  if ($7 != "" && $7 != "-") { n = split($7, k, ","); for (i = 1; i <= n; i++) busy[k[i]] = $2 }
+  hold($7, $2)
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:idle", $2, $3 / 1073741824)
   next
 }
@@ -903,8 +972,7 @@ END {
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
-    bk = ""
-    if (w_keys[i] != "-") { n = split(w_keys[i], kk, ","); for (j = 1; j <= n; j++) if (kk[j] in busy) { bk = kk[j]; break } }
+    bk = clash(w_keys[i])
     if (bk != "") { why[i] = "key: lock key " bk " is busy (" busy[bk] ")"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (!headi) {
@@ -1084,7 +1152,9 @@ cmdline=${cmdline//\"/\'}
 (( ${#cmdline} > 160 )) && cmdline="${cmdline:0:157}..."
 cls=$(classify "$@")
 read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls")"
-keys_csv=$(lock_keys "$@" | sed 's/ /%20/g' | paste -sd, -)
+keys_out=$(lock_keys "$@")
+keys_note=$(grep '^!' <<< "$keys_out" | sed 's/^!//' | paste -sd' ' -)
+keys_csv=$(grep -v '^!' <<< "$keys_out" | sed 's/ /%20/g' | paste -sd, -)
 [[ -n $keys_csv ]] || keys_csv=-
 # The default priority comes from the calling session's class, or from the
 # grove lane the build runs in. HB_MACHINE_SESSION is a test hook.
@@ -1146,6 +1216,10 @@ else
   ticket=$QDIR/$(date +%s%N)-$$-$hash
   jobid=${ticket##*/}
   write_ticket
+  if [[ -n $keys_note ]]; then
+    log_line "$keys_note keys=$keys_csv cmd=\"$cmdline\""
+    say "lock key not split by AgentOutputSuffix: this tree has no suffix blocks ($SPLIT_MARK)"
+  fi
   said= best= last_log= would_since=
   while :; do
     reentry_guard
