@@ -1,0 +1,26 @@
+[Unit]
+Description=qmd search server for the ifkb knowledge base (GPU, localhost:8181, no auth)
+After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+# Keeps qmd's embed, rerank and query-expansion models loaded on the GPU. A CLI
+# `qmd query` reloads them each time (8 to 64 s on 2026-10-11); this server
+# answers in 0.2 to 1.7 s. MCP at http://localhost:8181/mcp, REST at POST /query.
+# Runs from the repo root so qmd uses the checked-in .qmd/index.yml and the
+# per-clone index in ~/work/ifkb/.qmd/index.sqlite.
+WorkingDirectory=%h/work/ifkb
+# qmd's native modules (better-sqlite3, node-llama-cpp) are built for the nvm
+# Node 22. /usr/bin/node is Node 26 and does not load them. Update this path
+# when the nvm Node version changes.
+Environment=PATH=%h/.nvm/versions/node/v22.14.0/bin:/usr/bin:/bin
+ExecStart=%h/.nvm/versions/node/v22.14.0/bin/node %h/.local/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js mcp --http --port 8181
+Restart=on-failure
+RestartSec=10
+# Measured 2026-10-11 after warm-up: 3.8 GB host memory (models are mmap'd and
+# also held in VRAM). Cap it so a leak cannot push the desktop into oomd.
+MemoryMax=6G
+
+[Install]
+WantedBy=default.target
