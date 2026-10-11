@@ -51,6 +51,18 @@
 # When no build runs, a build starts once MemAvailable is at least
 # HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate. Order is priority, then
 # arrival. A build whose lock key is busy is skipped and keeps its place.
+# Writer preference: no build with a tree:<top>#<suffix> key that is behind
+# the first waiter with the plain key tree:<top> in order starts until the
+# plain one has started (reason writer:). Suffixed builds ahead of it in
+# order, and suffixed builds already running, go on as usual; the plain build
+# waits only for the running ones. Builds in other trees are not affected.
+# Aging slot: a normal or low build that has waited HEAVY_BUILD_AGE_SECS
+# (default 3600) goes ahead of critical builds, the oldest first, while fewer
+# than HEAVY_BUILD_AGE_SLOTS (default 1) builds let in this way still run. It
+# then ranks after high builds and before critical ones, and the starve and
+# backfill rules treat it like any build in that place. Every memory, swap,
+# CPU pressure, disk and lock key check still applies. Its start is logged
+# with aged=1. HEAVY_BUILD_AGE_SLOTS=0 turns it off.
 # When the first build in order does not fit, a later one may start if it fits
 # now and should end before the first one could start. That stops once the
 # first one has waited HEAVY_BUILD_STARVE seconds (default 1800).
@@ -110,8 +122,13 @@
 # - Checks again every HEAVY_BUILD_POLL seconds (default 5).
 # - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
 #   with exit code 75. The clock starts again each time the waiter moves up
-#   in line. A wait can be long: run it in the background when your tool call
-#   has a timeout.
+#   in line. In live mode it does not run while the build waits only because
+#   a higher-priority build is ahead of it (a critical build that goes first,
+#   or a first build in order with a higher priority). It does run while the
+#   build is first in order, or waits for a lock key, the hold file, swap or
+#   interactive memory pressure. A wait can be long: run it in the background
+#   when your tool call has a timeout.
+# - Every exit 75 (gave up, or low disk) is logged as decision=refuse.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
@@ -252,6 +269,8 @@ read_conf() {
   setting HEAVY_BUILD_MAX_MEM_PSI 5
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_STARVE 1800
+  setting HEAVY_BUILD_AGE_SECS 3600
+  setting HEAVY_BUILD_AGE_SLOTS 1
 }
 
 setting() {
@@ -884,6 +903,14 @@ function clash(keys,   n, k, i, b) {
   }
   return ""
 }
+# The plain tree key that a waiter ahead (before place o in order) holds
+# against these suffixed keys by the writer preference, or "".
+function writer(keys, o,   n, k, i, b, t) {
+  if (keys == "" || keys == "-") return ""
+  n = split(keys, k, ",")
+  for (i = 1; i <= n; i++) if ((b = index(k[i], "#")) > 0 && ((t = substr(k[i], 1, b - 1)) in wpos) && wpos[t] < o) return t
+  return ""
+}
 function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct,   n, k, i, held, tc, cc) {
   nr++
   if (stalled == 1) { held = cur; tc = 0; cc = 0 }
@@ -893,7 +920,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   }
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_cur[nr] = cur; r_high[nr] = (prio == "high")
-  T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high")
+  T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high"); T_aged += (prio ~ /:aged$/)
   hold(keys, id)
 }
 function why_not(i, nrun, cpu, tc, held, av, nhigh) {
@@ -907,7 +934,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap", w_mem[i], held, slicecap)
   return ""
 }
-function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i], w_keys[i], tcpct); picked[i] = 1 }
+function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct); picked[i] = 1 }
 # When enough running builds should have ended for waiter i to fit.
 function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
   for (j = 1; j <= nr; j++) idx[j] = j
@@ -955,11 +982,29 @@ $1 == "W" {
   w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8
 }
 END {
+  # The aging slot: the oldest normal or low waiter that has waited agesecs
+  # goes ahead of critical ones (rank 0.5), while fewer than ageslots builds
+  # let in this way run. A running one has prio <prio>:aged.
+  for (n = ageslots - T_aged; n > 0; n--) {
+    a = 0
+    for (i = 1; i <= nw; i++) if (w_rank[i] >= 2 && now - w_arr[i] >= agesecs && (!a || w_id[i] < w_id[a])) a = i
+    if (!a) break
+    w_rank[a] = 0.5; w_aged[a] = 1
+  }
   for (i = 1; i <= nw; i++) ord[i] = i
   for (i = 2; i <= nw; i++) {
     x = ord[i]
     for (j = i - 1; j >= 1 && (w_rank[ord[j]] > w_rank[x] || (w_rank[ord[j]] == w_rank[x] && w_id[ord[j]] > w_id[x])); j--) ord[j + 1] = ord[j]
     ord[j + 1] = x
+  }
+  # Writer preference: the first waiter in order with a plain tree:<top> key
+  # holds that tree. No waiter behind it with a tree:<top>#<suffix> key may
+  # start first. Suffixed waiters ahead of it keep their place.
+  for (o = 1; o <= nw; o++) {
+    i = ord[o]
+    if (w_keys[i] == "" || w_keys[i] == "-") continue
+    n = split(w_keys[i], k, ",")
+    for (j = 1; j <= n; j++) if (k[j] ~ /^tree:/ && index(k[j], "#") == 0 && !(k[j] in wpref)) { wpref[k[j]] = i; wpos[k[j]] = o }
   }
   gate = ""
   if (swt > 0 && (0.9 * swt - (swt - swf)) / 1048576 < minswap)
@@ -974,6 +1019,8 @@ END {
     if (gate != "") { why[i] = gate; continue }
     bk = clash(w_keys[i])
     if (bk != "") { why[i] = "key: lock key " bk " is busy (" busy[bk] ")"; continue }
+    wk = writer(w_keys[i], o)
+    if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (!headi) {
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
@@ -990,16 +1037,27 @@ END {
     pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
   }
   if (untracked == "") untracked = "-"
-  for (o = 1; o <= nw; o++) if (w_id[ord[o]] == me) { printf "%s\t%d\t%s\t%s\n", (picked[ord[o]] ? "start" : "wait"), o, why[ord[o]], untracked; exit }
-  printf "wait\t0\tqueue: no ticket for this build\t%s\n", untracked
+  for (o = 1; o <= nw; o++) {
+    i = ord[o]
+    if (w_id[i] != me) continue
+    if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of critical builds (%s)", (now - w_arr[i]) / 60, why[i])
+    # prioheld: this build waits only because a higher-priority build is
+    # ahead of it, so its give-up clock does not run.
+    kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
+    if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    printf "%s\t%d\t%s\t%s\t%d\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph
+    exit
+  }
+  printf "wait\t0\tqueue: no ticket for this build\t%s\t0\n", untracked
 }'
 
-# Runs the budget rule for this waiter. Sets dec (start or wait), rank and why.
+# Runs the budget rule for this waiter. Sets dec (start or wait), rank, why and
+# prioheld (1 when only higher-priority builds ahead hold it back).
 decide() {
   local out
   sweep_stale
   if [[ -e $HOLD ]]; then
-    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=-
+    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0
     return
   fi
   psi_watch
@@ -1009,9 +1067,11 @@ decide() {
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
-    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" "$ADMIT_AWK")
-  IFS=$'\t' read -r dec rank why untracked <<< "$out"
+    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
+    -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" "$ADMIT_AWK")
+  IFS=$'\t' read -r dec rank why untracked prioheld <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
+  [[ ${prioheld:-} == 1 ]] || prioheld=0
   untracked=${untracked:--}
 }
 
@@ -1041,7 +1101,14 @@ log_decision() {
   [[ $k == "$last_log" ]] && return
   last_log=$k
   [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
+  [[ $dec == start && $why == aged:* ]] && since+=" aged=1"
   log_line "decision=$dec reason=\"$why\" actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
+}
+
+# Logs an exit 75 as decision=refuse, then exits 75. $1 is the reason.
+refuse() {
+  log_line "decision=refuse reason=\"$1\" waited_s=$(( EPOCHSECONDS - queued_ts )) stuck_s=${stuck:-0} rank=${pos:-0} prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
+  exit 75
 }
 
 # ---------------------------------------------------------------- job state
@@ -1049,7 +1116,7 @@ log_decision() {
 write_state() {
   mkdir -p "$JDIR" 2>/dev/null
   printf '%s %s %s %s %s %s %s %s %s %s %s %s\n' "$unit" "$$" "$mystart" "$start_ts" "$est_mem" "$est_cores" \
-    "$est_wall" "$1" "$2" "$3" "$PRIO" "$keys_csv" > "$JDIR/$unit.tmp" && mv -f "$JDIR/$unit.tmp" "$JDIR/$unit"
+    "$est_wall" "$1" "$2" "$3" "$state_prio" "$keys_csv" > "$JDIR/$unit.tmp" && mv -f "$JDIR/$unit.tmp" "$JDIR/$unit"
 }
 
 now_us() { local t=${EPOCHREALTIME//[!0-9]/}; echo "${t#0}"; }
@@ -1176,6 +1243,8 @@ if [[ -z ${HEAVY_BUILD_PRIORITY:-} ]]; then
   fi
 fi
 unit="heavy-build-$$-$RANDOM"
+# PRIO in the state file; <prio>:aged for a build let in by the aging slot.
+state_prio=$PRIO
 script_id=$(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)
 # Ends this heavy-build if it comes back to the wait section after its build
 # started. Only a script rewritten in place under an older heavy-build (one
@@ -1206,7 +1275,9 @@ trap 'exit 143' TERM
 read_conf
 
 reentry_guard
-deadline=$(( SECONDS + WAIT ))
+# The give-up clock: seconds of waiting without moving up in line, not counted
+# while only higher-priority builds ahead hold this build back.
+stuck=0 tick=$SECONDS queued_ts=$EPOCHSECONDS pos=0
 held=
 if ancestor_holds_lock; then
   say "a parent process holds a build slot; not taking another"
@@ -1233,6 +1304,7 @@ else
       decide
       if [[ $dec == start ]]; then
         start_ts=$EPOCHSECONDS
+        [[ $why == aged:* ]] && state_prio=$PRIO:aged
         write_state 0 - 0   # our reservation, written while we hold the mutex
         rm -f -- "$ticket"
         started=1
@@ -1276,13 +1348,16 @@ else
       fi
       log_decision wait
       why=$oldwhy
+      prioheld=0   # the old rule is first come, first served
     fi
-    if [[ -n $best ]] && (( pos > 0 && pos < best )); then deadline=$(( SECONDS + WAIT )); fi
+    (( prioheld )) || stuck=$(( stuck + SECONDS - tick ))
+    tick=$SECONDS
+    if [[ -n $best ]] && (( pos > 0 && pos < best )); then stuck=0; fi
     (( pos > 0 )) && { [[ -z $best ]] || (( pos < best )); } && best=$pos
     line="in line: position $pos of $total${dup:+ (an identical build is ahead)}"
-    if (( SECONDS >= deadline )); then
-      say "gave up after ${WAIT}s without moving up: $why; $line. Tell the manager session."
-      exit 75
+    if (( stuck >= WAIT )); then
+      say "gave up after ${stuck}s without moving up: $why; $line. Tell the manager session."
+      refuse "wait: gave up after ${stuck}s without moving up: $why"
     fi
     key="${why%% *} $pos"
     if [[ $key != "$said" ]]; then say "waiting: $why; $line"; said=$key; fi
@@ -1295,7 +1370,7 @@ avail=$(LC_ALL=C df -B1G --output=avail -- . 2>/dev/null | tail -1 | tr -d ' ')
 if [[ $avail =~ ^[0-9]+$ ]] && (( avail < REFUSE_GIB )) && [[ ${HEAVY_BUILD_FORCE:-0} != 1 ]]; then
   say "refused. $(df --output=target -- . | tail -1) has ${avail} GiB free; the limit is ${REFUSE_GIB} GiB."
   say "stop and tell the manager session. Do not delete other build output to make room."
-  exit 75
+  refuse "disk: $(df --output=target -- . | tail -1) has ${avail} GiB free, the limit is ${REFUSE_GIB} GiB"
 fi
 
 # Memory caps scale with the estimate: MemoryHigh = 1.25 x estimate, 16G to 22G.
