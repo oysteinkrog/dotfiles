@@ -45,60 +45,66 @@ screen was locked.
 ## MotionCatalyst: use `headless-mc.sh`
 
 `tools/wine/headless-mc.sh` in the monorepo starts MC on its own Xvfb display,
-driven through its own UI broker. Its docs are in `tools/wine/README.md`, section
-"Headless MC on its own display".
+driven through its own UI broker, with its own licence mock. Its docs are in
+`tools/wine/README.md`, section "Headless MC on its own display".
 
-**It is only on branch `kpp` for now** (commit `ae63e372e91f`, worktree
-`~/work/desktop/kpp`), not on master. From another lane, run it by its path in the
-kpp worktree and pass your own build and hive to `mc_connect`, or wait until it is
-merged. Do not cherry-pick it into other branches. The kpp copy starts kpp's broker
-build unless you export `MC_BROKER_DIR` first.
+**It is only on branch `kpp` for now** (commit `111c94051d7b`, worktree
+`~/work/desktop/kpp`). A PR to master is still to come. From another lane, run it by
+its path in the kpp worktree and pass your own build with `--build-dir`, or wait
+until it is merged. Do not cherry-pick it into other branches. The kpp copy starts
+kpp's broker build unless you export `MC_BROKER_DIR` first.
 
 ```bash
-K=~/work/desktop/kpp/tools/wine
-$K/headless-mc.sh start one                 # Xvfb, D-Bus, broker; prints display and port
-eval "$($K/headless-mc.sh env one)"         # MC_UI_URL and XDG_RUNTIME_DIR for mcpc.py
-$K/mcpc.py call mc_connect '{"buildDir":"<your BUILD/x64_Debug>","hiveDir":"/var/tmp/claude/<hive>","waitForIdle":true,"idleTimeoutMs":300000}'
-# maximize once, see Limits
-$K/headless-mc.sh shot one /var/tmp/claude/<task>/one.png
-$K/mcpc.py call mc_disconnect '{"closeTarget":true}'
-$K/headless-mc.sh stop one
+K=~/work/desktop/kpp/tools
+$K/qa/hive/setup-hive.sh /var/tmp/claude/<hive> --profile minimal
+$K/wine/headless-mc.sh start one --hive /var/tmp/claude/<hive> --licence profiler \
+    --build-dir <your src/motioncatalyst/BUILD/x64_Debug>
+eval "$($K/wine/headless-mc.sh env one)"    # MC_UI_URL and XDG_RUNTIME_DIR for mcpc.py
+$K/wine/mcpc.py call mc_navigate_to '{"screenName":"UserSelection"}'
+$K/wine/headless-mc.sh shot one --refresh /var/tmp/claude/<task>/one.png
+$K/wine/headless-mc.sh stop one
 ```
+
+`start` brings up Xvfb, a D-Bus session bus and the broker. With `--hive` it also
+starts MC through the broker and maximizes its window. `--licence <profile>` first
+starts a licence mock for this instance on a free port, installs a test key into the
+hive and passes `--license-server` to MC. That needs a Debug build with
+`MotionCatalyst-cli.exe` in it (see "A licence from the mock" in the README).
+Profiles are in `tools/qa/hive/license-profiles/` (`profiler`, `all-features`).
+Without `--hive`, start MC yourself with `mc_connect`, then maximize it (see Limits).
+`stop` closes MC through the broker, then ends the mock, the broker, the prefix's
+wineserver, the D-Bus bus and Xvfb, each by the PID that `start` recorded.
 
 Each instance gets:
 
-- the next free X display from `:90` (Xvfb with `-br`, 1920x1080 by default,
-  `--size` to change it);
+- a display that Xvfb picks itself (`-displayfd`), run with `-br`, 1920x1080 by
+  default (`--size` to change it);
 - its own D-Bus session bus, and an `XDG_RUNTIME_DIR` under
   `/var/tmp/headless-mc-$USER/<name>/`;
-- a free broker port (`--port` to pick one);
-- its own Wine prefix, `~/.local/share/wineprefixes/motioncatalyst-headless-<name>`.
-  This is a reflink copy of the shared prefix, made on the first start and kept for
-  the next. `--fresh-prefix` copies it again.
+- a free broker port (`--port` to pick one) and a free licence mock port;
+- `WAYLAND_DISPLAY` set to a name that does not exist;
+- its own Wine prefix, `~/.local/share/wineprefixes/motioncatalyst-ui-<name>`. This
+  is a reflink copy of the shared prefix, made on the first start and kept for the
+  next. `--fresh-prefix` copies it again.
 
 There is no KWin and no window manager. DXVK runs on Mesa's software Vulkan
 (llvmpipe), so MC draws and screenshots show it, but slowly.
 
-`stop` ends the broker, the prefix's wineserver, the D-Bus bus and Xvfb, each by the
-PID that `start` recorded. Close MC with `mc_disconnect` before `stop`.
+**Proven on 2026-10-11** by the kpp lane impl-licmock: MC renders under Xvfb on DXVK
+with llvmpipe, two licensed instances ran at once (on `:1` and `:2`), and screenshots
+worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-report.md`.
 
-**Proven on 2026-10-11** by the kpp lane impl-licmock: 2 instances at once on `:90`
-and `:91`, and screenshots with ImageMagick `import` while the screen was locked.
-Lane report: `/var/tmp/claude/impl-licmock-report.md`.
+### Hive, licence and CLI calls
 
-### Hive and licence
-
-- Use a fresh hive: `tools/qa/hive/setup-hive.sh <dir> --profile minimal`. Never
-  copy a whole hive folder, and do not use a `.dev-hive` copied from another
-  checkout. `AppRegistry.json` holds absolute paths to the hive it came from, so MC
-  reads and writes the original instead.
-- A fresh hive stops at the licence dialog. A Debug MC can take its licence from
-  the Linux licence mock. See "A licence from the mock" in `tools/wine/README.md`:
-  `mock-license.sh --hive <dir> --profile <name>` serves on 127.0.0.1:8797, and
-  you pass `"extraArgsJson":"[\"--license-server\",\"http://127.0.0.1:8797\"]"` to
-  `mc_connect`. Profiles are in `tools/qa/hive/license-profiles/` (`profiler`,
-  `all-features`). Release and ReleaseInternal cannot use the mock. Stop it with
-  `mock-license.sh --down`.
+- Use a fresh hive from `setup-hive.sh --profile minimal`. Never copy a whole hive
+  folder, and do not use a `.dev-hive` copied from another checkout.
+  `AppRegistry.json` holds absolute paths to the hive it came from, so MC reads and
+  writes the original instead.
+- Run MC's CLI (`MotionCatalyst-cli.exe install-license`, `import-takes`) with this
+  instance's prefix: `export WINEPREFIX=~/.local/share/wineprefixes/motioncatalyst-ui-<name>`
+  first. `headless-mc.sh env` does not export it, and without it the CLI runs in the
+  shared prefix.
+- Release and ReleaseInternal builds cannot use the licence mock.
 - Each MC opens the hardware its hive enables, and a USB camera or serial port
   serves one process. In a second hive, turn off what the first one owns in
   `GeneralSettings.xml` (`UseAxioForce`, `UseBertecSDK`, the camera flags), while
@@ -106,31 +112,36 @@ Lane report: `/var/tmp/claude/impl-licmock-report.md`.
 
 ### Limits
 
-- `wpf_click` and `wpf_select_item` cannot pick an item in the databox drop-down
-  (an Xceed list). Open it with `wpf_set_property IsChecked True` on
+- MC does not repaint the area a closed dialog covered, even with `-br`, so the
+  dialog stays in the picture. Toggling `WindowState` from `Normal` to `Maximized`
+  repaints it. `shot --refresh` does this before the capture.
+- MC restores the window position saved in the hive, which can be off the Xvfb
+  screen. `start --hive` maximizes it. After your own `mc_connect`, use
+  `wpf_set_property` on the main window, `WindowState`, `Maximized`.
+- `wpf_click` and `wpf_select_item` cannot pick an item from MC's Xceed lists, such
+  as the databox drop-down. Open it with `wpf_set_property IsChecked True` on
   `PART_DropDownButton`, then click the row with `wpf_click_point` at the position
-  the screenshot shows.
-- With no window manager, MC can restore a window position that is off the Xvfb
-  screen. Maximize once after `mc_connect`: `wpf_set_property` on the main window,
-  `WindowState`, `Maximized`.
-- `mcpc.py` keeps its MCP session in `$XDG_RUNTIME_DIR/mc-ui-wine/mcp-session`. A
-  new broker does not know an old session and answers HTTP 404. `start` clears the
-  file; if you start a broker any other way, run `mcpc.py reset`.
-- Screenshots show names from the committed test takes. Keep them out of
-  anything published.
+  the screenshot shows. Click the scroll bar track to page the list.
+- `mcpc.py` keeps its MCP session id in `$XDG_RUNTIME_DIR/mc-ui-wine/mcp-session`. A
+  restarted broker answers HTTP 404 until that file is deleted. `start` clears it;
+  after any other broker restart, run `mcpc.py reset`.
+- Screenshots show names from the committed test takes. Keep them out of anything
+  published.
 - Video decoding and real cameras are not tested headless.
 
 ### Disk and cleanup
 
 Each prefix is a reflink copy, so it starts near 0 B but grows as MC writes to it.
-Reuse one instance name per lane rather than inventing new ones. When the lane ends:
+Reuse one instance name per lane rather than inventing new ones. When the lane ends,
+stop the instance and delete its prefix. kpp plans a `stop --rm` option; until it
+exists:
 
 ```bash
-$K/headless-mc.sh stop <name>
-rm -r ~/.local/share/wineprefixes/motioncatalyst-headless-<name>   # the script has no option for this
+$K/wine/headless-mc.sh stop <name>
+rm -r ~/.local/share/wineprefixes/motioncatalyst-ui-<name>
 ```
 
-Check first that `stop` printed `stopped` and that `pgrep -af headless-<name>`
+Check first that `stop` printed `stopped` and that `pgrep -af motioncatalyst-ui-<name>`
 shows nothing, so no wineserver is still using the prefix.
 
 ## Other apps: plain Xvfb
@@ -160,7 +171,9 @@ own prefix, each captured on its own.
 
 Screenshot the whole display with
 `ffmpeg -loglevel error -y -f x11grab -video_size 1920x1200 -i "$DISPLAY" -frames:v 1 out.png`
-or `import -window root out.png`. Xvfb has no window manager, so
+or `import -window root -display "$DISPLAY" out.png`. Against Xwayland `:0`, `import`
+fails with the misleading "missing an image filename"; you must not capture `:0`
+anyway. Xvfb has no window manager, so
 `_NET_CLIENT_LIST` does not exist and window lookups by title find nothing.
 
 ## Second path: nested KWin (waiting for a rebuild)
