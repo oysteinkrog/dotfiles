@@ -48,10 +48,11 @@ screen was locked.
 driven through its own UI broker, with its own licence mock. Its docs are in
 `tools/wine/README.md`, section "Headless MC on its own display".
 
-**It is only on branch `kpp` for now** (commit `d2c9a4fdf3bb`, worktree
+**It is only on branch `kpp` for now** (commit `1d83beb3af5d`, worktree
 `~/work/desktop/kpp`). It does not stand alone on master yet, because the licence
 mock tests need the kpp-only `ANALYSIS_PROFILER` flag. kpp is preparing a trimmed
-master PR. From another lane, run it by
+master PR, #12194. That PR does not carry `run` or the consent setting yet, so the
+master version lacks both. From another lane, run it by
 its path in the kpp worktree and pass your own build with `--build-dir`, or wait
 until it is merged. Do not cherry-pick it into other branches. The kpp copy starts
 kpp's broker build unless you export `MC_BROKER_DIR` first.
@@ -101,8 +102,25 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
 - Use a fresh hive from `setup-hive.sh --profile minimal`. Never copy a whole hive
   folder, and do not use a `.dev-hive` copied from another checkout.
   `AppRegistry.json` holds absolute paths to the hive it came from, so MC reads and
-  writes the original instead.
-- Run `eval "$(headless-mc.sh env <name>)"` before any CLI or Wine call
+  writes the original instead. For the same reason, never rename a hive folder.
+- Two takes with the same take id need separate hives.
+- `start --hive` writes `DataSharing/Consented=false` into the hive's
+  `ProgramData/settings/PrivacySettings.xml` before MC starts. Without it the
+  data-sharing consent dialog blocks MC's UI thread, and neither `wpf_click_point`
+  nor `WM_CLOSE` gets past it under Wine. If you start MC yourself with
+  `mc_connect`, set it first. kpp saw no dialog after 90 s with the setting.
+- For a CLI call or Wine command that goes through `heavy-build`, use `run`:
+
+  ```bash
+  $K/wine/headless-mc.sh run one -- sh -c 'cd "$MC_BUILD_DIR" && wine MotionCatalyst-cli.exe import-takes --dir Z:/var/tmp/claude/takes --hiveDir Z:/var/tmp/claude/<hive>'
+  ```
+
+  `run` starts `heavy-build` with the real `XDG_RUNTIME_DIR=/run/user/$UID` and user
+  bus, which heavy-build needs for its systemd scope. The command inside gets the
+  instance's prefix, display, bus and private `XDG_RUNTIME_DIR`, plus `MC_BUILD_DIR`
+  and `MC_BROKER_DIR`. The instance must be running. kpp checked that
+  `import-takes` wrote into the instance prefix only.
+- For a plain call without `heavy-build`, run `eval "$(headless-mc.sh env <name>)"` before any CLI or Wine call
   (`MotionCatalyst-cli.exe install-license`, `import-takes`, `wine reg add`). It
   exports `MC_UI_URL`, `XDG_RUNTIME_DIR`, `WINEPREFIX`, `DISPLAY`,
   `WAYLAND_DISPLAY=no-such-wl`, `XAUTHORITY=/dev/null` and the D-Bus address.
