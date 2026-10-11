@@ -31,7 +31,8 @@
 #   CASS       cass running without the CASS_AUTO_REFRESH=0 wrapper, or
 #              indexing outside its own unit.
 #   PROCS      gpg-agent 10/50, git 48/96, wine* and *.exe 200/400 processes.
-#   TASKS      tasks per claude-*.scope 1000 warn, 2000 crit.
+#   TASKS      tasks per claude-*.scope 1000 warn, 2000 crit; 4000/8000 for a
+#              critical-class session (class cached 10 min, default on failure).
 #   DUP_SESSION two live Claude processes resuming the same session id.
 #   TIMER      watched units skipped or failed, watched timers not active,
 #              slab-guard not active (every 5 min); other failed units (info).
@@ -68,6 +69,8 @@ MM_GPG_BANDS=${MM_GPG_BANDS:-10 50}
 MM_GIT_BANDS=${MM_GIT_BANDS:-48 96}
 MM_WINE_BANDS=${MM_WINE_BANDS:-200 400}
 MM_TASKS_BANDS=${MM_TASKS_BANDS:-1000 2000}
+MM_TASKS_BANDS_CRITICAL=${MM_TASKS_BANDS_CRITICAL:-4000 8000}
+MM_CLASS_TTL=${MM_CLASS_TTL:-600}
 MM_SLAB_RATE_WARN=${MM_SLAB_RATE_WARN:-200}
 MM_SLAB_RATE_REARM=${MM_SLAB_RATE_REARM:-50}
 
@@ -405,24 +408,43 @@ proc_band() {
   esac
 }
 
+# Session class of a scope (critical, normal, pausable), cached per scope for
+# MM_CLASS_TTL seconds. Prints nothing when the lookup fails.
+mm_session_class() { machine-session class "$1" 2>/dev/null | cut -f1; }
+declare -gA CLASS_VAL=() CLASS_AT=()
+scope_class() {
+  local name=$1 now=$SECONDS
+  if [[ -n ${CLASS_AT[$name]:-} ]] && (( now - CLASS_AT[$name] < MM_CLASS_TTL )); then
+    CLASS=${CLASS_VAL[$name]}; return
+  fi
+  CLASS=$(mm_session_class "$name") || CLASS=""
+  CLASS_VAL[$name]=$CLASS; CLASS_AT[$name]=$now
+}
+
 check_tasks() {
-  local s name n live=" "
+  local s name n bands live=" "
   for s in "$MM_CGROUP"/claude-*.scope; do
     [[ -r $s/pids.current ]] || continue
     name=${s##*/}; name=${name%.scope}; live+="$name "
     read -r n 2>/dev/null < "$s/pids.current" || continue
-    band_up "tasks_$name" "$n" "$MM_TASKS_BANDS" 200
+    scope_class "$name"
+    bands=$MM_TASKS_BANDS
+    [[ $CLASS == critical ]] && bands=$MM_TASKS_BANDS_CRITICAL
+    band_up "tasks_$name" "$n" "$bands" 200
     case $BAND_CHANGE in
-      up) emit "$(level_for "$BAND" "$MM_TASKS_BANDS")" TASKS "$name has $n tasks (band $BAND)" ;;
+      up) emit "$(level_for "$BAND" "$bands")" TASKS "$name has $n tasks (band $BAND)" ;;
       down) emit info TASKS "$name back to $n tasks" ;;
     esac
   done
   # Forget scopes that are gone.
-  local f
+  local f k
   for f in "$MM_STATE"/s/tasks_claude-*; do
     [[ -e $f ]] || continue
     name=${f##*/tasks_}
     [[ $live == *" $name "* ]] || rm -f -- "$f"
+  done
+  for k in "${!CLASS_AT[@]}"; do
+    [[ $live == *" $k "* ]] || { unset "CLASS_AT[$k]" "CLASS_VAL[$k]"; }
   done
 }
 
