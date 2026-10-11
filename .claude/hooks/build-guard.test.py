@@ -68,6 +68,11 @@ cases = [
     ("CARGO_TARGET_DIR=/var/tmp/claude/ft-x cargo test", CWD, W),
     ("dotnet build Foo.sln", CWD, W),
     ("dotnet test", CWD, W),
+    ("dotnet run -- /var/tmp/x", CWD, W),
+    ("timeout 600 dotnet run -- /var/tmp/x 2>&1 | tail -80", CWD, W),
+    ("cd /var/tmp/claude/x && dotnet build -nodeReuse:false --no-restore", CWD, W),
+    ("heavy-build dotnet run -- /var/tmp/x", CWD, OK),
+    ("heavy-build dotnet build Foo.sln", CWD, OK),
     ("./build.cmd build", CWD, W),
     # --- build dir overrides: blocked ---
     ("CARGO_BUILD_BUILD_DIR=/var/tmp/x cargo test", CWD, B),
@@ -164,7 +169,19 @@ def main():
         fails += 1
         print(f"FAIL broken detector rc={broken.returncode}")
 
-    total = len(cases) + 2
+    # The dotnet warning names the compiler server; the cargo warning does not.
+    server = "Roslyn compiler server"
+    for command, want in (
+        ("dotnet run", True),
+        ("dotnet test", True),
+        ("cargo test", False),
+    ):
+        text = run(command, CWD).stdout
+        if (server in text) != want:
+            fails += 1
+            print(f"FAIL compiler server note for {command!r}: want={want}")
+
+    total = len(cases) + 2 + 3
     print(f"{total - fails}/{total} correct")
     sys.exit(1 if fails else 0)
 
