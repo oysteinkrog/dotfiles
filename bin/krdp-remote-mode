@@ -15,6 +15,13 @@ current position, through a runtime drop-in that overrides the setup one.
 Runs as the systemd user unit krdp-remote-mode.service.
 Env: KRDP_KEEP_OUTPUT (default: the primary output), KRDP_PORT (default 3389).
 
+Office takeover: a key press or mouse click on this machine's own keyboard or mouse while
+remote mode is on (local-input-watch.service records it) means someone is at the office,
+for example after a session was left connected at home. Then this stops KRDP, which drops
+the client, and restores the layout. Stopping matters: mstsc reconnects by itself after a
+server restart. KRDP starts again once the office keyboard and mouse have been idle for
+HOLD seconds.
+
 `krdp-remote-mode WIDTH HEIGHT` is the resize hook for a patched KRDP (see
 KRDP_OUTPUT_RESIZE_HOOK in the localbuilds krdp recipe). KRDP calls it with the
 RDP client's window size. It saves the layout if remote mode has not already,
@@ -34,10 +41,13 @@ PORT = os.environ.get("KRDP_PORT", "3389")
 KEEP = os.environ.get("KRDP_KEEP_OUTPUT")
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "krdp-remote-mode"
 SAVED = STATE / "layout.json"
+TAKEOVER = STATE / "office-takeover"  # exists while KRDP is held stopped after a takeover
 POLL = 2
 ON_AFTER = 3   # seconds connected before switching on (skips failed handshakes)
 OFF_AFTER = 5  # seconds disconnected before restoring (rides out quick reconnects)
 RETRY = 60     # seconds between restore attempts when KWin rejects one
+HOLD = 600     # seconds of office idle after a takeover before KRDP starts again
+LOCAL_INPUT = Path("/run/local-input/last")  # touched by local-input-watch.service
 ROTATION = {1: "none", 2: "left", 4: "inverted", 8: "right"}
 KRDP_UNIT = "app-org.kde.krdpserver.service"
 KRDP_DROPIN = (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
@@ -210,7 +220,8 @@ def sync_krdp_monitor():
         "# Written by krdp-remote-mode: the kept output's current Wayland index.\n"
         f"[Service]\nExecStart=\nExecStart=/usr/bin/krdpserver --monitor {index}\n")
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "restart", KRDP_UNIT], check=True)
+    # try-restart: KRDP held stopped after an office takeover must stay stopped.
+    subprocess.run(["systemctl", "--user", "try-restart", KRDP_UNIT], check=True)
 
 
 def layout_matches(saved):
@@ -244,6 +255,22 @@ def remote_off():
     sync_krdp_monitor()
 
 
+def local_input():
+    """When someone last pressed a key or clicked at this machine, as a Unix time; 0 if never."""
+    try:
+        return LOCAL_INPUT.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def takeover():
+    log("key press or click at the office while remote mode is on: stopping KRDP")
+    STATE.mkdir(parents=True, exist_ok=True)
+    TAKEOVER.touch()
+    subprocess.run(["systemctl", "--user", "stop", KRDP_UNIT])
+    remote_off()
+
+
 def main():
     def stop(*_):
         if not connected():
@@ -272,7 +299,20 @@ def main():
         on = on or SAVED.exists()
         held = time.monotonic() - since
         try:
-            if now and not on and held >= ON_AFTER:
+            if TAKEOVER.exists():
+                if SAVED.exists() and time.monotonic() - last_restore >= RETRY:
+                    last_restore = time.monotonic()
+                    remote_off()
+                if time.time() - local_input() >= HOLD:
+                    TAKEOVER.unlink()
+                    log(f"office idle for {HOLD} s: starting KRDP again")
+                    subprocess.run(["systemctl", "--user", "start", KRDP_UNIT])
+                on = SAVED.exists()
+            elif on and SAVED.exists() and local_input() > SAVED.stat().st_mtime + ON_AFTER:
+                last_restore = time.monotonic()
+                takeover()
+                on = SAVED.exists()
+            elif now and not on and held >= ON_AFTER:
                 remote_on()
                 on = True
             elif not now and on and held >= OFF_AFTER and time.monotonic() - last_restore >= RETRY:
