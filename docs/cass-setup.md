@@ -27,7 +27,10 @@ into a searchable archive (lexical + semantic). Upstream:
   set `CASS_EXCLUDE_PATHS`: it turns the ledger skip off for every source, so every
   run parses the whole corpus again. The service runs
   `~/.local/bin/cass-maintenance.sh`: a capped `cass index` (4 hours), then
-  `cm reflect` on new Claude sessions. `install.sh`
+  `cm reflect` on new Claude sessions. Before that, `cass-memcheck` (ExecCondition)
+  needs MemAvailable >= 20 GiB and SwapFree >= 12 GiB. If not, it retries every
+  5 minutes for up to 2 hours, logging each wait to the journal, then skips the
+  run. `TimeoutStartSec` is 6h10min: 2 h wait + 4 h index cap + slack. `install.sh`
   links the script and both units, and the `services` step enables the timer.
   Linger must be on (`loginctl enable-linger`) so the timer runs without a login.
 - **Log:** `~/.local/share/cass-maintenance.log`, and

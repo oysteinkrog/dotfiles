@@ -5,7 +5,8 @@ Documentation=file:%h/.dotfiles/docs/cass-setup.md
 [Service]
 Type=oneshot
 Slice=background.slice
-# Skip this run when the box is short of memory; the timer tries again later.
+# When the box is short of memory, cass-memcheck retries every 5 min for up to
+# 2 h, then skips the run. The wait counts against TimeoutStartSec.
 ExecCondition=%h/.local/bin/cass-memcheck
 ExecStart=%h/.local/bin/cass-maintenance.sh
 Environment=CASS_AUTO_REFRESH=0
@@ -31,7 +32,8 @@ CPUWeight=20
 IOWeight=20
 Nice=10
 IOSchedulingClass=idle
-TimeoutStartSec=4h10min
+# 2 h memory wait + 4 h index cap + 10 min slack.
+TimeoutStartSec=6h10min
 # cass needs more than 10 s to act on SIGTERM during startup (measured
 # 2026-10-04). A stop that ends in SIGKILL mid-scan forces a full lexical
 # rebuild on the next run, so give a stop two minutes.
