@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Record when someone presses a key or clicks on this machine's own USB keyboard or mouse.
+
+    local-input-watch
+
+krdp-remote-mode turns the office monitors off while an RDP client is connected. If that
+session was left open at home, nobody at the office can see the screen to log in. This
+runs as root, because reading input devices needs root or the input group, and the input
+group would let every user program read every keystroke. It reads only the USB keyboards
+and mice under /dev/input/by-id, so KRDP's virtual input never counts. It writes no key
+codes anywhere: on a key press or mouse click it only updates the time of
+/run/local-input/last, at most once a second. Mouse movement does not count, so a bumped
+mouse does not end a remote session. krdp-remote-mode reads that time.
+"""
+
+import os
+import pathlib
+import selectors
+import struct
+import time
+
+BY_ID = pathlib.Path("/dev/input/by-id")
+OUT = pathlib.Path("/run/local-input/last")
+EVENT = struct.Struct("llHHi")  # struct input_event on 64-bit: timeval, type, code, value
+EV_KEY = 1
+RESCAN = 10  # seconds between looks for plugged or unplugged devices
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def devices():
+    return {
+        str(p.resolve())
+        for p in BY_ID.glob("usb-*-event-*")
+        if p.name.endswith(("-event-kbd", "-event-mouse"))
+    }
+
+
+def touch():
+    OUT.parent.mkdir(mode=0o755, exist_ok=True)
+    OUT.touch(mode=0o644)
+    os.utime(OUT)
+
+
+def main():
+    sel = selectors.DefaultSelector()
+    open_fds = {}
+    last_write = 0.0
+    next_scan = 0.0
+    while True:
+        now = time.monotonic()
+        if now >= next_scan:
+            next_scan = now + RESCAN
+            want = devices()
+            for path in set(open_fds) - want:
+                fd = open_fds.pop(path)
+                sel.unregister(fd)
+                os.close(fd)
+                log(f"stopped watching {path}")
+            for path in want - set(open_fds):
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                except OSError as e:
+                    log(f"cannot open {path}: {e}")
+                    continue
+                open_fds[path] = fd
+                sel.register(fd, selectors.EVENT_READ, path)
+                log(f"watching {path}")
+        for key, _ in sel.select(timeout=RESCAN):
+            try:
+                data = os.read(key.fd, EVENT.size * 64)
+            except OSError:  # unplugged; the next scan drops it
+                next_scan = 0.0
+                continue
+            pressed = any(
+                etype == EV_KEY and value == 1
+                for _, _, etype, _, value in EVENT.iter_unpack(data[: len(data) // EVENT.size * EVENT.size])
+            )
+            if pressed and time.monotonic() - last_write >= 1:
+                last_write = time.monotonic()
+                touch()
+
+
+if __name__ == "__main__":
+    main()
