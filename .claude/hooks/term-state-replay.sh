@@ -46,5 +46,7 @@ for f in "$sessions"/*.json; do
   # TERM_STATE_DRY=1 prints what it would send instead
   if [ -n "${TERM_STATE_DRY:-}" ]; then echo "$tty pid $pid: $state"; continue; fi
   printf '\033]1337;SetUserVar=claude_state=%s\007' "$(printf %s "$state" | base64)" >>"$tty"
+  n=$((n + 1))
 done
+mkdir -p "$dir" && echo "$(date -Is) replayed ${n:-0} states" >> "$dir/replay.log"
 exit 0
