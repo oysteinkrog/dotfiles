@@ -199,6 +199,15 @@ hook_end() {
     done
   fi
   [ ${#files[@]} -gt 0 ] || return 0
+  # Keep the entries when the mux server the session ran under is gone. A
+  # Claude in its own scope can outlive its mux by a few seconds, and when the
+  # restarted mux is already active the checks below see a normal exit. On
+  # 2026-10-12 that dropped kpp one second after the mux came back.
+  local cur stamp; cur=$(mux_pid)
+  for g in "${files[@]}"; do
+    stamp=$(jq -r '.mux // empty' "$g")
+    [ -n "$stamp" ] && [ "$stamp" != "$cur" ] && return 0
+  done
   # Keep the entry when the session dies because the machine or its mux
   # server is going down; drop it on a normal exit.
   [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && return 0
