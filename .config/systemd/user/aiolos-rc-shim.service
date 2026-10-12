@@ -1,0 +1,13 @@
+[Unit]
+Description=aiolos-rc shared TLS shim for --no-pin Claude sessions
+# Sessions handed to Claude's background daemon keep the shim port they started
+# with, so the shim must outlive every session. See ~/.config/aiolos-rc/aiolos-rc.
+
+[Service]
+ExecStart=%h/.config/aiolos-rc/aiolos-rc --serve-shared
+Restart=always
+RestartSec=2
+UnsetEnvironment=LD_PRELOAD AIOLOS_RC_PORT ANTHROPIC_BASE_URL
+
+[Install]
+WantedBy=default.target

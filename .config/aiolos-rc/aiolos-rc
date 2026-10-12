@@ -17,10 +17,11 @@
 # We deliberately do NOT use ANTHROPIC_UNIX_SOCKET: setting it flips Claude into
 # "host-managed auth" mode, which breaks the remote-control subscription check.
 #
-# ONE SHIM PER SESSION: every invocation starts its own shim on a fresh ephemeral
-# port and tears it down when Claude exits. Multiple concurrent Claude instances
-# are fully isolated — no shared port, no cross-session restarts, no single point
-# of failure.
+# SHIMS: --no-pin sessions all use one shared shim, aiolos-rc-shim.service on a
+# fixed port (SHARED_PORT below), because Claude can hand a session to its
+# background daemon, which outlives the launcher. Pinned sessions (--account) and
+# AIOLOS_RC_SHARED=0 start their own shim on a fresh ephemeral port and stop it
+# when Claude exits.
 #
 # Routing modes:
 #   no-pin (--no-pin)          inference -> aiolos with NO account header; aiolos
@@ -59,6 +60,33 @@ DEFAULT_ACCOUNT=""
 [ -f "$SECRETS/config.env" ] && . "$SECRETS/config.env"
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+
+# The aiolos URL for the inference leg. Prefer an explicit shell override; else
+# read it from ~/.claude/settings.local.json (the on-disk source of record).
+# An api.anthropic.com value is ignored: that is the per-process override aiolos-rc
+# gives Claude, and Claude exports it to every shell it starts. Taken as the aiolos
+# URL, inference would go straight to Anthropic on the main login.
+resolve_aiolos_url() {
+  local url="${ANTHROPIC_BASE_URL:-}"
+  case "$url" in *://api.anthropic.com|*://api.anthropic.com/*|*://api.anthropic.com:*) url="" ;; esac
+  if [ -z "$url" ]; then
+    url="$(python3 -c "import json,sys
+try:
+    d=json.load(open('$HOME/.claude/settings.local.json'))
+    print(d.get('env',{}).get('ANTHROPIC_BASE_URL',''))
+except Exception:
+    print('')")"
+  fi
+  printf '%s' "$url"
+}
+
+# One shared shim for all --no-pin sessions, run by aiolos-rc-shim.service on a fixed
+# port. A session that Claude hands to its background daemon keeps the shim port it
+# was started with. With a per-session shim, that port died when the launching
+# session exited (ECONNREFUSED, 2026-10-12). The shared shim outlives every session.
+# The port is below the ephemeral range (32768-60999) so nothing else takes it.
+SHARED_PORT="${AIOLOS_RC_SHARED_PORT:-28443}"
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 # True only if $1 is alive AND is actually one of our shim processes — guards
 # --stop/--status against a recycled PID now owned by an unrelated process.
 is_our_shim() {
@@ -90,7 +118,16 @@ case "${1:-}" in
       else rm -f "$f" "$f.log"; fi
     done
     [ "$any" = 1 ] || echo "aiolos-rc: no session shims running"
+    if port_open "$SHARED_PORT"; then echo "aiolos-rc: shared shim listening on :$SHARED_PORT"
+    else echo "aiolos-rc: shared shim not listening on :$SHARED_PORT"; fi
     exit 0 ;;
+  --serve-shared)
+    # Run by aiolos-rc-shim.service. Load-balanced, no account header.
+    url="$(resolve_aiolos_url)"
+    [ -n "$url" ] || { echo "aiolos-rc: no aiolos URL found" >&2; exit 1; }
+    exec env -u LD_PRELOAD -u AIOLOS_RC_PORT -u RC_PORTFILE RC_PORT="$SHARED_PORT" \
+      RC_CERT="$CERT" RC_KEY="$KEY" RC_AIOLOS_URL="$url" RC_ACCOUNT_ID= \
+      ${RC_DEBUG:+RC_DEBUG="$RC_DEBUG"} python3 "$DIR/shim.py" ;;
 esac
 
 # Run each session in its own systemd scope (claude-<pid>.scope in claude.slice), with
@@ -119,6 +156,9 @@ scope_props() {
     printf '%s\n' -p "MemoryLow=$AIOLOS_RC_SCOPE_MEMORY_LOW"
   fi
 }
+# "Already scoped" is read from the cgroup, not only from AIOLOS_RC_SCOPED: a tab
+# opened from inside a session inherits that variable but runs in the mux's cgroup.
+if ! grep -q '/claude.slice/claude-' /proc/self/cgroup 2>/dev/null; then unset AIOLOS_RC_SCOPED; fi
 if [ -z "${AIOLOS_RC_SCOPED:-}" ] && [ -d /run/systemd/system ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private" ]; then
   export AIOLOS_RC_SCOPED=1
   mapfile -t SCOPE_PROPS < <(scope_props "$@")
@@ -179,7 +219,7 @@ case "${1:-}" in
     if [ -n "$SKIP" ] && [ "$have_pm" = 0 ]; then
       set -- --permission-mode bypassPermissions "$@"
     fi
-    exec "${LAUNCH[@]}" "$sub" "$@"
+    exec env -u LD_PRELOAD -u AIOLOS_RC_PORT "${LAUNCH[@]}" "$sub" "$@"
     ;;
 esac
 
@@ -193,17 +233,7 @@ if [ ! -f "$PRELOAD" ]; then
   exit 1
 fi
 
-# The aiolos URL for the inference leg. Prefer an explicit shell override; else
-# read it from ~/.claude/settings.local.json (the on-disk source of record).
-AIOLOS_URL="${ANTHROPIC_BASE_URL:-}"
-if [ -z "$AIOLOS_URL" ]; then
-  AIOLOS_URL="$(python3 -c "import json,sys
-try:
-    d=json.load(open('$HOME/.claude/settings.local.json'))
-    print(d.get('env',{}).get('ANTHROPIC_BASE_URL',''))
-except Exception:
-    print('')")"
-fi
+AIOLOS_URL="$(resolve_aiolos_url)"
 [ -n "$AIOLOS_URL" ] || { echo "aiolos-rc: no aiolos URL found (set ANTHROPIC_BASE_URL or add it to ~/.claude/settings.local.json env)"; exit 1; }
 
 # Pinned mode needs an account. Load-balanced (--no-pin) does not.
@@ -225,17 +255,37 @@ print(next((a['id'] for a in accts if a.get('name')==want), ''))")"
 fi
 if [ "$NOPIN" = 1 ]; then MODE="load-balanced"; else MODE="pinned:$ACCOUNT"; fi
 
+# --no-pin sessions use the shared shim (see SHARED_PORT). Start its service when
+# it is not up; fall back to a per-session shim when it cannot be started.
+# AIOLOS_RC_SHARED=0 forces a per-session shim.
+SHIM_PID=""
+PORT=""
+if [ "$NOPIN" = 1 ] && [ "${AIOLOS_RC_SHARED:-1}" != 0 ]; then
+  if ! port_open "$SHARED_PORT"; then
+    systemctl --user start aiolos-rc-shim.service 2>/dev/null || true
+    for _ in $(seq 1 60); do port_open "$SHARED_PORT" && break; sleep 0.05; done
+  fi
+  if port_open "$SHARED_PORT"; then PORT="$SHARED_PORT"
+  else echo "aiolos-rc: shared shim not reachable on :$SHARED_PORT, using a session shim" >&2; fi
+fi
+
+# Per-session --settings override (flagSettings). Its content never changes, so one
+# file in the runtime dir serves every session. It is never deleted: a session that
+# outlives this launcher (handed to Claude's background daemon) may read it again.
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/aiolos-rc"
+mkdir -p "$RUNDIR"
+OVERRIDE_SETTINGS="$RUNDIR/override.settings.json"
+if [ ! -s "$OVERRIDE_SETTINGS" ]; then
+  printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > "$OVERRIDE_SETTINGS.$$"
+  mv -f "$OVERRIDE_SETTINGS.$$" "$OVERRIDE_SETTINGS"
+fi
+
+if [ -z "$PORT" ]; then
 # Start THIS session's shim on an ephemeral port (RC_PORT=0). The shim writes the
 # port it actually bound to PORTFILE; we read it back and point this process's
-# preload at it. Torn down on exit by the trap below.
-SHIM_PID=""
+# preload at it. Torn down on exit by the trap below, which also stops it for any
+# copy of the session that Claude moved to its background daemon.
 PORTFILE="$(mktemp "${TMPDIR:-/tmp}/aiolos-rc-port.XXXXXX")"
-# Per-session --settings override (flagSettings). Per-session (not a shared file in
-# the code dir) so concurrent instances never share or race on it; removed on exit.
-# Give it a .json name (mktemp, then rename) to match a settings file.
-_ov_tmp="$(mktemp "${TMPDIR:-/tmp}/aiolos-rc-settings.XXXXXX")"
-OVERRIDE_SETTINGS="$_ov_tmp.json"
-mv "$_ov_tmp" "$OVERRIDE_SETTINGS"
 cleanup() {
   if [ -n "$SHIM_PID" ] && pid_alive "$SHIM_PID"; then kill "$SHIM_PID" 2>/dev/null || true; fi
   if [ -n "$SHIM_PID" ]; then
@@ -243,7 +293,7 @@ cleanup() {
     # Keep the per-session log for post-mortem when debugging.
     [ -n "${RC_DEBUG:-}" ] || rm -f "$SHIMS_DIR/$SHIM_PID.log"
   fi
-  rm -f "$PORTFILE" "$OVERRIDE_SETTINGS"
+  rm -f "$PORTFILE"
 }
 trap cleanup EXIT INT TERM
 
@@ -259,7 +309,6 @@ SHIM_PID=$!
 mv -f "$STARTLOG" "$SHIMS_DIR/$SHIM_PID.log" 2>/dev/null || true
 
 # Wait for the shim to report its bound port.
-PORT=""
 for _ in $(seq 1 100); do
   if [ -s "$PORTFILE" ]; then PORT="$(cat "$PORTFILE")"; break; fi
   pid_alive "$SHIM_PID" || break
@@ -271,6 +320,7 @@ if [ -z "$PORT" ]; then
   exit 1
 fi
 printf 'pid=%s port=%s mode=%s\n' "$SHIM_PID" "$PORT" "$MODE" > "$SHIMS_DIR/$SHIM_PID"
+fi
 if [ "$NOPIN" = 1 ]; then
   echo "aiolos-rc: inference -> aiolos (load-balanced) ; remote-control -> main login (shim :$PORT)"
 else
@@ -293,12 +343,10 @@ export LD_PRELOAD="$PRELOAD"
 export AIOLOS_RC_PORT="$PORT"
 export NODE_EXTRA_CA_CERTS="$CA"
 
-printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > "$OVERRIDE_SETTINGS"
-
 # Launch as a CHILD (not exec) so the trap can tear down this session's shim when
 # Claude exits. LD_PRELOAD is inherited by the child.
 set +e
 "${LAUNCH[@]}" --settings "$OVERRIDE_SETTINGS" $SKIP "$@"
 rc=$?
 set -e
-exit $rc   # trap cleanup runs on exit and stops this session's shim
+exit $rc   # with a session shim, the trap stops it on exit

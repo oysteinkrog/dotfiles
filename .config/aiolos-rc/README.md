@@ -108,11 +108,18 @@ The aiolos URL for the inference leg is read from `ANTHROPIC_BASE_URL` in the cu
 shell if set, otherwise from `~/.claude/settings.local.json`. Add the dir to PATH for
 a bare `aiolos-rc`.
 
-**One shim per session.** Each `aiolos-rc` invocation starts its own shim on a fresh
-ephemeral port and tears it down when Claude exits, so multiple concurrent Claude
-instances are fully isolated — no shared port, no cross-session restarts, no single
-point of failure. `--status` lists running session shims; `--stop` stops all of them.
-Registry + per-session logs live under `~/.config/aiolos-rc/shims/`.
+**Shared shim for `--no-pin`.** Every `--no-pin` session uses one shared shim, the
+systemd user unit `aiolos-rc-shim.service` (`aiolos-rc --serve-shared`) on
+`127.0.0.1:28443` (`AIOLOS_RC_SHARED_PORT`). Claude can hand a session to its background
+daemon, which keeps running after the launcher exits, so the shim has to outlive every
+session. aiolos-rc starts the unit when it is down, and falls back to a session shim
+when it cannot.
+
+**Session shims.** Pinned sessions (`--account`), and any session with
+`AIOLOS_RC_SHARED=0`, start their own shim on an ephemeral port and stop it when Claude
+exits. `--status` lists running session shims and whether the shared one is up; `--stop`
+stops the session shims. Registry + per-session logs live under
+`~/.config/aiolos-rc/shims/`.
 
 ## Why `/remote-control` was hidden, and how the override works
 
@@ -150,16 +157,19 @@ command (clearing one left the other injecting the proxy host).
   resolver, the redirect would need revisiting.
 - `RC_DEBUG=1 aiolos-rc ...` logs one line per request (method, path, upstream) to
   that session's log under `shims/`. No bodies or tokens are ever logged.
-- The shim binds an ephemeral port per session (assigned by the OS); there is no
-  fixed port to configure.
+- A session shim binds an ephemeral port (assigned by the OS). The shared shim uses
+  28443, below the ephemeral range. Its `RC_DEBUG` lines go to its journal
+  (`journalctl --user -u aiolos-rc-shim`).
+- An `ANTHROPIC_BASE_URL` of `api.anthropic.com` is ignored as the aiolos URL: it is
+  the override aiolos-rc gives Claude, and Claude passes it on to every shell it starts.
 - Launches the native binary the same way `~/.config/fish/functions/claude.fish` does
   (WSL1 `p_align` patch + `--dangerously-skip-permissions`); override the flag with
   `AIOLOS_RC_SKIP_PERMISSIONS=""`.
 
 ## Files
 
-- `aiolos-rc` — launcher (one shim per session; `--status` / `--stop` manage them)
-- `shim.py` — path-splitting TLS shim on an ephemeral `127.0.0.1` port
+- `aiolos-rc` — launcher (`--status` / `--stop` manage the shims, `--serve-shared` runs the shared one)
+- `shim.py` — path-splitting TLS shim on a `127.0.0.1` port
 - `preload.c` / `preload.so` — per-process `api.anthropic.com` → shim redirect
 - `certs/` — local CA + `api.anthropic.com` leaf (825-day, machine-local)
 - `shims/` — per-session registry + logs (auto-managed)
