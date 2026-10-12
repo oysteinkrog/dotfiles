@@ -249,6 +249,22 @@ test_tasks_critical_bands() {
   [[ $(nevents 'crit TASKS claude-1 has 8100') == 1 ]]
 }
 
+test_class_lookup_retry_and_path() {
+  setup class_retry
+  mkdir -p "$MM_CGROUP/claude-1.scope"; echo 2100 > "$MM_CGROUP/claude-1.scope/pids.current"
+  MM_CLASS_RETRY=60
+  check_tasks   # lookup fails (no class file): cached as empty
+  [[ $(nevents 'crit TASKS claude-1 ') == 1 ]] || return 1
+  echo critical > "$T/class.claude-1"
+  scope_class claude-1; [[ -z $CLASS ]] || return 1   # still inside the retry window
+  CLASS_AT[claude-1]=$((SECONDS - 61)); scope_class claude-1
+  [[ $CLASS == critical ]] || return 1
+  # The real lookup must not depend on PATH (the unit has no ~/bin).
+  printf '#!/bin/sh\nprintf "critical\\t(x)\\n"\n' > "$T/ms"; chmod +x "$T/ms"
+  unset -f mm_session_class; source "$SCRIPT" > /dev/null
+  [[ $(PATH=/usr/bin MM_SESSION_BIN=$T/ms mm_session_class claude-1) == critical ]]
+}
+
 # ---- duplicate sessions ----
 test_dup_sessions() {
   setup dup
