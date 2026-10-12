@@ -531,6 +531,10 @@ wait_for_mux() {
 # (The mux-startup handler in wezterm.lua uses `plan` directly instead.)
 restore() {
   exec >> "$STATE_DIR/restore.log" 2>&1
+  # `cli spawn` passes the caller's environment to the new tab. Run from inside a
+  # Claude session, that would hand the resumed session this session's aiolos-rc
+  # preload and shim port, and its own shim would then fail every request.
+  unset LD_PRELOAD AIOLOS_RC_PORT AIOLOS_RC_SCOPED CLAUDECODE CLAUDE_CODE_ENTRYPOINT
   wait_for_mux || { echo "mux not reachable, giving up"; return 1; }
   local cwd title cmd pane window_id
   window_id=$("$WEZTERM" cli --prefer-mux list --format json | jq -r '.[0].window_id // empty')
