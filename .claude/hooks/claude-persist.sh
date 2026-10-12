@@ -10,7 +10,8 @@
 #   claude-persist.sh snapshot        save the mux server's tab order (systemd
 #                                     timer and ExecStop run this)
 #   claude-persist.sh plan            print sessions to resume (cwd, title, command)
-#   claude-persist.sh restore         resume every recorded session with `wezterm cli`
+#   claude-persist.sh restore         resume every recorded session into the running
+#                                     mux server with `frankenterm-gui cli`
 #   claude-persist.sh list            show recorded sessions
 #   claude-persist.sh forget KEY      drop one entry (file name without .json)
 #
@@ -29,7 +30,6 @@ set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-persist"
 SESS_DIR="$STATE_DIR/sessions"
 CLAUDE_SESSIONS="$HOME/.claude/sessions"   # Claude writes <pid>.json here per process
-WEZTERM="$HOME/.local/bin/wezterm"
 FT_CLI="$HOME/.local/bin/frankenterm-gui"
 MUX_UNIT=frankenterm-mux.service
 TAB_ORDER="$STATE_DIR/tab-order"
@@ -109,7 +109,7 @@ keep_flags() {
         printf '%s\n' "$a" ;;
       --settings)
         i=$((i + 1)); v=${argv[$i]:-}
-        case "$v" in */aiolos-rc-settings.*) ;; *) printf '%s\n%s\n' "$a" "$v" ;; esac ;;
+        case "$v" in */aiolos-rc-settings.*|*/aiolos-rc/override.settings.json) ;; *) printf '%s\n%s\n' "$a" "$v" ;; esac ;;
       --model|--permission-mode|--add-dir|--agent|--mcp-config|--effort|--fallback-model|--append-system-prompt|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools|--plugin-dir)
         printf '%s\n' "$a"
         i=$((i + 1)); [ $i -lt ${#argv[@]} ] && printf '%s\n' "${argv[$i]}" ;;
@@ -279,23 +279,64 @@ mux_pid() {
   printf '%s:%s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$p"
 }
 
+# The FrankenTerm CLI, talking to the mux server's own socket, not a GUI's (a GUI
+# numbers panes its own way). The CLI falls back to WEZTERM_UNIX_SOCKET, so clear
+# that one too.
+ft() { env -u FRANKENTERM_UNIX_SOCKET -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$FT_CLI" cli "$@"; }
+
+# Is this session id running in any live Claude process? A session that Claude
+# handed to its background daemon lives on under another pid (kind "bg").
+session_running() {
+  local sf
+  for sf in $(grep -l -F -- "\"$1\"" "$CLAUDE_SESSIONS"/*.json 2>/dev/null); do
+    claude_alive "$(basename "$sf" .json)" "$1" && return 0
+  done
+  return 1
+}
+
+# Open a tab in the mux server that runs CMD in CWD, then keeps a fish shell open,
+# and print the new pane id. `cli spawn` hands the caller's environment to the new
+# tab. Clear what belongs to the caller's own Claude session: with aiolos-rc's
+# preload and shim port, the resumed session's shim would send its own requests
+# into the caller's shim and fail; with ANTHROPIC_BASE_URL=api.anthropic.com,
+# aiolos-rc would send inference straight to Anthropic. The timer runs with
+# systemd's short PATH, so give the tab the PATH of a login shell.
+spawn_tab() {
+  local window_id=$1 cwd=$2 cmd=$3 lp
+  local -a where=(--new-window)
+  [ -n "$window_id" ] && where=(--window-id "$window_id")
+  lp=$(fish -lc 'string join : $PATH' 2>/dev/null)
+  [ -n "$lp" ] && cmd="export PATH=$(printf '%q' "$lp"); $cmd"
+  env -u LD_PRELOAD -u AIOLOS_RC_PORT -u AIOLOS_RC_SCOPED -u CLAUDECODE \
+      -u CLAUDE_CODE_ENTRYPOINT -u ANTHROPIC_BASE_URL \
+      -u FRANKENTERM_UNIX_SOCKET -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE \
+    "$FT_CLI" cli spawn "${where[@]}" --cwd "$cwd" -- bash -c "$cmd; exec fish -l"
+}
+
 # Save the mux server's tab order: a header line with the server's id, then
 # <window id> TAB <pane id> per pane, in tab order. Ask the server's own socket,
 # not a GUI's (a GUI numbers panes its own way). Keep the old file when the
 # server answers with nothing, so a dying server cannot wipe it.
 snapshot() {
-  local pid rows
+  local pid listing rows
   pid=$(mux_pid); [ -n "$pid" ] || return 0
-  rows=$(env -u FRANKENTERM_UNIX_SOCKET "$FT_CLI" cli list --json 2>/dev/null \
-    | jq -r '.[] | "\(.window_id)\t\(.pane_id)"' 2>/dev/null)
+  listing=$(ft list --json 2>/dev/null)
+  rows=$(jq -r '.[] | "\(.window_id)\t\(.pane_id)"' <<<"$listing" 2>/dev/null)
   [ -n "$rows" ] || return 0
   lock_state
   { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
 
   local f epid pane sf ssid scwd em
-  local -A row_pane=()
-  local w_ p_
+  local -A row_pane=() row_tty=()
+  local w_ p_ t_
   while IFS=$'\t' read -r w_ p_; do row_pane[$p_]=1; done <<<"$rows"
+  # The terminal of each pane. Pane ids start over in every mux server, so a
+  # Claude that outlived the last server can have the pane id of a new pane.
+  # A tty cannot be shared: the old Claude still holds its pts open, so the new
+  # server gets other numbers. "Is this Claude in this server" asks by tty.
+  while IFS= read -r t_; do [ -n "$t_" ] && row_tty[$t_]=1; done \
+    < <(jq -r '.[].tty_name // empty' <<<"$listing" 2>/dev/null)
+  in_this_mux() { local t; t=$(readlink "/proc/$1/fd/0" 2>/dev/null); [ -n "$t" ] && [ -n "${row_tty[$t]:-}" ]; }
 
   # Record live terminal sessions in this server that have no entry. Their
   # SessionStart hook can miss: at boot about 40 sessions start at once, and
@@ -307,7 +348,7 @@ snapshot() {
     [ "$(jq -r '.kind // empty' "$sf" 2>/dev/null)" = interactive ] || continue
     started_in_terminal "$epid" || continue
     pane=$(tr '\0' '\n' < "/proc/$epid/environ" 2>/dev/null | sed -n 's/^WEZTERM_PANE=//p' | head -1)
-    [ -n "$pane" ] && [ -n "${row_pane[$pane]:-}" ] || continue
+    [ -n "$pane" ] && in_this_mux "$epid" || continue
     tr '\0' '\n' < "/proc/$epid/environ" 2>/dev/null | grep -qx 'CLAUDE_PERSIST=0' && continue
     ssid=$(jq -r '.sessionId // empty' "$sf"); scwd=$(jq -r '.cwd // empty' "$sf")
     [ -n "$ssid" ] && [ -n "$scwd" ] || continue
@@ -336,12 +377,16 @@ snapshot() {
   # sessions stamped by the server that just went away, which are the ones
   # still open at its last snapshot (at most 30 s before it stopped). An entry
   # whose tab was closed without a SessionEnd hook keeps an old stamp and is
-  # dropped instead of coming back.
+  # dropped instead of coming back. Only a session whose terminal is in this
+  # server gets the stamp: a Claude that outlived the last server keeps that
+  # server's stamp, so its exit hook keeps the entry and the late resume below
+  # brings it back.
   for f in "$SESS_DIR"/*.json; do
     [ -e "$f" ] || continue
     epid=$(jq -r '.pid // 0' "$f")
     claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
     [ "$(jq -r '.mux // empty' "$f")" = "$pid" ] && continue
+    in_this_mux "$epid" || continue
     jq --arg m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
@@ -366,6 +411,34 @@ snapshot() {
     mv "$f" "$STATE_DIR/restored/"
     echo "$(date -Is) closed $(basename "$f" .json): pane $pane is gone from mux $pid" >> "$STATE_DIR/events.log"
   done
+  # Resume sessions whose Claude outlived its mux server. At mux startup plan
+  # skips a session that is still running and marks it late. Its Claude dies
+  # soon after (its terminal is gone), its exit hook keeps the entry because the
+  # stamp is the old server's, and nothing else would bring it back. On
+  # 2026-10-12 kpp had to be resumed by hand. A session that Claude moved to its
+  # background daemon is still running under another pid: drop that entry.
+  local late lsid window_id="" lcmd lpane
+  for f in "$SESS_DIR"/*.json; do
+    [ -z "$stopping" ] || break
+    [ -e "$f" ] || continue
+    late=$(jq -r '.late // empty' "$f"); [ -n "$late" ] || continue
+    lsid=$(jq -r .session_id "$f")
+    claude_alive "$(jq -r '.pid // 0' "$f")" "$lsid" && continue
+    if [ "$(jq -r '.mux // empty' "$f")" != "$late" ] || session_running "$lsid"; then
+      mv "$f" "$STATE_DIR/restored/"
+      echo "$(date -Is) late $(basename "$f" .json): not resumed, restamped or still running elsewhere" >> "$STATE_DIR/events.log"
+      continue
+    fi
+    lcmd=$(resume_cmd "$f") || { mv "$f" "$STATE_DIR/restored/"; continue; }
+    [ -n "$window_id" ] || window_id=$(jq -r '.[0].window_id // empty' <<<"$listing")
+    mv "$f" "$STATE_DIR/restored/"
+    if lpane=$(spawn_tab "$window_id" "$(jq -r .cwd "$STATE_DIR/restored/$(basename "$f")")" "$lcmd"); then
+      echo "$(date -Is) late $(basename "$f" .json): resumed in pane $lpane, its Claude outlived mux $late" >> "$STATE_DIR/events.log"
+    else
+      echo "$(date -Is) late $(basename "$f" .json): spawn failed" >> "$STATE_DIR/events.log"
+    fi
+  done
+
   # Drop ended markers once their Claude process is gone.
   for em in "$STATE_DIR"/ended/*; do
     [ -e "$em" ] || continue
@@ -433,6 +506,23 @@ tab_title() {
   printf '%s' "${t:-$(basename "$cwd")}"
 }
 
+# Print the bash command that resumes the session of entry file $1.
+resume_cmd() {
+  local f=$1 a prompt cmd
+  cmd="cd $(printf '%q' "$(jq -r .cwd "$f")") &&"
+  if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
+    while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.launcher[]' "$f")
+  else
+    cmd+=" $(printf '%q' "$CLAUDE_BIN")"
+  fi
+  cmd+=" --resume $(printf '%q' "$(jq -r .session_id "$f")")"
+  while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.flags[]' "$f")
+  # `--` ends the options, so a variadic flag such as --add-dir cannot take the prompt
+  prompt=$(resume_prompt "$(jq -r '.transcript // empty' "$f")" "$(jq -r '.status // empty' "$f")")
+  [ -n "$prompt" ] && cmd+=" -- $(printf '%q' "$prompt")"
+  printf '%s\n' "$cmd"
+}
+
 # Print one line per session to resume: <cwd> TAB <tab title> TAB <bash command>.
 # The command cds into <cwd> itself, because some spawn APIs ignore the cwd
 # they are given when a command is set (Frankenterm's Lua spawn_tab does).
@@ -440,7 +530,7 @@ tab_title() {
 # SessionStart hook writes a fresh entry. Log lines go to restore.log.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
-  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd a prompt ep
+  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd ep
   local max=${CLAUDE_PERSIST_MAX:-40} n=0 last_mux="" tag spid
   local -A newest=() mt=()
   # The pid of the server that wrote the last snapshot, when that server is
@@ -472,7 +562,12 @@ plan() {
     sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f")
     transcript=$(jq -r '.transcript // empty' "$f"); pid=$(jq -r '.pid // 0' "$f")
     if claude_alive "$pid" "$sid"; then
-      echo "skip $sid: still running as pid $pid" >> "$log"; continue
+      echo "skip $sid: still running as pid $pid" >> "$log"
+      # It outlived the last server; snapshot resumes it once it exits.
+      if [ -n "$last_mux" ] && [ "$(jq -r '.mux // empty' "$f")" = "$last_mux" ]; then
+        jq --arg m "$last_mux" '.late = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+      fi
+      continue
     fi
     if [ -n "$transcript" ] && [ ! -s "$transcript" ]; then
       echo "drop $sid ($cwd): no transcript (session never had a message)" >> "$log"
@@ -502,17 +597,7 @@ plan() {
     fi
     n=$((n + 1))
 
-    cmd="cd $(printf '%q' "$cwd") &&"
-    if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
-      while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.launcher[]' "$f")
-    else
-      cmd+=" $(printf '%q' "$CLAUDE_BIN")"
-    fi
-    cmd+=" --resume $(printf '%q' "$sid")"
-    while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.flags[]' "$f")
-    # `--` ends the options, so a variadic flag such as --add-dir cannot take the prompt
-    prompt=$(resume_prompt "$transcript" "$(jq -r '.status // empty' "$f")")
-    [ -n "$prompt" ] && cmd+=" -- $(printf '%q' "$prompt")"
+    cmd=$(resume_cmd "$f")
     mv "$f" "$STATE_DIR/restored/"
     echo "resume $sid ($cwd): $cmd" >> "$log"
     printf '%s\t%s\t%s\n' "$cwd" "$(tab_title "$transcript" "$cwd")" "$cmd"
@@ -521,33 +606,27 @@ plan() {
 
 wait_for_mux() {
   local n=0
-  until "$WEZTERM" cli --prefer-mux list >/dev/null 2>&1; do
+  until ft list >/dev/null 2>&1; do
     n=$((n + 1)); [ $n -ge 60 ] && return 1
     sleep 1
   done
 }
 
-# Resume sessions into an already running wezterm mux with `wezterm cli`.
-# (The mux-startup handler in wezterm.lua uses `plan` directly instead.)
+# Resume sessions into an already running mux server, for example the ones plan
+# held back over the limit. (The mux-startup handler in wezterm.lua uses `plan`
+# directly instead.) The CLI cannot set a tab title; Claude sets it once it runs.
 restore() {
   exec >> "$STATE_DIR/restore.log" 2>&1
-  # `cli spawn` passes the caller's environment to the new tab. Run from inside a
-  # Claude session, that would hand the resumed session this session's aiolos-rc
-  # preload and shim port, and its own shim would then fail every request.
-  unset LD_PRELOAD AIOLOS_RC_PORT AIOLOS_RC_SCOPED CLAUDECODE CLAUDE_CODE_ENTRYPOINT
   wait_for_mux || { echo "mux not reachable, giving up"; return 1; }
   local cwd title cmd pane window_id
-  window_id=$("$WEZTERM" cli --prefer-mux list --format json | jq -r '.[0].window_id // empty')
+  window_id=$(ft list --json | jq -r '.[0].window_id // empty')
   while IFS=$'\t' read -r cwd title cmd; do
-    # run claude, then keep a shell open in the tab when it exits
-    if [ -n "$window_id" ]; then
-      pane=$("$WEZTERM" cli --prefer-mux spawn --window-id "$window_id" --cwd "$cwd" -- bash -c "$cmd; exec fish -l")
+    if pane=$(spawn_tab "$window_id" "$cwd" "$cmd"); then
+      echo "spawned pane $pane for $cwd ($title)"
+      [ -n "$window_id" ] || window_id=$(ft list --json | jq -r --argjson p "$pane" '.[] | select(.pane_id==$p) | .window_id')
     else
-      pane=$("$WEZTERM" cli --prefer-mux spawn --new-window --cwd "$cwd" -- bash -c "$cmd; exec fish -l")
-      window_id=$("$WEZTERM" cli --prefer-mux list --format json | jq -r --argjson p "$pane" '.[] | select(.pane_id==$p) | .window_id')
+      echo "could not spawn a tab for $cwd ($title)"
     fi
-    "$WEZTERM" cli --prefer-mux set-tab-title --pane-id "$pane" "$title" >/dev/null 2>&1
-    echo "spawned pane $pane for $cwd"
   done < <(plan)
 }
 
