@@ -250,7 +250,9 @@ trap cleanup EXIT INT TERM
 # Log to a launcher-PID-unique name ($$ differs per concurrent launch), then
 # rename to the shim's PID once known. Both end in .log so --status/--stop skip them.
 STARTLOG="$SHIMS_DIR/starting.$$.log"
-setsid env RC_PORT=0 RC_PORTFILE="$PORTFILE" RC_CERT="$CERT" RC_KEY="$KEY" \
+# -u: when launched from a shell that inherited another session's preload, the
+# shim's own upstream calls would be redirected into that session's shim and fail.
+setsid env -u LD_PRELOAD -u AIOLOS_RC_PORT RC_PORT=0 RC_PORTFILE="$PORTFILE" RC_CERT="$CERT" RC_KEY="$KEY" \
   RC_AIOLOS_URL="$AIOLOS_URL" RC_ACCOUNT_ID="$ACCOUNT" ${RC_DEBUG:+RC_DEBUG="$RC_DEBUG"} \
   python3 "$DIR/shim.py" >"$STARTLOG" 2>&1 &
 SHIM_PID=$!
