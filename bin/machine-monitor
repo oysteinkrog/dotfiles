@@ -32,7 +32,7 @@
 #              indexing outside its own unit.
 #   PROCS      gpg-agent 10/50, git 48/96, wine* and *.exe 200/400 processes.
 #   TASKS      tasks per claude-*.scope 1000 warn, 2000 crit; 4000/8000 for a
-#              critical-class session (class cached 10 min, default on failure).
+#              critical-class session (class cached 10 min, failed lookup retried after 60 s, default on failure).
 #   DUP_SESSION two live Claude processes resuming the same session id.
 #   TIMER      watched units skipped or failed, watched timers not active,
 #              slab-guard not active (every 5 min); other failed units (info).
@@ -71,6 +71,9 @@ MM_WINE_BANDS=${MM_WINE_BANDS:-200 400}
 MM_TASKS_BANDS=${MM_TASKS_BANDS:-1000 2000}
 MM_TASKS_BANDS_CRITICAL=${MM_TASKS_BANDS_CRITICAL:-4000 8000}
 MM_CLASS_TTL=${MM_CLASS_TTL:-600}
+MM_CLASS_RETRY=${MM_CLASS_RETRY:-60}
+# The systemd unit runs with PATH=/usr/local/bin:/usr/bin, so call by full path.
+MM_SESSION_BIN=${MM_SESSION_BIN:-$HOME/bin/machine-session}
 MM_SLAB_RATE_WARN=${MM_SLAB_RATE_WARN:-200}
 MM_SLAB_RATE_REARM=${MM_SLAB_RATE_REARM:-50}
 
@@ -409,12 +412,15 @@ proc_band() {
 }
 
 # Session class of a scope (critical, normal, pausable), cached per scope for
-# MM_CLASS_TTL seconds. Prints nothing when the lookup fails.
-mm_session_class() { machine-session class "$1" 2>/dev/null | cut -f1; }
+# MM_CLASS_TTL seconds. A failed or empty lookup is retried after MM_CLASS_RETRY
+# seconds. Prints nothing when the lookup fails.
+mm_session_class() { "$MM_SESSION_BIN" class "$1" 2>/dev/null | cut -f1; }
 declare -gA CLASS_VAL=() CLASS_AT=()
 scope_class() {
   local name=$1 now=$SECONDS
-  if [[ -n ${CLASS_AT[$name]:-} ]] && (( now - CLASS_AT[$name] < MM_CLASS_TTL )); then
+  local ttl=$MM_CLASS_TTL
+  [[ -n ${CLASS_VAL[$name]:-} ]] || ttl=$MM_CLASS_RETRY
+  if [[ -n ${CLASS_AT[$name]:-} ]] && (( now - CLASS_AT[$name] < ttl )); then
     CLASS=${CLASS_VAL[$name]}; return
   fi
   CLASS=$(mm_session_class "$name") || CLASS=""
