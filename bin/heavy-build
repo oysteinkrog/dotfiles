@@ -44,12 +44,18 @@
 #   and its unit name is logged as untracked=unit:GiB. When such a scope used
 #   under 0.05 cores over the last 2 min, it is logged as unit:GiB:idle and
 #   is not counted as a running build, for the job limit or for cores;
-# - the memory builds hold plus its estimate fits under the builds.slice cap;
+# - the memory builds hold plus its estimate fits under the builds.slice cap.
+#   The cap is the lower of builds.slice memory.max (MemoryMax) and
+#   memory.high (MemoryHigh); "max" means no limit. Both files are read again
+#   on every decision, so a `systemctl --user set-property builds.slice
+#   MemoryHigh=...` applies at once. Each live.log decision line has
+#   cap=<GiB>G(max|high), or cap=none when neither is set;
 # - claude.slice and app.slice memory pressure (some avg10) are each under
 #   HEAVY_BUILD_MAX_MEM_PSI percent (default 5);
 # - no running build holds one of its lock keys.
 # When no build runs, a build starts once MemAvailable is at least
-# HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate. Order is priority, then
+# HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate (the builds.slice cap does
+# not apply), so one big build is never blocked forever. Order is priority, then
 # arrival. A build whose lock key is busy is skipped and keeps its place.
 # Writer preference: no build with a tree:<top>#<suffix> key that is behind
 # the first waiter with the plain key tree:<top> in order starts until the
@@ -887,7 +893,9 @@ waiter_lines() {
 }
 
 # The admission walk. Input: R, F and W lines. Prints
-# "start|wait<TAB>rank<TAB>reason<TAB>untracked" for the waiter named by `me`.
+# "start|wait<TAB>rank<TAB>reason<TAB>untracked<TAB>prioheld<TAB>cap" for the
+# waiter named by `me`. cap is the builds.slice cap used, as <GiB>G(max|high)
+# or none.
 # Each reason starts with a short kind and a colon. untracked lists the F scopes
 # as unit:GiB, comma separated, or "-".
 # shellcheck disable=SC2016
@@ -946,7 +954,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
   if (av - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available, %.1f still to come for running builds, reserve %d", w_mem[i], av, tc, reserve)
-  if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap", w_mem[i], held, slicecap)
+  if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
   return ""
 }
 function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct); picked[i] = 1 }
@@ -970,9 +978,14 @@ BEGIN {
     else if (f[1] == "SwapFree:") swf = f[2]
   }
   close(meminfo)
-  slicecap = 1e9
-  if ((getline l < slicemax) > 0 && l ~ /^[0-9]+$/) slicecap = l / 1073741824
+  # The cap is the lower of memory.max and memory.high; "max" or a missing
+  # file means no limit. On a tie memory.max is named.
+  slicecap = 1e9; capsrc = "none"
+  if ((getline l < slicemax) > 0 && l ~ /^[0-9]+$/) { slicecap = l / 1073741824; capsrc = "max" }
   close(slicemax)
+  if ((getline l < slicehigh) > 0 && l ~ /^[0-9]+$/ && l / 1073741824 < slicecap) { slicecap = l / 1073741824; capsrc = "high" }
+  close(slicehigh)
+  capinfo = (capsrc == "none") ? "none" : sprintf("%.1fG(%s)", slicecap, capsrc)
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
   claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
 }
@@ -1063,34 +1076,35 @@ END {
     # ahead of it, so its give-up clock does not run.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
     if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
-    printf "%s\t%d\t%s\t%s\t%d\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph
+    printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
   }
-  printf "wait\t0\tqueue: no ticket for this build\t%s\t0\n", untracked
+  printf "wait\t0\tqueue: no ticket for this build\t%s\t0\t%s\n", untracked, capinfo
 }'
 
-# Runs the budget rule for this waiter. Sets dec (start or wait), rank, why and
+# Runs the budget rule for this waiter. Sets dec (start or wait), rank, why,
+# capinfo (the builds.slice cap used) and
 # prioheld (1 when only higher-priority builds ahead hold it back).
 decide() {
   local out
   sweep_stale
   if [[ -e $HOLD ]]; then
-    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0
+    dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0 capinfo=-
     return
   fi
   psi_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
-    -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v cpupsifile="$PROC/pressure/cpu" \
+    -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" "$ADMIT_AWK")
-  IFS=$'\t' read -r dec rank why untracked prioheld <<< "$out"
+  IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
-  untracked=${untracked:--}
+  untracked=${untracked:--} capinfo=${capinfo:--}
 }
 
 # ---------------------------------------------------------------- logging
@@ -1110,7 +1124,7 @@ log_line() {
 # Logs the budget decision when it, its reason kind or the actual outcome
 # changes. $1 is what actually happened: wait or start.
 log_decision() {
-  local k="$dec|${why%%:*}|$1|$MODE" since=
+  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}" since=
   if [[ $dec == start ]]; then
     [[ -n $would_since ]] || would_since=$EPOCHSECONDS
   else
@@ -1120,7 +1134,7 @@ log_decision() {
   last_log=$k
   [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
   [[ $dec == start && $why == aged:* ]] && since+=" aged=1"
-  log_line "decision=$dec reason=\"$why\" actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
+  log_line "decision=$dec reason=\"$why\" cap=${capinfo:--} actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
 }
 
 # Logs an exit 75 as decision=refuse, then exits 75. $1 is the reason.
