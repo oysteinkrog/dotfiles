@@ -142,6 +142,16 @@
 #   hung), or when its Wine processes have lost their wineserver. Such a build
 #   stops counting against the budget. Nothing is killed by default;
 #   HEAVY_BUILD_WINE_ORPHAN=stop stops a Wine run after 2 min in that state.
+# - CPU pinning is undone. Every 3 s (HB_CPU_GUARD_SECS) any thread in the
+#   build's own scope whose CPU list is narrower than all CPUs the scope may
+#   use (taskset, numactl --physcpubind, sched_setaffinity) is set back to all
+#   of them, and live.log gets event=unpin once per pid. On 2026-10-13 40 busy
+#   loops pinned to CPUs 30 and 31 starved the NVIDIA modeset thread and
+#   KWin's output thread there, and the desktop froze for seconds at a time.
+#   A cgroup cannot forbid sched_setaffinity, so it is undone after the fact.
+# - Warns (event=busy-loops, nothing is killed) when the scope has more than
+#   2 times its estimated cores (at least 2) in threads that stayed runnable
+#   without ever sleeping between two checks, for 60 s (HB_BUSY_SECS).
 # - Exit codes: the command's own status; 128 + signal on a signal death (137
 #   after an OOM kill); 75 when refused or when the wait gave up; 124 when
 #   HEAVY_BUILD_TIMEOUT or HEAVY_BUILD_WINE_ORPHAN=stop ended it; 2 for a usage
@@ -204,6 +214,9 @@ SCOPE_GONE_SECS=${HB_SCOPE_GONE_SECS:-120}
 PSI_GAP=${HB_PSI_GAP_SECS:-20}
 CPUDIR=$RUNDIR/heavy-build.cpu
 PSIF=$RUNDIR/heavy-build.cpupsi
+GUARD_SECS=${HB_CPU_GUARD_SECS:-3}
+BUSY_SECS=${HB_BUSY_SECS:-60}
+SYSCPU=${HB_SYSCPU:-/sys/devices/system/cpu}
 # comm names (as /proc shows them, 15 characters at most) of the Wine
 # processes that stay behind when a Wine run ends. From the user journal,
 # 2026-10-07 to 10-09: winedevice.exe in almost every stop, and now and then
@@ -1202,6 +1215,86 @@ sample_scope() {
   psi_watch
 }
 
+# ---------------------------------------------------------------- CPU guard
+# See "CPU pinning is undone" in the help text for why.
+
+# All CPUs the scope cgroup $1 may use: its cpuset.cpus.effective when the
+# cpuset controller is on, else all online CPUs.
+all_cpus() {
+  local c=
+  read -r c 2>/dev/null < "$1/cpuset.cpus.effective"
+  [[ -n $c ]] || read -r c 2>/dev/null < "$SYSCPU/online"
+  echo "$c"
+}
+
+# Thread IDs in the scope cgroup $1 and any cgroups below it. Uses
+# cgroup.threads; where it is missing, the threads of each pid in cgroup.procs.
+scope_tids() {
+  local c pid ts
+  while IFS= read -r c; do
+    if [[ -r $c/cgroup.threads ]]; then cat -- "$c/cgroup.threads" 2>/dev/null; continue; fi
+    while read -r pid; do
+      [[ $pid =~ ^[0-9]+$ ]] || continue
+      ts=("$PROC/$pid"/task/[0-9]*)
+      if [[ -e ${ts[0]} ]]; then printf '%s\n' "${ts[@]##*/}"; else echo "$pid"; fi
+    done 2>/dev/null < "$c/cgroup.procs"
+  done < <(find "$1" -type d 2>/dev/null)
+}
+
+# Reads thread IDs on stdin. Prints "tid tgid state voluntary_switches cpus"
+# for each one whose status can be read.
+thread_info() {
+  grep -x '[0-9]\+' | sed "s|.*|$PROC/&/status|" \
+    | xargs -r grep -sH -e '^Tgid:' -e '^State:' -e '^voluntary_ctxt_switches:' -e '^Cpus_allowed_list:' 2>/dev/null \
+    | awk '{
+        i = index($0, ":"); p = substr($0, 1, i - 1); r = substr($0, i + 1)
+        j = index(r, ":"); k = substr(r, 1, j - 1); v = substr(r, j + 1); gsub(/^[ \t]+|[ \t]+$/, "", v)
+        n = split(p, a, "/"); t = a[n - 1]
+        if (!(t in seen)) { seen[t] = 1; order[++m] = t }
+        if (k == "Tgid") g[t] = v
+        else if (k == "State") s[t] = substr(v, 1, 1)
+        else if (k == "voluntary_ctxt_switches") w[t] = v
+        else c[t] = v
+      }
+      END { for (i = 1; i <= m; i++) { t = order[i]; if (c[t] != "") printf "%s %s %s %s %s\n", t, (g[t] == "" ? t : g[t]), (s[t] == "" ? "?" : s[t]), (w[t] == "" ? "-" : w[t]), c[t] } }'
+}
+
+# Sets pinned threads in our own scope back to all CPUs and watches for busy
+# loops. Touches nothing outside $BSLICE/$unit.scope.
+cpu_guard() {
+  local d=$BSLICE/$unit.scope all tid tgid st vcs cpus busy=0 cmd lim10 k
+  local -A now_st=()
+  [[ -d $d ]] || return 0
+  all=$(all_cpus "$d")
+  [[ -n $all ]] || return 0
+  while read -r tid tgid st vcs cpus; do
+    if [[ $cpus != "$all" ]] && taskset -p -c "$all" "$tid" >/dev/null 2>&1 && [[ -z ${unpinned[$tgid]:-} ]]; then
+      unpinned[$tgid]=1
+      cmd=$(tr '\0' ' ' < "$PROC/$tgid/cmdline" 2>/dev/null | cut -c1-200)
+      cmd=${cmd% }; cmd=${cmd//\"/\'}
+      log_line "event=unpin unit=$unit pid=$tgid tid=$tid cpus=$cpus set_to=$all cmd=\"$cmd\""
+      say "warning: pid $tgid ($cmd) was pinned to CPUs $cpus; set back to $all. Pinned builds froze the desktop on 2026-10-13."
+    fi
+    [[ $st == R && $vcs != - && ${prev_st[$tid]:-} == "R:$vcs" ]] && busy=$(( busy + 1 ))
+    now_st[$tid]="$st:$vcs"
+  done < <(scope_tids "$d" | thread_info)
+  prev_st=()
+  for k in "${!now_st[@]}"; do prev_st[$k]=${now_st[$k]}; done
+  lim10=${est_cores/./}
+  lim10=$(( 2 * 10#${lim10:-80} ))
+  (( lim10 < 20 )) && lim10=20
+  if (( busy * 10 > lim10 )); then
+    [[ -n $busy_since ]] || busy_since=$EPOCHSECONDS
+    if [[ -z $busy_warned ]] && (( EPOCHSECONDS - busy_since >= BUSY_SECS )); then
+      busy_warned=1
+      say "warning: $busy threads in this build have spun without sleeping for ${BUSY_SECS} s (estimate: ${est_cores} cores). Busy loops starved the desktop on 2026-10-13. Nothing is killed."
+      log_line "event=busy-loops unit=$unit threads=$busy est_cores=$est_cores secs=$(( EPOCHSECONDS - busy_since )) cmd=\"$cmdline\""
+    fi
+  else
+    busy_since=
+  fi
+}
+
 # append_history EXIT_CODE REASON. Columns: see the help text at the top.
 append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
@@ -1417,10 +1510,14 @@ child=$!
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
 rc= gone_since=
+declare -A unpinned=() prev_st=()
+busy_since= busy_warned= last_sample=$(now_us)
 while :; do
   iv=$SAMPLE
   (( EPOCHSECONDS - start_ts < 60 && iv > 2 )) && iv=2
-  sleep "$iv" &
+  step=$iv
+  (( GUARD_SECS > 0 && GUARD_SECS < step )) && step=$GUARD_SECS
+  sleep "$step" &
   sp=$!
   done_pid=
   wait -n -p done_pid "$child" "$sp"
@@ -1435,7 +1532,11 @@ while :; do
     kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
     continue
   fi
-  sample_scope
+  (( GUARD_SECS > 0 )) && cpu_guard
+  if (( $(now_us) - last_sample >= iv * 1000000 - 250000 )); then
+    sample_scope
+    last_sample=$(now_us)
+  fi
   # wait -n can miss a child that bash already reaped, so check it directly.
   if ! kill -0 "$child" 2>/dev/null; then
     wait "$child"; rc=$?
