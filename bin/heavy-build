@@ -409,6 +409,27 @@ wineservers_for() {
   done
 }
 
+# True when the command runs Wine: some word, split on blanks and shell
+# separators so sh -c '...' counts, is a Wine program (wine, wine64,
+# wineserver, wineboot, winetricks), a known Wine wrapper script, or a script
+# under tools/wine/. "wine" inside another path or argument does not count,
+# so /var/tmp/claude/x-linux-wine/run.sh gets no Wine key.
+wine_cmd() {
+  local a w b ws
+  for a in "$@"; do
+    read -r -d '' -a ws <<< "${a//[;&|()\`]/ }"
+    for w in "${ws[@]}"; do
+      b=${w##*/}
+      case ${b,,} in
+        wine|wine64|wineserver|wineboot|winetricks) return 0 ;;
+        run-tests.sh|run-mc.sh|headless-mc.sh) return 0 ;;
+      esac
+      [[ $w == tools/wine/* || $w == */tools/wine/* ]] && return 0
+    done
+  done
+  return 1
+}
+
 # The DESKTOP-14957 stopgap. Runs that share one Wine prefix share one
 # wineserver, which lives in the scope of whichever run started it; when that
 # scope ends, the other runs hang. So such runs get the key wine:<prefix>.
@@ -420,7 +441,7 @@ wine_key() {
   local top=$1 s p
   shift
   s=" $* "
-  [[ ${s,,} == *wine* || $s == *run-tests.sh* ]] || return 0
+  wine_cmd "$@" || return 0
   if [[ -n ${WINEPREFIX:-} ]]; then
     p=$WINEPREFIX
   else
