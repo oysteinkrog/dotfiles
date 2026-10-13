@@ -56,3 +56,8 @@ if test -f "$HOME/.cargo/env.fish"               # was conf.d/rustup.fish
     source "$HOME/.cargo/env.fish"
 end
 set -gx CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS 1   # was conf.d/superbot2.fish
+
+# Our patched Wine (MC fixes on top of stock Wine) is the default `wine`.
+# Keep the `current` symlink path: tools/wine/build-wine.sh finds stock Wine
+# by skipping this exact directory.
+fish_add_path -g -p -m ~/.local/share/motioncatalyst-wine/current/bin
