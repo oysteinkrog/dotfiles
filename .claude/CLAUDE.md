@@ -99,10 +99,11 @@ Rules, all hard:
 - **Never commit a secret.** If you see one going into a tracked file, stop and say so.
 - **Reference by env-var name** in scripts and configs, never by value, and wrap the
   consuming command in `with-secrets KEY -- ...`.
-- **Anthropic and OpenAI are both approved providers.** Claude subagents (Opus, Sonnet,
-  Fable) and OpenAI through Codex (GPT-6 Astra and the other OpenAI models) can receive
-  proprietary content without asking first. Any other provider, including non-OpenAI models
-  reached through PAL, still needs approval before proprietary content goes to it.
+- **Anthropic, OpenAI and Google are approved providers.** Claude subagents (Opus, Sonnet,
+  Fable), OpenAI through Codex (GPT-6 Astra and the other OpenAI models) and Google Gemini
+  through PAL (Gemini 4 Argon and the other Gemini models) can receive proprietary content
+  without asking first. Any other provider reached through PAL still needs approval before
+  proprietary content goes to it.
 - **Load `secret-lookup`** to add, rotate or remove a credential, or to roll back the
   loader if it breaks.
 

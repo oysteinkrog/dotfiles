@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "pal": {
-      "type": "sse",
-      "url": "http://127.0.0.1:4801/sse"
+      "type": "stdio",
+      "command": "/home/oystein/work/pal-mcp-server/.pal_venv/bin/python",
+      "args": ["/home/oystein/work/pal-mcp-server/server.py"]
     },
 "cdb-interactive": {
       "type": "stdio",

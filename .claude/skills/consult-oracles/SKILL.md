@@ -1,7 +1,7 @@
 ---
 name: consult-oracles
 model: fable
-description: Consult GPT-6 Astra (primary oracle, via Codex CLI, configurable reasoning effort) for expert second opinions; add Fable as a secondary oracle for high-stakes or contested questions, and use it as the fallback when Codex is unavailable. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult GPT-6 Astra (primary oracle, via Codex CLI, configurable reasoning effort) for expert second opinions; add Fable as a secondary oracle for high-stakes or contested questions, and use it as the fallback when Codex is unavailable; add Gemini 4 Argon (via PAL) as a third oracle from Google. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 argument-hint: "[--effort low|medium|high|xhigh|max|ultra] <question>"
 context: fork
 ---
@@ -36,7 +36,8 @@ effort only applies to the Codex call; Fable subagents have no effort knob.
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Astra is unreachable and the Fable spawn also fails. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted, or Codex is unavailable and a GPT view is still needed |
 | `gpt-5.6-sol` / `gpt-5.6-terra` | Codex CLI | Rarely; prior-generation GPT probe |
-| `gemini-3.1-pro-preview` | `mcp__pal__chat` | Cross-provider second opinion, bug hunting, deep code analysis |
+| **Gemini 4 Argon** (`gemini-4-argon`) | `mcp__pal__chat` with `model: "gemini-4-argon"` | Third oracle, from a third provider (Google). Add it for high-stakes questions, as a tie-breaker when Astra and Fable disagree, for bug hunting and deep code analysis, and for very long inputs (1M token context) |
+| `gemini-3.1-pro-preview` | `mcp__pal__chat` | Only when the Argon call fails. Flag the substitution |
 
 **Rules:**
 1. Default to Astra for every oracle consultation. One Astra call at the right effort
@@ -49,10 +50,14 @@ effort only applies to the Codex call; Fable subagents have no effort knob.
    trusted, auth error, empty output after a real attempt), fall back to a Fable
    subagent as the oracle and say so in the synthesis. If Fable also fails, fall back
    to an Opus subagent and say that too. Do not silently downgrade.
-4. Sensitive or proprietary code needs approval before it goes to Astra, because the
-   Codex call goes to OpenAI. Claude subagents (Fable, Opus) use the same approved
-   Anthropic boundary as the session and need no extra approval. If approval is not
-   available, run the consultation on Fable instead and note why.
+4. **Add Gemini 4 Argon as a third oracle** for high-stakes decisions, when Astra
+   and Fable disagree, or when the user asks for more perspectives. It is a different
+   provider (Google) with different training, so its disagreements are useful. If the
+   Argon call fails, use `gemini-3.1-pro-preview` and say so.
+5. Anthropic (Fable, Opus), OpenAI (Astra through Codex) and Google (Gemini through
+   PAL) are all approved providers, so proprietary code can go to any of these
+   oracles without asking first. Any other provider reached through PAL still needs
+   approval.
 
 ## When to Use
 
@@ -141,23 +146,29 @@ codex exec --sandbox read-only \       - subagent_type: "general-purpose"
   "<question>" < /dev/null 2>/dev/null
 ```
 
-### Cross-Provider Second Opinion (Gemini)
+### Third Oracle (Gemini 4 Argon)
 
-Consult Gemini when you need a perspective from a third provider, the user requests
-multiple perspectives, or the problem involves bug hunting / deep code analysis:
+Consult Argon when you need a perspective from a third provider, the user requests
+multiple perspectives, Astra and Fable disagree, or the problem involves bug
+hunting / deep code analysis:
 
 ```
 mcp__pal__chat with:
 - prompt: "<the question/problem to analyze>"
-- model: "gemini-3.1-pro-preview"
+- model: "gemini-4-argon"
 - working_directory_absolute_path: "<repository root>"
 - thinking_mode: "max"
 ```
 
+Argon reads 1M tokens of input but writes at most 32K tokens per reply. For a long
+review, ask for findings only, not rewritten files. If `mcp__pal__chat` is missing,
+PAL is not registered in this session: run `claude mcp list` and see the PAL section
+of the dotfiles README.
+
 ### Consensus (Multiple PAL Models)
 
 When the user explicitly wants a structured multi-model debate, `mcp__pal__consensus`
-works for the PAL-reachable models (GPT-5.5, Gemini). Astra and Fable are not
+works for the PAL-reachable models (GPT-5.5, Gemini 4 Argon). Astra and Fable are not
 PAL-reachable; run them with their own calls and synthesize all the answers together:
 
 ```
@@ -165,7 +176,7 @@ mcp__pal__consensus with:
 - step: "<the question/problem to analyze>"
 - models: [
     {"model": "gpt-5.5-pro", "stance": "neutral"},
-    {"model": "gemini-3.1-pro-preview", "stance": "neutral"}
+    {"model": "gemini-4-argon", "stance": "neutral"}
   ]
 - step_number: 1
 - total_steps: 3
@@ -270,20 +281,20 @@ Same shape as above with -c model_reasoning_effort=ultra. Ultra is justified
 because the question splits into three independent sub-analyses.
 ```
 
-### Bug Hunting (Cross-Provider: Gemini)
+### Bug Hunting (Cross-Provider: Gemini 4 Argon)
 ```
 mcp__pal__chat with:
 - prompt: "Find the bug causing <symptom> in <files>..."
-- model: "gemini-3.1-pro-preview"
+- model: "gemini-4-argon"
 - thinking_mode: "max"
 ```
 
 ## Safety Notes
 
-- Don't share sensitive/proprietary code without approval (Codex and PAL calls go
-  to a non-Anthropic provider; Fable and Opus subagents use the same approved
-  Anthropic boundary as the session). Without approval,
-  run the consultation on Fable and say why
+- Proprietary code may go to Anthropic (Fable, Opus), OpenAI (Codex, and GPT models
+  through PAL) and Google (Gemini models through PAL) without asking first. Any other
+  provider reached through PAL needs approval. Without it, run the consultation on
+  Fable and say why
 - Verify recommendations against project constraints
 - Document which recommendation was chosen and why, including the Astra effort used
 - Never report an oracle result you did not actually get. A failed Codex call means
