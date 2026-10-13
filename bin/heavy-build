@@ -151,7 +151,11 @@
 # - CPU pinning is undone. Every 3 s (HB_CPU_GUARD_SECS) any thread in the
 #   build's own scope whose CPU list is narrower than all CPUs the scope may
 #   use (taskset, numactl --physcpubind, sched_setaffinity) is set back to all
-#   of them, and live.log gets event=unpin once per pid. On 2026-10-13 40 busy
+#   of them when that pinning crowds CPUs: more runnable threads share one
+#   narrow CPU set than it has CPUs, in two checks in a row, or the busy-loop
+#   warning below is active and the thread spins. One thread per CPU (.NET
+#   Server GC does that on purpose) is left alone. live.log gets event=unpin
+#   once per pid. On 2026-10-13 40 busy
 #   loops pinned to CPUs 30 and 31 starved the NVIDIA modeset thread and
 #   KWin's output thread there, and the desktop froze for seconds at a time.
 #   A cgroup cannot forbid sched_setaffinity, so it is undone after the fact.
@@ -1273,27 +1277,50 @@ thread_info() {
       END { for (i = 1; i <= m; i++) { t = order[i]; if (c[t] != "") printf "%s %s %s %s %s\n", t, (g[t] == "" ? t : g[t]), (s[t] == "" ? "?" : s[t]), (w[t] == "" ? "-" : w[t]), c[t] } }'
 }
 
-# Sets pinned threads in our own scope back to all CPUs and watches for busy
-# loops. Touches nothing outside $BSLICE/$unit.scope.
+# Number of CPUs in a list such as 0-3,8,30-31.
+cpu_count() {
+  local n=0 r a b IFS=,
+  for r in $1; do
+    if [[ $r == *-* ]]; then a=${r%-*} b=${r#*-}; n=$(( n + b - a + 1 )); else n=$(( n + 1 )); fi
+  done
+  echo "$n"
+}
+
+# Sets harmful CPU pinning in our own scope back to all CPUs and watches for
+# busy loops. Touches nothing outside $BSLICE/$unit.scope.
+# Pinning alone is not harmful: .NET Server GC pins one thread to each CPU on
+# purpose (GCHeapAffinitize), and several .NET processes in one scope each put
+# a GC thread on CPU 0. So a pinned thread is set back only when
+# - its narrow CPU set is crowded: more runnable threads share that exact set
+#   than it has CPUs, in two checks in a row (a GC pause lasts milliseconds,
+#   the 2026-10-13 loops stayed runnable), or
+# - the busy-loop warning is active and the thread itself is spinning.
 cpu_guard() {
-  local d=$BSLICE/$unit.scope all tid tgid st vcs cpus busy=0 cmd lim10 k
-  local -A now_st=()
+  local d=$BSLICE/$unit.scope all tid tgid st vcs cpus busy=0 cmd lim10 k i why spin
+  local -a T_tid=() T_tgid=() T_cpus=() T_spin=()
+  local -A now_st=() runq=() crowded=()
   [[ -d $d ]] || return 0
   all=$(all_cpus "$d")
   [[ -n $all ]] || return 0
   while read -r tid tgid st vcs cpus; do
-    if [[ $cpus != "$all" ]] && taskset -p -c "$all" "$tid" >/dev/null 2>&1 && [[ -z ${unpinned[$tgid]:-} ]]; then
-      unpinned[$tgid]=1
-      cmd=$(tr '\0' ' ' < "$PROC/$tgid/cmdline" 2>/dev/null | cut -c1-200)
-      cmd=${cmd% }; cmd=${cmd//\"/\'}
-      log_line "event=unpin unit=$unit pid=$tgid tid=$tid cpus=$cpus set_to=$all cmd=\"$cmd\""
-      say "warning: pid $tgid ($cmd) was pinned to CPUs $cpus; set back to $all. Pinned builds froze the desktop on 2026-10-13."
-    fi
-    [[ $st == R && $vcs != - && ${prev_st[$tid]:-} == "R:$vcs" ]] && busy=$(( busy + 1 ))
+    spin=0
+    [[ $st == R && $vcs != - && ${prev_st[$tid]:-} == "R:$vcs" ]] && { busy=$(( busy + 1 )); spin=1; }
     now_st[$tid]="$st:$vcs"
+    [[ $cpus == "$all" ]] && continue
+    [[ $st == R ]] && runq[$cpus]=$(( ${runq[$cpus]:-0} + 1 ))
+    T_tid+=("$tid") T_tgid+=("$tgid") T_cpus+=("$cpus") T_spin+=("$spin")
   done < <(scope_tids "$d" | thread_info)
   prev_st=()
   for k in "${!now_st[@]}"; do prev_st[$k]=${now_st[$k]}; done
+  # Crowded now and at the last check.
+  for k in "${!runq[@]}"; do
+    (( runq[$k] > $(cpu_count "$k") )) && crowded[$k]=${runq[$k]}
+  done
+  local -A was=()
+  for k in "${!crowd_prev[@]}"; do was[$k]=1; done
+  crowd_prev=()
+  for k in "${!crowded[@]}"; do crowd_prev[$k]=1; done
+
   lim10=${est_cores/./}
   lim10=$(( 2 * 10#${lim10:-80} ))
   (( lim10 < 20 )) && lim10=20
@@ -1307,6 +1334,24 @@ cpu_guard() {
   else
     busy_since=
   fi
+
+  for i in "${!T_tid[@]}"; do
+    tid=${T_tid[i]} tgid=${T_tgid[i]} cpus=${T_cpus[i]} why=
+    if [[ -n ${crowded[$cpus]:-} && -n ${was[$cpus]:-} ]]; then
+      why="crowded runnable=${crowded[$cpus]}"
+    elif [[ -n $busy_warned && -n $busy_since ]] && (( T_spin[i] )); then
+      why=busy-loop
+    else
+      continue
+    fi
+    taskset -p -c "$all" "$tid" >/dev/null 2>&1 || continue
+    [[ -n ${unpinned[$tgid]:-} ]] && continue
+    unpinned[$tgid]=1
+    cmd=$(tr '\0' ' ' < "$PROC/$tgid/cmdline" 2>/dev/null | cut -c1-200)
+    cmd=${cmd% }; cmd=${cmd//\"/\'}
+    log_line "event=unpin unit=$unit pid=$tgid tid=$tid cpus=$cpus set_to=$all reason=\"$why\" cmd=\"$cmd\""
+    say "warning: pid $tgid ($cmd) had threads crowded on CPUs $cpus ($why); set back to $all. Pinned busy loops froze the desktop on 2026-10-13."
+  done
 }
 
 # append_history EXIT_CODE REASON. Columns: see the help text at the top.
@@ -1524,7 +1569,7 @@ child=$!
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
 rc= gone_since=
-declare -A unpinned=() prev_st=()
+declare -A unpinned=() prev_st=() crowd_prev=()
 busy_since= busy_warned= last_sample=$(now_us)
 while :; do
   iv=$SAMPLE
