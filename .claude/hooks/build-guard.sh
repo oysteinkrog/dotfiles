@@ -16,6 +16,10 @@
 #                does not run under heavy-build. The warning reaches the agent
 #                as additional context. For dotnet it also says that the
 #                Roslyn compiler server would escape heavy-build's budget.
+#   cpu_pin      taskset, numactl --physcpubind, realtime chrt (-f, -r) or a
+#                `while :; do :; done` busy loop. On 2026-10-13 40 pinned busy
+#                loops froze the desktop. heavy-build undoes pinning inside its
+#                scopes, but not outside them.
 #
 # Detection lives in build-detect.py, which reuses the shell segmentation in
 # grove-worktree-detect.py. Test matrix in build-guard.test.py. Run the tests
@@ -33,7 +37,7 @@ command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null) || cwd=
 
 # Cheap pre-filter so most Bash calls never start python.
-if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|BUILD_DIR|build-dir|clone|worktree'; then
+if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
   exit 0
 fi
 if [[ $command == *"noqa: build-guard"* ]]; then
@@ -92,6 +96,7 @@ EOF
   exit 2
 fi
 
+msg=
 warn=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "no_wrapper"' | head -1 | cut -f3-)
 if [[ -n $warn ]]; then
   msg="build-guard: this looks like a heavy build without heavy-build ($warn). Machine rule (~/.claude/CLAUDE.md, \"Builds\"): run every cargo build/test/check/clippy and dotnet build/test as \`heavy-build <command>\`. It takes the shared build lock, so it may wait; run it in the background if your tool call has a timeout. The command was allowed this time."
@@ -102,6 +107,13 @@ if [[ -n $warn ]]; then
   if [[ $warn == dotnet* ]]; then
     msg+=" For dotnet this matters more: the compile starts a Roslyn compiler server (VBCSCompiler) in your session's cgroup. It stays alive after the command ends and does compile work outside heavy-build's memory cap and budget. Under heavy-build it runs in the build scope and stops with it."
   fi
+fi
+pin=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "cpu_pin"' | head -1 | cut -f3-)
+if [[ -n $pin ]]; then
+  [[ -n $msg ]] && msg+=" "
+  msg+="build-guard: this command uses $pin. Do not pin work to CPUs, give it realtime priority or start busy loops on this desktop. On 2026-10-13 a test started 40 \`while :; do :; done\` loops pinned with taskset to CPUs 30 and 31. They starved the NVIDIA modeset kernel thread and KWin's output thread on those CPUs, and the desktop froze for seconds at a time. Let the scheduler spread the work; to load the CPU in a test, use a short loop that ends on its own, unpinned, under heavy-build. heavy-build sets pinned threads in its scopes back to all CPUs. The command was allowed this time. If this is deliberate, append \`# noqa: build-guard\`."
+fi
+if [[ -n $msg ]]; then
   jq -cn --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' 2>/dev/null || true
 fi
 exit 0

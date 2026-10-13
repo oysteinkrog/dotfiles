@@ -1,11 +1,14 @@
 import json
+import os
 import shutil
 import tempfile
 import subprocess
 import sys
 from pathlib import Path
 
-HOOK = str(Path(__file__).with_name("build-guard.sh"))
+HOOK = os.environ.get("BUILD_GUARD_HOOK") or str(
+    Path(__file__).with_name("build-guard.sh")
+)
 HOME = str(Path.home())
 CWD = f"{HOME}/src/frankenterm"
 MONO = f"{HOME}/work/desktop/master"
@@ -99,6 +102,36 @@ cases = [
     ("git -C ~/work/desktop/master worktree add /var/tmp/claude/x", CWD, B),
     # --- monorepo lanes inside grove's work_dir: left to grove-worktree-guard ---
     ("git -C ~/work/desktop/master worktree add ~/work/desktop/.scratch/x", CWD, OK),
+    # --- CPU pinning, realtime and busy loops: warned, not blocked ---
+    ("taskset -c 30,31 ./run-tests.sh", CWD, W),
+    ("taskset -a -p 0x3 1234", CWD, W),
+    ("for i in $(seq 40); do taskset -c 30 sh -c 'while :; do :; done' & done", CWD, W),
+    ("heavy-build taskset -c 0 cargo test", CWD, W),
+    ("env FOO=1 nice -n 5 taskset -c 0 make", CWD, W),
+    ("sh -c 'taskset -c 1 sleep 1'", CWD, W),
+    ("bash -lc 'numactl --physcpubind=30,31 ./bench'", CWD, W),
+    ("numactl -C 0-3 ./bench", CWD, W),
+    ("numactl --physcpubind 4 ./bench", CWD, W),
+    ("chrt -f 50 ./latency-test", CWD, W),
+    ("chrt -r 10 ./latency-test", CWD, W),
+    ("chrt --fifo 50 ./latency-test", CWD, W),
+    ("chrt 50 ./latency-test", CWD, W),
+    ("sudo chrt -f -p 50 1234", CWD, W),
+    ("sh -c 'while :; do :; done' &", CWD, W),
+    ("while true; do true; done", CWD, W),
+    ("timeout 5 bash -c 'while :; do :; done'", CWD, W),
+    ("taskset -c 0 sleep 1 # noqa: build-guard", CWD, OK),
+    # --- CPU-related commands that are fine ---
+    ("numactl --hardware", CWD, OK),
+    ("numactl --interleave=all ./bench", CWD, OK),
+    ("chrt -p 1234", CWD, OK),
+    ("chrt -b 0 ./batch-job", CWD, OK),
+    ("chrt -i 0 ./idle-job", CWD, OK),
+    ("while :; do sleep 1; done", CWD, OK),
+    ("while true; do date; sleep 5; done", CWD, OK),
+    ("while read -r l; do echo $l; done < f", CWD, OK),
+    ("rg taskset ~/src", CWD, OK),
+    ('git commit -m "warn on taskset" -- a.sh', CWD, OK),
     # --- bypass ---
     ("CARGO_BUILD_BUILD_DIR=/var/tmp/x cargo test # noqa: build-guard", CWD, OK),
     # --- unrelated ---
@@ -181,7 +214,19 @@ def main():
             fails += 1
             print(f"FAIL compiler server note for {command!r}: want={want}")
 
-    total = len(cases) + 2 + 3
+    # The pin warning names the incident and keeps the build warning.
+    text = run("cargo test; taskset -c 30 sleep 1", CWD).stdout
+    for want in (
+        "2026-10-13",
+        "CPUs 30 and 31",
+        "heavy-build <command>",
+        "noqa: build-guard",
+    ):
+        if want not in text:
+            fails += 1
+            print(f"FAIL pin warning lacks {want!r}")
+
+    total = len(cases) + 2 + 3 + 4
     print(f"{total - fails}/{total} correct")
     sys.exit(1 if fails else 0)
 

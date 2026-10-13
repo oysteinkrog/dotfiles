@@ -16,6 +16,11 @@ cwd from BUILD_GUARD_CWD. Prints one line per finding,
   warn  no_wrapper    a heavy cargo or dotnet command, or build.cmd/build.sh,
                       that does not run under heavy-build or the old
                       `flock ... systemd-run` rule.
+  warn  cpu_pin       taskset, numactl --physcpubind (or -C), realtime chrt
+                      (-f, -r), or a `while :; do :; done` busy loop. On
+                      2026-10-13 40 busy loops pinned to CPUs 30 and 31 starved
+                      the NVIDIA modeset thread and KWin's output thread there,
+                      and the desktop froze for seconds at a time.
 
 Prints nothing when the command is fine. Shell segmentation (quote and
 heredoc blanking, separator splitting) is shared with grove-worktree-detect.py,
@@ -294,6 +299,129 @@ def check_segment(seg, tokens, cwd, findings, grove):
     return cwd
 
 
+SHELLS = {"sh", "bash", "zsh", "dash", "fish"}
+CHRT_REALTIME = {"-f", "--fifo", "-r", "--rr"}
+# `while :; do :; done`, `while true; do true; done` and the like: a loop
+# whose body never waits. Checked on the raw text, so it is found inside
+# `sh -c '...'` too.
+BUSY_LOOP_RE = re.compile(
+    r"\bwhile\s+(?::|true)\s*(?:;|\n)\s*do\s+(?:(?::|true)\s*(?:;|\n)\s*)*done\b"
+)
+
+
+def chrt_realtime(args):
+    """args follow `chrt`. True when they set SCHED_FIFO or SCHED_RR.
+
+    Without a policy flag chrt sets SCHED_RR, so `chrt 50 cmd` counts too.
+    """
+    flags = set()
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        t = args[i]
+        if t in CHRT_REALTIME:
+            return True
+        if t.startswith("--"):
+            flags.add(t)
+        else:
+            flags.update(t[1:])
+        i += 1
+    if "f" in flags or "r" in flags:
+        return True
+    other = {"o", "b", "i", "d", "e", "m", "--other", "--batch", "--idle"}
+    other |= {"--deadline", "--ext", "--max", "-h", "--help", "-V", "--version"}
+    if flags & other:
+        return False
+    positional = args[i:]
+    if "p" in flags or "--pid" in flags:
+        return len(positional) >= 2
+    return bool(positional) and positional[0].isdigit()
+
+
+def numactl_pins(args):
+    return any(
+        t == "-C" or t.startswith("-C") or t.startswith("--physcpubind") for t in args
+    )
+
+
+def pin_findings(tokens, depth=0):
+    """Labels for CPU pinning or realtime commands in one segment's tokens.
+
+    Walks through env assignments, wrappers, heavy-build and `sh -c '...'`,
+    so `heavy-build taskset ...` and `sh -c 'taskset ...'` are found too.
+    """
+    found = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if ASSIGN_RE.match(t):
+            i += 1
+            continue
+        head = os.path.basename(t)
+        rest = tokens[i + 1 :]
+        if head == "taskset":
+            found.append("taskset")
+            return found
+        if head == "numactl":
+            if numactl_pins(rest):
+                found.append("numactl --physcpubind")
+            return found
+        if head == "chrt":
+            if chrt_realtime(rest):
+                found.append("realtime chrt")
+            return found
+        if head in SHELLS and depth < 3:
+            for j, a in enumerate(rest):
+                if a == "-c" or (
+                    a.startswith("-") and not a.startswith("--") and "c" in a
+                ):
+                    if j + 1 < len(rest):
+                        found.extend(pin_findings_text(rest[j + 1], depth + 1))
+                    break
+            return found
+        if (
+            head in WRAPPERS
+            or head in POSITIONAL_WRAPPERS
+            or head in LOCKED_HEADS
+            or head == "sudo"
+        ):
+            # Skip the wrapper and its options; what follows may be the pin.
+            value_opts = WRAPPERS.get(head) or POSITIONAL_WRAPPERS.get(head) or set()
+            i += 1
+            while i < len(tokens) and tokens[i].startswith("-"):
+                i += 2 if tokens[i] in value_opts else 1
+            if head in POSITIONAL_WRAPPERS:
+                i += 1
+            continue
+        return found
+    return found
+
+
+def pin_findings_text(command, depth=0):
+    found = []
+    assert seg_mod is not None
+    blanked = seg_mod.blank_data_regions(command)
+    for raw in seg_mod.split_segments(command, blanked):
+        stripped = raw.strip().lstrip("({ ").rstrip(")} ").strip()
+        if not stripped:
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=True)
+        except ValueError:
+            continue
+        if tokens:
+            found.extend(pin_findings(tokens, depth))
+    return found
+
+
+def cpu_pin_finding(command):
+    labels = pin_findings_text(command)
+    if BUSY_LOOP_RE.search(command):
+        labels.append("busy loop")
+    if not labels:
+        return None
+    return ("warn", "cpu_pin", ", ".join(dict.fromkeys(labels)))
+
+
 seg_mod = None
 
 
@@ -318,6 +446,9 @@ def main():
         if not tokens:
             continue
         cwd = check_segment(stripped, tokens, cwd, findings, grove)
+    pin = cpu_pin_finding(command)
+    if pin:
+        findings.append(pin)
     seen = set()
     for action, kind, detail in findings:
         if (action, kind) in seen:
