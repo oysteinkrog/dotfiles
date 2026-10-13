@@ -4,9 +4,10 @@ Description=Heavy builds started by heavy-build
 # heavy-build puts each build in its own scope here, capped at 16G to 22G high
 # (2G more for the hard max) by its memory estimate. This slice caps all builds
 # together, so they cannot take the memory that the terminal and the agent
-# sessions need. CPUWeight 50 (default 100) keeps interactive work responsive
-# while builds run.
+# sessions need. CPUWeight 20 (default 100) keeps interactive work responsive
+# while builds run. It was 50 until 2026-10-13, when builds at load 60 to 100
+# still pushed CPU pressure in app.slice and claude.slice to 5 to 19%.
 [Slice]
 MemoryMax=42G
 MemorySwapMax=6G
-CPUWeight=50
+CPUWeight=20
