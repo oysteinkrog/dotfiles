@@ -27,7 +27,11 @@ a complete consultation.
   asks for a second opinion. Present both views clearly labelled and call out disagreements.
 - **Fallback order when the Codex call fails**, whatever the reason: Fable subagent, then
   Opus subagent. Say which one answered. Never downgrade silently.
-- **Codex calls leave the machine.** The confidentiality rule in the global file applies.
+- **Gemini 4 Argon is the third oracle**, reached through PAL with `mcp__pal__chat` and
+  `model: "gemini-4-argon"`. Add it for high-stakes decisions, or as a tie-breaker when
+  Astra and Fable disagree. If it fails, use `gemini-3.1-pro-preview` and say so.
+- **Codex and PAL calls leave the machine.** The confidentiality rule in the global file
+  applies. OpenAI and Google are both approved there.
 - **Load `consult-oracles`** for the exact invocation and its known failure modes.
 
 ## Python

@@ -21,8 +21,13 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 > PAL) and state the substitution in the verdict. If Fable spawns also fail, use
 > `model: "opus"` subagents and say so. Do not silently downgrade.
 >
-> **Sensitive code:** the Codex calls leave the machine. Proprietary or sensitive
-> material needs approval first; without it, run the debate on Fable and note why.
+> **Sensitive code:** the Codex calls leave the machine, but OpenAI is an approved
+> provider, as are Anthropic and Google (Gemini through PAL). Proprietary material
+> can go to Astra, Fable and Gemini 4 Argon without asking first.
+>
+> **Third view:** for a high-stakes validation, or when Astra and Fable split, add
+> Gemini 4 Argon as a neutral evaluator with `mcp__pal__chat` (`model: "gemini-4-argon"`,
+> `thinking_mode: "max"`). See `/consult-oracles`.
 
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
@@ -126,7 +131,7 @@ consensus flow is wanted; PAL tops out at gpt-5.5-pro):
 [
   {"model": "gpt-5.5-pro", "stance": "for"},
   {"model": "gpt-5.5-pro", "stance": "against"},
-  {"model": "gemini-3.1-pro-preview", "stance": "neutral", "stance_prompt": "Provide an independent technical assessment. Focus on feasibility, risk, and alternatives the other evaluators may miss."}
+  {"model": "gemini-4-argon", "stance": "neutral", "stance_prompt": "Provide an independent technical assessment. Focus on feasibility, risk, and alternatives the other evaluators may miss."}
 ]
 ```
 
