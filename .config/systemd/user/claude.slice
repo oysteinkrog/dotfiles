@@ -3,7 +3,7 @@ Description=Claude Code sessions started by aiolos-rc
 
 # aiolos-rc starts each session as claude-<pid>.scope in this slice.
 #
-# No MemoryHigh here or on the scopes. vm.swappiness is 150 (the CachyOS zram default),
+# No MemoryHigh here or on the scopes. vm.swappiness is 100,
 # so reclaim under MemoryHigh swaps anonymous memory before it drops page cache, and
 # systemd-oomd kills on swap at 90%. On 2026-10-09 a per-session MemoryHigh=8G pushed
 # 2.3 GiB of one session (VBCSCompiler) into swap in 10 minutes while 23 GiB RAM was free.
@@ -13,7 +13,7 @@ Description=Claude Code sessions started by aiolos-rc
 # or swaps other cgroups instead. At 14:05 the sessions held 15.5 GiB of swap, so 20G
 # leaves room.
 #
-# CPUWeight 80 sits between builds (50) and the desktop (100). Sessions used 3.8 cores
+# CPUWeight 80 sits between builds (20) and the desktop (100). Sessions used 3.8 cores
 # in total at 13:40, median 0.01 per session, so this matters only under contention.
 [Slice]
 CPUWeight=80
