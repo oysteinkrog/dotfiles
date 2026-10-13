@@ -6,7 +6,7 @@ Description=Heavy builds started by heavy-build
 # together, so they cannot take the memory that the terminal and the agent
 # sessions need. CPUWeight 20 (default 100) keeps interactive work responsive
 # while builds run. It was 50 until 2026-10-13, when builds at load 60 to 100
-# still pushed CPU pressure in app.slice and claude.slice to 5 to 19%.
+# still kept app.slice and claude.slice CPU pressure at 4 to 10%.
 [Slice]
 MemoryMax=42G
 MemorySwapMax=6G
