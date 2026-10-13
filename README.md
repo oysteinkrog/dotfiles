@@ -51,6 +51,21 @@ curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 claude mcp add -s user fff -- ~/.local/bin/fff-mcp
 ```
 
+#### PAL MCP server (GPT and Gemini models, including Gemini 4 Argon)
+
+[PAL](https://github.com/oysteinkrog/pal-mcp-server) runs as a stdio MCP server from
+its own checkout at `~/work/pal-mcp-server`. Its API keys live in that checkout's
+gitignored `.env`, so nothing secret is in this repo. The entry in
+`.claude/mcp-servers.json` is the source of truth. Register it at user scope:
+
+```bash
+claude mcp add-json -s user pal "$(jq -c .mcpServers.pal ~/.claude/mcp-servers.json)"
+claude mcp list | grep pal   # expect: pal ... Connected
+```
+
+Do not also add `pal` to a repo `.mcp.json`. Two registrations of one server race for
+the same tool names. After a PAL model change, restart Claude Code sessions to load it.
+
 Claude Code hooks actually wired in `.claude/settings.json`: `dcg` (destructive
 command guard) and `.claude/hooks/trauma_guard.py` (blocks commands matching
 learned trauma patterns) on PreToolUse for Bash, plus the gated aiolos telemetry
