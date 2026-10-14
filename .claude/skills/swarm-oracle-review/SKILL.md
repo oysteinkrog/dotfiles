@@ -23,10 +23,10 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 > **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
 > primary oracle. By default the FOR/AGAINST sessions below run as two `codex exec`
-> calls, one per stance, and that is enough on its own. Fable is the
-> secondary oracle: add a Fable FOR/AGAINST pair for high-stakes or contested
-> validations, and use it as the whole debate when Codex is unavailable (Fable is not
-> reachable through PAL). See `/consult-oracles` and the Oracle Consultation Policy in
+> calls, one per stance, and that is enough on its own. Gemini 4 Argon is the
+> secondary oracle: add a Gemini FOR/AGAINST pair (two `mcp__pal__chat` calls) for
+> high-stakes or contested validations, and use it as the whole debate when Codex is
+> unavailable. Fable is the last fallback, only when Codex and PAL both fail. See `/consult-oracles` and the Oracle Consultation Policy in
 > `~/CLAUDE.md`.
 
 Two-part process: (1) oracle consensus validation with FOR/AGAINST stances,
@@ -52,7 +52,7 @@ then (2) iterative hardening loop until findings converge to near-zero.
 
 Run 2 concurrent oracle sessions:
 - **Default tier:** two `codex exec` calls on `gpt-6-astra` (`-c model_reasoning_effort=xhigh`, `< /dev/null`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, both launched in a single message. See `/swarm-oracle` Step 2 for the exact commands
-- **Second opinion / Codex fallback:** two Fable subagents (`Agent`, `model: "fable"`), one FOR stance, one AGAINST stance, spawned in a single message
+- **Second opinion / Codex fallback:** two Gemini 4 Argon calls (`mcp__pal__chat`, `model: "gemini-4-argon"`), one FOR stance, one AGAINST stance, made in a single message. Fable subagents (`Agent`, `model: "fable"`) only when Codex and PAL both fail
 - **Alternate route:** PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST) when Codex is unavailable and the structured consensus flow is wanted
 
 ### Oracle Prompt Template
@@ -184,7 +184,7 @@ performance impact, data integrity, rollback strategy.
 ## Full Hardening Pipeline Example
 
 ```
-Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Fable if high-stakes or contested)
+Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Gemini if high-stakes or contested)
   -> Fix CRITICAL/HIGH findings
 Phase 2: Agent Review (10 Opus, multi-lens)
   -> Fix all findings
@@ -205,4 +205,4 @@ Phase 5: Final Correctness (10 Opus)
 3. **Track convergence** — if issues aren't decreasing, the artifact needs redesign, not more rounds
 4. **Validate fixes against plan** — hardening must not drift from the original design intent
 5. **Oracle before agents, agents before oracle** — alternate perspectives for best coverage
-6. **Check the oracle route before launching** — for Astra, `codex` on PATH and the repo root trusted in `~/.codex/config.toml`; for the PAL route, PAL MCP running (agents silently fall back to self-analysis without it). Fable subagents need neither
+6. **Check the oracle route before launching** — for Astra, `codex` on PATH and the repo root trusted in `~/.codex/config.toml`; for the PAL route, PAL MCP running (agents silently fall back to self-analysis without it). Fable subagents need neither, but the Gemini second opinion needs PAL
