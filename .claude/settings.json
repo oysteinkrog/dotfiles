@@ -172,11 +172,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh complete bell",
-            "async": true
-          },
-          {
-            "type": "command",
             "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
@@ -210,11 +205,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh input bell",
-            "async": true
-          },
-          {
-            "type": "command",
             "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
@@ -243,16 +233,6 @@
         ]
       },
       {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh working",
-            "async": true
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -269,11 +249,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh error",
-            "async": true
-          },
-          {
-            "type": "command",
             "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
@@ -287,11 +262,6 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/agent-mail-guard.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh working",
-            "async": true
           },
           {
             "type": "command",
@@ -374,16 +344,6 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/plain-language-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/term-state.sh input bell",
-            "async": true
           }
         ]
       }

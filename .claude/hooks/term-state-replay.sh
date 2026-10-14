@@ -8,7 +8,7 @@
 # ran, which for an idle tab can take hours. Writing the escape sequence to the
 # pane's tty again makes the mux send the alert to the new client.
 #
-# The state comes from what term-state.sh saved for that terminal, when it was
+# The state comes from what claude-tab-watch.sh saved for that terminal, when it was
 # saved by the Claude running there now. Otherwise it is mapped from the
 # session's status: busy or shell -> working, waiting -> input, idle -> complete.
 
