@@ -1,13 +1,13 @@
 ---
 name: swarm-review
 model: opus
-description: Run 10 parallel review agents, each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
+description: Run 6 parallel review agents by default, each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
 argument-hint: "<target: plan file, bead list, or code path> [--lenses L1,L2,...] [--team-size N]"
 ---
 
 # Multi-Lens Review
 
-Spawn N parallel agents (default 10), each assigned a distinct review lens, to independently review a target artifact. Compile findings into a single issues list with severity and actionable fixes.
+Spawn N parallel agents (default 6), each assigned a distinct review lens, to independently review a target artifact. Compile findings into a single issues list with severity and actionable fixes.
 
 ## When to Use
 
@@ -19,7 +19,9 @@ Spawn N parallel agents (default 10), each assigned a distinct review lens, to i
 
 ## Review Lenses
 
-Default set of 10 lenses. Override with `--lenses` to select a subset or customize.
+Full set of 10 lenses. The default team of 6 runs lenses 1, 2, 3, 6, 9 and 10 (correctness, safety, performance, testability, security, feasibility). Override with `--lenses` to select a subset or customize.
+
+**Model per lane:** use `sonnet` for every lane. Use `opus` only for the correctness and security lenses (1 and 9), where a missed flaw costs the most. Pass `model:` on every spawn.
 
 | # | Lens | Focus | Key Questions |
 |---|------|-------|---------------|
@@ -145,8 +147,8 @@ If fixes are extensive, consider running a second pass (reduced team: 4-6 agents
 | Target Size | Recommended Team | Rationale |
 |-------------|-----------------|-----------|
 | 1-5 beads or small plan | 6 agents | Full coverage overkill for small targets |
-| 6-20 beads or medium plan | 10 agents (default) | Standard coverage |
-| 20+ beads or large plan | 10 + second pass | First pass finds bulk, second pass catches interactions |
+| 6-20 beads or medium plan | 6 agents (default) | Standard coverage |
+| 20+ beads or large plan | 10 + second pass (Sonnet lanes, Opus for correctness and security) | First pass finds bulk, second pass catches interactions |
 | Code review (<500 LOC) | 6 agents | Focus on correctness, safety, perf, tests |
 | Code review (>500 LOC) | 10 agents | Full lens set |
 
