@@ -711,6 +711,24 @@ def test_a_marker_too_deep_to_start_an_item_continues_the_paragraph(scorer):
     assert "echo hi" in joined
 
 
+def test_a_heading_inside_a_list_item_ends_the_paragraph(scorer):
+    """Found by GPT-6 Astra review, 2026-10-15. Headings count from the item's column."""
+    doc = (
+        "1. Step\n    ## Example\n        echo as an AI language model\n\nAfterwards.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "language model" not in joined
+    assert "Afterwards" in joined
+
+
+def test_a_list_marker_in_indented_code_is_code(scorer):
+    """Found by GPT-6 Astra review, 2026-10-15."""
+    doc = "    - command\n    echo as an AI language model\n\nAfterwards.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "language model" not in joined
+    assert "Afterwards" in joined
+
+
 def test_a_list_items_second_paragraph_is_prose(scorer):
     """Found by a Fable review, 2026-10-14: 201 lines in 86 real files were hidden.
 
