@@ -105,6 +105,15 @@ def _item_text(line: str, item: re.Match[str], start: int = 0) -> tuple[int, int
     return _indent_width(line[: item.end()]), item.end()
 
 
+def _relative(body: str, lead: int, stack: list[int]) -> str:
+    """The line as its innermost open container sees it, for block checks.
+
+    "    ## Example" under "1. " is a heading: the four spaces are the item's.
+    """
+    base = max((c for c in stack if c <= lead), default=0)
+    return " " * (lead - base) + body
+
+
 def _indent_width(indent: str) -> int:
     width = 0
     for ch in indent:
@@ -149,14 +158,15 @@ class _FenceScanner:
                 i += 1
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
+            rel_line = _relative(body, lead, stack)
             item = _LIST_ITEM.match(line)
             if item and _THEMATIC.match(body):
                 item = None  # "* * *" is a thematic break, not a list item
             if item and in_para and _ORDERED_NOT_ONE.match(line):
                 item = None  # only "1." may interrupt a paragraph
-            if item and in_para and lead - (stack[-1] if stack else 0) >= 4:
-                item = None  # too deep to start an item: paragraph text
-            if in_para and not item and _SETEXT_UNDER.match(line):
+            if item and lead - (stack[-1] if stack else 0) >= 4:
+                item = None  # too deep to start an item: paragraph text or code
+            if in_para and not item and _SETEXT_UNDER.match(rel_line):
                 in_para = False  # the paragraph above became a heading
                 i += 1
                 continue
@@ -164,7 +174,7 @@ class _FenceScanner:
                 in_para
                 and not item
                 and not _FENCE_OPEN.match(body)
-                and not _INTERRUPTS.match(line)
+                and not _INTERRUPTS.match(rel_line)
             ):
                 i += 1  # lazy continuation: the list items stay open
                 continue
@@ -197,7 +207,7 @@ class _FenceScanner:
                 # A heading or a thematic break is not paragraph text.
                 # On a marker line the item's own text decides: "- # Title"
                 # is a heading and "-" alone is an empty item.
-                body = candidate if item else line
+                body = candidate if item else rel_line
                 in_para = bool(body.strip()) and not _INTERRUPTS.match(body)
                 i += 1
                 continue
@@ -270,12 +280,13 @@ class _IndentedCodeScanner:
                 in_para = False
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
+            rel_line = _relative(body, lead, stack)
             item = _LIST_ITEM.match(line)
             if item and _THEMATIC.match(body):
                 item = None
             if item and in_para and _ORDERED_NOT_ONE.match(line):
                 item = None
-            if item and in_para and lead - (stack[-1] if stack else 0) >= 4:
+            if item and lead - (stack[-1] if stack else 0) >= 4:
                 item = None
             if item:
                 col, end = _item_text(line, item)
@@ -284,9 +295,9 @@ class _IndentedCodeScanner:
                 stack.append(col)
                 body = line[end:]
                 in_para = bool(body.strip()) and not _INTERRUPTS.match(body)
-            elif in_para and _SETEXT_UNDER.match(line):
+            elif in_para and _SETEXT_UNDER.match(rel_line):
                 in_para = False  # the paragraph above became a heading
-            elif in_para and not _INTERRUPTS.match(line):
+            elif in_para and not _INTERRUPTS.match(rel_line):
                 pass  # lazy continuation, or the next line of the paragraph
             else:
                 while stack and lead < stack[-1]:
@@ -296,7 +307,7 @@ class _IndentedCodeScanner:
                     yield _Span(start + len(line) - len(body), start + len(line))
                     in_para = False
                 else:
-                    in_para = not _INTERRUPTS.match(line)
+                    in_para = not _INTERRUPTS.match(rel_line)
 
 
 _INDENTED_CODE = _IndentedCodeScanner()

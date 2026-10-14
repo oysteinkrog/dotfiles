@@ -16,7 +16,7 @@ generated, because the scanner does not model them. On 2026-10-14, with
 headings, thematic breaks, lazy continuation and CRLF in the mix, the scanner
 hid prose in 12 of 20,000 random documents and the regex it replaced in 3,075.
 On 2026-10-15 setext headings and five-space list padding joined the mix; the
-scanner then hid prose in 11 of 20,000. Those need deeper CommonMark container
+scanner then hid prose in 5 of 20,000. Those need deeper CommonMark container
 rules. Real files: none of 8,018.
 """
 
