@@ -1,6 +1,5 @@
 ---
 name: swarm-beads-create
-model: opus
 description: Convert implementation plans into actionable beads with proper structure, acceptance criteria, dependencies, and test requirements. Use after completing an implementation plan and before starting development.
 triggers:
   - "create beads from plan"

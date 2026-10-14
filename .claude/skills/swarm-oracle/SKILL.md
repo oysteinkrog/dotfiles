@@ -1,6 +1,5 @@
 ---
 name: swarm-oracle
-model: opus
 description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra sessions via Codex CLI; add two Gemini 4 Argon calls (via PAL) as a second opinion for high-stakes or contested validations, and use them as the fallback when Codex is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
