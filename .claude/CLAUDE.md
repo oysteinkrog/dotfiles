@@ -144,9 +144,20 @@ These rules hold whether or not a skill is loaded:
   refactors off the same files as security fixes, or serialize them with `blockedBy`.
 - **Verify after the swarm.** Grep for the patterns that should be gone, diff each bead's
   expected changes against HEAD, run the full test suite.
-- **Pass `model:` explicitly on every spawn**, defaulting to `'opus'`. Do not reintroduce a
-  `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one model everywhere and breaks
-  per-call overrides.
+- **Pass `model:` explicitly on every spawn, and pick it by task.** The pool runs out of
+  weekly quota, and per request Fable costs about 3x Sonnet and Opus about 2.4x.
+
+  | Task | Model |
+  |---|---|
+  | Lookup, classify, list files, check one fact, format output | `haiku` |
+  | Search, grep, read and summarise, explore, mechanical edits, bead work with a clear spec, running builds and tests | `sonnet` |
+  | Design, hard debugging, review of logic or security, synthesis the leader acts on | `opus` |
+  | Oracle, second opinion, FOR/AGAINST | Astra via `codex exec`, or Gemini 4 Argon via PAL; not a Claude agent |
+  | Fable | Only when Oystein asks, or after Opus and Astra both failed; say why in the spawn |
+
+  If unsure, use `sonnet` and go up one level only when the result is wrong. Do not
+  reintroduce a `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one model everywhere
+  and breaks per-call overrides.
 - Tell teammates to read CLAUDE.md first, and name the files they will touch so reservations
   can prevent conflicts.
 
