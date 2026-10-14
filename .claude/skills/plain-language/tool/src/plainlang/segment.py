@@ -58,9 +58,15 @@ class Document:
 # indented, because a code block inside a list item is indented to the item's
 # text. Anchoring at column 0 left that code scored as prose, so a `--` in a
 # shell command was charged as an em dash.
+#
+# An unclosed fence runs to the end of the file, as in CommonMark. That fallback
+# applies only to a fence indented 0 to 3 spaces. A line indented 4 or more is
+# indented code outside a list, and when it merely starts with ``` and never
+# closes, the fallback masked every paragraph after it, so that prose was never
+# scored. A deeply indented fence now has to close to count.
 _FENCE = re.compile(
-    r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n"
-    r"(?:.*?(?m:^)[ \t]*(?P=fence)`*~*[ \t]*$|.*\Z)", re.S)
+    r"(?m)^(?:(?P<deep>[ \t]*(?:\t| {4})[ \t]*)|[ ]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n"
+    r"(?:.*?(?m:^)[ \t]*(?P=fence)`*~*[ \t]*$|(?(deep)(?!)|.*\Z))", re.S)
 _FRONTMATTER = re.compile(r"\A---\n.*?\n---[ \t]*$", re.S | re.M)
 # An indented line is code only when it is not a continuation of a list. Nested
 # bullets and list continuation paragraphs are indented by four spaces in normal
