@@ -1,14 +1,10 @@
 ---
 name: plain-language
 description: >-
-  The standing rule for every word a person will read: chat replies, docs,
-  artifacts, titles and headings, PR and commit messages, Jira, Slack, email,
-  user-facing UI and error copy, code comments. Very clear and simple language,
-  always, without losing technical precision. Bans slogans, aphorisms, inflated
-  vocabulary, hype and padding. Also the authority on titles and copy where other
-  skills overlap. Ships a scorer, `pl`, and a hook that gates writes, commits,
-  pull requests, Jira, Slack, email and artifacts. Use before sending, publishing
-  or handing over anything written for a person, and whenever drafting a title.
+  The rule for every word a person reads (chat, docs, PR and commit text,
+  Jira, Slack, email, UI copy, comments): clear simple language, technical
+  precision kept, no slogans or hype. Ships the `pl` scorer. Use before
+  sending anything, and for titles.
 ---
 
 # Plain language
