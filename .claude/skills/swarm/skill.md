@@ -263,12 +263,15 @@ Agent({
   subagent_type: "general-purpose",
   name: "swarm-1",
   team_name: TEAM_NAME,
+  model: "sonnet",
   run_in_background: true,
   prompt: "<the template from section 4>"
 })
 Agent({ ..., name: "swarm-2", ... })
 # ... up to $AGENT_COUNT
 ```
+
+Use `opus` only for beads marked complex, or for security fixes.
 
 Each teammate self-claims the next available task. This is safe only because step 3d
 chained same-file beads, so no two claimable tasks share a file. Without a task list,
