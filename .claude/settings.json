@@ -7,7 +7,10 @@
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000",
     "MCP_TIMEOUT": "180000",
-    "MCP_TOOL_TIMEOUT": "120000"
+    "MCP_TOOL_TIMEOUT": "120000",
+    "CLAUDE_CODE_TMPDIR": "/var/tmp/claude",
+    "MSBUILDDISABLENODEREUSE": "1",
+    "CLAUDE_CODE_TETHER_LIVE": "0"
   },
   "permissions": {
     "defaultMode": "auto"
