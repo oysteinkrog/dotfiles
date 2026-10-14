@@ -10,6 +10,7 @@ units=(
   app-dev.lizardbyte.app.Sunshine.service  # sunshine package
   app-org.kde.krdpserver.service           # krdp package
   cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
+  claude-tab-watch.service                 # dotfiles: Claude session status in FrankenTerm tabs
 )
 # The FrankenTerm mux needs the frankenterm-local package from the tools step.
 if [ -x /usr/bin/frankenterm-mux-server ]; then
