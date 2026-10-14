@@ -1,7 +1,7 @@
 ---
 name: swarm-oracle
 model: opus
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra sessions via Codex CLI; add two Fable subagents as a second opinion for high-stakes or contested validations, and use them as the fallback when Codex is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra sessions via Codex CLI; add two Gemini 4 Argon calls (via PAL) as a second opinion for high-stakes or contested validations, and use them as the fallback when Codex is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
 
@@ -10,24 +10,23 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 > **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
 > primary oracle — the default FOR/AGAINST debate runs as two `codex exec` calls, one
 > per stance. Astra alone is the normal shape of a validation; no pairing is required.
-> Fable is the **secondary oracle**: add a Fable FOR/AGAINST pair
-> when the validation is high-stakes or the two Astra stances leave the call contested,
+> Gemini 4 Argon is the **secondary oracle**: add a Gemini FOR/AGAINST pair
+> (two `mcp__pal__chat` calls) when the validation is high-stakes or the two Astra stances leave the call contested,
 > or when the user asks for a second opinion. See `/consult-oracles` and the Oracle
 > Consultation Policy in `~/CLAUDE.md`.
 >
 > **Availability fallback:** if the Codex calls fail (Codex missing, path not trusted,
 > auth error, empty output after a real attempt), run the same FOR/AGAINST debate with
-> Fable subagents (`Agent` tool with `model: "fable"`; Fable is not reachable through
-> PAL) and state the substitution in the verdict. If Fable spawns also fail, use
-> `model: "opus"` subagents and say so. Do not silently downgrade.
+> two Gemini 4 Argon calls (`mcp__pal__chat`, one FOR, one AGAINST) and state the
+> substitution in the verdict. If PAL also fails, use Fable subagents (`Agent` tool with
+> `model: "fable"`; Fable is not reachable through PAL) and say so. Do not silently downgrade.
 >
 > **Sensitive code:** the Codex calls leave the machine, but OpenAI is an approved
 > provider, as are Anthropic and Google (Gemini through PAL). Proprietary material
 > can go to Astra, Fable and Gemini 4 Argon without asking first.
 >
-> **Third view:** for a high-stakes validation, or when Astra and Fable split, add
-> Gemini 4 Argon as a neutral evaluator with `mcp__pal__chat` (`model: "gemini-4-argon"`,
-> `thinking_mode: "max"`). See `/consult-oracles`.
+> **Third view:** for a high-stakes validation, or when Astra and Gemini split, add
+> one Fable subagent as a neutral evaluator. See `/consult-oracles`.
 
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
@@ -41,7 +40,7 @@ Run a structured FOR/AGAINST debate between two high-capability oracle sessions 
 
 ## Prerequisites
 
-The default Astra tier needs Codex only: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. Fable subagents need no PAL.
+The default Astra tier needs Codex only: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. Fable subagents need no PAL, but the Gemini second opinion does.
 
 ## Workflow
 
@@ -99,16 +98,17 @@ answer that cites no file or line was not read from the repo.
 
 Then skip to Step 4 and synthesize the two responses yourself.
 
-**Second opinion (Fable):** for high-stakes validations, or when the two Astra
-stances leave the call contested, spawn a Fable FOR/AGAINST pair in a single message
-and synthesize all four responses. Same shape when Codex is unavailable, in which
-case the Fable pair is the whole debate.
+**Second opinion (Gemini 4 Argon):** for high-stakes validations, or when the two Astra
+stances leave the call contested, make a Gemini FOR/AGAINST pair of `mcp__pal__chat`
+calls in a single message and synthesize all four responses. Same shape when Codex is
+unavailable, in which case the Gemini pair is the whole debate. Use Fable subagents
+(`Agent`, `model: "fable"`, same two stance prompts) only when Codex and PAL both fail.
 
 ```
-Agent({ subagent_type: "general-purpose", model: "fable",
-  prompt: "<evaluation prompt>\n\nStance: Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific — cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive." })
+mcp__pal__chat({ model: "gemini-4-argon", thinking_mode: "max",
+  prompt: "<evaluation prompt>\n\nStance: Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific, cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive." })
 
-Agent({ subagent_type: "general-purpose", model: "fable",
+mcp__pal__chat({ model: "gemini-4-argon", thinking_mode: "max",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
 
