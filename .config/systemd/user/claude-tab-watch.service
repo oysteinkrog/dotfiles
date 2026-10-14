@@ -1,0 +1,11 @@
+[Unit]
+Description=Show each Claude Code session's status in its FrankenTerm tab (claude-tab-watch)
+
+[Service]
+ExecStart=%h/.claude/hooks/claude-tab-watch.sh
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=default.target

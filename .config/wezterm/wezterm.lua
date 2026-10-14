@@ -278,6 +278,9 @@ local function tab_colors(palette)
     title = mix(fg, bg, 0.2),
     muted = mix(fg, bg, 0.45),
     active_title = fg,
+    fg = fg,
+    -- a soft amber tint behind a tab where Claude waits for you
+    blocked_bg = mix(ansi[4] or '#EBCB8B', bg, 0.75),
   }
 end
 
@@ -311,18 +314,31 @@ wezterm.on('format-tab-title', function(tab, tabs, panes, config)
   elseif tab.has_bell then
     edge, edge_color, idx_color, title_color = '▌', c.bell, c.bell, c.bell
   end
-  local strong = tab.is_active or tab.has_bell
-  return {
+  -- Claude blocked on you (AskUserQuestion, a permission prompt or an MCP
+  -- dialog): a "?" instead of the dot, and on other tabs an amber edge, bold
+  -- title and a tinted row. It stays until you answer, not just until you look.
+  local blocked = claude_state == 'input'
+  local symbol = blocked and '?' or '●'
+  local cells = {}
+  if blocked and not tab.is_active then
+    edge, edge_color, idx_color, title_color = '▌', c.bell, c.bell, c.fg
+    table.insert(cells, { Background = { Color = c.blocked_bg } })
+  end
+  local strong = tab.is_active or tab.has_bell or blocked
+  for _, cell in ipairs({
     { Foreground = { Color = edge_color or idx_color } },
     { Text = edge },
     { Attribute = { Intensity = strong and 'Bold' or 'Normal' } },
     { Foreground = { Color = idx_color } },
     { Text = idx .. ' ' },
     { Foreground = { Color = dot_color } },
-    { Text = '●' },
+    { Text = symbol },
     { Foreground = { Color = title_color } },
     { Text = ' ' .. title .. ' ' },
-  }
+  }) do
+    table.insert(cells, cell)
+  end
+  return cells
 end)
 
 -- Copy on select (send to clipboard instead of primary selection)
