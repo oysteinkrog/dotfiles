@@ -75,6 +75,8 @@ _LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 # Lines that end a paragraph, so they are never its lazy continuation.
 _THEMATIC = re.compile(r" {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
 _ORDERED_NOT_ONE = re.compile(r"[ \t]*(?!1[.)])\d+[.)]")
+# A setext underline turns the paragraph above it into a heading.
+_SETEXT_UNDER = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
 _INTERRUPTS = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-*_][ \t]*){3,}$)")
 
 
@@ -86,6 +88,21 @@ class _Span:
 
     def span(self) -> tuple[int, int]:
         return self._span
+
+
+def _item_text(line: str, item: re.Match[str], start: int = 0) -> tuple[int, int]:
+    """Return (text column, index where the text starts) for a list marker.
+
+    CommonMark counts one to four spaces after the marker as padding. With five
+    or more, or nothing after the marker, the padding is one space and the rest
+    belongs to the item's content.
+    """
+    marker_end = item.start() + len(item.group(0).rstrip(" \t"))
+    rest = line[item.end() :]
+    padding = _indent_width(line[: item.end()]) - _indent_width(line[:marker_end])
+    if padding >= 5 or not rest.strip():
+        return _indent_width(line[:marker_end]) + 1, min(marker_end + 1, len(line))
+    return _indent_width(line[: item.end()]), item.end()
 
 
 def _indent_width(indent: str) -> int:
@@ -133,10 +150,16 @@ class _FenceScanner:
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
             item = _LIST_ITEM.match(line)
-            if item and _THEMATIC.match(line):
+            if item and _THEMATIC.match(body):
                 item = None  # "* * *" is a thematic break, not a list item
             if item and in_para and _ORDERED_NOT_ONE.match(line):
                 item = None  # only "1." may interrupt a paragraph
+            if item and in_para and lead - (stack[-1] if stack else 0) >= 4:
+                item = None  # too deep to start an item: paragraph text
+            if in_para and not item and _SETEXT_UNDER.match(line):
+                in_para = False  # the paragraph above became a heading
+                i += 1
+                continue
             if (
                 in_para
                 and not item
@@ -148,18 +171,19 @@ class _FenceScanner:
             while stack and lead < stack[-1]:
                 stack.pop()
             if item:
-                col = _indent_width(item.group(0))
+                col, end = _item_text(line, item)
                 while stack and stack[-1] >= col:
                     stack.pop()
                 stack.append(col)
-                end = item.end()
                 # "- - ~~~sh" opens two items on one line; read every marker.
                 while (more := _LIST_ITEM.match(line, end)) and more.start() == end:
                     if _THEMATIC.match(line[end:]):
                         break
-                    col = _indent_width(line[: more.end()])
+                    col, nxt = _item_text(line, more)
+                    if nxt <= end:
+                        break  # no progress: stop rather than loop forever
+                    end = nxt
                     stack.append(col)
-                    end = more.end()
                 candidate, base, rel = line[end:], col, 0
             else:
                 base = stack[-1] if stack else 0
@@ -171,7 +195,10 @@ class _FenceScanner:
                 m = None  # backticks in the info string: inline code, not a fence
             if not m:
                 # A heading or a thematic break is not paragraph text.
-                in_para = not _INTERRUPTS.match(line)
+                # On a marker line the item's own text decides: "- # Title"
+                # is a heading and "-" alone is an empty item.
+                body = candidate if item else line
+                in_para = bool(body.strip()) and not _INTERRUPTS.match(body)
                 i += 1
                 continue
             in_para = False
@@ -244,16 +271,21 @@ class _IndentedCodeScanner:
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
             item = _LIST_ITEM.match(line)
-            if item and _THEMATIC.match(line):
+            if item and _THEMATIC.match(body):
                 item = None
             if item and in_para and _ORDERED_NOT_ONE.match(line):
                 item = None
+            if item and in_para and lead - (stack[-1] if stack else 0) >= 4:
+                item = None
             if item:
-                col = _indent_width(item.group(0))
+                col, end = _item_text(line, item)
                 while stack and stack[-1] >= col:
                     stack.pop()
                 stack.append(col)
-                in_para = True
+                body = line[end:]
+                in_para = bool(body.strip()) and not _INTERRUPTS.match(body)
+            elif in_para and _SETEXT_UNDER.match(line):
+                in_para = False  # the paragraph above became a heading
             elif in_para and not _INTERRUPTS.match(line):
                 pass  # lazy continuation, or the next line of the paragraph
             else:

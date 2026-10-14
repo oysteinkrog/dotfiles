@@ -15,7 +15,9 @@ Blank lines are ignored, since they hold no prose. Block quotes are not
 generated, because the scanner does not model them. On 2026-10-14, with
 headings, thematic breaks, lazy continuation and CRLF in the mix, the scanner
 hid prose in 12 of 20,000 random documents and the regex it replaced in 3,075.
-The 12 need deeper CommonMark container rules. Real files: none of 8,018.
+On 2026-10-15 setext headings and five-space list padding joined the mix; the
+scanner then hid prose in 11 of 20,000. Those need deeper CommonMark container
+rules. Real files: none of 8,018.
 """
 
 from __future__ import annotations
@@ -75,6 +77,8 @@ def block(rng: random.Random, indent: str) -> list[str]:
         ]
     )
     if kind == "heading":
+        if rng.random() < 0.3:
+            return [indent + "Title", indent + rng.choice(["=====", "---"])]
         return [indent + rng.choice(["# Title", "## Section", "### Sub"])]
     if kind == "rule":
         return [indent + rng.choice(["---", "***", "* * *"])]
@@ -111,9 +115,11 @@ def block(rng: random.Random, indent: str) -> list[str]:
     if kind == "marker_fence":
         f = rng.choice(FENCES)
         return [indent + "- " + f + "sh", indent + "  echo hi", indent + "  " + f]
-    marker = rng.choice(["- ", "* ", "1. ", "10. "])
+    marker = rng.choice(["- ", "* ", "1. ", "10. ", "-     "])
     lines = [indent + marker + "Item text."]
-    child = indent + " " * len(marker)
+    # Five or more spaces after the marker: CommonMark counts only one as padding.
+    width = len(marker.rstrip()) + 1 if marker.endswith("     ") else len(marker)
+    child = indent + " " * width
     for _ in range(rng.randint(0, 2)):
         if rng.random() < 0.7:  # else no blank line: exercises lazy continuation
             lines.append("")

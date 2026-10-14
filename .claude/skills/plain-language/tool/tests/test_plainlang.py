@@ -689,6 +689,28 @@ def test_a_fence_after_two_list_markers_on_one_line(scorer):
     assert "ls -la" not in joined
 
 
+def test_a_starred_rule_inside_a_nested_list_does_not_hang(scorer):
+    """Found by the fuzz, 2026-10-15: "* * *" read as markers looped forever."""
+    doc = "- Item text.\n\n  10. Item text.\n\n      * * *\n  Title\n  ---\n\nAfter.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "After" in joined
+
+
+def test_an_indented_rule_in_a_list_item_is_not_a_new_item(scorer):
+    """Found by the fuzz, 2026-10-15. "* * *" at the item's column is a rule."""
+    doc = "10. Item text.\n\n    * * *\n\n\n        ~~~\n\nSigned, [your name]\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "Signed" in joined
+
+
+def test_a_marker_too_deep_to_start_an_item_continues_the_paragraph(scorer):
+    """Found by the fuzz, 2026-10-15. Four spaces in, "- ~~~sh" is paragraph text."""
+    doc = "Signed, [your name]\n    - ~~~sh\n      echo hi\n      ~~~\n\nAfter it.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "After it" in joined
+    assert "echo hi" in joined
+
+
 def test_a_list_items_second_paragraph_is_prose(scorer):
     """Found by a Fable review, 2026-10-14: 201 lines in 86 real files were hidden.
 
@@ -719,6 +741,27 @@ def test_indented_code_right_after_a_heading_is_code(scorer):
     doc = "# Example\n    echo as an AI language model\n\nPlain prose after it.\n"
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "language model" not in joined
+
+
+def test_indented_code_right_after_a_setext_heading_is_code(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. The underline ends the paragraph."""
+    doc = (
+        "Example\n=======\n    echo as an AI language model\n\nPlain prose after it.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "language model" not in joined
+    assert "Plain prose" in joined
+
+
+def test_five_spaces_after_a_list_marker_count_as_one(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14: the CommonMark padding rule.
+
+    With five or more spaces after "-", the item's text column is one past the
+    marker, so a fence at two spaces is still inside the item.
+    """
+    doc = "-     Item\n\n  ```sh\n  echo hi\n\nSigned, [your name]\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "Signed" in joined
 
 
 def test_front_matter_may_start_with_a_yaml_comment(scorer):
