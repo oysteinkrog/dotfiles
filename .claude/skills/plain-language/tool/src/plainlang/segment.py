@@ -29,7 +29,9 @@ class Span:
 class Sentence:
     text: str
     start: int
-    block_kind: str = "paragraph"  # paragraph | heading | list_item | table | quote | title
+    block_kind: str = (
+        "paragraph"  # paragraph | heading | list_item | table | quote | title
+    )
 
 
 @dataclass
@@ -45,7 +47,9 @@ class Document:
         # a 1 MB document took 490 seconds. The newline offsets are found once.
         nl = self.__dict__.get("_newlines")
         if nl is None:
-            nl = self.__dict__["_newlines"] = [m.start() for m in re.finditer("\n", self.source)]
+            nl = self.__dict__["_newlines"] = [
+                m.start() for m in re.finditer("\n", self.source)
+            ]
         i = bisect.bisect_left(nl, offset)
         return i + 1, offset - (nl[i - 1] + 1 if i else 0) + 1
 
@@ -88,7 +92,18 @@ def _indent_width(indent: str) -> int:
 
 
 class _FenceScanner:
-    """Finds fenced code blocks, with the same finditer/span surface as a regex."""
+    """Finds fenced code blocks, with the same finditer/span surface as a regex.
+
+    Follows CommonMark for the cases that decide what is prose: a fence may be
+    indented at most three columns past its container, which inside a list is
+    the column where the item's text starts; a fence may start on the list
+    marker's own line; a backtick fence's info string has no backticks (else the
+    line is inline code); a closer sits at most three columns past the container;
+    and an unclosed fence ends with its container, which for the document is the
+    end of the file. A line that directly continues a paragraph (no blank line
+    between) stays in the paragraph's list item, which is CommonMark's lazy
+    continuation. Block quotes are not modelled.
+    """
 
     def finditer(self, text: str):
         lines = text.split("\n")
@@ -97,58 +112,77 @@ class _FenceScanner:
         for line in lines:
             offsets.append(pos)
             pos += len(line) + 1
-        # The column where the current list item's text starts, or None outside
-        # a list. Fence rules count from this column, as CommonMark does.
-        item_col: int | None = None
+        # Text columns of the open list items, innermost last.
+        stack: list[int] = []
+        # True while the previous line was paragraph text, so this line may be a
+        # lazy continuation of it.
+        in_para = False
         i = 0
         while i < len(lines):
             line = lines[i]
-            m = _FENCE_OPEN.match(line)
-            if m:
-                width = _indent_width(m.group("indent"))
-                base = item_col if item_col is not None and width >= item_col else 0
-                if width - base > 3:
-                    m = None
-            if m:
-                fence = m.group("fence")
-                contained = base > 0
-                closer = None
-                stop = len(lines)
-                for j in range(i + 1, len(lines)):
-                    raw = lines[j]
-                    body = raw.lstrip(" \t")
-                    lead = _indent_width(raw[: len(raw) - len(body)])
-                    # Inside a list item the block ends with the item: at the
-                    # first non-blank line indented less than the item's text.
-                    if contained and body and lead < base:
-                        stop = j
-                        break
-                    body = body.rstrip()
-                    # A closer sits at most three columns past the container's
-                    # edge; deeper than that it is content of the block.
-                    if (lead - base <= 3 and body.startswith(fence)
-                            and body.rstrip(fence[0]) == "" and len(body) >= len(fence)):
-                        closer = j
-                        break
-                if closer is not None:
-                    yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
-                    i = closer + 1
-                    continue
-                end = len(text) if stop == len(lines) else offsets[stop] - 1
-                yield _Span(offsets[i], end)
-                if stop == len(lines):
-                    return
-                i = stop
-                item_col = None
+            body = line.lstrip(" \t")
+            if not body:
+                in_para = False
+                i += 1
                 continue
-            if line.strip():
-                item = _LIST_ITEM.match(line)
-                if item:
-                    item_col = _indent_width(item.group(0))
-                elif item_col is not None and _indent_width(
-                        line[: len(line) - len(line.lstrip())]) < item_col:
-                    item_col = None
-            i += 1
+            lead = _indent_width(line[: len(line) - len(body)])
+            item = _LIST_ITEM.match(line)
+            if in_para and not item and not _FENCE_OPEN.match(body):
+                i += 1  # lazy continuation: the list items stay open
+                continue
+            while stack and lead < stack[-1]:
+                stack.pop()
+            if item:
+                col = _indent_width(item.group(0))
+                while stack and stack[-1] >= col:
+                    stack.pop()
+                stack.append(col)
+                candidate, base, rel = line[item.end() :], col, 0
+            else:
+                base = stack[-1] if stack else 0
+                candidate, rel = body, lead - base
+            m = _FENCE_OPEN.match(candidate) if 0 <= rel <= 3 else None
+            if m and m.group("indent"):
+                m = None  # the candidate already starts at its text
+            if m and m.group("fence")[0] == "`" and "`" in candidate[m.end() :]:
+                m = None  # backticks in the info string: inline code, not a fence
+            if not m:
+                in_para = True
+                i += 1
+                continue
+            in_para = False
+            fence = m.group("fence")
+            contained = base > 0
+            closer = None
+            stop = len(lines)
+            for j in range(i + 1, len(lines)):
+                raw = lines[j]
+                rest = raw.lstrip(" \t")
+                if not rest:
+                    continue
+                jlead = _indent_width(raw[: len(raw) - len(rest)])
+                if contained and jlead < base:
+                    stop = j
+                    break
+                rest = rest.rstrip()
+                if (
+                    jlead - base <= 3
+                    and rest.startswith(fence)
+                    and rest.rstrip(fence[0]) == ""
+                    and len(rest) >= len(fence)
+                ):
+                    closer = j
+                    break
+            if closer is not None:
+                yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
+                i = closer + 1
+                continue
+            yield _Span(
+                offsets[i], len(text) if stop == len(lines) else offsets[stop] - 1
+            )
+            if stop == len(lines):
+                return
+            i = stop
 
 
 _FENCE = _FenceScanner()
@@ -159,8 +193,7 @@ _FRONTMATTER = re.compile(r"\A---\n.*?\n---[ \t]*$", re.S | re.M)
 # slop as a sub-bullet made it invisible. The lookbehind requires the line above
 # to be blank or itself indented code, which is what CommonMark requires for an
 # indented code block anyway.
-_INDENTED_CODE = re.compile(
-    r"(?m)^(?: {4,}|\t)(?![-*+][ \t]|\d+[.)][ \t])\S[^\n]*$")
+_INDENTED_CODE = re.compile(r"(?m)^(?: {4,}|\t)(?![-*+][ \t]|\d+[.)][ \t])\S[^\n]*$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _URL = re.compile(r"https?://\S+|\bwww\.\S+")
 _MD_LINK_TARGET = re.compile(r"\]\([^)\s]+(?:\s+\"[^\"]*\")?\)")
@@ -242,13 +275,44 @@ _QUOTE_MARK = re.compile(r"(?m)^[ \t]*>[ \t]?")
 _TABLE_ROW = re.compile(r"(?m)^[ \t]*\|.*\|[ \t]*$")
 # Possessive quantifiers (*+): with plain ones a long whitespace-only line made
 # the overlapping [ \t]* runs backtrack, and 20,000 spaces took 3 seconds.
-_TABLE_SEP = re.compile(r"(?m)^[ \t]*+\|?[ \t]*+:?-{2,}:?[ \t]*+(\|[ \t]*+:?-{2,}:?[ \t]*+)*+\|?[ \t]*+$")
+_TABLE_SEP = re.compile(
+    r"(?m)^[ \t]*+\|?[ \t]*+:?-{2,}:?[ \t]*+(\|[ \t]*+:?-{2,}:?[ \t]*+)*+\|?[ \t]*+$"
+)
 
 # Abbreviations that end in a period but do not end a sentence.
 _ABBREV = {
-    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e",
-    "fig", "no", "vol", "approx", "al", "inc", "ltd", "co", "dept", "est",
-    "min", "max", "sec", "cf", "ca", "ver", "rev", "ref", "eq", "ch",
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "prof",
+    "sr",
+    "jr",
+    "st",
+    "vs",
+    "etc",
+    "e.g",
+    "i.e",
+    "fig",
+    "no",
+    "vol",
+    "approx",
+    "al",
+    "inc",
+    "ltd",
+    "co",
+    "dept",
+    "est",
+    "min",
+    "max",
+    "sec",
+    "cf",
+    "ca",
+    "ver",
+    "rev",
+    "ref",
+    "eq",
+    "ch",
 }
 
 _SENT_END = re.compile(r"[.!?]['\")\]]*(?=\s|$)")
@@ -266,7 +330,11 @@ def split_sentences(text: str, base: int = 0) -> list[tuple[str, int]]:
         last = re.search(r"([A-Za-z.]+)\.$", stripped)
         if last and last.group(1).lower().strip(".") in _ABBREV:
             continue
-        if re.search(r"\d\.$", stripped) and end < len(text) and text[end:end + 2].strip()[:1].isdigit():
+        if (
+            re.search(r"\d\.$", stripped)
+            and end < len(text)
+            and text[end : end + 2].strip()[:1].isdigit()
+        ):
             continue
         # A single capital letter before the period is an initial.
         if re.search(r"(?:^|\s)[A-Z]\.$", stripped):
@@ -298,7 +366,7 @@ def parse(source: str) -> Document:
             doc.sentences.append(Sentence(span.text, span.start, "heading"))
         take(*m.span())
     for m in _SETEXT.finditer(prose):
-        if any(consumed[m.start():m.end()]):
+        if any(consumed[m.start() : m.end()]):
             continue
         span = Span(m.group("text").strip(), m.start("text"))
         if span.text:
@@ -313,7 +381,9 @@ def parse(source: str) -> Document:
     for raw_line in prose.split("\n"):
         s = line_start
         line_start += len(raw_line) + 1
-        if not raw_line.strip() or all(consumed[i] for i in range(s, s + len(raw_line)) if raw_line):
+        if not raw_line.strip() or all(
+            consumed[i] for i in range(s, s + len(raw_line)) if raw_line
+        ):
             continue
         if any(consumed[i] for i in range(s, s + len(raw_line))):
             continue
@@ -324,19 +394,21 @@ def parse(source: str) -> Document:
         if qm:
             kind = "quote"
             off += qm.end()
-            body = raw_line[qm.end():]
+            body = raw_line[qm.end() :]
         lm = _LIST_MARK.match(body)
         if lm:
             kind = "list_item"
             off += lm.end()
-            body = body[lm.end():]
+            body = body[lm.end() :]
         if _TABLE_ROW.match(raw_line):
             kind = "table"
             for cell in body.strip().strip("|").split("|"):
                 idx = body.find(cell, 0)
                 cell_text = cell.strip()
                 if cell_text:
-                    doc.sentences.append(Sentence(cell_text, off + max(idx, 0), "table"))
+                    doc.sentences.append(
+                        Sentence(cell_text, off + max(idx, 0), "table")
+                    )
             continue
         for text, offset in split_sentences(body, off):
             doc.sentences.append(Sentence(text, offset, kind))
@@ -383,5 +455,6 @@ def fence_spans(text: str) -> list[tuple[int, int]]:
     document that documents it. A marker in backticks is being quoted; a real
     leak appears bare.
     """
-    return [m.span() for m in _FENCE.finditer(text)] + \
-           [m.span() for m in _INLINE_CODE.finditer(text)]
+    return [m.span() for m in _FENCE.finditer(text)] + [
+        m.span() for m in _INLINE_CODE.finditer(text)
+    ]
