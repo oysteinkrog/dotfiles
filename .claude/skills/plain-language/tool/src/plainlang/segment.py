@@ -210,26 +210,22 @@ class _FenceScanner:
 
 
 _FENCE = _FenceScanner()
-# Front matter opens with "---" and a "key:" line. Without the key check, a
-# document that starts with a horizontal rule lost its first section.
+# Front matter opens with "---" and, after any YAML comments or blank lines, a
+# "key:" line. Without the key check, a document that starts with a horizontal
+# rule lost its first section.
 _FRONTMATTER = re.compile(
-    r"\A---\n(?=[A-Za-z0-9_-]+:)(?:.*?\n)?---[ \t]*$", re.S | re.M
+    r"\A---\n(?=(?:[ \t]*(?:#[^\n]*)?\n)*[A-Za-z0-9_-]+:)(?:.*?\n)?---[ \t]*$",
+    re.S | re.M,
 )
-# An indented line is code only when it is not a continuation of a list. Nested
-# bullets and list continuation paragraphs are indented by four spaces in normal
-# CommonMark, and masking them meant a whole nested list was never scored: writing
-# slop as a sub-bullet made it invisible. The lookbehind requires the line above
-# to be blank or itself indented code, which is what CommonMark requires for an
-# indented code block anyway.
 
 
 class _IndentedCodeScanner:
     """Finds indented code lines, with the same finditer/span surface as a regex.
 
     A line is indented code when it sits four or more columns past its
-    container (inside a list, the column where the item's text starts), follows
-    a blank line or another code line, and is not a lazy continuation of a
-    paragraph. A flat "four spaces" regex took a list item's second paragraph
+    container (inside a list, the column where the item's text starts) and does
+    not continue a paragraph: indented code cannot interrupt one, but it may
+    follow a blank line, a heading, a horizontal rule or more code. A flat "four spaces" regex took a list item's second paragraph
     for code, and hid 201 lines of prose in 86 real files. Fences are already
     blanked when this runs, so their lines read as blank here.
     """
@@ -237,8 +233,6 @@ class _IndentedCodeScanner:
     def finditer(self, text: str):
         stack: list[int] = []
         in_para = False
-        prev_blank = True
-        prev_code = False
         pos = 0
         for raw in text.split("\n"):
             start = pos
@@ -246,7 +240,7 @@ class _IndentedCodeScanner:
             line = raw[:-1] if raw.endswith("\r") else raw
             body = line.lstrip(" \t")
             if not body:
-                in_para, prev_blank = False, True
+                in_para = False
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
             item = _LIST_ITEM.match(line)
@@ -254,7 +248,6 @@ class _IndentedCodeScanner:
                 item = None
             if item and in_para and _ORDERED_NOT_ONE.match(line):
                 item = None
-            code = False
             if item:
                 col = _indent_width(item.group(0))
                 while stack and stack[-1] >= col:
@@ -267,13 +260,11 @@ class _IndentedCodeScanner:
                 while stack and lead < stack[-1]:
                     stack.pop()
                 base = stack[-1] if stack else 0
-                if lead - base >= 4 and (prev_blank or prev_code):
-                    code = True
+                if lead - base >= 4 and not in_para:
                     yield _Span(start + len(line) - len(body), start + len(line))
                     in_para = False
                 else:
                     in_para = not _INTERRUPTS.match(line)
-            prev_blank, prev_code = False, code
 
 
 _INDENTED_CODE = _IndentedCodeScanner()
