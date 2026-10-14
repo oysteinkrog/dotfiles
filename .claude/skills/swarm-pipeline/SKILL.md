@@ -115,7 +115,7 @@ Phase 2:  10 agents (map landscape — same size, different abstraction)
 Phase 3:  10 agents (design — same size, now proposing solutions)
 Phase 4:   8+2 (doc updates + oracle validation)
 Phase 5:  20 agents (maximum — deepest planning, most facets)
-Phase 6:  10 agents (review — one lens each)
+Phase 6:  6 agents (review — one lens each, mostly Sonnet)
 Phase 7:   6 agents (general review — broader roles)
 Phase 8:   6 agents (bead creation — 1-2 epics each)
 Phase 9:  10→2→8→10 (hardening — VARIES per round)
@@ -150,11 +150,11 @@ Each agent prompt MUST include:
 Use Astra oracles (GPT-6 Astra via `/swarm-oracle`) for adversarial review at
 decision points. Oracles challenge assumptions; agents cover breadth.
 
-### Oracles vs More Opus Agents
+### Oracles vs More Agents
 
 | Need | Use | Why |
 |------|-----|-----|
-| Broader coverage of known concerns | More Opus | Parallel breadth |
+| Broader coverage of known concerns | More Sonnet agents | Parallel breadth |
 | Challenge assumptions, find blind spots | Astra oracles | Adversarial depth |
 | Design tradeoff decisions | Astra oracles | FOR/AGAINST surfaces tension |
 | Spec/bead correctness | Opus first, then oracles | Opus catches obvious; oracles catch subtle |
@@ -196,10 +196,10 @@ Reviewers report only supported findings, never a target number.
 
 | Round | Type | Character |
 |-------|------|-----------|
-| 1 | Opus review (10) | Logic, structure, missing pieces |
+| 1 | Review (6, mostly Sonnet) | Logic, structure, missing pieces |
 | 2 | Oracle (2 Astra) | Deeper: spec contradictions, arch gaps |
-| 3 | Fresh-eyes (8) | Format, completeness, cross-cutting |
-| 4 | Final (10) | Minor: paths, typos, deps |
+| 3 | Fresh-eyes (8, Sonnet) | Format, completeness, cross-cutting |
+| 4 | Final (4 Sonnet + 1 Astra) | Minor: paths, typos, deps |
 
 ### Stop Condition
 
@@ -218,10 +218,10 @@ If Round N finds MORE issues than Round N-1:
 ## Convergence Log
 | Round | Agents | Issues Found | Logic Issues | Stop? |
 |-------|--------|-------------|-------------|-------|
-| 1 | 10 Opus | 25 | 8 | No |
+| 1 | 6 agents, mostly Sonnet | 25 | 8 | No |
 | 2 | 2 Astra | 5 | 3 | No |
-| 3 | 8 Opus (fresh) | 10 | 1 | No |
-| 4 | 10 Opus | 3 | 0 | YES |
+| 3 | 8 Sonnet (fresh) | 10 | 1 | No |
+| 4 | 4 Sonnet + 1 Astra | 3 | 0 | YES |
 ```
 
 **Why this matters:** Without tracking, you run review rounds "until it feels right."
@@ -269,7 +269,7 @@ Fix every issue you find. Do NOT assume prior reviewers caught anything.
 ### When in the Pipeline
 
 Fresh-eyes is Round 3 of the hardening loop (Phase 9):
-1. Round 1: Opus review (agents familiar with the plan)
+1. Round 1: Review (mostly Sonnet, agents familiar with the plan)
 2. Round 2: Oracle validation (Astra, adversarial)
 3. **Round 3: Fresh-eyes hardening (NEW agents, no history)**
 4. Round 4: Final correctness (can reuse Round 1 agents)
@@ -329,7 +329,7 @@ Each agent reads actual source files they reference.
 **Output:** 20 implementation plan documents.
 
 ## Phase 6: Multi-Lens Review
-**Use:** `/swarm-review` | **Team:** 10 Opus
+**Use:** `/swarm-review` | **Team:** 6 (Sonnet lanes, Opus for correctness and security)
 
 Lenses: correctness, conflicts, test coverage, UX fidelity, safety,
 performance, localization, architecture, accessibility, feasibility.
@@ -350,10 +350,10 @@ Use `br create` + `br dep add`. Target 1-3 files per bead.
 **Use:** `/swarm-beads-quality` or `/swarm-hardening`
 
 Four rounds with convergence tracking (see Pattern 4):
-1. 10 Opus: per-epic + deps + tests + self-containment
+1. 6 mostly Sonnet: per-epic + deps + tests + self-containment
 2. 2 Astra: oracle challenge on readiness
-3. 8 Opus: **fresh eyes** (see Pattern 5) — fix specs, embed cross-cutting, GWT
-4. 10 Opus: final correctness
+3. 8 Sonnet: **fresh eyes** (see Pattern 5) — fix specs, embed cross-cutting, GWT
+4. 4 Sonnet verifiers + 1 Astra call: final correctness
 
 ## Phase 10: Architecture Audit (Optional)
 **Team:** 10 Opus | Read actual source, decide: rewrite | refactor | keep.
@@ -364,7 +364,7 @@ Apply audit findings → 6 Opus rewrite beads → 2 Astra oracles validate scope
 Apply two-track labels (Pattern 1) to all beads.
 
 ## Phase 12: Final Correctness
-**Team:** 10 Opus | Verify every bead. Fix remaining issues.
+**Team:** 4 Sonnet verifiers + 1 Astra call | Verify every bead. Fix remaining issues.
 
 ---
 
@@ -451,11 +451,11 @@ Never auto-advance without confirmation.
 [ ] Phase 3: Design (10 agents) → design doc
 [ ] Phase 4: Oracle (2 Astra FOR/AGAINST) → corrections applied
 [ ] Phase 5: Impl Planning (20 agents) → 20 plan docs
-[ ] Phase 6-7: Review (10+6 agents) → findings fixed
+[ ] Phase 6-7: Review (6+6 agents) → findings fixed
 [ ] Phase 8: Bead Creation (6 agents) → beads with ACs
-[ ] Phase 9: Hardening (10→2→8→10, track convergence) → hardened beads
+[ ] Phase 9: Hardening (6→2→8→5, track convergence) → hardened beads
 [ ] Phase 10-11: Audit + Apply + Oracle + Two-Track → final beads
-[ ] Phase 12: Final Correctness (10 agents) → ship-ready backlog
+[ ] Phase 12: Final Correctness (4 Sonnet + 1 Astra) → ship-ready backlog
 ```
 
 ## Proven Metrics
@@ -479,12 +479,12 @@ Never auto-advance without confirmation.
 | Design | 10 | Opus |
 | Oracle (2 rounds) | 4 | GPT-6 Astra |
 | Planning | 20 | Opus |
-| Review (2 rounds) | 16 | Opus |
+| Review (2 rounds) | 16 | Mostly Sonnet |
 | Bead creation | 6 | Opus |
-| Hardening (4 rounds) | 30 | Opus |
+| Hardening (4 rounds) | 30 | Mostly Sonnet |
 | Oracle (2 rounds) | 4 | GPT-6 Astra |
-| Final pass | 10 | Opus |
-| **Total** | **~120** | |
+| Final pass | 4 + 1 | Sonnet + GPT-6 Astra |
+| **Total** | **~115** | |
 
 ## Artifacts
 

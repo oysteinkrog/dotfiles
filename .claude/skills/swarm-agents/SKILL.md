@@ -26,7 +26,7 @@ argument-hint: "<type: research|design|review|planning|bead-creation> <topic> [-
 
 # Agent Swarm Skill
 
-Orchestrate N parallel Opus agents for research, design, review, planning, or bead creation.
+Orchestrate N parallel agents, model per lane, for research, design, review, planning, or bead creation.
 Each agent explores one facet independently; results are synthesized by the leader.
 
 ## When to Use
@@ -48,15 +48,21 @@ Each agent explores one facet independently; results are synthesized by the lead
 
 There is **no `CLAUDE_CODE_SUBAGENT_MODEL` env pin**, and it must not come back. It was
 removed because it silently forced every subagent to one model and broke per-call `model:`
-overrides. The Opus default below is a prompt-level convention, not a setting.
+overrides. The model table below is a prompt-level convention, not a setting.
 
 - **Pass `model:` explicitly on every spawn.** An unspecified model falls back to the
-  leader model, which is expensive at fan-out scale.
-- **Default to `model: 'opus'`** for spawned subagents and workflow `agent()` calls.
-- **Override per call:** `'fable'` when Oystein asks for Fable workers or a lane needs the
-  frontier model, `'sonnet'` for cheap breadth lanes, `'haiku'` for cheap mechanical lanes.
+  leader model, which is expensive at fan-out scale. Pick by task:
+
+| Task | Model |
+|------|-------|
+| Lookup, classify, list files, check one fact, format output | `haiku` |
+| Search, grep, read and summarise, explore, mechanical edits, bead work with a clear spec, running builds and tests | `sonnet` |
+| Design, hard debugging, review of logic or security, synthesis the leader acts on | `opus` |
+| Oracle, second opinion, FOR/AGAINST | Astra via `codex exec`, or Gemini 4 Argon via PAL; not a Claude agent |
+| Fable | Only when Oystein asks, or after Opus and Astra both failed; say why in the spawn |
+
+- If unsure, use `sonnet` and go up one level only when the result is wrong.
 - Mixing models inside one fan-out is encouraged. Set the model per leaf, not per wave.
-  Opus for most lanes, Fable for the few contested ones, Sonnet or Haiku where cost matters.
 
 ## NxM notation
 

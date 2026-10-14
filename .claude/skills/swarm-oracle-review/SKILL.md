@@ -109,14 +109,14 @@ After oracle validation, run hardening rounds until convergence.
 
 Each round has 3 steps:
 
-**Step A: Review** (10 Opus agents via `/swarm-agents type=review`)
+**Step A: Review** (6 agents via `/swarm-agents type=review`, Sonnet lanes; Opus for correctness and security)
 - Each agent reviews with a different lens
 - Finds issues, inconsistencies, gaps
 - Output: list of findings per agent
 
 **Step B: Fix**
 - Compile all findings
-- Apply fixes (6-8 Opus agents for large artifacts)
+- Apply fixes (6-8 Sonnet agents for large artifacts)
 - Each fix validated against the original plan/design
 
 **Step C: Validate Fixes**
@@ -186,13 +186,13 @@ performance impact, data integrity, rollback strategy.
 ```
 Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Gemini if high-stakes or contested)
   -> Fix CRITICAL/HIGH findings
-Phase 2: Agent Review (10 Opus, multi-lens)
+Phase 2: Agent Review (6 agents, multi-lens, mostly Sonnet)
   -> Fix all findings
 Phase 3: Oracle (2x Astra FOR/AGAINST) on fixes
   -> Verify fixes, find remaining issues
-Phase 4: Agent Hardening (8 Opus, fresh eyes)
+Phase 4: Agent Hardening (8 Sonnet, fresh eyes)
   -> Embed cross-cutting, convert ACs, split oversized
-Phase 5: Final Correctness (10 Opus)
+Phase 5: Final Correctness (4 Sonnet verifiers + 1 Astra call)
   -> Verify everything, fix last issues
   -> If <= 2 issues: DONE
   -> If > 2 issues: repeat from Phase 3
