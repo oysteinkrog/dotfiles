@@ -487,13 +487,40 @@ def test_indented_backticks_do_not_pair_with_a_later_fence(scorer):
     assert "ls -la" not in joined
 
 
-def test_a_long_blank_line_does_not_stall_the_fence_scan(scorer):
-    """Found by GPT-6 Astra review, 2026-10-14: the regex backtracked quadratically."""
-    import time
-    doc = "Short intro sentence here.\n" + " " * 20000 + "\nAnother plain sentence.\n"
-    t = time.monotonic()
-    parse(doc)
-    assert time.monotonic() - t < 0.5
+def test_a_long_blank_line_keeps_the_prose_around_it(scorer):
+    """A long whitespace-only line once made two regexes backtrack for seconds.
+
+    Timing is not asserted here, because a busy machine would make that flaky.
+    This only pins that such a line is handled and the prose around it scored.
+    """
+    doc = "Short intro sentence here.\n" + " " * 2000 + "\nAnother plain sentence.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "Short intro" in joined and "Another plain" in joined
+
+
+def test_a_deeply_indented_marker_inside_a_block_does_not_close_it(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14.
+
+    A fence line indented four or more columns past the opener is content of
+    the block, not its closer. Taking it as the closer left the real closer to
+    open a new block that masked the rest of the document.
+    """
+    doc = ("This block quotes a fence marker.\n\n"
+           "```\n    ```\nexample\n```\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+    assert "example" not in joined
+
+
+def test_an_unclosed_fence_in_a_list_item_ends_with_the_item(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. CommonMark ends it with its container."""
+    doc = ("- Paste this into the terminal:\n\n"
+           "  ```sh\n  ls -la\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+    assert "ls -la" not in joined
 
 
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):

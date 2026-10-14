@@ -105,20 +105,39 @@ class _FenceScanner:
             deep = m is not None and _indent_width(m.group("indent")) >= 4
             if m and (not deep or in_list):
                 fence = m.group("fence")
+                width = _indent_width(m.group("indent"))
+                # Inside a list item the block ends with the item: at the first
+                # non-blank line indented less than the fence. At top level it
+                # runs to the end of the file.
+                contained = in_list and width > 0
                 closer = None
+                stop = len(lines)
                 for j in range(i + 1, len(lines)):
-                    body = lines[j].strip()
-                    if (body.startswith(fence) and body.rstrip(fence[0]) == ""
-                            and len(body) >= len(fence)):
+                    raw = lines[j]
+                    body = raw.lstrip(" \t")
+                    lead = _indent_width(raw[: len(raw) - len(body)])
+                    if contained and body and lead < width:
+                        stop = j
+                        break
+                    body = body.rstrip()
+                    # A closing fence sits at most three columns deeper than its
+                    # opener; deeper than that it is content of the block.
+                    if (lead < width + 4 and body.startswith(fence)
+                            and body.rstrip(fence[0]) == "" and len(body) >= len(fence)):
                         closer = j
                         break
                 if closer is not None:
                     yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
                     i = closer + 1
                     continue
-                if not deep:
-                    yield _Span(offsets[i], len(text))
-                    return
+                if not deep or contained:
+                    end = len(text) if stop == len(lines) else offsets[stop] - 1
+                    yield _Span(offsets[i], end)
+                    if stop == len(lines):
+                        return
+                    i = stop
+                    in_list = False
+                    continue
             if line.strip():
                 if _LIST_ITEM.match(line):
                     in_list = True
