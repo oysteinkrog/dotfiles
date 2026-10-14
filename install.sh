@@ -183,6 +183,7 @@ if [ -n "$native_linux" ]; then
     .config/pipewire/iem-eq
     .config/autostart/wezterm.desktop
     .config/systemd/user/plasma-kwin_wayland.service.d
+    .config/systemd/user/session.slice.d
     .local/share/applications/org.wezfurlong.wezterm.desktop
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
