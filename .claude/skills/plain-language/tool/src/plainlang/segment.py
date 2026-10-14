@@ -72,6 +72,10 @@ class Document:
 # backtracked quadratically on long blank lines, so this is a line scanner.
 _FENCE_OPEN = re.compile(r"(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})")
 _LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
+# Lines that end a paragraph, so they are never its lazy continuation.
+_THEMATIC = re.compile(r" {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_ORDERED_NOT_ONE = re.compile(r"[ \t]*(?!1[.)])\d+[.)]")
+_INTERRUPTS = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-*_][ \t]*){3,}$)")
 
 
 class _Span:
@@ -106,12 +110,14 @@ class _FenceScanner:
     """
 
     def finditer(self, text: str):
-        lines = text.split("\n")
+        raw_lines = text.split("\n")
         offsets = []
         pos = 0
-        for line in lines:
+        for line in raw_lines:
             offsets.append(pos)
             pos += len(line) + 1
+        # CRLF text: drop the \r for the analysis, keep the offsets of the source.
+        lines = [line[:-1] if line.endswith("\r") else line for line in raw_lines]
         # Text columns of the open list items, innermost last.
         stack: list[int] = []
         # True while the previous line was paragraph text, so this line may be a
@@ -127,7 +133,16 @@ class _FenceScanner:
                 continue
             lead = _indent_width(line[: len(line) - len(body)])
             item = _LIST_ITEM.match(line)
-            if in_para and not item and not _FENCE_OPEN.match(body):
+            if item and _THEMATIC.match(line):
+                item = None  # "* * *" is a thematic break, not a list item
+            if item and in_para and _ORDERED_NOT_ONE.match(line):
+                item = None  # only "1." may interrupt a paragraph
+            if (
+                in_para
+                and not item
+                and not _FENCE_OPEN.match(body)
+                and not _INTERRUPTS.match(line)
+            ):
                 i += 1  # lazy continuation: the list items stay open
                 continue
             while stack and lead < stack[-1]:
@@ -147,7 +162,8 @@ class _FenceScanner:
             if m and m.group("fence")[0] == "`" and "`" in candidate[m.end() :]:
                 m = None  # backticks in the info string: inline code, not a fence
             if not m:
-                in_para = True
+                # A heading or a thematic break is not paragraph text.
+                in_para = not _INTERRUPTS.match(line)
                 i += 1
                 continue
             in_para = False
@@ -174,7 +190,7 @@ class _FenceScanner:
                     closer = j
                     break
             if closer is not None:
-                yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
+                yield _Span(offsets[i], offsets[closer] + len(raw_lines[closer]))
                 i = closer + 1
                 continue
             yield _Span(
