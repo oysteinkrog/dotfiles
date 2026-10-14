@@ -132,10 +132,11 @@
 #   with exit code 75. The clock starts again each time the waiter moves up
 #   in line. In live mode it does not run while the build waits only because
 #   a higher-priority build is ahead of it (a critical build that goes first,
-#   or a first build in order with a higher priority). It does run while the
-#   build is first in order, or waits for a lock key, the hold file, swap or
-#   interactive memory pressure. A wait can be long: run it in the background
-#   when your tool call has a timeout.
+#   or a first build in order with a higher priority). In both modes it stays
+#   at 0 while the hold file exists, and starts from 0 when the hold lifts.
+#   It does run while the build is first in order, or waits for a lock key,
+#   swap or interactive memory pressure. A wait can be long: run it in the
+#   background when your tool call has a timeout.
 # - Every exit 75 (gave up, or low disk) is logged as decision=refuse.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
@@ -1534,7 +1535,15 @@ else
       why=$oldwhy
       prioheld=0   # the old rule is first come, first served
     fi
-    (( prioheld )) || stuck=$(( stuck + SECONDS - tick ))
+    # While the manager's hold file exists the clock stays at 0, so a hold of
+    # any length never ends in exit 75. On 2026-10-14 a build was refused
+    # after 7201 s that it spent waiting only on the hold. The clock starts
+    # from 0 again when the hold lifts.
+    if [[ -e $HOLD ]]; then
+      stuck=0
+    elif (( ! prioheld )); then
+      stuck=$(( stuck + SECONDS - tick ))
+    fi
     tick=$SECONDS
     if [[ -n $best ]] && (( pos > 0 && pos < best )); then stuck=0; fi
     (( pos > 0 )) && { [[ -z $best ]] || (( pos < best )); } && best=$pos
