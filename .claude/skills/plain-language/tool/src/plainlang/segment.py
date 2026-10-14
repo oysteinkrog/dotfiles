@@ -152,7 +152,15 @@ class _FenceScanner:
                 while stack and stack[-1] >= col:
                     stack.pop()
                 stack.append(col)
-                candidate, base, rel = line[item.end() :], col, 0
+                end = item.end()
+                # "- - ~~~sh" opens two items on one line; read every marker.
+                while (more := _LIST_ITEM.match(line, end)) and more.start() == end:
+                    if _THEMATIC.match(line[end:]):
+                        break
+                    col = _indent_width(line[: more.end()])
+                    stack.append(col)
+                    end = more.end()
+                candidate, base, rel = line[end:], col, 0
             else:
                 base = stack[-1] if stack else 0
                 candidate, rel = body, lead - base
