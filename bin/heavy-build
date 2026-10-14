@@ -80,7 +80,14 @@
 #
 # Both modes:
 # - Stops first while $XDG_RUNTIME_DIR/heavy-build.hold exists (the manager
-#   session's pause switch; its text is the reason).
+#   session's pause switch; its text is the reason). An optional line
+#   expires=<unix epoch seconds> (a line of its own, or the start of the first
+#   line, like "expires=1791990000 cargo cache rebuild") ends the hold at that
+#   time even when the file stays: builds then go on as if it were gone, and
+#   each waiting heavy-build logs event=hold-expired ("hold expired") once.
+#   Example for 18 min: echo "expires=$(( $(date +%s) + 1080 )) <reason>" >
+#   $XDG_RUNTIME_DIR/heavy-build.hold. A hold without such a line lasts until
+#   the file is removed.
 # - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
 #   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
 # - Estimates each build's memory, cores and wall time: from the last 5 runs
@@ -133,7 +140,7 @@
 #   in line. In live mode it does not run while the build waits only because
 #   a higher-priority build is ahead of it (a critical build that goes first,
 #   or a first build in order with a higher priority). In both modes it stays
-#   at 0 while the hold file exists, and starts from 0 when the hold lifts.
+#   at 0 while the hold is on, and starts from 0 when the hold lifts.
 #   It does run while the build is first in order, or waits for a lock key,
 #   swap or interactive memory pressure. A wait can be long: run it in the
 #   background when your tool call has a timeout.
@@ -206,6 +213,7 @@ SOLO_MEM_GIB=${HEAVY_BUILD_SOLO_MEM_GIB:-8}
 MIN_SWAP_ROOM_GIB=${HEAVY_BUILD_MIN_SWAP_ROOM_GIB:-10}
 POLL=${HEAVY_BUILD_POLL:-5}
 HOLD=$RUNDIR/heavy-build.hold
+hold_expired_logged=
 QDIR=$RUNDIR/heavy-build.queue
 JDIR=$RUNDIR/heavy-build.jobs
 ADMIT=$RUNDIR/heavy-build.admit
@@ -1118,7 +1126,7 @@ END {
 decide() {
   local out
   sweep_stale
-  if [[ -e $HOLD ]]; then
+  if hold_on; then
     dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0 capinfo=-
     return
   fi
@@ -1149,6 +1157,26 @@ log_line() {
     sz=$(stat -c %s -- "$f" 2>/dev/null || echo 0)
     if (( sz > 20000000 )); then tail -n 50000 -- "$f" > "$f.tmp" && mv -f -- "$f.tmp" "$f"; fi
   } 6>>"$f"
+}
+
+# True while the manager's hold file is in force: it exists, and it has no
+# expires=<epoch> line or that time has not come. On 2026-10-14 a hold meant
+# for 18 min stayed 36 min because the manager missed its check; about 28
+# builds waited. Logs "hold expired" once per expiry time.
+hold_on() {
+  local line exp=
+  [[ -e $HOLD ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line =~ ^expires=([0-9]{1,15})([^0-9]|$) ]]; then exp=$(( 10#${BASH_REMATCH[1]} )); break; fi
+  done 2>/dev/null < "$HOLD"
+  [[ -n $exp ]] || return 0
+  (( EPOCHSECONDS < exp )) && return 0
+  if [[ $hold_expired_logged != "$exp" ]]; then
+    hold_expired_logged=$exp
+    say "hold expired at $(printf '%(%H:%M:%S)T' "$exp"); going on although $HOLD is still there"
+    log_line "event=hold-expired expires=$exp reason=\"hold expired; the hold file is still there\""
+  fi
+  return 1
 }
 
 # Logs the budget decision when it, its reason kind or the actual outcome
@@ -1520,7 +1548,7 @@ else
       (( rank > 0 )) && pos=$rank
       [[ -n $started ]] && break
     else
-      if [[ -e $HOLD ]]; then
+      if hold_on; then
         why="new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)"
       elif (( pos > 1 )); then
         why="earlier builds go first"
@@ -1560,7 +1588,7 @@ else
     # any length never ends in exit 75. On 2026-10-14 a build was refused
     # after 7201 s that it spent waiting only on the hold. The clock starts
     # from 0 again when the hold lifts.
-    if [[ -e $HOLD ]]; then
+    if hold_on; then
       stuck=0
     elif (( ! prioheld )); then
       stuck=$(( stuck + SECONDS - tick ))
