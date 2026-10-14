@@ -56,11 +56,11 @@ overrides. The model table below is a prompt-level convention, not a setting.
 |------|-------|
 | Lookup, classify, list files, check one fact, format output | `haiku` |
 | Search, grep, read and summarise, explore, mechanical edits, bead work with a clear spec, running builds and tests | `sonnet` |
-| Design, hard debugging, review of logic or security, synthesis the leader acts on | `opus` |
-| Oracle, second opinion, FOR/AGAINST | Astra via `codex exec`, or Gemini 4 Argon via PAL; not a Claude agent |
-| Fable | Only when Oystein asks, or after Opus and Astra both failed; say why in the spawn |
+| Writing real code, design, hard debugging, review of logic or security, synthesis the leader acts on | `opus` |
+| Decision points and tricky analysis | Consult `fable` and/or Astra (`codex exec`) or Gemini 4 Argon (PAL) with a short, self-contained brief |
+| A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
-- If unsure, use `sonnet` and go up one level only when the result is wrong.
+- Pull the strongest model in for the decision, not for the whole job, and keep its brief small.
 - Mixing models inside one fan-out is encouraged. Set the model per leaf, not per wave.
 
 ## NxM notation
