@@ -714,6 +714,21 @@ def test_a_document_starting_with_a_rule_has_no_front_matter(scorer):
     assert "Intro prose" in joined
 
 
+def test_indented_code_right_after_a_heading_is_code(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. Only a paragraph blocks indented code."""
+    doc = "# Example\n    echo as an AI language model\n\nPlain prose after it.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "language model" not in joined
+
+
+def test_front_matter_may_start_with_a_yaml_comment(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14, on a real template file."""
+    doc = "---\n# template header comment\n\ntitle: X\n---\n\nBody prose here.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "template header" not in joined
+    assert "Body prose" in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
