@@ -35,8 +35,17 @@ lab-deploy.sh logs 3                                                    # newest
 
 - **People use this PC.** Someone may be running Swing Catalyst with hardware connected. Never
   stop or restart the app, install over it, or reboot without asking the user first.
-- **This machine cannot build Swing Catalyst** (Linux, no `cmd.exe`). Get an installer from CI
-  (the monorepo's `release-installers` skill finds the download link), then `push` it.
+- **Test a fix or feature from a branch build, not an installer.** Oystein, 2026-10-14: waiting
+  for a merge plus a ~20 min CI installer "slows everything down massively". Build the branch here
+  in a grove lane and push it:
+  `git -C <lane> checkout --detach <PR head>`, then
+  `heavy-build ./build.sh build --target wine --config ReleaseInternal`, then
+  `python3 tools/qa/lab/labqa.py ri-push src/motioncatalyst/BUILD/x64_ReleaseInternal_win-x64`
+  (about 4 min and 20 s). `ri-push` swaps the Wine bridges (FLIR_GenTL_v140.cti, Bertec ftd2xx.dll)
+  for the Windows originals; a build copied any other way hangs at the Spinnaker start. Run it in a
+  test hive like any `C:\LabQa\ri` build. Use a CI installer only when the installer itself is
+  under test (`release-installers` finds the link, then `push`). Until the labqa-push PR merges,
+  `ri-push` exists only in the lane `~/work/desktop/.scratch/labqa-push`.
 - **The Windows password is only for someone sitting at the PC.** It is `LAB_DEPLOY_PASSWORD`
   in the secrets file. Never put it in a file or a command line.
 - **Adding a key:** append it to `C:\ProgramData\ssh\administrators_authorized_keys` (the account
