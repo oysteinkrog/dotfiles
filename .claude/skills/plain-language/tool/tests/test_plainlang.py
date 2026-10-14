@@ -523,6 +523,30 @@ def test_an_unclosed_fence_in_a_list_item_ends_with_the_item(scorer):
     assert "ls -la" not in joined
 
 
+def test_a_list_fence_indented_past_the_item_text_keeps_its_block(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14.
+
+    The item's text starts at column 2. Fences at column 3 with content at
+    column 2 are one valid block; ending it at the first content line let the
+    real closer open a new block that masked the rest.
+    """
+    doc = ("- Paste this:\n\n"
+           "   ```sh\n  ls -la\n   ```\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+    assert "ls -la" not in joined
+
+
+def test_a_closer_four_columns_in_at_top_level_is_content(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. The allowance counts from the container, not the opener."""
+    doc = (" ```\n    ```\nexample\n```\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+    assert "example" not in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
