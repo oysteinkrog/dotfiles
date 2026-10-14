@@ -689,6 +689,31 @@ def test_a_fence_after_two_list_markers_on_one_line(scorer):
     assert "ls -la" not in joined
 
 
+def test_a_list_items_second_paragraph_is_prose(scorer):
+    """Found by a Fable review, 2026-10-14: 201 lines in 86 real files were hidden.
+
+    Four spaces under "1. " is the item's own text column plus one, so the
+    paragraph belongs to the item. It is not indented code.
+    """
+    doc = "1. Install the tool.\n\n    This paragraph explains the step and leverages synergies.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "leverages" in joined
+
+
+def test_code_indented_past_a_list_items_text_is_still_code(scorer):
+    doc = "- Item text.\n\n      real_code()\n\nAfter the code.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "real_code" not in joined
+    assert "After the code" in joined
+
+
+def test_a_document_starting_with_a_rule_has_no_front_matter(scorer):
+    """Found by a Fable review, 2026-10-14. Front matter needs a key: line."""
+    doc = "---\n\nIntro prose that matters.\n\n---\n\nMore prose.\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "Intro prose" in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
