@@ -445,6 +445,30 @@ def test_a_fence_indented_under_a_list_item_masks_its_contents(scorer):
     assert not [f for f in scorer.score(doc).findings if f.rule == "em-dash"]
 
 
+def test_a_closed_fence_indented_four_spaces_in_a_list_masks_its_contents(scorer):
+    """A bullet's code block is often indented four spaces, and it closes."""
+    doc = ("- Run the command with only the key it needs:\n\n"
+           "    ```sh\n    with-secrets KEY -- sh -c 'echo hi'\n    ```\n\n"
+           "- Check the exit code after the call returns.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "with-secrets" not in joined
+    assert "Check the exit code" in joined
+
+
+def test_unclosed_backticks_in_indented_code_do_not_hide_the_rest(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14.
+
+    Outside a list, a line indented four spaces is indented code even when it
+    starts with three backticks. Treating it as an unclosed fence masked every
+    paragraph after it, so that prose was never scored.
+    """
+    doc = ("The example below shows a stray fence marker in indented code.\n\n"
+           "    ```not a fence\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
