@@ -50,6 +50,7 @@ python ablate.py                    # per-rule hits by register
 python ablate.py --groups           # does each rule group pay for itself
 python validate_external.py         # CLEAR and OneStopEnglish
 python backtest_hook.py --calls <toolcalls.json> --replies <replies.json>
+uv run --with markdown-it-py fence_fuzz.py 5000   # code fences vs a CommonMark parser
 python backtest_hook.py --calls ... --dump-blocked 40   # read what it refused
 ```
 

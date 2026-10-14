@@ -10,6 +10,7 @@ from plainlang.segment import mask_non_prose, parse, split_sentences
 
 # --- segmentation -----------------------------------------------------------
 
+
 def test_code_fence_is_not_prose():
     src = "Text before.\n\n```python\nx = 'delve into the realm'\n```\n\nText after."
     doc = parse(src)
@@ -19,14 +20,18 @@ def test_code_fence_is_not_prose():
 
 
 def test_inline_code_and_paths_are_masked():
-    prose, _ = mask_non_prose("Run `utilize --leverage` on /usr/local/bin/paradigm now.")
+    prose, _ = mask_non_prose(
+        "Run `utilize --leverage` on /usr/local/bin/paradigm now."
+    )
     assert "utilize" not in prose
     assert "paradigm" not in prose
     assert "Run" in prose and "now" in prose
 
 
 def test_urls_are_masked():
-    prose, _ = mask_non_prose("See https://example.com/delve/into/the/realm for detail.")
+    prose, _ = mask_non_prose(
+        "See https://example.com/delve/into/the/realm for detail."
+    )
     assert "delve" not in prose
     assert "for detail" in prose
 
@@ -45,22 +50,28 @@ def test_frontmatter_is_masked():
     assert "leverage" not in joined
 
 
-@pytest.mark.parametrize("text,count", [
-    ("One. Two. Three.", 3),
-    ("Dr. Smith went home. He slept.", 2),
-    ("Version 1.5 shipped. It worked.", 2),
-    ("Is it done? Yes. Good!", 3),
-])
+@pytest.mark.parametrize(
+    "text,count",
+    [
+        ("One. Two. Three.", 3),
+        ("Dr. Smith went home. He slept.", 2),
+        ("Version 1.5 shipped. It worked.", 2),
+        ("Is it done? Yes. Good!", 3),
+    ],
+)
 def test_sentence_splitting(text, count):
     assert len(split_sentences(text)) == count
 
 
 def test_headings_are_found():
-    doc = parse("# Phonecam Settings Brief\n\nBody text here.\n\n## Risks\n\nMore text.")
+    doc = parse(
+        "# Phonecam Settings Brief\n\nBody text here.\n\n## Risks\n\nMore text."
+    )
     assert [h.text for h in doc.headings] == ["Phonecam Settings Brief", "Risks"]
 
 
 # --- word cost --------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def scorer():
@@ -98,6 +109,7 @@ def test_nothing_is_banned_outright(scorer):
 
 # --- rules ------------------------------------------------------------------
 
+
 def test_em_dash_is_priced_but_does_not_gate(scorer):
     """An em dash is a tell, not a comprehension problem.
 
@@ -114,11 +126,15 @@ def test_em_dash_is_priced_but_does_not_gate(scorer):
 
 def test_only_defects_gate(scorer):
     """A hard rule means something objectively wrong, not something inelegant."""
-    for text in ("The rebuild is scheduled for 26.2 citeturn0search3 and the drift held.",
-                 "Reviewed by [NAME] on [DATE]. The plate matched within 0.5 N."):
+    for text in (
+        "The rebuild is scheduled for 26.2 citeturn0search3 and the drift held.",
+        "Reviewed by [NAME] on [DATE]. The plate matched within 0.5 N.",
+    ):
         assert scorer.score(text).stats["errors"] > 0, text
-    for text in ("The phone reports its state — and the desktop shows it.",
-                 "It is not a flake, it's a real deadlock in the capture pipeline."):
+    for text in (
+        "The phone reports its state — and the desktop shows it.",
+        "It is not a flake, it's a real deadlock in the capture pipeline.",
+    ):
         assert scorer.score(text).stats["errors"] == 0, text
 
 
@@ -132,32 +148,39 @@ def test_em_dash_inside_code_is_ignored(scorer):
     assert not any(f.rule == "em-dash" for f in rep.findings)
 
 
-@pytest.mark.parametrize("text,rule", [
-    ("In today's fast-paced world, teams ship faster.", "in-todays"),
-    ("It is worth noting that the plate reports zero.", "worth-noting"),
-    ("Experts agree the format is stable.", "vague-attribution"),
-    ("This stands as a testament to the design.", "testament"),
-    ("The change landed, underscoring the value of tests.", "gerund-tail"),
-    ("Let's dive in and see how it works.", "lets-dive"),
-    ("We delve into the parser next.", "delve"),
-    ("The build is seamless and robust.", "robust-hype"),
-    ("Not only does it parse, but it also validates.", "not-only-but-also"),
-])
+@pytest.mark.parametrize(
+    "text,rule",
+    [
+        ("In today's fast-paced world, teams ship faster.", "in-todays"),
+        ("It is worth noting that the plate reports zero.", "worth-noting"),
+        ("Experts agree the format is stable.", "vague-attribution"),
+        ("This stands as a testament to the design.", "testament"),
+        ("The change landed, underscoring the value of tests.", "gerund-tail"),
+        ("Let's dive in and see how it works.", "lets-dive"),
+        ("We delve into the parser next.", "delve"),
+        ("The build is seamless and robust.", "robust-hype"),
+        ("Not only does it parse, but it also validates.", "not-only-but-also"),
+    ],
+)
 def test_shape_rules_fire(scorer, text, rule):
     rep = scorer.score(text)
     assert any(f.rule == rule for f in rep.findings), f"{rule} did not fire on: {text}"
 
 
-@pytest.mark.parametrize("text", [
-    "The plate reads 812 N at 1000 Hz.",
-    "Set the timeout to 30 seconds and retry twice.",
-    "Nils asked for a per-activity flag on 2026-08-26.",
-    "The 26.1 protocol ignores unknown field types, so no backport is needed.",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The plate reads 812 N at 1000 Hz.",
+        "Set the timeout to 30 seconds and retry twice.",
+        "Nils asked for a per-activity flag on 2026-08-26.",
+        "The 26.1 protocol ignores unknown field types, so no backport is needed.",
+    ],
+)
 def test_plain_technical_text_trips_no_rule(scorer, text):
     rep = scorer.score(text)
-    assert not [f for f in rep.findings if f.severity in {"error", "warn"}], \
-        [f.rule for f in rep.findings]
+    assert not [f for f in rep.findings if f.severity in {"error", "warn"}], [
+        f.rule for f in rep.findings
+    ]
 
 
 def test_heading_that_is_a_sentence_costs_more_than_a_name(scorer):
@@ -206,14 +229,18 @@ def test_score_is_bounded(scorer):
 
 
 def test_findings_carry_positions(scorer):
-    rep = scorer.score("Line one is fine.\n\nIt is worth noting that line three is not.")
+    rep = scorer.score(
+        "Line one is fine.\n\nIt is worth noting that line three is not."
+    )
     hit = next(f for f in rep.findings if f.rule == "worth-noting")
     assert hit.line == 3
 
 
 def test_header_row_is_not_a_word(scorer):
     """The lexicon file starts with a header; looking up "word" must not read it."""
-    rep = scorer.score("The word count and the zipf value are both stored per word in the table.")
+    rep = scorer.score(
+        "The word count and the zipf value are both stored per word in the table."
+    )
     assert 0.0 <= rep.score <= 100.0
 
 
@@ -251,13 +278,16 @@ def test_machine_residue_quoted_as_evidence_is_exempt(scorer):
 
 
 def test_machine_residue_in_prose_still_fires(scorer):
-    leaked = ("The rebuild is scheduled for 26.2 citeturn0search3 and the drift was "
-              "confirmed by the vendor, so the change is ready for review.")
+    leaked = (
+        "The rebuild is scheduled for 26.2 citeturn0search3 and the drift was "
+        "confirmed by the vendor, so the change is ready for review."
+    )
     assert [f for f in scorer.score(leaked).findings if f.rule == "tool-artifact"]
 
 
 def test_report_serialises(scorer):
     import json
+
     json.loads(scorer.score(PLAIN).to_json())
 
 
@@ -344,8 +374,9 @@ def test_a_markdown_blockquote_is_quoted_material(scorer):
     )
     report = (
         "The vendor replied on 2026-08-20. Their answer is below, unedited. I "
-        "have not changed a word of it.\n\n" + hype +
-        "\nI do not think it answers the question we asked about frame timing."
+        "have not changed a word of it.\n\n"
+        + hype
+        + "\nI do not think it answers the question we asked about frame timing."
     )
     from_quote = {"robust-hype", "promo-adjectives", "ai-vocab", "heavy-sentence"}
     fired = {f.rule for f in scorer.score(report).findings}
@@ -367,9 +398,18 @@ def test_a_bullet_list_is_not_flat_writing(scorer):
 
     A ten-item release note of two-word bullets was charged for uniform rhythm.
     """
-    items = ["Import take", "Trim clip", "Export overlay", "Sync cameras",
-             "Rebuild index", "Clear cache", "Reset plate offsets",
-             "Recalibrate pads", "Reload profile", "Verify sync"]
+    items = [
+        "Import take",
+        "Trim clip",
+        "Export overlay",
+        "Sync cameras",
+        "Rebuild index",
+        "Clear cache",
+        "Reset plate offsets",
+        "Recalibrate pads",
+        "Reload profile",
+        "Verify sync",
+    ]
     rep = scorer.score("\n".join(f"- {i}" for i in items))
     assert not [f for f in rep.findings if f.rule == "uniform-rhythm"]
 
@@ -405,8 +445,10 @@ def test_slop_inside_a_nested_bullet_is_scored(scorer):
 
 def test_real_indented_code_is_still_masked(scorer):
     """The other direction: an indented block that is not a list item is code."""
-    doc = ("Run the loop below and watch the counter.\n\n"
-           "    for i in range(10):\n        print(paradigm, synergy, leverage)\n")
+    doc = (
+        "Run the loop below and watch the counter.\n\n"
+        "    for i in range(10):\n        print(paradigm, synergy, leverage)\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" not in joined
 
@@ -416,16 +458,20 @@ def test_a_longer_fence_masks_its_contents(scorer):
 
     Matching exactly three let the inner code leak out and be scored as writing.
     """
-    doc = ("The nested fence below is the markdown to paste into the issue.\n\n"
-           "````\n```\nparadigm synergy leverage utilise commence\n```\n````\n")
+    doc = (
+        "The nested fence below is the markdown to paste into the issue.\n\n"
+        "````\n```\nparadigm synergy leverage utilise commence\n```\n````\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" not in joined
 
 
 def test_an_unclosed_fence_runs_to_the_end_of_the_file(scorer):
     """CommonMark says an unclosed fence closes at end of input."""
-    doc = ("Run this to reproduce the crash.\n\n"
-           "```\nparadigm synergy leverage utilise commence\nmore paradigm synergy\n")
+    doc = (
+        "Run this to reproduce the crash.\n\n"
+        "```\nparadigm synergy leverage utilise commence\nmore paradigm synergy\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" not in joined
 
@@ -436,9 +482,11 @@ def test_a_fence_indented_under_a_list_item_masks_its_contents(scorer):
     The fence matched only at column 0, so this command was scored as prose and
     its `--` separator was charged as an em dash.
     """
-    doc = ("1. Run the command with only the key it needs:\n\n"
-           "   ```sh\n   with-secrets KEY -- sh -c 'echo hi'\n   ```\n\n"
-           "2. Check the exit code after the call returns.\n")
+    doc = (
+        "1. Run the command with only the key it needs:\n\n"
+        "   ```sh\n   with-secrets KEY -- sh -c 'echo hi'\n   ```\n\n"
+        "2. Check the exit code after the call returns.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "with-secrets" not in joined
     assert "Check the exit code" in joined
@@ -447,9 +495,11 @@ def test_a_fence_indented_under_a_list_item_masks_its_contents(scorer):
 
 def test_a_closed_fence_indented_four_spaces_in_a_list_masks_its_contents(scorer):
     """A bullet's code block is often indented four spaces, and it closes."""
-    doc = ("- Run the command with only the key it needs:\n\n"
-           "    ```sh\n    with-secrets KEY -- sh -c 'echo hi'\n    ```\n\n"
-           "- Check the exit code after the call returns.\n")
+    doc = (
+        "- Run the command with only the key it needs:\n\n"
+        "    ```sh\n    with-secrets KEY -- sh -c 'echo hi'\n    ```\n\n"
+        "- Check the exit code after the call returns.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "with-secrets" not in joined
     assert "Check the exit code" in joined
@@ -462,9 +512,11 @@ def test_unclosed_backticks_in_indented_code_do_not_hide_the_rest(scorer):
     starts with three backticks. Treating it as an unclosed fence masked every
     paragraph after it, so that prose was never scored.
     """
-    doc = ("The example below shows a stray fence marker in indented code.\n\n"
-           "    ```not a fence\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n")
+    doc = (
+        "The example below shows a stray fence marker in indented code.\n\n"
+        "    ```not a fence\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
 
@@ -476,11 +528,13 @@ def test_indented_backticks_do_not_pair_with_a_later_fence(scorer):
     fence: that hid the paragraph in between and left the real block's closer
     to mask the rest of the document.
     """
-    doc = ("Here is indented code that shows a fence marker.\n\n"
-           "    ```\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n\n"
-           "```sh\nls -la\n```\n\n"
-           "Then commence the holistic synergy rollout.\n")
+    doc = (
+        "Here is indented code that shows a fence marker.\n\n"
+        "    ```\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n\n"
+        "```sh\nls -la\n```\n\n"
+        "Then commence the holistic synergy rollout.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
     assert "holistic" in joined
@@ -505,9 +559,11 @@ def test_a_deeply_indented_marker_inside_a_block_does_not_close_it(scorer):
     the block, not its closer. Taking it as the closer left the real closer to
     open a new block that masked the rest of the document.
     """
-    doc = ("This block quotes a fence marker.\n\n"
-           "```\n    ```\nexample\n```\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n")
+    doc = (
+        "This block quotes a fence marker.\n\n"
+        "```\n    ```\nexample\n```\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
     assert "example" not in joined
@@ -515,9 +571,11 @@ def test_a_deeply_indented_marker_inside_a_block_does_not_close_it(scorer):
 
 def test_an_unclosed_fence_in_a_list_item_ends_with_the_item(scorer):
     """Found by GPT-6 Astra review, 2026-10-14. CommonMark ends it with its container."""
-    doc = ("- Paste this into the terminal:\n\n"
-           "  ```sh\n  ls -la\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n")
+    doc = (
+        "- Paste this into the terminal:\n\n"
+        "  ```sh\n  ls -la\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
     assert "ls -la" not in joined
@@ -530,9 +588,11 @@ def test_a_list_fence_indented_past_the_item_text_keeps_its_block(scorer):
     column 2 are one valid block; ending it at the first content line let the
     real closer open a new block that masked the rest.
     """
-    doc = ("- Paste this:\n\n"
-           "   ```sh\n  ls -la\n   ```\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n")
+    doc = (
+        "- Paste this:\n\n"
+        "   ```sh\n  ls -la\n   ```\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
     assert "ls -la" not in joined
@@ -540,11 +600,54 @@ def test_a_list_fence_indented_past_the_item_text_keeps_its_block(scorer):
 
 def test_a_closer_four_columns_in_at_top_level_is_content(scorer):
     """Found by GPT-6 Astra review, 2026-10-14. The allowance counts from the container, not the opener."""
-    doc = (" ```\n    ```\nexample\n```\n\n"
-           "We leverage a paradigm to utilise synergy going forward.\n")
+    doc = (
+        " ```\n    ```\nexample\n```\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
     joined = " ".join(s.text for s in parse(doc).sentences)
     assert "paradigm" in joined
     assert "example" not in joined
+
+
+def test_triple_backtick_inline_code_is_not_a_fence(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. A backtick fence's info string has no backticks."""
+    doc = "   ```inline``` code at the start of a paragraph.\n\nSigned, [your name]\n"
+    assert [
+        f for f in scorer.score(doc).findings if f.rule == "placeholder"
+    ] or "Signed" in " ".join(s.text for s in parse(doc).sentences)
+
+
+def test_a_fence_on_the_list_marker_line_is_a_fence(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14."""
+    doc = (
+        "- ```sh\n  echo hi\n  ```\n\n"
+        "  We leverage a paradigm to utilise synergy going forward.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "echo hi" not in joined
+    assert "paradigm" in joined
+
+
+def test_an_outer_item_fence_ends_with_the_outer_item(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14: the parent item's column must be kept."""
+    doc = (
+        "- Outer item.\n\n  - Inner item.\n\n  ```sh\n  ls -la\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "ls -la" not in joined
+    assert "paradigm" in joined
+
+
+def test_a_lazy_continuation_line_keeps_the_list_item_open(scorer):
+    """Found by a differential test against markdown-it-py (CommonMark), 2026-10-14."""
+    doc = (
+        "1. Item text\ncontinued lazily on the next line.\n   ```\n   ls -la\n\n"
+        "- Next list.\n\nWe leverage a paradigm to utilise synergy going forward.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "ls -la" not in joined
+    assert "paradigm" in joined
 
 
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
@@ -558,32 +661,41 @@ def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
         "That is the convention this repository documents in CLAUDE.md, and every "
         "commit that closes an issue carries it in the body, never in the title."
     )
-    assert not [f for f in scorer.score(describing).findings
-                if f.rule == "unfilled-placeholder"]
+    assert not [
+        f for f in scorer.score(describing).findings if f.rule == "unfilled-placeholder"
+    ]
 
 
-@pytest.mark.parametrize("body", [
-    "Fixes: DESKTOP-XXXX",
-    "- Fixes: DESKTOP-XXXX",
-    "> Fixes: DESKTOP-XXXX",
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Fixes: DESKTOP-XXXX",
+        "- Fixes: DESKTOP-XXXX",
+        "> Fixes: DESKTOP-XXXX",
+    ],
+)
 def test_a_real_unfilled_trailer_still_gates(scorer, body):
     """The other direction: a trailer nobody filled in is still a defect."""
-    msg = ("video: rebuild the frame index on import\n\nThe first scrub after an "
-           "import was slow because the index was built lazily.\n\n" + body + "\n")
+    msg = (
+        "video: rebuild the frame index on import\n\nThe first scrub after an "
+        "import was slow because the index was built lazily.\n\n" + body + "\n"
+    )
     assert [f for f in scorer.score(msg).findings if f.rule == "unfilled-placeholder"]
 
 
-@pytest.mark.parametrize("heading,fires", [
-    ("## Why The Capture Lifecycle Needs A Second Pass", True),
-    ("### What Costs Real Money", True),
-    ("## The Phone Stays Mounted", True),
-    ("### What it costs on real history", False),
-    ("### Defects reported and not yet fixed", False),
-    ("## Rebuild the frame index on import", False),
-    ("# API CLI SDK", False),
-    ("## Force plate calibration", False),
-])
+@pytest.mark.parametrize(
+    "heading,fires",
+    [
+        ("## Why The Capture Lifecycle Needs A Second Pass", True),
+        ("### What Costs Real Money", True),
+        ("## The Phone Stays Mounted", True),
+        ("### What it costs on real history", False),
+        ("### Defects reported and not yet fixed", False),
+        ("## Rebuild the frame index on import", False),
+        ("# API CLI SDK", False),
+        ("## Force plate calibration", False),
+    ],
+)
 def test_title_case_heading_reads_capitals_not_word_count(heading, fires):
     """The rule was compiled case-insensitively, so it matched any three words.
 
@@ -593,21 +705,37 @@ def test_title_case_heading_reads_capitals_not_word_count(heading, fires):
     one-letter word sit inside the run without ending the match.
     """
     from plainlang.rules import ALL_RULES
+
     rule = next(r for r in ALL_RULES if r.id == "title-case-heading")
     assert bool(rule.pattern.search(heading)) is fires
 
 
-@pytest.mark.parametrize("text,fires,why", [
-    ("The seek path rebuilds the index — that is why it is slow.", True, "em dash as punctuation"),
-    ("The seek path rebuilds the index – that is why it is slow.", True, "en dash as punctuation"),
-    ("Deteksjon mislyktes – platesignal er i konflikt.", True, "Norwegian pause tankestrek"),
-    ("Use pages 3 – 5 for the figures.", True, "spaced dash between digits"),
-    ("The Oslo–Bergen route takes seven hours.", False, "paired name"),
-    ("The window is 2024–2026 for this plan.", False, "date range"),
-    ("The May–June window is when it lands.", False, "month range"),
-    ("Growth was –5 % in the quarter.", False, "minus sign on a number"),
-    ("kost–nytte-analyse viser det samme.", False, "Norwegian paired compound"),
-])
+@pytest.mark.parametrize(
+    "text,fires,why",
+    [
+        (
+            "The seek path rebuilds the index — that is why it is slow.",
+            True,
+            "em dash as punctuation",
+        ),
+        (
+            "The seek path rebuilds the index – that is why it is slow.",
+            True,
+            "en dash as punctuation",
+        ),
+        (
+            "Deteksjon mislyktes – platesignal er i konflikt.",
+            True,
+            "Norwegian pause tankestrek",
+        ),
+        ("Use pages 3 – 5 for the figures.", True, "spaced dash between digits"),
+        ("The Oslo–Bergen route takes seven hours.", False, "paired name"),
+        ("The window is 2024–2026 for this plan.", False, "date range"),
+        ("The May–June window is when it lands.", False, "month range"),
+        ("Growth was –5 % in the quarter.", False, "minus sign on a number"),
+        ("kost–nytte-analyse viser det samme.", False, "Norwegian paired compound"),
+    ],
+)
 def test_en_dash_is_charged_only_as_punctuation(text, fires, why):
     """The en dash has mechanical jobs a character-level ban would corrupt.
 
@@ -617,5 +745,6 @@ def test_en_dash_is_charged_only_as_punctuation(text, fires, why):
     The em dash stays charged everywhere.
     """
     from plainlang.rules import ALL_RULES
+
     rule = next(r for r in ALL_RULES if r.id == "em-dash")
     assert bool(rule.pattern.search(text)) is fires, why
