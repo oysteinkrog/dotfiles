@@ -681,6 +681,14 @@ def test_a_thematic_break_is_not_a_list_item(scorer):
     assert "paradigm" in joined
 
 
+def test_a_fence_after_two_list_markers_on_one_line(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14: "- - ~~~sh" opens two items."""
+    doc = "- - ~~~sh\n    ls -la\n    ~~~\n\n  Signed, [your name]\n"
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "Signed" in joined
+    assert "ls -la" not in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
