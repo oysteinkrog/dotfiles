@@ -59,14 +59,75 @@ class Document:
 # text. Anchoring at column 0 left that code scored as prose, so a `--` in a
 # shell command was charged as an em dash.
 #
-# An unclosed fence runs to the end of the file, as in CommonMark. That fallback
-# applies only to a fence indented 0 to 3 spaces. A line indented 4 or more is
-# indented code outside a list, and when it merely starts with ``` and never
-# closes, the fallback masked every paragraph after it, so that prose was never
-# scored. A deeply indented fence now has to close to count.
-_FENCE = re.compile(
-    r"(?m)^(?:(?P<deep>[ \t]*(?:\t| {4})[ \t]*)|[ ]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n"
-    r"(?:.*?(?m:^)[ \t]*(?P=fence)`*~*[ \t]*$|(?(deep)(?!)|.*\Z))", re.S)
+# An unclosed fence runs to the end of the file, as in CommonMark. A fence line
+# indented four or more spaces counts only inside a list item, where code is
+# indented to the item's text. Outside a list such a line is indented code, and
+# treating it as a fence hid prose from the scorer: unclosed, it masked the rest
+# of the document; closed by a later unrelated fence, it masked the paragraphs
+# in between. A regex cannot see list context, and the one that tried
+# backtracked quadratically on long blank lines, so this is a line scanner.
+_FENCE_OPEN = re.compile(r"(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})")
+_LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d+[.)])[ \t]")
+
+
+class _Span:
+    __slots__ = ("_span",)
+
+    def __init__(self, start: int, end: int):
+        self._span = (start, end)
+
+    def span(self) -> tuple[int, int]:
+        return self._span
+
+
+def _indent_width(indent: str) -> int:
+    width = 0
+    for ch in indent:
+        width = width + 4 - width % 4 if ch == "\t" else width + 1
+    return width
+
+
+class _FenceScanner:
+    """Finds fenced code blocks, with the same finditer/span surface as a regex."""
+
+    def finditer(self, text: str):
+        lines = text.split("\n")
+        offsets = []
+        pos = 0
+        for line in lines:
+            offsets.append(pos)
+            pos += len(line) + 1
+        in_list = False
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            m = _FENCE_OPEN.match(line)
+            deep = m is not None and _indent_width(m.group("indent")) >= 4
+            if m and (not deep or in_list):
+                fence = m.group("fence")
+                closer = None
+                for j in range(i + 1, len(lines)):
+                    body = lines[j].strip()
+                    if (body.startswith(fence) and body.rstrip(fence[0]) == ""
+                            and len(body) >= len(fence)):
+                        closer = j
+                        break
+                if closer is not None:
+                    yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
+                    i = closer + 1
+                    continue
+                if not deep:
+                    yield _Span(offsets[i], len(text))
+                    return
+            if line.strip():
+                if _LIST_ITEM.match(line):
+                    in_list = True
+                elif _indent_width(line[: len(line) - len(line.lstrip())]) < 2:
+                    in_list = False
+            i += 1
+
+
+_FENCE = _FenceScanner()
 _FRONTMATTER = re.compile(r"\A---\n.*?\n---[ \t]*$", re.S | re.M)
 # An indented line is code only when it is not a continuation of a list. Nested
 # bullets and list continuation paragraphs are indented by four spaces in normal
@@ -155,7 +216,9 @@ _SETEXT = re.compile(r"(?m)^(?P<text>[^\n#>\-*][^\n]*)\n[ \t]{0,3}(?:=+|-{2,})[ 
 _LIST_MARK = re.compile(r"(?m)^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 _QUOTE_MARK = re.compile(r"(?m)^[ \t]*>[ \t]?")
 _TABLE_ROW = re.compile(r"(?m)^[ \t]*\|.*\|[ \t]*$")
-_TABLE_SEP = re.compile(r"(?m)^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$")
+# Possessive quantifiers (*+): with plain ones a long whitespace-only line made
+# the overlapping [ \t]* runs backtrack, and 20,000 spaces took 3 seconds.
+_TABLE_SEP = re.compile(r"(?m)^[ \t]*+\|?[ \t]*+:?-{2,}:?[ \t]*+(\|[ \t]*+:?-{2,}:?[ \t]*+)*+\|?[ \t]*+$")
 
 # Abbreviations that end in a period but do not end a sentence.
 _ABBREV = {
