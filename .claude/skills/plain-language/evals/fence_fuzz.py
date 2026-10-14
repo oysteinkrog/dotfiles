@@ -12,9 +12,10 @@ markdown-it-py is not a dependency of the tool, so run it with:
     uv run --with markdown-it-py evals/fence_fuzz.py [N] [files...]
 
 Blank lines are ignored, since they hold no prose. Block quotes are not
-generated, because the scanner does not model them. On 2026-10-14 the scanner
-matched CommonMark on 25,000 random documents; the regex it replaced hid prose
-in 3,291 of 20,000.
+generated, because the scanner does not model them. On 2026-10-14, with
+headings, thematic breaks, lazy continuation and CRLF in the mix, the scanner
+hid prose in 12 of 20,000 random documents and the regex it replaced in 3,075.
+The 12 need deeper CommonMark container rules. Real files: none of 8,018.
 """
 
 from __future__ import annotations
@@ -69,8 +70,14 @@ def block(rng: random.Random, indent: str) -> list[str]:
             "indented",
             "list",
             "marker_fence",
+            "heading",
+            "rule",
         ]
     )
+    if kind == "heading":
+        return [indent + rng.choice(["# Title", "## Section", "### Sub"])]
+    if kind == "rule":
+        return [indent + rng.choice(["---", "***", "* * *"])]
     if kind == "para":
         return [
             indent
@@ -108,7 +115,8 @@ def block(rng: random.Random, indent: str) -> list[str]:
     lines = [indent + marker + "Item text."]
     child = indent + " " * len(marker)
     for _ in range(rng.randint(0, 2)):
-        lines.append("")
+        if rng.random() < 0.7:  # else no blank line: exercises lazy continuation
+            lines.append("")
         lines.extend(block(rng, child) if len(child) < 12 else [child + "Deep prose."])
     return lines
 
@@ -117,8 +125,10 @@ def make(rng: random.Random) -> str:
     out: list[str] = []
     for _ in range(rng.randint(1, 6)):
         out.extend(block(rng, ""))
-        out.append("")
-    return "\n".join(out) + "\n"
+        if rng.random() < 0.8:
+            out.append("")
+    newline = "\r\n" if rng.random() < 0.2 else "\n"
+    return newline.join(out) + newline
 
 
 def main() -> int:

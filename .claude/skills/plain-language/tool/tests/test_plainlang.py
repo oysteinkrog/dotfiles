@@ -650,6 +650,37 @@ def test_a_lazy_continuation_line_keeps_the_list_item_open(scorer):
     assert "paradigm" in joined
 
 
+def test_a_crlf_blank_line_inside_a_list_fence_is_blank(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14."""
+    doc = (
+        "- Paste this:\r\n\r\n  ```sh\r\n  ls -la\r\n\r\n  pwd\r\n  ```\r\n\r\n"
+        "We leverage a paradigm to utilise synergy going forward.\r\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "pwd" not in joined
+    assert "paradigm" in joined
+
+
+def test_a_heading_ends_the_list_for_a_following_fence(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14. A heading is never a lazy continuation."""
+    doc = (
+        "- Item text\n# Heading\n  ```\nls -la\n  ```\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+
+
+def test_a_thematic_break_is_not_a_list_item(scorer):
+    """Found by the CommonMark fuzz test, 2026-10-14."""
+    doc = (
+        "* * *\n\n   ````bash\n  ```\n ````\n\n"
+        "We leverage a paradigm to utilise synergy going forward.\n"
+    )
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
