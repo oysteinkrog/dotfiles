@@ -11,10 +11,12 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_REPO="${1:?usage: sync-to-monorepo.sh <repo root>}"
 DEST="$TARGET_REPO/.claude/skills/plain-language"
 
-[ -d "$TARGET_REPO/.git" ] || { echo "$TARGET_REPO is not a git repository" >&2; exit 1; }
+# rev-parse, not a .git directory test: in a git worktree .git is a file.
+git -C "$TARGET_REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "$TARGET_REPO is not a git repository" >&2; exit 1; }
 mkdir -p "$DEST"
 
 tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.cache' \
+    --exclude='.ruff_cache' --exclude='.pytest_cache' \
     --exclude='evals/data/external' --exclude='evals/data/human_writing.json' \
     --exclude='evals/data/backtest_blocked.json' \
     --exclude='sync-to-monorepo.sh' \
@@ -55,7 +57,7 @@ while IFS= read -r rel; do
   # virtualenv. Harmless, because the gate never needed a virtualenv, but the
   # pattern was still wrong.
   case "$rel" in
-    */.venv/*|*/__pycache__/*|*.pyc|*.cache) continue ;;
+    */.venv/*|*/__pycache__/*|*/.ruff_cache/*|*/.pytest_cache/*|*.pyc|*.cache) continue ;;
     ./evals/data/*) continue ;;
     ./sync-to-monorepo.sh|./stage-in-repo.sh) continue ;;
   esac

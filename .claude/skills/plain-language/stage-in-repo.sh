@@ -20,7 +20,8 @@ APPLY="${2:-}"
 REL=".claude/skills/plain-language"
 DIR="$REPO/$REL"
 
-[ -d "$REPO/.git" ] || { echo "$REPO is not a git repository" >&2; exit 1; }
+# rev-parse, not a .git directory test: in a git worktree .git is a file.
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "$REPO is not a git repository" >&2; exit 1; }
 [ -d "$DIR" ] || { echo "$DIR does not exist; run sync-to-monorepo.sh first" >&2; exit 1; }
 
 # Everything except build output, caches, and corpora the host repo should not hold.
@@ -38,6 +39,7 @@ mapfile -t FILES < <(
     -not -path "*/.venv/*" \
     -not -path "*/__pycache__/*" \
     -not -path "*/.pytest_cache/*" \
+    -not -path "*/.ruff_cache/*" \
     -not -name "*.pyc" \
     -not -name "*.cache" \
     -not -name "uv.lock" \
@@ -56,7 +58,9 @@ for f in "${FILES[@]}"; do
   bytes=$((bytes + n))
 done
 
-printf '%d files, %.1f MB\n' "${#FILES[@]}" "$(echo "$bytes" | awk '{print $1/1048576}')"
+# LC_NUMERIC=C: in a locale with a decimal comma (nb_NO) printf rejects awk's
+# "2.9" and, under set -e, the script would stop here before staging anything.
+LC_NUMERIC=C printf '%d files, %.1f MB\n' "${#FILES[@]}" "$(echo "$bytes" | LC_NUMERIC=C awk '{print $1/1048576}')"
 
 if [ "$APPLY" != "--apply" ]; then
   printf '\n%s\n' "would stage:"
