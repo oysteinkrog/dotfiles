@@ -67,7 +67,7 @@ class Document:
 # in between. A regex cannot see list context, and the one that tried
 # backtracked quadratically on long blank lines, so this is a line scanner.
 _FENCE_OPEN = re.compile(r"(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})")
-_LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d+[.)])[ \t]")
+_LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 
 
 class _Span:
@@ -97,32 +97,36 @@ class _FenceScanner:
         for line in lines:
             offsets.append(pos)
             pos += len(line) + 1
-        in_list = False
+        # The column where the current list item's text starts, or None outside
+        # a list. Fence rules count from this column, as CommonMark does.
+        item_col: int | None = None
         i = 0
         while i < len(lines):
             line = lines[i]
             m = _FENCE_OPEN.match(line)
-            deep = m is not None and _indent_width(m.group("indent")) >= 4
-            if m and (not deep or in_list):
-                fence = m.group("fence")
+            if m:
                 width = _indent_width(m.group("indent"))
-                # Inside a list item the block ends with the item: at the first
-                # non-blank line indented less than the fence. At top level it
-                # runs to the end of the file.
-                contained = in_list and width > 0
+                base = item_col if item_col is not None and width >= item_col else 0
+                if width - base > 3:
+                    m = None
+            if m:
+                fence = m.group("fence")
+                contained = base > 0
                 closer = None
                 stop = len(lines)
                 for j in range(i + 1, len(lines)):
                     raw = lines[j]
                     body = raw.lstrip(" \t")
                     lead = _indent_width(raw[: len(raw) - len(body)])
-                    if contained and body and lead < width:
+                    # Inside a list item the block ends with the item: at the
+                    # first non-blank line indented less than the item's text.
+                    if contained and body and lead < base:
                         stop = j
                         break
                     body = body.rstrip()
-                    # A closing fence sits at most three columns deeper than its
-                    # opener; deeper than that it is content of the block.
-                    if (lead < width + 4 and body.startswith(fence)
+                    # A closer sits at most three columns past the container's
+                    # edge; deeper than that it is content of the block.
+                    if (lead - base <= 3 and body.startswith(fence)
                             and body.rstrip(fence[0]) == "" and len(body) >= len(fence)):
                         closer = j
                         break
@@ -130,19 +134,20 @@ class _FenceScanner:
                     yield _Span(offsets[i], offsets[closer] + len(lines[closer]))
                     i = closer + 1
                     continue
-                if not deep or contained:
-                    end = len(text) if stop == len(lines) else offsets[stop] - 1
-                    yield _Span(offsets[i], end)
-                    if stop == len(lines):
-                        return
-                    i = stop
-                    in_list = False
-                    continue
+                end = len(text) if stop == len(lines) else offsets[stop] - 1
+                yield _Span(offsets[i], end)
+                if stop == len(lines):
+                    return
+                i = stop
+                item_col = None
+                continue
             if line.strip():
-                if _LIST_ITEM.match(line):
-                    in_list = True
-                elif _indent_width(line[: len(line) - len(line.lstrip())]) < 2:
-                    in_list = False
+                item = _LIST_ITEM.match(line)
+                if item:
+                    item_col = _indent_width(item.group(0))
+                elif item_col is not None and _indent_width(
+                        line[: len(line) - len(line.lstrip())]) < item_col:
+                    item_col = None
             i += 1
 
 
