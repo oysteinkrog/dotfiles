@@ -65,6 +65,32 @@ check "hold lifted: clock starts from 0 (gave up ${took}s after lift, want 2..10
 check "refuse is logged with stuck_s at about 3" 'grep -q "decision=refuse.*stuck_s=[3-5] " "$T/state/heavy-build/shadow.log"'
 teardown
 
+# 4. A hold whose expires= time has passed counts as gone, and says so once.
+setup
+printf 'expired test hold\nexpires=%s\n' "$(( EPOCHSECONDS - 60 ))" > "$T/run/heavy-build.hold"
+run_hb
+start=$SECONDS
+wait "$hbpid"; rc=$?
+check "expired hold: gives up with exit 75 like no hold" '(( rc == 75 ))'
+check "expired hold: gives up within 10 s" '(( SECONDS - start <= 10 ))'
+check "expired hold: logged once" '(( $(grep -c "event=hold-expired.*hold expired" "$T/state/heavy-build/shadow.log") == 1 ))'
+teardown
+
+# 5. expires= at the start of the first line: the hold holds until then.
+setup
+echo "expires=$(( EPOCHSECONDS + 6 )) short test hold" > "$T/run/heavy-build.hold"
+run_hb
+start=$SECONDS
+sleep 5
+alive=0; kill -0 "$hbpid" 2>/dev/null && alive=1
+check "hold with expires: still waiting before it expires" '(( alive == 1 ))'
+wait "$hbpid"; rc=$?
+took=$(( SECONDS - start ))
+check "hold with expires: gives up with 75 after it expires (took ${took}s, want 8..16)" '(( rc == 75 && took >= 8 && took <= 16 ))'
+check "hold with expires: logged once" '(( $(grep -c "event=hold-expired" "$T/state/heavy-build/shadow.log") == 1 ))'
+check "hold file is left in place" '[[ -e $T/run/heavy-build.hold ]]'
+teardown
+
 # 3. The wineserver check uses the job's WINEPREFIX, and never guesses
 # ~/.wine for a Wine process without one. The functions are taken from
 # heavy-build and run against a fake /proc, so no Wine runs.
