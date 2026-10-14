@@ -469,6 +469,33 @@ def test_unclosed_backticks_in_indented_code_do_not_hide_the_rest(scorer):
     assert "paradigm" in joined
 
 
+def test_indented_backticks_do_not_pair_with_a_later_fence(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14.
+
+    Indented code holding ``` must not close on the opener of a later, real
+    fence: that hid the paragraph in between and left the real block's closer
+    to mask the rest of the document.
+    """
+    doc = ("Here is indented code that shows a fence marker.\n\n"
+           "    ```\n\n"
+           "We leverage a paradigm to utilise synergy going forward.\n\n"
+           "```sh\nls -la\n```\n\n"
+           "Then commence the holistic synergy rollout.\n")
+    joined = " ".join(s.text for s in parse(doc).sentences)
+    assert "paradigm" in joined
+    assert "holistic" in joined
+    assert "ls -la" not in joined
+
+
+def test_a_long_blank_line_does_not_stall_the_fence_scan(scorer):
+    """Found by GPT-6 Astra review, 2026-10-14: the regex backtracked quadratically."""
+    import time
+    doc = "Short intro sentence here.\n" + " " * 20000 + "\nAnother plain sentence.\n"
+    t = time.monotonic()
+    parse(doc)
+    assert time.monotonic() - t < 0.5
+
+
 def test_describing_a_commit_trailer_is_not_an_unfilled_placeholder(scorer):
     """This repository documents `Fixes: DESKTOP-XXXX` as the form to use.
 
