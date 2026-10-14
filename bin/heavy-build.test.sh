@@ -65,4 +65,42 @@ check "hold lifted: clock starts from 0 (gave up ${took}s after lift, want 2..10
 check "refuse is logged with stuck_s at about 3" 'grep -q "decision=refuse.*stuck_s=[3-5] " "$T/state/heavy-build/shadow.log"'
 teardown
 
+# 3. The wineserver check uses the job's WINEPREFIX, and never guesses
+# ~/.wine for a Wine process without one. The functions are taken from
+# heavy-build and run against a fake /proc, so no Wine runs.
+W=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+mkdir -p "$W/proc" "$W/winetmp" "$W/home/.wine" "$W/pfxA" "$W/pfxB" "$W/scope"
+fakeproc() {  # pid comm [env...]
+  local p=$1 c=$2; shift 2
+  mkdir -p "$W/proc/$p"
+  echo "$c" > "$W/proc/$p/comm"
+  echo "0::/user.slice/x" > "$W/proc/$p/cgroup"
+  if (( $# )); then printf '%s\0' "$@" > "$W/proc/$p/environ"; else : > "$W/proc/$p/environ"; fi
+}
+fakeproc 101 app.exe "WINEPREFIX=$W/pfxA" PATH=/usr/bin
+fakeproc 102 services.exe PATH=/usr/bin
+printf '101\n102\n' > "$W/scope/cgroup.procs"
+wo() {  # job-WINEPREFIX (or -) ; prints wine_orphans output on one line
+  (
+    PROC=$W/proc WINE_TMP=$W/winetmp HOME=$W/home
+    eval "$(sed -n '/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p' "$HB")"
+    if [[ $1 == - ]]; then unset WINEPREFIX; else export WINEPREFIX=$1; fi
+    wine_orphans "$W/scope" | tr '\n' ' '
+  )
+}
+fakeproc 201 wineserver
+sdir=$(PROC=$W/proc WINE_TMP=$W/winetmp; eval "$(sed -n '/^wine_server_dir()/,/^}/p' "$HB")"; wine_server_dir "$W/pfxA")
+mkdir -p "$sdir" && ln -s "$sdir" "$W/proc/201/cwd"
+T=$W; : > "$T/out"
+out=$(wo -)
+check "wine: no job prefix, unknown process skipped, not ~/.wine (got '$out')" '[[ $out == "?1 " ]]'
+out=$(wo "$W/pfxA")
+check "wine: job prefix with a live wineserver is no orphan (got '$out')" '[[ -z $out ]]'
+out=$(wo "$W/pfxB")
+check "wine: job prefix without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxB " ]]'
+rm -f "$W/proc/201/cwd"
+out=$(wo -)
+check "wine: own WINEPREFIX without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxA ?1 " ]]'
+rm -rf -- "$W"
+
 exit "$fail"
