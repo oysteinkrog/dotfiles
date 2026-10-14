@@ -147,7 +147,11 @@
 # - HEAVY_BUILD_TIMEOUT=<seconds> stops the build after that long (exit 124).
 # - Warns on stderr when the build used under 0.05 cores for 10 min (it may be
 #   hung), or when its Wine processes have lost their wineserver. Such a build
-#   stops counting against the budget. Nothing is killed by default;
+#   stops counting against the budget. A Wine process's prefix is the
+#   WINEPREFIX in its own environment, else heavy-build's own WINEPREFIX. When
+#   neither has one (WINEPREFIX set only inside the wrapped command, for a
+#   child Wine started without it), that process is skipped, never guessed to
+#   use ~/.wine; live.log gets event=wine-orphan-skip once. Nothing is killed by default;
 #   HEAVY_BUILD_WINE_ORPHAN=stop stops a Wine run after 2 min in that state.
 # - CPU pinning is undone. Every 3 s (HB_CPU_GUARD_SECS) any thread in the
 #   build's own scope whose CPU list is narrower than all CPUs the scope may
@@ -1180,8 +1184,16 @@ write_state() {
 now_us() { local t=${EPOCHREALTIME//[!0-9]/}; echo "${t#0}"; }
 
 # Prefixes used by Wine processes in our scope that have no wineserver.
+# A process's prefix is the WINEPREFIX in its own /proc environ, else the
+# WINEPREFIX heavy-build itself got (the job's). A process with neither is not
+# guessed to use ~/.wine: Wine's own children (services.exe, winedevice.exe,
+# test hosts started with their own environment) often lack WINEPREFIX and
+# reach their wineserver through the inherited WINESERVERSOCKET instead. On
+# 2026-10-14 that guess warned "the wineserver for ~/.wine is gone" for a run
+# whose own prefix was fine. Such processes are counted on a last line
+# "?<count>" instead, so the caller can log that it skipped them.
 wine_orphans() {
-  local d=$1 pid comm files=() p exe=0
+  local d=$1 pid comm files=() p exe=0 nopfx
   while read -r pid; do
     read -r comm 2>/dev/null < "$PROC/$pid/comm" || continue
     [[ $comm == *.exe || $comm == wine || $comm == wine64 || $comm == wine*-preloader ]] || continue
@@ -1189,19 +1201,22 @@ wine_orphans() {
     exe=1
   done 2>/dev/null < "$d/cgroup.procs"
   (( exe )) || return 0
+  nopfx=$(grep -a -z -L '^WINEPREFIX=' "${files[@]}" 2>/dev/null | grep -c .)
   {
     grep -a -z -h '^WINEPREFIX=' "${files[@]}" 2>/dev/null | tr '\0' '\n' | sed 's/^WINEPREFIX=//'
-    grep -a -z -L '^WINEPREFIX=' "${files[@]}" 2>/dev/null | grep -q . && echo "$HOME/.wine"
+    (( nopfx > 0 )) && [[ -n ${WINEPREFIX:-} ]] && echo "$WINEPREFIX"
   } | sort -u | while read -r p; do
     [[ -n $p && -d $p ]] || continue
     [[ -n $(wineservers_for "$p") ]] || echo "$p"
   done
+  (( nopfx > 0 )) && [[ -z ${WINEPREFIX:-} ]] && echo "?$nopfx"
+  return 0
 }
 
 # Reads our scope's cgroup: memory, CPU time, the 60 s core average, the stall
 # test and the Wine orphan test. Rewrites the state file.
 sample_scope() {
-  local d=$BSLICE/$unit.scope cur=0 pk u= now k v c60=- n rate orph
+  local d=$BSLICE/$unit.scope cur=0 pk u= now k v c60=- n rate orph unknown
   [[ -d $d ]] || return 0
   read -r cur 2>/dev/null < "$d/memory.current" || cur=0
   [[ $cur =~ ^[0-9]+$ ]] || cur=0
@@ -1231,7 +1246,13 @@ sample_scope() {
       fi
     fi
   fi
-  orph=$(wine_orphans "$d" | head -1)
+  orph=$(wine_orphans "$d")
+  unknown=$(grep -m1 '^?' <<< "$orph")
+  orph=$(grep -m1 -v '^?' <<< "$orph")
+  if [[ -n $unknown && -z $orph_unknown_logged ]]; then
+    orph_unknown_logged=1
+    log_line "event=wine-orphan-skip unit=$unit procs=${unknown#?} reason=\"prefix unknown: WINEPREFIX is not in the process environment or in heavy-build's, so the wineserver check skips these processes instead of guessing ~/.wine\" cmd=\"$cmdline\""
+  fi
   if [[ -n $orph ]]; then
     orphan_seen=$(( orphan_seen + 1 ))
     [[ -n $orphan_since ]] || orphan_since=$EPOCHSECONDS
@@ -1597,7 +1618,7 @@ child=$!
 [[ -n $cancel_sig ]] && stop_build "$cancel_sig"
 
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
-stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped=
+stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped= orph_unknown_logged=
 rc= gone_since=
 declare -A unpinned=() prev_st=() crowd_prev=()
 busy_since= busy_warned= last_sample=$(now_us)
