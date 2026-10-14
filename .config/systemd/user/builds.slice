@@ -7,7 +7,11 @@ Description=Heavy builds started by heavy-build
 # sessions need. CPUWeight 20 (default 100) keeps interactive work responsive
 # while builds run. It was 50 until 2026-10-13, when builds at load 60 to 100
 # still kept app.slice and claude.slice CPU pressure at 4 to 10%.
+# MemoryHigh 32G protects the desktop from build memory pressure: the kernel
+# reclaims build memory before the 42G hard cap. Added after the 2026-10-13
+# freezes.
 [Slice]
+MemoryHigh=32G
 MemoryMax=42G
 MemorySwapMax=6G
 CPUWeight=20
