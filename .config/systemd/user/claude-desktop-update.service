@@ -1,0 +1,7 @@
+[Unit]
+Description=Install a newer claude-desktop package, nothing else (claude-desktop-update)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/claude-desktop-update
