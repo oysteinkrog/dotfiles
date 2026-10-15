@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# claude-desktop-update: install a newer claude-desktop from the CachyOS repo,
+# and nothing else. Run by claude-desktop-update.timer once a day.
+#
+# It reads a fresh copy of the package lists (checkupdates keeps its own
+# database), so the system database is never synced and the rest of the system
+# is never upgraded. A full -Syu would also pull in qt6-base and friends, which
+# breaks the locally built kwin until `localbuild build kwin` runs.
+#
+# Skips the update and says why when the new package would need any other
+# package installed or upgraded. That case needs a normal full upgrade.
+#
+# Output: a journal line every run, ~/.local/state/claude-desktop-update/status,
+# and a desktop notification after an install or a failure.
+set -euo pipefail
+export LC_ALL=C
+
+PKG=claude-desktop
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/claude-desktop-update
+DB=$STATE/db
+mkdir -p -- "$STATE"
+
+status() {
+  printf '%s %s\n' "$(date -Is)" "$1" > "$STATE/status"
+  echo "claude-desktop-update: $1"
+}
+
+notify() {
+  notify-send --app-name="Claude Desktop" --icon=com.anthropic.Claude "$1" "$2" 2>/dev/null || true
+}
+
+fail() {
+  status "failed: $1"
+  notify "Claude Desktop update failed" "$1"
+  exit 1
+}
+
+# checkupdates exits 2 when nothing is out of date.
+rc=0
+updates=$(CHECKUPDATES_DB=$DB checkupdates 2>&1) || rc=$?
+if (( rc == 2 )); then
+  status "up to date ($(pacman -Q $PKG))"
+  exit 0
+elif (( rc != 0 )); then
+  fail "checkupdates exited $rc: ${updates//$'\n'/ }"
+fi
+
+line=$(grep -m1 "^$PKG " <<<"$updates" || true)
+if [[ -z $line ]]; then
+  status "up to date ($(pacman -Q $PKG))"
+  exit 0
+fi
+
+# Everything pacman would install with it. Only the package itself is allowed.
+targets=$(pacman -S --dbpath "$DB" --print --print-format '%n' "$PKG" 2>&1) \
+  || fail "cannot resolve $PKG: ${targets//$'\n'/ }"
+if [[ $targets != "$PKG" ]]; then
+  extra=$(grep -vx "$PKG" <<<"$targets" | tr '\n' ' ')
+  status "skipped $line: also needs $extra"
+  notify "Claude Desktop update waiting" "The new version also needs: $extra. Run a full system upgrade."
+  exit 0
+fi
+
+file=$(basename "$(pacman -S --dbpath "$DB" --print "$PKG")")
+out=$(sudo -n pacman -Sw --noconfirm --dbpath "$DB" "$PKG" 2>&1) \
+  || fail "download: ${out//$'\n'/ }"
+out=$(sudo -n pacman -U --noconfirm "/var/cache/pacman/pkg/$file" 2>&1) \
+  || fail "install: ${out//$'\n'/ }"
+
+status "installed $line"
+notify "Claude Desktop updated" "${line#$PKG }. Quit and reopen Claude to use it."
