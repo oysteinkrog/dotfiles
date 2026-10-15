@@ -59,22 +59,9 @@ Activate when the user says:
 # and re-checks http://127.0.0.1:4809/health before spawning.
 curl -sf http://127.0.0.1:4809/health > /dev/null 2>&1 && echo "Agent-mail: running" || echo "Agent-mail DOWN — run 'pm2 restart mcp-agent-mail', then re-check http://127.0.0.1:4809/health before spawning teammates."
 
-# Ensure the PROJECT .mcp.json registers agent-mail (no-auth rust entry). This MUST
-# live in the PROJECT .mcp.json: subagents inherit project scope, but the user-scope
-# ~/.claude.json is NOT inherited by subagents, so a user-scope entry is invisible to teammates.
-python3 -c "
-import json, os
-p = '.mcp.json'
-cfg = json.load(open(p)) if os.path.exists(p) else {'mcpServers': {}}
-if 'mcp-agent-mail' not in cfg.get('mcpServers', {}):
-    cfg.setdefault('mcpServers', {})['mcp-agent-mail'] = {
-        'type': 'http', 'url': 'http://127.0.0.1:4809/mcp/'
-    }
-    json.dump(cfg, open(p, 'w'), indent=2)
-    print('Added agent-mail to project .mcp.json')
-else:
-    print('Agent-mail already in project .mcp.json')
-"
+# agent-mail is registered once at user scope (~/.claude.json); subagents see it.
+# Never add it to the project .mcp.json: a second registration races for the same tools.
+claude mcp get mcp-agent-mail 2>&1 | grep -q 'User config' && echo "Agent-mail: user scope OK" || echo "Agent-mail not at user scope: claude mcp add --scope user --transport http mcp-agent-mail http://127.0.0.1:4809/mcp/"
 
 # Show what's ready
 bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
