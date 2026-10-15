@@ -281,6 +281,8 @@ local function tab_colors(palette)
     fg = fg,
     -- a soft amber tint behind a tab where Claude waits for you
     blocked_bg = mix(ansi[4] or '#EBCB8B', bg, 0.75),
+    -- a clear tint of the accent color behind the active tab
+    active_bg = mix(ansi[7] or '#88C0D0', bg, 0.7),
   }
 end
 
@@ -320,7 +322,9 @@ wezterm.on('format-tab-title', function(tab, tabs, panes, config)
   local blocked = claude_state == 'input'
   local symbol = blocked and '?' or '●'
   local cells = {}
-  if blocked and not tab.is_active then
+  if tab.is_active then
+    table.insert(cells, { Background = { Color = c.active_bg } })
+  elseif blocked then
     edge, edge_color, idx_color, title_color = '▌', c.bell, c.bell, c.fg
     table.insert(cells, { Background = { Color = c.blocked_bg } })
   end
@@ -508,8 +512,8 @@ local function scheme_tab_bar(s)
   local hover = mix(s.bg, s.fg, 0.02)
   return {
     background = bar,
-    -- A faint lift only: the colored edge mark and bold title already show the active tab
-    active_tab = { bg_color = mix(s.bg, s.fg, 0.03), fg_color = s.fg, intensity = 'Bold' },
+    -- The same accent tint format-tab-title paints behind the active tab
+    active_tab = { bg_color = mix(s.cyan or s.fg, s.bg, 0.7), fg_color = s.fg, intensity = 'Bold' },
     inactive_tab = { bg_color = s.bg, fg_color = muted },
     inactive_tab_hover = { bg_color = hover, fg_color = s.fg, italic = true },
     new_tab = { bg_color = bar, fg_color = muted },
