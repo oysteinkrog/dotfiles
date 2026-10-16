@@ -1,0 +1,9 @@
+[Unit]
+Description=Close an idle Chrome profile when memory is tight (chrome-idle-close)
+
+[Service]
+Type=oneshot
+# Mode comes from ~/.config/chrome-idle/mode (live or dry-run). No file means dry-run.
+ExecStart=%h/bin/chrome-idle-close
+# The close step waits up to 60 s for Chrome to exit after SIGTERM.
+TimeoutStartSec=120
