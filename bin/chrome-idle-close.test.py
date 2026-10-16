@@ -1,0 +1,163 @@
+"""Tests for chrome-idle-close. They use a fake /proc and fake log text, and
+never touch Chrome, KWin or the real state folder.
+
+Run: python3 ~/.dotfiles/bin/chrome-idle-close.test.py
+"""
+
+import atexit
+import importlib.machinery
+import importlib.util
+import os
+import shutil
+import tempfile
+import unittest
+from datetime import datetime
+from pathlib import Path
+
+_tmp = tempfile.mkdtemp(prefix="chrome-idle-test-", dir="/var/tmp")
+atexit.register(shutil.rmtree, _tmp, True)
+os.environ["CHROME_IDLE_PROC"] = f"{_tmp}/proc"
+os.environ["CHROME_IDLE_STATE_DIR"] = f"{_tmp}/state"
+os.environ["CHROME_IDLE_MODE_FILE"] = f"{_tmp}/mode"
+os.environ.pop("CHROME_IDLE_MODE", None)
+
+_path = str(Path(__file__).with_name("chrome-idle-close"))
+_loader = importlib.machinery.SourceFileLoader("chrome_idle_close", _path)
+_spec = importlib.util.spec_from_loader("chrome_idle_close", _loader)
+assert _spec is not None
+cic = importlib.util.module_from_spec(_spec)
+_loader.exec_module(cic)
+
+HOME = str(Path.home())
+SCOPE = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
+
+
+def fake_proc(pid: int, cmdline: bytes, cgroup: str) -> None:
+    d = Path(os.environ["CHROME_IDLE_PROC"]) / str(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "cmdline").write_bytes(cmdline)
+    (d / "cgroup").write_text(cgroup)
+
+
+# Main browser process: title rewritten into one space-joined string, and
+# moved into its own scope, as seen on this machine.
+fake_proc(
+    100,
+    f"/opt/google/chrome/chrome --user-data-dir={HOME}/.config/google-chrome-personal"
+    " --profile-directory=Profile 1 --class=chrome-personal\0".encode(),
+    SCOPE + "app-com.google.Chrome-100.scope\n",
+)
+# A renderer of the personal profile, still in the service cgroup.
+fake_proc(
+    101,
+    b"/opt/google/chrome/chrome\0--type=renderer\0",
+    SCOPE + "app-chrome\\x2dpersonal@abc.service\n",
+)
+# Work main process with normal NUL-separated argv.
+fake_proc(
+    200,
+    f"/opt/google/chrome/chrome\0--user-data-dir={HOME}/.config/google-chrome\0"
+    "--profile-directory=Default\0--class=chrome-work\0".encode(),
+    SCOPE + "app-com.google.Chrome-200.scope\n",
+)
+# A terminal.
+fake_proc(300, b"/usr/bin/frankenterm\0", SCOPE + "app-term.scope\n")
+# Headless Chrome with another data folder: not a profile.
+fake_proc(
+    400,
+    f"/opt/google/chrome/chrome\0--user-data-dir={HOME}/.config/google-chrome-headless\0".encode(),
+    SCOPE + "x.scope\n",
+)
+
+
+class ProfileMapping(unittest.TestCase):
+    def test_main_process_by_cmdline(self):
+        self.assertEqual(cic.profile_of_pid(100), "personal")
+        self.assertEqual(cic.profile_of_pid(200), "work")
+
+    def test_helper_by_cgroup(self):
+        self.assertEqual(cic.profile_of_pid(101), "personal")
+
+    def test_other_windows(self):
+        self.assertIsNone(cic.profile_of_pid(300))
+        self.assertIsNone(cic.profile_of_pid(400))
+        self.assertIsNone(cic.profile_of_pid(-1))
+
+    def test_class_fallback(self):
+        self.assertEqual(cic.profile_of_pid(999, "chrome-work"), "work")
+
+    def test_main_pids_skip_helpers_and_headless(self):
+        self.assertEqual(cic.main_pids(), {"personal": 100, "work": 200})
+
+
+def resolve(pid, wclass):
+    return {100: "personal", 200: "work"}.get(pid)
+
+
+class FocusTracking(unittest.TestCase):
+    def test_focus_ends_at_next_event(self):
+        st = {}
+        cic.apply_events(st, [(1000, 100, ""), (1300, 300, "")], 2000, 0, resolve)
+        self.assertEqual(st["last_focus"], {"personal": 1300})
+        self.assertIsNone(st["active"]["profile"])
+
+    def test_still_focused_counts_until_now(self):
+        st = {}
+        cic.apply_events(st, [(1000, 200, "")], 2000, 0, resolve)
+        self.assertEqual(st["last_focus"], {"work": 2000})
+        # A later run with no new events keeps moving it forward.
+        cic.apply_events(st, [], 2600, 0, resolve)
+        self.assertEqual(st["last_focus"], {"work": 2600})
+
+    def test_locked_screen_stops_focus(self):
+        st = {}
+        cic.apply_events(st, [(1000, 100, "")], 5000, 3000, resolve)
+        self.assertEqual(st["last_focus"], {"personal": 2000})
+
+    def test_switch_between_profiles(self):
+        st = {}
+        ev = [(1000, 100, ""), (1100, 200, ""), (1200, 300, "")]
+        cic.apply_events(st, ev, 5000, 0, resolve)
+        self.assertEqual(st["last_focus"], {"personal": 1100, "work": 1200})
+
+
+class Memory(unittest.TestCase):
+    def test_swap_pct(self):
+        mi = "MemTotal: 10 kB\nSwapTotal:     1000 kB\nSwapFree:      300 kB\n"
+        self.assertAlmostEqual(cic.swap_pct(mi), 70.0)
+        self.assertEqual(cic.swap_pct("SwapTotal: 0 kB\nSwapFree: 0 kB\n"), 0.0)
+
+    def test_heavy_build_waits(self):
+        now = datetime.fromisoformat("2026-10-16T21:42:00+02:00").timestamp()
+        text = "\n".join(
+            [
+                '2026-10-16T21:41:47+0200 mode=live job=a decision=wait reason="memory: needs 9 GiB"',
+                '2026-10-16T21:41:48+0200 mode=live job=a decision=wait reason="memory: needs 9 GiB"',
+                '2026-10-16T21:41:50+0200 mode=live job=b decision=wait reason="interactive: app.slice"',
+                '2026-10-16T21:41:51+0200 mode=live job=c decision=wait reason="cores: needs 8"',
+                '2026-10-16T21:41:52+0200 mode=live job=d decision=start reason="fits"',
+                '2026-10-16T21:41:53+0200 mode=live job=e decision=wait reason="slice-cap: x"',
+                '2026-10-16T21:30:00+0200 mode=live job=f decision=wait reason="swap: x"',
+            ]
+        )
+        self.assertEqual(cic.hb_memory_waits(now, text), 2)
+
+
+class Decide(unittest.TestCase):
+    def test_rules(self):
+        self.assertFalse(cic.decide(14.9, True, 1)[0])
+        self.assertFalse(cic.decide(30, False, 1)[0])
+        self.assertFalse(cic.decide(30, True, None)[0])
+        self.assertFalse(cic.decide(30, True, 5)[0])
+        self.assertTrue(cic.decide(15, True, 1)[0])
+
+    def test_mode_defaults_to_dry_run(self):
+        self.assertEqual(cic.resolve_mode(None), "dry-run")
+        Path(os.environ["CHROME_IDLE_MODE_FILE"]).write_text("live\n")
+        self.assertEqual(cic.resolve_mode(None), "live")
+        self.assertEqual(cic.resolve_mode("dry-run"), "dry-run")
+        Path(os.environ["CHROME_IDLE_MODE_FILE"]).unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,525 @@
+#!/usr/bin/env python3
+"""chrome-idle-close: close an idle Chrome profile when memory is tight.
+
+Run by chrome-idle-close.timer once a minute. A profile (personal or work) is
+closed only when both hold:
+  1. No window of that profile has had focus for IDLE_MIN minutes (15).
+  2. Memory is tight: swap used is over SWAP_PCT (60%) of SwapTotal, or
+     heavy-build logged a build waiting for memory, swap or interactive memory
+     pressure in the last HB_WINDOW seconds (120).
+
+Focus: a small KWin script (chrome-idle-focus.kwin.js, next to this file)
+writes a journal line each time the active window changes. Each run reads the
+new lines and updates ~/.local/state/chrome-idle/state.json with the last
+time each profile had focus. While the screen is locked, no window counts as
+focused.
+
+Close: SIGTERM to the profile's main browser process only, the same signal a
+normal logout sends. Chrome then saves its session and exits cleanly. The tool
+never sends SIGKILL, never stops the systemd unit (that would SIGTERM every
+renderer at once), and never starts Chrome again. A profile whose "On startup"
+setting is not "Continue where you left off" is never closed, because a clean
+exit would then lose its tabs.
+
+Mode: dry-run unless set to live. Order: --dry-run or --live flag, then
+CHROME_IDLE_MODE, then the file ~/.config/chrome-idle/mode (one word: live or
+dry-run), then dry-run.
+
+Usage:
+  chrome-idle-close              one check, act per mode
+  chrome-idle-close --dry-run    one check, never close
+  chrome-idle-close --status     print per-profile idle minutes and memory
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home()
+IDLE_MIN = float(os.environ.get("CHROME_IDLE_MIN", "15"))
+SWAP_PCT = float(os.environ.get("CHROME_IDLE_SWAP_PCT", "60"))
+HB_WINDOW = float(os.environ.get("CHROME_IDLE_HB_WINDOW", "120"))
+CLOSE_WAIT = 60.0
+STATE_DIR = Path(
+    os.environ.get("CHROME_IDLE_STATE_DIR", HOME / ".local/state/chrome-idle")
+)
+MODE_FILE = Path(
+    os.environ.get("CHROME_IDLE_MODE_FILE", HOME / ".config/chrome-idle/mode")
+)
+HB_LOG = Path(
+    os.environ.get("CHROME_IDLE_HB_LOG", HOME / ".local/state/heavy-build/live.log")
+)
+PROC = Path(os.environ.get("CHROME_IDLE_PROC", "/proc"))
+KWIN_PLUGIN = "chrome-idle-focus"
+KWIN_SCRIPT = Path(os.path.realpath(__file__)).with_name("chrome-idle-focus.kwin.js")
+LOG_MAX = 5 * 1024 * 1024
+
+# Data folder, profile folder and window class per profile. These match
+# ~/.local/bin/chrome-personal and ~/.local/bin/chrome-work.
+PROFILES = {
+    "personal": {
+        "data_dir": str(HOME / ".config/google-chrome-personal"),
+        "profile_dir": "Profile 1",
+        "class": "chrome-personal",
+    },
+    "work": {
+        "data_dir": str(HOME / ".config/google-chrome"),
+        "profile_dir": "Default",
+        "class": "chrome-work",
+    },
+}
+DEFAULT_DATA_DIR = str(HOME / ".config/google-chrome")
+
+HB_MEM_WAIT = re.compile(
+    r'^(\S+) mode=\S+ job=(\S+) decision=wait reason="(memory|swap|interactive):'
+)
+FOCUS_LINE = re.compile(r"chrome-idle-focus pid=(-?\d+) class=(\S*)")
+
+
+# ---------------------------------------------------------------- processes
+
+
+def read_cmdline(pid: int) -> list[str]:
+    try:
+        raw = (PROC / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return []
+    argv = [a for a in raw.decode(errors="replace").split("\0") if a]
+    if len(argv) == 1 and " --" in argv[0]:
+        # Chrome rewrites its process title into one space-joined string.
+        # Split before each " --" so "--profile-directory=Profile 1" survives.
+        argv = re.split(r" (?=--)", argv[0])
+    return argv
+
+
+def read_cgroup(pid: int) -> str:
+    try:
+        return (PROC / str(pid) / "cgroup").read_text()
+    except OSError:
+        return ""
+
+
+def data_dir_of(argv: list[str]) -> str | None:
+    """The --user-data-dir of a Chrome command line, or None if not Chrome."""
+    if not argv or os.path.basename(argv[0]) != "chrome":
+        return None
+    for a in argv[1:]:
+        if a.startswith("--user-data-dir="):
+            return os.path.normpath(os.path.expanduser(a.split("=", 1)[1]))
+    return DEFAULT_DATA_DIR
+
+
+def profile_of_data_dir(data_dir: str | None) -> str | None:
+    for name, p in PROFILES.items():
+        if data_dir == p["data_dir"]:
+            return name
+    return None
+
+
+def profile_of_pid(pid: int, wclass: str = "") -> str | None:
+    """Map a window's pid to a profile.
+
+    The window belongs to Chrome's main browser process. Chrome moves that
+    process into its own app-com.google.Chrome-<pid>.scope, so the cgroup
+    names the profile only for the helper processes. So check, in order: the
+    cgroup (app-chrome\\x2d<profile>@...service), the --user-data-dir on the
+    command line, and the window class Chrome sets from --class.
+    """
+    if pid > 0:
+        cg = read_cgroup(pid)
+        for name in PROFILES:
+            if f"app-chrome\\x2d{name}@" in cg:
+                return name
+        prof = profile_of_data_dir(data_dir_of(read_cmdline(pid)))
+        if prof:
+            return prof
+    for name, p in PROFILES.items():
+        if wclass == p["class"]:
+            return name
+    return None
+
+
+def boot_time() -> float:
+    try:
+        for line in (PROC / "stat").read_text().splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except OSError:
+        pass
+    return 0.0
+
+
+def proc_start(pid: int) -> float:
+    """Start time of a process as a unix time, or 0 if unknown."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return 0.0
+    fields = stat.rsplit(")", 1)[1].split()
+    ticks = int(fields[19])  # field 22 of stat, counted after "pid (comm)"
+    return boot_time() + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def main_pids() -> dict[str, int]:
+    """Main browser process per running profile (no --type= flag)."""
+    found: dict[str, int] = {}
+    for entry in PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        argv = read_cmdline(int(entry.name))
+        dd = data_dir_of(argv)
+        if dd is None or any(a.startswith("--type=") for a in argv):
+            continue
+        prof = profile_of_data_dir(dd)
+        if prof and prof not in found:
+            found[prof] = int(entry.name)
+    return found
+
+
+def restore_setting(name: str) -> int | None:
+    """Chrome's session.restore_on_startup (1 = continue where you left off)."""
+    p = PROFILES[name]
+    prefs = Path(p["data_dir"]) / p["profile_dir"] / "Preferences"
+    try:
+        value = json.loads(prefs.read_text()).get("session", {})
+    except (OSError, ValueError):
+        return None
+    return value.get("restore_on_startup")
+
+
+# ---------------------------------------------------------------- memory
+
+
+def swap_pct(meminfo: str | None = None) -> float:
+    if meminfo is None:
+        meminfo = (PROC / "meminfo").read_text()
+    vals = {}
+    for line in meminfo.splitlines():
+        k, _, rest = line.partition(":")
+        if k in ("SwapTotal", "SwapFree"):
+            vals[k] = int(rest.split()[0])
+    total = vals.get("SwapTotal", 0)
+    if total <= 0:
+        return 0.0
+    return 100.0 * (total - vals.get("SwapFree", 0)) / total
+
+
+def hb_memory_waits(now: float, text: str | None = None) -> int:
+    """Number of distinct heavy-build jobs that waited for memory, swap or
+    interactive memory pressure in the last HB_WINDOW seconds."""
+    if text is None:
+        try:
+            with HB_LOG.open("rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 512 * 1024))
+                text = f.read().decode(errors="replace")
+        except OSError:
+            return 0
+    jobs = set()
+    for line in text.splitlines():
+        m = HB_MEM_WAIT.match(line)
+        if not m:
+            continue
+        try:
+            ts = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        except ValueError:
+            continue
+        if now - ts <= HB_WINDOW:
+            jobs.add(m.group(2))
+    return len(jobs)
+
+
+# ---------------------------------------------------------------- KWin focus
+
+
+def qdbus(*args: str) -> str | None:
+    try:
+        r = subprocess.run(
+            ["qdbus6", "org.kde.KWin", "/Scripting", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def ensure_kwin_script() -> str:
+    """Load the focus script into KWin if it is not loaded (after a KWin
+    restart, for example). Returns 'loaded', 'already' or 'failed'."""
+    if qdbus("org.kde.kwin.Scripting.isScriptLoaded", KWIN_PLUGIN) == "true":
+        return "already"
+    sid = qdbus("org.kde.kwin.Scripting.loadScript", str(KWIN_SCRIPT), KWIN_PLUGIN)
+    if sid is None or sid.startswith("-"):
+        return "failed"
+    qdbus("org.kde.kwin.Scripting.start")
+    return "loaded"
+
+
+def screen_locked_for() -> float:
+    """Seconds the screen has been locked, 0 when unlocked."""
+    try:
+        r = subprocess.run(
+            [
+                "qdbus6",
+                "org.freedesktop.ScreenSaver",
+                "/ScreenSaver",
+                "org.freedesktop.ScreenSaver.GetActiveTime",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return float(r.stdout.strip() or 0)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 0.0
+
+
+def focus_events(since: float) -> list[tuple[float, int, str]]:
+    """Focus lines from the KWin journal after the unix time `since`."""
+    try:
+        r = subprocess.run(
+            [
+                "journalctl",
+                "--user",
+                "-u",
+                "plasma-kwin_wayland.service",
+                "--since",
+                f"@{int(since)}",
+                "-g",
+                "chrome-idle-focus pid=",
+                "-o",
+                "json",
+                "--output-fields=MESSAGE,__REALTIME_TIMESTAMP",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    events = []
+    for line in r.stdout.splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        msg = e.get("MESSAGE")
+        if not isinstance(msg, str):
+            continue
+        m = FOCUS_LINE.search(msg)
+        if not m:
+            continue
+        ts = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+        if ts > since:
+            events.append((ts, int(m.group(1)), m.group(2)))
+    events.sort()
+    return events
+
+
+def apply_events(
+    state: dict,
+    events: list[tuple[float, int, str]],
+    now: float,
+    locked_for: float,
+    resolve=profile_of_pid,
+) -> None:
+    """Update state['last_focus'] from focus events, in time order.
+
+    A profile keeps focus from its activation event until the next event.
+    If it is still active at `now`, its focus runs until now, or until the
+    screen locked.
+    """
+    last = state.setdefault("last_focus", {})
+    active: dict | None = state.get("active")
+    for ts, pid, wclass in events:
+        if active and active.get("profile"):
+            p = active["profile"]
+            last[p] = max(last.get(p, 0.0), ts)
+        active = {
+            "pid": pid,
+            "class": wclass,
+            "profile": resolve(pid, wclass),
+            "since": ts,
+        }
+        state["last_ts"] = ts
+    state["active"] = active
+    if active and active.get("profile"):
+        p = active["profile"]
+        end = now if locked_for <= 0 else max(active["since"], now - locked_for)
+        last[p] = max(last.get(p, 0.0), min(now, end))
+
+
+# ---------------------------------------------------------------- state and log
+
+
+def load_state(now: float) -> dict:
+    try:
+        return json.loads((STATE_DIR / "state.json").read_text())
+    except (OSError, ValueError):
+        return {"tracking_since": now, "last_ts": now - 1800}
+
+
+def save_state(state: dict) -> None:
+    tmp = STATE_DIR / "state.json.tmp"
+    tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+    tmp.replace(STATE_DIR / "state.json")
+
+
+def log(line: str) -> None:
+    path = STATE_DIR / "log"
+    try:
+        if path.stat().st_size > LOG_MAX:
+            path.replace(STATE_DIR / "log.1")
+    except OSError:
+        pass
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    with path.open("a") as f:
+        f.write(f"{stamp} {line}\n")
+
+
+def resolve_mode(flag: str | None) -> str:
+    if flag:
+        return flag
+    env = os.environ.get("CHROME_IDLE_MODE", "").strip()
+    if env:
+        return "live" if env == "live" else "dry-run"
+    try:
+        return "live" if MODE_FILE.read_text().strip() == "live" else "dry-run"
+    except OSError:
+        return "dry-run"
+
+
+# ---------------------------------------------------------------- decide and close
+
+
+def decide(idle_min: float, tight: bool, restore: int | None) -> tuple[bool, str]:
+    if idle_min < IDLE_MIN:
+        return False, f"idle {idle_min:.1f} min, under {IDLE_MIN:.0f}"
+    if not tight:
+        return False, "idle, but memory is not tight"
+    if restore != 1:
+        return False, (
+            f"idle and memory tight, but restore_on_startup={restore} "
+            "(not 'continue where you left off'), so tabs would be lost"
+        )
+    return True, "idle and memory tight"
+
+
+def close_profile(pid: int) -> str:
+    """SIGTERM the main browser process and wait for it to exit. No SIGKILL."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "already gone"
+    except PermissionError as e:
+        return f"SIGTERM failed: {e}"
+    deadline = time.time() + CLOSE_WAIT
+    while time.time() < deadline:
+        if not (PROC / str(pid)).exists():
+            return "exited after SIGTERM"
+        time.sleep(1)
+    return f"still running {CLOSE_WAIT:.0f} s after SIGTERM, left alone"
+
+
+def run(mode: str, status: bool) -> int:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (STATE_DIR / "lock").open("w") as lockf:
+        fcntl.flock(lockf, fcntl.LOCK_EX)
+        now = time.time()
+        state = load_state(now)
+        kwin = ensure_kwin_script()
+        if kwin == "failed":
+            log("kwin: could not load the focus script, focus data may be stale")
+        locked_for = screen_locked_for()
+        apply_events(
+            state, focus_events(state.get("last_ts", now - 1800)), now, locked_for
+        )
+        save_state(state)
+
+        sw = swap_pct()
+        waits = hb_memory_waits(now)
+        tight = sw > SWAP_PCT or waits > 0
+        mem_note = (
+            f"swap={sw:.1f}% hb_mem_waits={waits} tight={'yes' if tight else 'no'}"
+        )
+        pids = main_pids()
+        active = state.get("active") or {}
+
+        if status:
+            print(
+                f"mode: {mode}   kwin script: {kwin}   screen locked: "
+                f"{'%.0f s' % locked_for if locked_for > 0 else 'no'}"
+            )
+            print(
+                f"memory: {mem_note} (swap limit {SWAP_PCT:.0f}%, "
+                f"heavy-build window {HB_WINDOW:.0f} s)"
+            )
+            print(
+                f"active window: pid={active.get('pid')} class={active.get('class')} "
+                f"profile={active.get('profile')}"
+            )
+            since = datetime.fromtimestamp(state.get("tracking_since", now))
+            print(
+                f"focus tracked since {since:%Y-%m-%d %H:%M}; idle time before "
+                "that counts as zero"
+            )
+
+        for name in PROFILES:
+            pid = pids.get(name)
+            if pid is None:
+                if status:
+                    print(f"{name:9} not running")
+                continue
+            base = max(state.get("tracking_since", now), proc_start(pid))
+            last = max(state.get("last_focus", {}).get(name, 0.0), base)
+            idle = max(0.0, (now - last) / 60)
+            restore = restore_setting(name)
+            close, why = decide(idle, tight, restore)
+            if status:
+                verdict = "would close" if close else "keep"
+                print(
+                    f"{name:9} pid={pid} idle={idle:.1f} min "
+                    f"restore_on_startup={restore} -> {verdict}: {why}"
+                )
+                continue
+            line = f"profile={name} pid={pid} idle_min={idle:.1f} {mem_note}"
+            if not close:
+                log(f'{line} action=keep reason="{why}"')
+            elif mode != "live":
+                log(f'{line} action=would-close mode=dry-run reason="{why}"')
+            else:
+                log(f'{line} action=close reason="{why}" sending SIGTERM')
+                result = close_profile(pid)
+                log(f'profile={name} pid={pid} close_result="{result}"')
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_const", const="dry-run", dest="mode")
+    g.add_argument("--live", action="store_const", const="live", dest="mode")
+    ap.add_argument(
+        "--status",
+        action="store_true",
+        help="print idle minutes and memory, change nothing in Chrome",
+    )
+    a = ap.parse_args()
+    return run(resolve_mode(a.mode), a.status)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
