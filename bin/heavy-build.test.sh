@@ -129,4 +129,47 @@ out=$(wo -)
 check "wine: own WINEPREFIX without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxA ?1 " ]]'
 rm -rf -- "$W"
 
+# 6. Memory estimates. class_table and estimate() are taken from heavy-build
+# and run against a fake history.tsv.
+E=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+G=1073741824
+row() {  # class key peak_gib exit reason [cap_gib]
+  local cap=
+  [[ -n ${6:-} ]] && cap=$'\t'$(( $6 * G ))
+  printf '1\t%s\t%s\t10\t20\t%s\t%s\t%s%s\n' "$1" "$2" "$(( $3 * G ))" "$4" "$5" "$cap" >> "$E/hist"
+}
+est() {  # key class ; prints "mem source"
+  (
+    HIST=$E/hist
+    eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^estimate()/,/^}/p' "$HB")"
+    estimate "$1" "$2" | awk '{print $1, $4}'
+  )
+}
+T=$E; : > "$T/out"
+: > "$E/hist"
+for i in $(seq 1 20); do row cargo-check "other$i" "$i" 0 ok; done
+out=$(est newkey cargo-check)
+check "estimate: a new key uses the class p90 (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
+row cargo-check lowkey 2 0 ok
+row cargo-check lowkey 3 1 fail
+out=$(est lowkey cargo-check)
+check "estimate: key history (max 3) below the class p90 (18) gets the p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+: > "$E/hist"
+row cargo-check oomkey 3 0 ok
+row cargo-check oomkey 8 137 fail
+row cargo-check oomkey 30 143 cancelled
+out=$(est oomkey cargo-check)
+check "estimate: exit 137 without a cap counts as 1.25 x its peak (got '$out')" '[[ $out == "10.0 history,mem=key" ]]'
+row cargo-check oomkey 9 1 oom 14
+out=$(est oomkey cargo-check)
+check "estimate: an OOM run counts as at least its recorded cap (got '$out')" '[[ $out == "14.0 history,mem=key" ]]'
+: > "$E/hist"
+for i in $(seq 1 6); do row wine-run-tests "w$i" 2 0 ok; done
+out=$(est newkey wine-run-tests)
+check "estimate: the class floor wins over a lower p90 (got '$out')" '[[ $out == "10.0 class-history,mem=floor" ]]'
+row wine-run-tests bigkey 30 0 ok
+out=$(est bigkey wine-run-tests)
+check "estimate: never above the 22 GiB scope cap (got '$out')" '[[ $out == "22.0 history,mem=cap" ]]'
+rm -rf -- "$E"
+
 exit "$fail"
