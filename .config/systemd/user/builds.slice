@@ -17,5 +17,6 @@ MemorySwapMax=6G
 CPUWeight=20
 
 # Kill the build that causes pressure before the user slice's 80% rule hits; 2026-10-16.
+# Raised 60% -> 75% on 2026-10-17: MemoryHigh throttling alone pushed pressure to 83% and killed a kpp build.
 ManagedOOMMemoryPressure=kill
-ManagedOOMMemoryPressureLimit=60%
+ManagedOOMMemoryPressureLimit=75%
