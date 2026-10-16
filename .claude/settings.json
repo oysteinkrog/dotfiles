@@ -4,8 +4,7 @@
     "USE_BUILTIN_RIPGREP": "0",
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "500000",
     "MCP_TIMEOUT": "180000",
     "MCP_TOOL_TIMEOUT": "120000",
     "CLAUDE_CODE_TMPDIR": "/var/tmp/claude",
@@ -15,7 +14,6 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "claude-fable-5-1[1m]",
   "skillOverrides": {
     "ab-testing": "off",
     "admin-page-for-nextjs-sites": "off",
@@ -384,13 +382,21 @@
     "rust-analyzer-lsp@claude-plugins-official": false,
     "frontend-design@claude-plugins-official": true,
     "ui-ux-pro-max@ui-ux-pro-max-skill": false,
-    "cowork-plugin-management@inline": false
+    "cowork-plugin-management@inline": false,
+    "claude-seo@agricidaniel-claude-seo": true,
+    "cc-plugin-you-should-know@builtin": true
   },
   "extraKnownMarketplaces": {
     "ui-ux-pro-max-skill": {
       "source": {
         "source": "github",
         "repo": "nextlevelbuilder/ui-ux-pro-max-skill"
+      }
+    },
+    "agricidaniel-claude-seo": {
+      "source": {
+        "source": "github",
+        "repo": "AgriciDaniel/claude-seo"
       }
     }
   },
@@ -403,13 +409,24 @@
   },
   "autoUpdatesChannel": "latest",
   "tui": "fullscreen",
+  "voice": {
+    "enabled": true,
+    "mode": "tap"
+  },
+  "timeFormat": "auto",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "editorMode": "normal",
   "autoCompactEnabled": true,
+  "switchModelsOnFlag": true,
   "fileCheckpointingEnabled": false,
   "teammateMode": "in-process",
+  "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "voiceEnabled": true,
+  "disabledMcpjsonServers": [
+    "mcp-agent-mail"
+  ]
 }
