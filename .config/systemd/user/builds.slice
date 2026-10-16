@@ -15,3 +15,7 @@ MemoryHigh=32G
 MemoryMax=42G
 MemorySwapMax=6G
 CPUWeight=20
+
+# Kill the build that causes pressure before the user slice's 80% rule hits; 2026-10-16.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=60%
