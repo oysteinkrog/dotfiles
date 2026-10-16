@@ -90,16 +90,21 @@
 #   the file is removed.
 # - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
 #   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
-# - Estimates each build's memory, cores and wall time: from the last 5 runs
-#   of the same command in the same directory, then from its class (cargo
-#   test, dotnet build, Wine run-tests and so on; the p90 of the peaks), then
-#   8 GiB, 8 cores and 600 s. History: ~/.local/state/heavy-build/history.tsv,
+# - Estimates each build's memory, cores and wall time. Memory is the largest
+#   of: the highest peak in the last 10 runs of the same command in the same
+#   directory, the p90 peak of the last 50 runs of its class (cargo test,
+#   dotnet build, Wine run-tests and so on), and the class floor, at most
+#   22 GiB. An OOM-killed run counts with a peak of at least its MemoryMax
+#   (column 9), else 1.25 times its peak. Cores and wall time come from the
+#   last 5 runs of the same command, then from the class, then 8 cores and
+#   600 s. History: ~/.local/state/heavy-build/history.tsv,
 #   one line per finished build, tab separated, with no header line. Columns:
 #   1 end time (epoch s), 2 class, 3 key (hash of directory and command),
 #   4 wall time in seconds (not the exit code), 5 CPU seconds, 6 peak memory
 #   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
 #   INT or HUP), timeout (exit 124) or oom (the scope's memory.events shows an
-#   oom_kill). Lines written before 2026-10-09 have no column 8.
+#   oom_kill), 9 the scope's MemoryMax in bytes. Lines written before
+#   2026-10-09 have no column 8, and lines before 2026-10-16 no column 9.
 # - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
 #   heavy-build is gone is stopped when it holds only Wine leftovers
 #   (winedevice.exe, wineserver, services.exe and the like) or used under
@@ -336,66 +341,106 @@ classify() {
   fi
 }
 
-# "mem_gib cores wall_s" per class, measured on 2026-10-07 (85 jobs): p90 peak,
-# average cores, median wall. Classes without a row use the default.
+# "mem_gib cores wall_s floor_gib" per class. The first three were measured on
+# 2026-10-07 (85 jobs): p90 peak, average cores, median wall. floor_gib is the
+# lowest memory estimate the class can get, set on 2026-10-16 after a
+# wine-run-tests run peaked at 17.4 GB on a 9.9 GB estimate and was OOM-killed.
+# mem_gib was raised to the floor where it was lower. Classes without a row
+# use the default.
 class_table() {
   case $1 in
-    cargo-release)  echo "16.3 3.4 4500" ;;
-    wine-script)    echo "7.4 5.6 537" ;;
-    wine-run-tests) echo "6.6 5.9 114" ;;
-    cargo-test)     echo "13.3 3.4 96" ;;
-    cargo-clippy)   echo "7.6 2.6 42" ;;
-    dotnet-build)   echo "4.7 8.0 17" ;;
-    dotnet-test)    echo "5.2 6.9 45" ;;
-    cargo-check)    echo "3.9 1.7 26" ;;
-    *)              echo "8 8 600" ;;
+    cargo-release)  echo "16.3 3.4 4500 0" ;;
+    wine-script)    echo "7.4 5.6 537 0" ;;
+    wine-run-tests) echo "10 5.9 114 10" ;;
+    cargo-test)     echo "13.3 3.4 96 6" ;;
+    cargo-clippy)   echo "7.6 2.6 42 6" ;;
+    dotnet-build)   echo "5 8.0 17 5" ;;
+    dotnet-test)    echo "5.2 6.9 45 0" ;;
+    cargo-check)    echo "3.9 1.7 26 0" ;;
+    *)              echo "8 8 600 0" ;;
   esac
 }
 
+# The highest memory estimate, in GiB. A scope's MemoryHigh is 1.25 x the
+# estimate, clamped to 16G..22G (see "Memory caps scale" below), so no build
+# gets more than 22G before it is throttled. A larger estimate would only
+# hold back other builds for memory this build cannot be given.
+EST_MEM_MAX_GIB=22
+
 # estimate KEY CLASS -> "mem_gib cores wall_s source".
 # history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code
-# reason. Only columns 1 to 7 are read here.
+# reason cap_bytes. Older lines have no column 9 (and some no column 8).
+# Memory is the largest of: the key's highest peak in its last 10 runs, the
+# class p90 peak over its last 50 runs (the class_table value when the class
+# has under 5 runs), and the class floor. It is capped at EST_MEM_MAX_GIB.
+# An OOM-killed run (exit 137 or reason oom, but not cancelled or timeout)
+# counts with a peak of at least its scope's MemoryMax (column 9), or its
+# peak times 1.25 when column 9 is missing. Exit 75, 124 and other signals
+# (exit 128 and above) are left out. Wall time and cores come from the key's
+# last 5 runs, else from the class, and never from OOM-killed runs.
+# source: history, class-history, class or default (where wall and cores
+# came from), then ",mem=" and what set memory: key, class-p90, class,
+# default, floor or cap.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
-  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" '
+  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" '
     function srt(a, n,   i, j, x) { for (i = 2; i <= n; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
-    $4 > 0 && $7 != 75 && $7 != 124 && $7 < 128 {
-      if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5; kp[kn] = $6 }
-      if ($2 == c) { cn++; cw[cn] = $4; cc[cn] = $5; cp[cn] = $6 }
+    $4 > 0 && $7 != 75 && $7 != 124 {
+      oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
+      if ($7 >= 128 && !oom) next
+      pk = $6
+      if (oom && pk != "NA") {
+        if ($9 ~ /^[0-9]+$/) { if ($9 + 0 > pk + 0) pk = $9 + 0 }
+        else pk = pk * 1.25
+      }
+      if ($3 == k) { kmn++; kmp[kmn] = pk }
+      if ($2 == c) { cmn++; cmp[cmn] = pk }
+      if (oom) next
+      if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5 }
+      if ($2 == c) { cn++; cw[cn] = $4; cc[cn] = $5 }
     }
     END {
-      split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]
+      split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]; floor = d[4] + 0
       src = (c == "other" || c == "cargo-build") ? "default" : "class"
+      msrc = src
       if (cn >= 5) {
-        n = 0; m = 0; sc = 0; sw = 0
+        n = 0; sc = 0; sw = 0
         for (i = (cn > 50 ? cn - 49 : 1); i <= cn; i++) {
           w[++n] = cw[i]
-          if (cp[i] != "NA") p[++m] = cp[i]
           if (cc[i] != "NA") { sc += cc[i]; sw += cw[i] }
         }
         srt(w, n); wall = w[int((n + 1) / 2)]
-        if (m > 0) { srt(p, m); i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824 }
         if (sw > 0) cores = sc / sw
         src = "class-history"
       }
+      if (cmn >= 5) {
+        m = 0
+        for (i = (cmn > 50 ? cmn - 49 : 1); i <= cmn; i++) if (cmp[i] != "NA") p[++m] = cmp[i]
+        if (m > 0) { srt(p, m); i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824; msrc = "class-p90" }
+      }
       if (kn >= 1) {
-        n = 0; m = 0; mx = -1; s = 0; nc = 0
+        n = 0; s = 0; nc = 0
         for (i = (kn > 5 ? kn - 4 : 1); i <= kn; i++) {
-          w[++n] = kw[i]
-          if (kp[i] != "NA" && kp[i] > mx) mx = kp[i]
+          w2[++n] = kw[i]
           if (kc[i] != "NA") { s += kc[i] / kw[i]; nc++ }
         }
-        srt(w, n); wall = w[int((n + 1) / 2)]
-        if (mx >= 0) mem = mx / 1073741824
+        srt(w2, n); wall = w2[int((n + 1) / 2)]
         if (nc > 0) cores = s / nc
         src = "history"
       }
+      if (kmn >= 1) {
+        mx = -1
+        for (i = (kmn > 10 ? kmn - 9 : 1); i <= kmn; i++) if (kmp[i] != "NA" && kmp[i] + 0 > mx) mx = kmp[i] + 0
+        if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = "key" }
+      }
+      if (floor > mem) { mem = floor; msrc = "floor" }
+      if (maxm > 0 && mem > maxm) { mem = maxm; msrc = "cap" }
       if (mem < 0.1) mem = 0.1
       if (cores < 0.1) cores = 0.1
       if (wall < 1) wall = 1
-      printf "%.1f %.1f %d %s\n", mem, cores, wall, src
-    }' "$h" 2>/dev/null || echo "8.0 8.0 600 default"
+      printf "%.1f %.1f %d %s,mem=%s\n", mem, cores, wall, src, msrc
+    }' "$h" 2>/dev/null || echo "8.0 8.0 600 default,mem=default"
 }
 
 # ---------------------------------------------------------------- lock keys
@@ -1430,11 +1475,13 @@ append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
   (( wall < 1 )) && wall=1
   [[ -n $usec_last ]] && cpu=$(printf '%d.%03d' $(( usec_last / 1000000 )) $(( usec_last % 1000000 / 1000 )))
+  local capb=NA
   (( peak > 0 )) && pk=$peak
+  [[ -n ${cap_high:-} ]] && capb=$(( (cap_high + 2) * 1073741824 ))
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" >&6
     if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
@@ -1616,6 +1663,7 @@ if [[ $avail =~ ^[0-9]+$ ]] && (( avail < REFUSE_GIB )) && [[ ${HEAVY_BUILD_FORC
 fi
 
 # Memory caps scale with the estimate: MemoryHigh = 1.25 x estimate, 16G to 22G.
+# estimate() never returns more than EST_MEM_MAX_GIB (22), the top of this range.
 mem10=${est_mem/./}
 cap_high=$(( (10#$mem10 * 125 + 999) / 1000 ))
 (( cap_high < 16 )) && cap_high=16
