@@ -127,20 +127,47 @@ class Memory(unittest.TestCase):
         self.assertAlmostEqual(cic.swap_pct(mi), 70.0)
         self.assertEqual(cic.swap_pct("SwapTotal: 0 kB\nSwapFree: 0 kB\n"), 0.0)
 
-    def test_heavy_build_waits(self):
-        now = datetime.fromisoformat("2026-10-16T21:42:00+02:00").timestamp()
-        text = "\n".join(
-            [
-                '2026-10-16T21:41:47+0200 mode=live job=a decision=wait reason="memory: needs 9 GiB"',
-                '2026-10-16T21:41:48+0200 mode=live job=a decision=wait reason="memory: needs 9 GiB"',
-                '2026-10-16T21:41:50+0200 mode=live job=b decision=wait reason="interactive: app.slice"',
-                '2026-10-16T21:41:51+0200 mode=live job=c decision=wait reason="cores: needs 8"',
-                '2026-10-16T21:41:52+0200 mode=live job=d decision=start reason="fits"',
-                '2026-10-16T21:41:53+0200 mode=live job=e decision=wait reason="slice-cap: x"',
-                '2026-10-16T21:30:00+0200 mode=live job=f decision=wait reason="swap: x"',
-            ]
-        )
-        self.assertEqual(cic.hb_memory_waits(now, text), 2)
+    @staticmethod
+    def _line(t, job, decision, reason):
+        stamp = datetime.fromtimestamp(t).astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        return f'{stamp} mode=live job={job} decision={decision} reason="{reason}: x"'
+
+    def test_short_memory_waits_do_not_count(self):
+        now = 1_800_000_000.0
+        lines = [
+            self._line(now - 300, "a", "wait", "memory"),
+            self._line(now - 30, "a", "wait", "memory"),
+            self._line(now - 100, "b", "wait", "interactive"),
+        ]
+        self.assertEqual(cic.hb_memory_waits(now, "\n".join(lines)), 0)
+
+    def test_job_stuck_ten_minutes_counts(self):
+        now = 1_800_000_000.0
+        lines = [
+            self._line(now - 900, "a", "wait", "memory"),
+            self._line(now - 500, "a", "wait", "cores"),
+            self._line(now - 60, "a", "wait", "swap"),
+            self._line(now - 700, "b", "wait", "interactive"),
+            self._line(now - 20, "b", "wait", "memory"),
+        ]
+        self.assertEqual(cic.hb_memory_waits(now, "\n".join(lines)), 2)
+
+    def test_started_or_gone_quiet_does_not_count(self):
+        now = 1_800_000_000.0
+        lines = [
+            # Waited long, then started.
+            self._line(now - 900, "a", "wait", "memory"),
+            self._line(now - 200, "a", "wait", "memory"),
+            self._line(now - 100, "a", "start", "fits"),
+            # Waited long, but no memory wait line in the last 120 s.
+            self._line(now - 900, "b", "wait", "memory"),
+            self._line(now - 300, "b", "wait", "memory"),
+            self._line(now - 30, "b", "wait", "cores"),
+            # Long wait for a reason that is not memory.
+            self._line(now - 900, "c", "wait", "slice-cap"),
+            self._line(now - 10, "c", "wait", "slice-cap"),
+        ]
+        self.assertEqual(cic.hb_memory_waits(now, "\n".join(lines)), 0)
 
 
 class Decide(unittest.TestCase):
