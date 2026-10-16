@@ -5,8 +5,9 @@ Run by chrome-idle-close.timer once a minute. A profile (personal or work) is
 closed only when both hold:
   1. No window of that profile has had focus for IDLE_MIN minutes (15).
   2. Memory is tight: swap used is over SWAP_PCT (60%) of SwapTotal, or
-     heavy-build logged a build waiting for memory, swap or interactive memory
-     pressure in the last HB_WINDOW seconds (120).
+     one heavy-build job has waited for memory, swap or interactive memory
+     pressure for HB_MIN_WAIT seconds (600) and still waits (a wait line in
+     the last HB_WINDOW seconds, 120, and no start line since).
 
 Focus: a small KWin script (chrome-idle-focus.kwin.js, next to this file)
 writes a journal line each time the active window changes. Each run reads the
@@ -49,6 +50,8 @@ HOME = Path.home()
 IDLE_MIN = float(os.environ.get("CHROME_IDLE_MIN", "15"))
 SWAP_PCT = float(os.environ.get("CHROME_IDLE_SWAP_PCT", "60"))
 HB_WINDOW = float(os.environ.get("CHROME_IDLE_HB_WINDOW", "120"))
+HB_MIN_WAIT = float(os.environ.get("CHROME_IDLE_HB_MIN_WAIT", "600"))
+HB_LOOKBACK = HB_MIN_WAIT + 600
 CLOSE_WAIT = 60.0
 STATE_DIR = Path(
     os.environ.get("CHROME_IDLE_STATE_DIR", HOME / ".local/state/chrome-idle")
@@ -80,9 +83,7 @@ PROFILES = {
 }
 DEFAULT_DATA_DIR = str(HOME / ".config/google-chrome")
 
-HB_MEM_WAIT = re.compile(
-    r'^(\S+) mode=\S+ job=(\S+) decision=wait reason="(memory|swap|interactive):'
-)
+HB_LINE = re.compile(r'^(\S+) mode=\S+ job=(\S+) decision=(\w+) reason="([a-z-]+)')
 FOCUS_LINE = re.compile(r"chrome-idle-focus pid=(-?\d+) class=(\S*)")
 
 
@@ -214,29 +215,68 @@ def swap_pct(meminfo: str | None = None) -> float:
     return 100.0 * (total - vals.get("SwapFree", 0)) / total
 
 
+def read_hb_tail(now: float) -> str:
+    """The end of heavy-build's live.log, far enough back to cover the last
+    HB_LOOKBACK seconds (or the whole file)."""
+    try:
+        with HB_LOG.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            chunk = 512 * 1024
+            while True:
+                f.seek(max(0, size - chunk))
+                data = f.read()
+                first = HB_LINE.search(data.decode(errors="replace").split("\n", 1)[-1])
+                if size <= chunk or chunk >= 64 * 1024 * 1024:
+                    break
+                if first and now - parse_ts(first.group(1)) > HB_LOOKBACK:
+                    break
+                chunk *= 2
+    except OSError:
+        return ""
+    text = data.decode(errors="replace")
+    return text if size <= chunk else text.split("\n", 1)[-1]
+
+
+def parse_ts(stamp: str) -> float:
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except ValueError:
+        return 0.0
+
+
 def hb_memory_waits(now: float, text: str | None = None) -> int:
-    """Number of distinct heavy-build jobs that waited for memory, swap or
-    interactive memory pressure in the last HB_WINDOW seconds."""
+    """Number of heavy-build jobs stuck waiting for memory.
+
+    A job counts when its first wait line with reason memory, swap or
+    interactive is at least HB_MIN_WAIT seconds old, its latest such line is
+    within the last HB_WINDOW seconds, and it has no start line since that
+    first wait. Short waits happen all the time and do not count.
+    """
     if text is None:
-        try:
-            with HB_LOG.open("rb") as f:
-                f.seek(0, os.SEEK_END)
-                f.seek(max(0, f.tell() - 512 * 1024))
-                text = f.read().decode(errors="replace")
-        except OSError:
-            return 0
-    jobs = set()
+        text = read_hb_tail(now)
+    first: dict[str, float] = {}
+    latest: dict[str, float] = {}
+    started: set[str] = set()
     for line in text.splitlines():
-        m = HB_MEM_WAIT.match(line)
+        m = HB_LINE.match(line)
         if not m:
             continue
-        try:
-            ts = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S%z").timestamp()
-        except ValueError:
-            continue
-        if now - ts <= HB_WINDOW:
-            jobs.add(m.group(2))
-    return len(jobs)
+        ts = parse_ts(m.group(1))
+        job, decision, reason = m.group(2), m.group(3), m.group(4)
+        if decision == "start":
+            if job in first:
+                started.add(job)
+        elif decision == "wait" and reason in ("memory", "swap", "interactive"):
+            first.setdefault(job, ts)
+            latest[job] = ts
+    return sum(
+        1
+        for job, t0 in first.items()
+        if job not in started
+        and now - t0 >= HB_MIN_WAIT
+        and now - latest[job] <= HB_WINDOW
+    )
 
 
 # ---------------------------------------------------------------- KWin focus
@@ -281,7 +321,8 @@ def screen_locked_for() -> float:
             text=True,
             timeout=5,
         )
-        return float(r.stdout.strip() or 0)
+        # KDE returns milliseconds here, not the seconds the spec names.
+        return float(r.stdout.strip() or 0) / 1000
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return 0.0
 
@@ -453,7 +494,7 @@ def run(mode: str, status: bool) -> int:
         waits = hb_memory_waits(now)
         tight = sw > SWAP_PCT or waits > 0
         mem_note = (
-            f"swap={sw:.1f}% hb_mem_waits={waits} tight={'yes' if tight else 'no'}"
+            f"swap={sw:.1f}% hb_stuck_mem_jobs={waits} tight={'yes' if tight else 'no'}"
         )
         pids = main_pids()
         active = state.get("active") or {}
@@ -465,7 +506,7 @@ def run(mode: str, status: bool) -> int:
             )
             print(
                 f"memory: {mem_note} (swap limit {SWAP_PCT:.0f}%, "
-                f"heavy-build window {HB_WINDOW:.0f} s)"
+                f"heavy-build memory wait {HB_MIN_WAIT:.0f} s)"
             )
             print(
                 f"active window: pid={active.get('pid')} class={active.get('class')} "
