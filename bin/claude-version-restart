@@ -724,6 +724,20 @@ class Monitor:
                 drop_tab_intent()
                 return False, "process survived SIGKILL"
         if s.method == "new-tab":
+            # Never start a second process on the session. Something else (a
+            # person following Claude's "claude --resume" hint) may have
+            # resumed it already; two processes can corrupt the transcript.
+            for n in self.read_sessions():
+                if (
+                    n.sid == s.sid
+                    and n.cwd == s.cwd
+                    and n.pid != s.pid
+                    and self.sys.alive(n.pid)
+                ):
+                    return (
+                        False,
+                        f"session already running as pid {n.pid}, not respawned",
+                    )
             rc, pane = self.sys.respawn(entry_copy, s.pane.get("window_id"))
             if rc != 0 or not pane.strip().isdigit():
                 return False, f"respawn failed (rc={rc}): {pane[:120]}"
