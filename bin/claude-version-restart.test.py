@@ -330,6 +330,34 @@ class MonitorTests(unittest.TestCase):
         e.sys.atimes["/dev/pts/100"] = NOW - 45
         self.assertEqual(e.run()[100], "skip: input in its terminal 45s ago")
 
+    def test_bulk_tty_burst_is_ignored(self):
+        e = Env()
+        for i in range(8):
+            e.add(100 + i, f"s{i}")
+            e.sys.atimes[f"/dev/pts/{100 + i}"] = NOW - 45 + i * 0.1
+        res = e.run()
+        self.assertFalse(any("input in its terminal" in d for d in res.values()))
+        self.assertEqual(sum(1 for d in res.values() if d == "candidate"), 3)
+
+    def test_single_pane_tty_update_blocks(self):
+        e = Env()
+        for i in range(8):
+            e.add(100 + i, f"s{i}")
+        e.sys.atimes["/dev/pts/100"] = NOW - 45
+        self.assertEqual(e.run()[100], "skip: input in its terminal 45s ago")
+
+    def test_typing_outside_a_burst_window_blocks(self):
+        e = Env()
+        for i in range(8):
+            e.add(100 + i, f"s{i}")
+            e.sys.atimes[f"/dev/pts/{100 + i}"] = NOW - 45
+        e.sys.atimes["/dev/pts/100"] = NOW - 40  # 5 s after the burst
+        res = e.run()
+        self.assertEqual(res[100], "skip: input in its terminal 40s ago")
+        self.assertFalse(
+            any("input in its terminal" in res[100 + i] for i in range(1, 8))
+        )
+
     def test_version_equal_skip(self):
         e = Env()
         e.add(100, "s", version=INSTALLED)
