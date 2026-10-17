@@ -2,6 +2,11 @@
 """Restart idle Claude Code sessions that still run an old Claude version.
 
     claude-version-restart [--dry-run] [--recheck-delay SECONDS] [--verbose]
+    claude-version-restart --only SID [--live | --dry-run] [--verbose]
+
+--only SID looks at that one session (a session id or its start) and logs
+nothing about the others. --live acts on it whatever the mode file says; it
+needs --only, so the timer can never use it. Use it for a supervised test.
 
 A systemd user timer runs this every 5 minutes (claude-version-restart.timer).
 It looks at every live Claude process in ~/.claude/sessions/<pid>.json and
@@ -546,6 +551,9 @@ class Monitor:
         results: list[tuple[Session, str]] = []
         stale = 0
         for s in self.read_sessions():
+            only = getattr(self.args, "only", None)
+            if only and not s.sid.startswith(only):
+                continue
             try:
                 self.check(s, ctx)
                 first[s.pid] = s
@@ -563,7 +571,7 @@ class Monitor:
             return results
         self.sys.sleep(self.args.recheck_delay)
         ctx = self.context()
-        again = {s.pid: s for s in self.read_sessions()}
+        again = {s.pid: s for s in self.read_sessions() if s.pid in first}
         acted = 0
         for pid, s1 in first.items():
             s = again.get(pid)
@@ -728,15 +736,28 @@ def main(argv=None) -> int:
         help="never restart, whatever the mode file says",
     )
     ap.add_argument("--recheck-delay", type=float, default=30.0)
+    ap.add_argument("--only", metavar="SID", help="look only at this session id")
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="act on the --only session, ignoring the mode file",
+    )
     ap.add_argument("--verbose", "-v", action="store_true", help="print decisions too")
     args = ap.parse_args(argv)
+    if args.live and (not args.only or args.dry_run):
+        ap.error("--live needs --only SID and cannot go with --dry-run")
+    if args.only is not None and len(args.only) < 8:
+        ap.error("--only needs at least 8 characters of the session id")
 
     state = (
         Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "claude-restart"
     )
-    mode = (
-        "dry-run" if args.dry_run else read_mode(HOME / ".config/claude-restart/mode")
-    )
+    if args.dry_run:
+        mode = "dry-run"
+    elif args.live:
+        mode = "live"
+    else:
+        mode = read_mode(HOME / ".config/claude-restart/mode")
     state.mkdir(parents=True, exist_ok=True)
     run_lock = os.open(state / "run.lock", os.O_CREAT | os.O_RDWR, 0o644)
     try:
