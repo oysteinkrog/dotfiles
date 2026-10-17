@@ -358,6 +358,7 @@ classify() {
     if wine_tests_prebuilt "${words[@]}"; then echo wine-run-tests-prebuilt
     else echo wine-run-tests
     fi
+  elif [[ ${c,,} =~ (^|[^[:alnum:]_-])inspectcode(\.sh|\.exe)?[[:space:]] ]]; then echo jb-inspectcode
   elif [[ $c =~ ${rc}build[[:space:]].*--release || $c == *localbuild* ]]; then echo cargo-release
   elif [[ $c =~ ${rc}clippy ]]; then echo cargo-clippy
   elif [[ $c =~ ${rc}check ]]; then echo cargo-check
@@ -378,7 +379,11 @@ classify() {
 # use the default. That 17.4 GB run was a test leak, fixed on 2026-10-16
 # (a normal run peaks at 4.6 GB at p90 over 443 runs), so the wine-run-tests
 # floor went from 10 to 6 GiB. A key that really used more still gets its own
-# peak. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
+# peak. jb-inspectcode (JetBrains inspectcode, also run as `jb inspectcode`)
+# peaked at 17.4 GB twice on 2026-10-17 on MotionCatalyst.sln, once oom-killed,
+# while it was estimated at 3.6 GB as "other". Its floor is 18 GiB; the scope
+# gets MemoryHigh 22G and MemoryMax 24G. Cores and wall time are guesses until
+# it has history. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
 # 33 s); its wall time is a guess until it has history.
 class_table() {
   case $1 in
@@ -391,6 +396,7 @@ class_table() {
     dotnet-build)   echo "5 8.0 17 5" ;;
     dotnet-test)    echo "5.2 6.9 45 0" ;;
     cargo-check)    echo "3.9 1.7 26 0" ;;
+    jb-inspectcode) echo "18 2.0 600 18" ;;
     *)              echo "8 8 600 0" ;;
   esac
 }
