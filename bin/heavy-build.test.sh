@@ -182,6 +182,11 @@ check "estimate: the prebuilt floor (3) wins over a lower p90 (got '$out')" '[[ 
 row wine-run-tests bigkey 30 0 ok
 out=$(est bigkey wine-run-tests)
 check "estimate: never above the 22 GiB scope cap (got '$out')" '[[ $out == "22.0 history,mem=cap" ]]'
+out=$(est newkey jb-inspectcode)
+check "estimate: a new jb-inspectcode key gets 18 GiB (got '$out')" '[[ $out == "18.0 class,mem=class" ]]'
+for i in $(seq 1 6); do row jb-inspectcode "j$i" 4 0 ok; done
+out=$(est newkey jb-inspectcode)
+check "estimate: the jb-inspectcode floor (18) wins over a lower p90 (got '$out')" '[[ $out == "18.0 class-history,mem=floor" ]]'
 rm -rf -- "$E"
 
 # 7. Classes for Wine test runs. run-tests.sh builds nothing when every
@@ -202,7 +207,12 @@ for c in \
   "wine-run-tests-prebuilt|tools/wine/run-tests.sh a/b/Foo.Tests.dll" \
   "wine-run-tests-prebuilt|./tools/wine/run-tests.sh --filter Name~Bar --include-gpu a/Foo.dll b/Bar.dll" \
   "wine-run-tests-prebuilt|./tools/wine/run-tests.sh --filter=Name~Bar a/Foo.dll" \
-  "wine-run-tests-prebuilt|bash -c tools/wine/run-tests.sh a/Foo.dll && echo done" ; do
+  "wine-run-tests-prebuilt|bash -c tools/wine/run-tests.sh a/Foo.dll && echo done" \
+  "jb-inspectcode|jb inspectcode src/motioncatalyst/MotionCatalyst.sln" \
+  "jb-inspectcode|inspectcode Foo.sln --output=x.xml" \
+  "jb-inspectcode|dotnet jb inspectcode Foo.sln" \
+  "jb-inspectcode|/opt/jb/inspectcode.sh Foo.sln" \
+  "dotnet-build|dotnet build Foo.sln" ; do
   want=${c%%|*} cmd=${c#*|}
   # shellcheck disable=SC2086
   out=$(cls $cmd)
