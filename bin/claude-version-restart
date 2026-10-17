@@ -35,7 +35,9 @@ claude-persist-resume.py, which re-arms /goal, /loop and cron jobs:
   set): this writes an intent file, and claude-tab-run resumes the session
   when Claude exits;
 - otherwise in a new tab (claude-persist.sh respawn), moved to the old tab's
-  place. The old pane is left with a fish shell.
+  place. Once the new session is verified, the old pane is closed with
+  SIGHUP to its shell, but only if that shell is idle (no child processes)
+  and the pane is still open. Otherwise it is kept and logged.
 
 It then waits 60 seconds for a sessions file with the same session id, cwd
 and the new version. A failure blocks that session for 24 hours.
@@ -638,7 +640,7 @@ class Monitor:
         where = (
             "in the same pane (claude-tab-run)"
             if s.method == "tab-run"
-            else f"in a new tab at index {s.tab_index} (old pane {s.pane.get('pane_id')} keeps a shell)"
+            else f"in a new tab at index {s.tab_index} (old pane {s.pane.get('pane_id')} closes when idle)"
         )
         rearm = f", re-arm {s.rearm}" if s.rearm else ""
         return f"{s.version} -> {self.installed} {where}{rearm}"
@@ -684,6 +686,11 @@ class Monitor:
             "entry_file": str(entry_copy),
             "created": now,
         }
+        # The process at the root of the old pane (bash -c "...; exec fish -l",
+        # or the fish the user started Claude from). Recorded before Claude is
+        # stopped, so the pane can be closed once the new tab works.
+        old_shell = self.pane_root(s.pid, s.pane.get("pane_id"))
+        intent["old_shell_pid"] = old_shell
         intents = self.state / "intents"
         self.write_json(intents / f"{s.key}.json", intent)
         tab_intent = intents / f"tabrun-{s.tab_run_pid}.json"
@@ -746,10 +753,53 @@ class Monitor:
                     and n.cwd == s.cwd
                     and version_key(n.version) >= version_key(ctx["installed"])
                 ):
+                    if s.method == "new-tab":
+                        self.close_old_pane(s, old_shell)
                     return True, f"resumed as pid {n.pid} on {n.version}"
             self.sys.sleep(2)
         drop_tab_intent()
         return False, f"no new session on {ctx['installed']} within {VERIFY_TIMEOUT}s"
+
+    def pane_root(self, pid: int, pane_id) -> int:
+        """The highest ancestor of pid that still belongs to the pane (its
+        WEZTERM_PANE is pane_id), or 0."""
+        root, p, n = 0, pid, 0
+        while n < 20:
+            pp = self.sys.parent(p)
+            if pp <= 1 or self.sys.environ(pp).get("WEZTERM_PANE") != str(pane_id):
+                break
+            root, p, n = pp, pp, n + 1
+        return root
+
+    def close_old_pane(self, s: Session, shell: int) -> None:
+        """Close the old pane after a new-tab restart: SIGHUP its shell, only
+        when it is an idle shell in that pane and the pane is still open."""
+        pane_id = s.pane.get("pane_id")
+        argv = self.sys.cmdline(shell) if shell else []
+        name = os.path.basename(argv[0]).lstrip("-") if argv else ""
+        if not shell or not self.sys.alive(shell):
+            why = "no shell found"
+        elif name not in ("fish", "bash", "zsh", "sh"):
+            why = f"pane root is {name or '?'}, not a shell"
+        elif self.sys.environ(shell).get("WEZTERM_PANE") != str(pane_id):
+            why = "shell is not in that pane"
+        elif self.sys.children(shell):
+            why = "busy"
+        elif not any(
+            str(p.get("pane_id")) == str(pane_id) for p in self.sys.mux_panes() or []
+        ):
+            why = "pane is gone from cli list"
+        else:
+            try:
+                self.sys.kill(shell, signal.SIGHUP)
+            except OSError as e:
+                self.log(s, "old-pane-kept", f"SIGHUP to {shell} failed: {e}")
+                return
+            self.log(
+                s, "old-pane-closed", f"SIGHUP to {name} {shell} in pane {pane_id}"
+            )
+            return
+        self.log(s, "old-pane-kept", f"{why} (pane {pane_id}, shell {shell})")
 
 
 def read_mode(path: Path) -> str:

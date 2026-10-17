@@ -148,7 +148,7 @@ class FakeSystem:
         if sig == signal.SIGTERM and pid in self.ignore_term:
             return
         self.procs.pop(pid, None)
-        if self.env.respawn_after_kill:
+        if sig != signal.SIGHUP and self.env.respawn_after_kill:
             self.env.respawn_after_kill(pid)
 
     def respawn(self, entry_file, window_id):
@@ -558,6 +558,76 @@ class LiveRestartTests(unittest.TestCase):
         self.assertEqual(res[100], "restarted")
         self.assertEqual(len(e.sys.respawned), 1)
         self.assertIn(("move-tab", "--tab-id", "99", "--index", "1"), e.sys.ft_calls)
+
+    def pane_with_shell(self, e, pid, shell_children=()):
+        """Put session pid under bash -c (exec fish -l) and aiolos-rc in its pane."""
+        pane = {"WEZTERM_PANE": str(pid)}
+        e.sys.procs[pid]["parent"] = 80
+        e.sys.procs[80] = {"parent": 79, "argv": ["bash", "aiolos-rc"], "environ": pane}
+        e.sys.procs[79] = {
+            "parent": 70,
+            "argv": ["fish", "-l"],
+            "environ": pane,
+            "children": list(shell_children),
+        }
+        e.sys.procs[70] = {"parent": 1, "argv": ["frankenterm-mux-server"]}
+
+        return 79
+
+    def test_new_tab_closes_idle_old_pane(self):
+        e = Env()
+        e.add(100, "s")
+        shell = self.pane_with_shell(e, 100)
+        self.new_session_after_kill(e)
+        self.assertEqual(e.run(mode="live")[100], "restarted")
+        self.assertEqual(e.sys.killed, [(100, signal.SIGTERM), (shell, signal.SIGHUP)])
+        self.assertIn("old-pane-closed pid=100", e.log())
+        intent = next((e.state / "intents").glob("s@*.json"))
+        self.assertEqual(json.loads(intent.read_text())["old_shell_pid"], shell)
+
+    def test_new_tab_keeps_busy_old_pane(self):
+        e = Env()
+        e.add(100, "s")
+        shell = self.pane_with_shell(e, 100, shell_children=[555])
+        self.new_session_after_kill(e)
+        self.assertEqual(e.run(mode="live")[100], "restarted")
+        self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
+        self.assertIn("old-pane-kept pid=100", e.log())
+        self.assertIn('reason="busy (pane 100', e.log())
+
+    def test_new_tab_keeps_pane_gone_from_list(self):
+        e = Env()
+        e.add(100, "s")
+        shell = self.pane_with_shell(e, 100)
+        self.new_session_after_kill(e)
+        orig = e.sys.respawn
+
+        def respawn(entry_file, window_id):
+            e.sys.panes = [p for p in e.sys.panes if p["pane_id"] != 100]
+            return orig(entry_file, window_id)
+
+        e.sys.respawn = respawn
+        self.assertEqual(e.run(mode="live")[100], "restarted")
+        self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
+        self.assertIn("pane is gone from cli list", e.log())
+
+    def test_failed_restart_keeps_old_pane(self):
+        e = Env()
+        e.add(100, "s")
+        shell = self.pane_with_shell(e, 100)
+        res = e.run(mode="live")  # nothing comes back
+        self.assertTrue(res[100].startswith("failed"))
+        self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
+        self.assertNotIn("old-pane", e.log())
+
+    def test_tab_run_never_closes_a_pane(self):
+        e = Env()
+        e.add(100, "s", environ={"WEZTERM_PANE": "100", "CLAUDE_TAB_RUN": "79"})
+        shell = self.pane_with_shell(e, 100)
+        self.new_session_after_kill(e)
+        self.assertEqual(e.run(mode="live")[100], "restarted")
+        self.assertEqual(e.sys.killed, [(100, signal.SIGTERM)])
+        self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
 
     def test_sigkill_after_timeout(self):
         e = Env()
