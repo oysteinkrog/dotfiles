@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# claude-tab-run: run a Claude session's resume command in a terminal tab, and
+# run it again in the same pane when claude-version-restart restarts it.
+#
+#   claude-tab-run CMD
+#
+# CMD is a bash command string, the one `claude-persist.sh resume-cmd` prints.
+# claude-persist.sh starts every resumed tab through this script, followed by
+# `exec fish -l`, so the tab keeps a shell once Claude exits.
+#
+# It exports CLAUDE_TAB_RUN=<its own pid>. Claude inherits it, and
+# claude-version-restart reads it to know the session can be restarted in
+# place. Before it stops an idle session on an old version, the monitor writes
+# ~/.local/state/claude-restart/intents/tabrun-<pid>.json with a copy of the
+# session's claude-persist entry. When CMD exits and that file exists and is at
+# most 10 minutes old, this script takes it (renames it to *.used), builds a
+# fresh resume command from the entry and runs that in the same pane.
+# Otherwise it exits with CMD's exit code, and the tab falls through to fish.
+#
+# Log: ~/.local/state/claude-restart/tab-run.log
+
+set -u
+
+[ $# -eq 1 ] || { sed -n '2,19p' "$0"; exit 2; }
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-restart"
+PERSIST="${CLAUDE_PERSIST_SH:-$HOME/.claude/hooks/claude-persist.sh}"
+MAX_AGE=600
+
+export CLAUDE_TAB_RUN=$$
+
+log() { mkdir -p "$STATE" && echo "$(date -Is) tab-run $$: $*" >> "$STATE/tab-run.log"; }
+
+cmd=$1
+while :; do
+  bash -c "$cmd"
+  rc=$?
+  intent="$STATE/intents/tabrun-$$.json"
+  [ -f "$intent" ] || exit "$rc"
+  age=$(( $(date +%s) - $(stat -c %Y "$intent") ))
+  used="$intent.used.$(date +%s)"
+  mv "$intent" "$used" || exit "$rc"
+  if [ "$age" -gt "$MAX_AGE" ]; then
+    log "intent is ${age}s old, not restarting (exit code $rc)"
+    exit "$rc"
+  fi
+  entry=$(jq -r '.entry_file // empty' "$used" 2>/dev/null)
+  if [ -z "$entry" ] || [ ! -f "$entry" ]; then
+    log "intent has no entry file, not restarting"
+    exit "$rc"
+  fi
+  if ! next=$(bash "$PERSIST" resume-cmd "$entry") || [ -z "$next" ]; then
+    log "could not build the resume command from $entry"
+    exit "$rc"
+  fi
+  log "restarting $(jq -r '.session_id // "?"' "$used") in place: $next"
+  echo "claude-tab-run: restarting this session on the new Claude Code version"
+  cmd=$next
+done

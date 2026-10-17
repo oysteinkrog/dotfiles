@@ -14,6 +14,13 @@
 #                                     mux server with `frankenterm-gui cli`
 #   claude-persist.sh list            show recorded sessions
 #   claude-persist.sh forget KEY      drop one entry (file name without .json)
+#   claude-persist.sh resume-cmd FILE print the bash command that resumes the
+#                                     session of entry FILE (no claude-tab-run)
+#   claude-persist.sh respawn FILE [WINDOW]
+#                                     resume entry FILE in a new tab, print its pane
+#
+# Resumed tabs run under claude-tab-run (~/bin), so claude-version-restart can
+# restart a session in the same pane after a Claude Code update.
 #
 # State: ~/.local/state/claude-persist/sessions/<session_id>@<folder>.json,
 # and tab-order (the last saved tab order of the mux server).
@@ -34,6 +41,9 @@ FT_CLI="$HOME/.local/bin/frankenterm-gui"
 MUX_UNIT=frankenterm-mux.service
 TAB_ORDER="$STATE_DIR/tab-order"
 AIOLOS_RC="$HOME/.config/aiolos-rc/aiolos-rc"
+# Runs a tab's resume command, and runs it again in the same pane when
+# claude-version-restart restarts the session (see that script).
+TAB_RUN="${CLAUDE_TAB_RUN_BIN:-$HOME/bin/claude-tab-run}"
 # full path: at boot the mux server may not have ~/.local/bin on PATH
 CLAUDE_BIN="${CLAUDE_PERSIST_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 
@@ -506,8 +516,20 @@ tab_title() {
   printf '%s' "${t:-$(basename "$cwd")}"
 }
 
-# Print the bash command that resumes the session of entry file $1.
+# Print the bash command that resumes the session of entry file $1, run through
+# claude-tab-run when it is installed.
 resume_cmd() {
+  local inner
+  inner=$(resume_cmd_inner "$1") || return 1
+  if [ -x "$TAB_RUN" ]; then
+    printf '%q %q\n' "$TAB_RUN" "$inner"
+  else
+    printf '%s\n' "$inner"
+  fi
+}
+
+# Print the bash command that resumes the session of entry file $1.
+resume_cmd_inner() {
   local f=$1 a prompt cmd
   cmd="cd $(printf '%q' "$(jq -r .cwd "$f")") &&"
   if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
@@ -649,6 +671,9 @@ case "${1:-}" in
   restore)    restore ;;
   list)       list ;;
   forget)     rm -v "$SESS_DIR/${2:?entry key}.json" ;;
-  *) sed -n '2,21p' "$0"; exit 1 ;;
+  resume-cmd) resume_cmd_inner "${2:?entry file}" ;;
+  respawn)    f=${2:?entry file}; [ -f "$f" ] || { echo "no entry file $f" >&2; exit 1; }
+              spawn_tab "${3:-}" "$(jq -r .cwd "$f")" "$(resume_cmd "$f")" || exit 1 ;;
+  *) sed -n '2,33p' "$0"; exit 1 ;;
 esac
 exit 0
