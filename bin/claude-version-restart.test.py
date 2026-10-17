@@ -463,6 +463,22 @@ class MonitorTests(unittest.TestCase):
             2,
         )
 
+    def test_only_looks_at_one_session(self):
+        e = Env()
+        e.add(100, "aaaaaaaa-1")
+        e.add(101, "bbbbbbbb-2")
+        mon = e.monitor()
+        mon.args.only = "bbbbbbbb"
+        res = {s.pid: d for s, d in mon.run()}
+        self.assertEqual(res, {101: "candidate"})
+        self.assertNotIn("pid=100", e.log())
+
+    def test_live_needs_only(self):
+        with self.assertRaises(SystemExit):
+            cvr.main(["--live"])
+        with self.assertRaises(SystemExit):
+            cvr.main(["--live", "--only", "abc"])
+
     def test_backoff_after_failure(self):
         e = Env()
         e.add(100, "s")
