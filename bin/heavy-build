@@ -325,10 +325,39 @@ setting() {
 
 # ---------------------------------------------------------------- estimates
 
+# wine_tests_prebuilt WORD... -> true when run-tests.sh is given only test
+# projects ending in .dll. run-tests.sh tests such an assembly as it is and
+# builds nothing, which needs about half the memory of a run that builds
+# (2.2 GB against 4.1 GB, measured 2026-10-16). One project name without .dll
+# means a build, and so does no project at all (every default project).
+wine_tests_prebuilt() {
+  local w seen= n=0 skip=
+  for w in "$@"; do
+    if [[ -z $seen ]]; then
+      [[ $w == *run-tests.sh ]] && seen=1
+      continue
+    fi
+    if [[ -n $skip ]]; then skip=; continue; fi
+    case $w in
+      ';'|'&&'|'||'|'|'|'&') break ;;
+      --filter) skip=1 ;;
+      -*) ;;
+      *.dll) n=$(( n + 1 )) ;;
+      *) return 1 ;;
+    esac
+  done
+  (( n > 0 ))
+}
+
 classify() {
   local c=" $* "
   local rc='(^|[^[:alnum:]_-])cargo[[:space:]]+(\+[^[:space:]]+[[:space:]]+)?'
-  if [[ $c == *run-tests.sh* ]]; then echo wine-run-tests
+  if [[ $c == *run-tests.sh* ]]; then
+    local -a words
+    read -ra words <<< "$*"
+    if wine_tests_prebuilt "${words[@]}"; then echo wine-run-tests-prebuilt
+    else echo wine-run-tests
+    fi
   elif [[ $c =~ ${rc}build[[:space:]].*--release || $c == *localbuild* ]]; then echo cargo-release
   elif [[ $c =~ ${rc}clippy ]]; then echo cargo-clippy
   elif [[ $c =~ ${rc}check ]]; then echo cargo-check
@@ -346,12 +375,17 @@ classify() {
 # lowest memory estimate the class can get, set on 2026-10-16 after a
 # wine-run-tests run peaked at 17.4 GB on a 9.9 GB estimate and was OOM-killed.
 # mem_gib was raised to the floor where it was lower. Classes without a row
-# use the default.
+# use the default. That 17.4 GB run was a test leak, fixed on 2026-10-16
+# (a normal run peaks at 4.6 GB at p90 over 443 runs), so the wine-run-tests
+# floor went from 10 to 6 GiB. A key that really used more still gets its own
+# peak. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
+# 33 s); its wall time is a guess until it has history.
 class_table() {
   case $1 in
     cargo-release)  echo "16.3 3.4 4500 0" ;;
     wine-script)    echo "7.4 5.6 537 0" ;;
-    wine-run-tests) echo "10 5.9 114 10" ;;
+    wine-run-tests) echo "6 5.9 114 6" ;;
+    wine-run-tests-prebuilt) echo "3 5.9 33 3" ;;
     cargo-test)     echo "13.3 3.4 96 6" ;;
     cargo-clippy)   echo "7.6 2.6 42 6" ;;
     dotnet-build)   echo "5 8.0 17 5" ;;

@@ -166,10 +166,48 @@ check "estimate: an OOM run counts as at least its recorded cap (got '$out')" '[
 : > "$E/hist"
 for i in $(seq 1 6); do row wine-run-tests "w$i" 2 0 ok; done
 out=$(est newkey wine-run-tests)
-check "estimate: the class floor wins over a lower p90 (got '$out')" '[[ $out == "10.0 class-history,mem=floor" ]]'
+check "estimate: the class floor (6) wins over a lower p90 (got '$out')" '[[ $out == "6.0 class-history,mem=floor" ]]'
+for i in $(seq 7 20); do row wine-run-tests "w$i" 2 0 ok; done
+row wine-run-tests leakkey 17 0 ok
+out=$(est leakkey wine-run-tests)
+check "estimate: a key that used 17 GiB keeps its own peak over the floor (got '$out')" '[[ $out == "17.0 history,mem=key" ]]'
+: > "$E/hist"
+out=$(est newkey wine-run-tests)
+check "estimate: a new wine-run-tests key with no class history gets 6 GiB (got '$out')" '[[ $out == "6.0 class,mem=class" ]]'
+out=$(est newkey wine-run-tests-prebuilt)
+check "estimate: a new wine-run-tests-prebuilt key gets 3 GiB (got '$out')" '[[ $out == "3.0 class,mem=class" ]]'
+for i in $(seq 1 6); do row wine-run-tests-prebuilt "p$i" 1 0 ok; done
+out=$(est newkey wine-run-tests-prebuilt)
+check "estimate: the prebuilt floor (3) wins over a lower p90 (got '$out')" '[[ $out == "3.0 class-history,mem=floor" ]]'
 row wine-run-tests bigkey 30 0 ok
 out=$(est bigkey wine-run-tests)
 check "estimate: never above the 22 GiB scope cap (got '$out')" '[[ $out == "22.0 history,mem=cap" ]]'
 rm -rf -- "$E"
+
+# 7. Classes for Wine test runs. run-tests.sh builds nothing when every
+# project it is given ends in .dll.
+cls() {
+  (
+    eval "$(sed -n '/^wine_tests_prebuilt()/,/^}/p;/^classify()/,/^}/p' "$HB")"
+    classify "$@"
+  )
+}
+T=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX"); : > "$T/out"
+for c in \
+  "wine-run-tests|tools/wine/run-tests.sh" \
+  "wine-run-tests|tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Windows" \
+  "wine-run-tests|tools/wine/run-tests.sh --filter Foo SwingCatalyst.Test.Unit.Windows" \
+  "wine-run-tests|tools/wine/run-tests.sh a/Foo.Tests.dll SwingCatalyst.Test.Unit.Windows" \
+  "wine-run-tests|./tools/wine/run-tests.sh --filter x.dll" \
+  "wine-run-tests-prebuilt|tools/wine/run-tests.sh a/b/Foo.Tests.dll" \
+  "wine-run-tests-prebuilt|./tools/wine/run-tests.sh --filter Name~Bar --include-gpu a/Foo.dll b/Bar.dll" \
+  "wine-run-tests-prebuilt|./tools/wine/run-tests.sh --filter=Name~Bar a/Foo.dll" \
+  "wine-run-tests-prebuilt|bash -c tools/wine/run-tests.sh a/Foo.dll && echo done" ; do
+  want=${c%%|*} cmd=${c#*|}
+  # shellcheck disable=SC2086
+  out=$(cls $cmd)
+  check "classify: '$cmd' is $want (got '$out')" '[[ $out == "$want" ]]'
+done
+rm -rf -- "$T"
 
 exit "$fail"
