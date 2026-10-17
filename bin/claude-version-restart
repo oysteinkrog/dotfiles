@@ -34,7 +34,11 @@ claude-persist-resume.py, which re-arms /goal, /loop and cron jobs:
 - in the same pane, when the tab runs under claude-tab-run (CLAUDE_TAB_RUN is
   set): this writes an intent file, and claude-tab-run resumes the session
   when Claude exits;
-- otherwise in a new tab (claude-persist.sh respawn), moved to the old tab's
+- otherwise only with --allow-new-tab (the timer never passes it; such
+  sessions are skipped as needs-new-tab, because the FrankenTerm GUI keeps
+  its own tab order in ~/.local/share/frankenterm/window-state.json and
+  `cli move-tab` changes only the mux's order): in a new tab
+  (claude-persist.sh respawn), moved to the old tab's
   place. Once the new session is verified, the old pane is closed with
   SIGHUP to its shell, but only if that shell is idle (no child processes)
   and the pane is still open. Otherwise it is kept and logged.
@@ -508,6 +512,11 @@ class Monitor:
             s.method, s.tab_run_pid = "tab-run", int(tr)
         else:
             s.method = "new-tab"
+            if not getattr(self.args, "allow_new_tab", False):
+                raise Skip(
+                    "needs-new-tab: not under claude-tab-run; a new tab would"
+                    " change the tab order the FrankenTerm GUI shows"
+                )
 
     # -------------------------------------------------------------- state
 
@@ -837,6 +846,12 @@ def main(argv=None) -> int:
         "--live",
         action="store_true",
         help="act on the --only session, ignoring the mode file",
+    )
+    ap.add_argument(
+        "--allow-new-tab",
+        action="store_true",
+        help="also restart sessions not under claude-tab-run, in a new tab"
+        " (changes the GUI tab order; manual use only)",
     )
     ap.add_argument("--verbose", "-v", action="store_true", help="print decisions too")
     args = ap.parse_args(argv)
