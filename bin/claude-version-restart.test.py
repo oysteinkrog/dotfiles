@@ -91,6 +91,7 @@ class FakeSystem:
         self.ft_calls = []
         self.on_sleep = None
         self.my_ancestors = set()
+        self.pending_respawn = 0
 
     def now(self):
         return self.t
@@ -147,12 +148,22 @@ class FakeSystem:
         self.killed.append((pid, sig))
         if sig == signal.SIGTERM and pid in self.ignore_term:
             return
-        self.procs.pop(pid, None)
-        if sig != signal.SIGHUP and self.env.respawn_after_kill:
+        proc = self.procs.pop(pid, None) or {}
+        if sig == signal.SIGHUP or not self.env.respawn_after_kill:
+            return
+        # The new session appears when claude-tab-run resumes it in place, or
+        # when respawn() opens the new tab, unless dup_on_kill says something
+        # else resumed it first.
+        if "CLAUDE_TAB_RUN" in proc.get("environ", {}) or self.env.dup_on_kill:
             self.env.respawn_after_kill(pid)
+        else:
+            self.pending_respawn = pid
 
     def respawn(self, entry_file, window_id):
         self.respawned.append((str(entry_file), window_id))
+        if self.pending_respawn:
+            self.env.respawn_after_kill(self.pending_respawn)
+            self.pending_respawn = 0
         self.panes.append(
             {"pane_id": 99, "tab_id": 99, "window_id": window_id, "tty_name": "x"}
         )
@@ -173,6 +184,7 @@ class Env:
         self.cwd.mkdir()
         self.sys = FakeSystem(self)
         self.respawn_after_kill = None
+        self.dup_on_kill = False
         self.next_tab = 0
 
     def add(
@@ -611,6 +623,19 @@ class LiveRestartTests(unittest.TestCase):
         self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
         self.assertIn("pane is gone from cli list", e.log())
 
+    def test_no_respawn_when_session_already_running(self):
+        e = Env()
+        e.add(100, "s")
+        shell = self.pane_with_shell(e, 100)
+        self.new_session_after_kill(e)
+        e.dup_on_kill = True  # a second copy appears before the respawn
+        res = e.run(mode="live")
+        self.assertTrue(
+            res[100].startswith("failed: session already running as pid 1100")
+        )
+        self.assertEqual(e.sys.respawned, [])
+        self.assertNotIn((shell, signal.SIGHUP), e.sys.killed)
+
     def test_failed_restart_keeps_old_pane(self):
         e = Env()
         e.add(100, "s")
@@ -809,6 +834,41 @@ class TabRunTests(unittest.TestCase):
         self.assertEqual(p.stdout.splitlines()[0], "first-run")
         self.assertIn("second-run", p.stdout)
         self.assertEqual(p.returncode, 4)  # the second run's exit code, no third run
+
+    def test_no_restart_when_session_runs_elsewhere(self):
+        d = Path(tempfile.mkdtemp(dir=_tmp))
+        (d / "state/claude-restart/intents").mkdir(parents=True)
+        (d / "sessions").mkdir()
+        (d / "sessions" / f"{os.getpid()}.json").write_text(
+            json.dumps({"sessionId": "s1"})
+        )
+        (d / "entry.json").write_text("{}")
+        (d / "persist.sh").write_text(
+            '[ "$1" = resume-cmd ] && echo "echo second-run; exit 4"\n'
+        )
+        (d / "first.sh").write_text(
+            'printf \'{"session_id":"s1","entry_file":"%s"}\' "$D/entry.json"'
+            ' > "$D/state/claude-restart/intents/tabrun-$CLAUDE_TAB_RUN.json"\n'
+            "exit 7\n"
+        )
+        env = dict(
+            os.environ,
+            D=str(d),
+            XDG_STATE_HOME=str(d / "state"),
+            CLAUDE_PERSIST_SH=str(d / "persist.sh"),
+            CLAUDE_SESSIONS_DIR=str(d / "sessions"),
+        )
+        p = subprocess.run(
+            [str(BIN / "claude-tab-run"), f"bash {d}/first.sh"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotIn("second-run", p.stdout)
+        self.assertEqual(p.returncode, 7)
+        log = (d / "state/claude-restart/tab-run.log").read_text()
+        self.assertIn(f"s1 is already running as pid {os.getpid()}", log)
 
     def test_no_intent_passes_exit_code(self):
         d = Path(tempfile.mkdtemp(dir=_tmp))

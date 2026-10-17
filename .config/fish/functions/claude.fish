@@ -67,6 +67,29 @@ function claude --description 'Claude Code (native install + WSL1 p_align patch 
             update upgrade
         # Other subcommands take no session flags; pass them through untouched.
     else
+        # Refuse to resume a session that is already open in a live process:
+        # two processes on one session can corrupt its transcript. On
+        # 2026-10-17 the "claude --resume <id>" hint in a pane left behind by a
+        # restart was typed there and started a second copy.
+        set -l rsid
+        set -l n (count $argv)
+        for i in (seq $n)
+            if contains -- $argv[$i] --resume -r; and test $i -lt $n
+                set rsid $argv[(math $i + 1)]
+            else if string match -q -- '--resume=*' $argv[$i]
+                set rsid (string replace -- '--resume=' '' $argv[$i])
+            end
+        end
+        set -l uuid '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if string match -qr -- $uuid "$rsid"; and not set -q CLAUDE_ALLOW_DUP
+            and test -x "$HOME/bin/claude-session-running"
+            set -l live ("$HOME/bin/claude-session-running" $rsid)
+            if test -n "$live"
+                echo "claude: session $rsid is already running as pid $live." >&2
+                echo "Two processes on one session can corrupt its transcript. Use that tab, or set CLAUDE_ALLOW_DUP=1 to start it anyway." >&2
+                return 1
+            end
+        end
         set cmd --dangerously-skip-permissions $argv
     end
 

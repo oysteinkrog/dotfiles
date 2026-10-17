@@ -15,13 +15,15 @@
 # session's claude-persist entry. When CMD exits and that file exists and is at
 # most 10 minutes old, this script takes it (renames it to *.used), builds a
 # fresh resume command from the entry and runs that in the same pane.
-# Otherwise it exits with CMD's exit code, and the tab falls through to fish.
+# It does not when the session is already running in another process
+# (claude-session-running). Otherwise it exits with CMD's exit code, and the
+# tab falls through to fish.
 #
 # Log: ~/.local/state/claude-restart/tab-run.log
 
 set -u
 
-[ $# -eq 1 ] || { sed -n '2,19p' "$0"; exit 2; }
+[ $# -eq 1 ] || { sed -n '2,21p' "$0"; exit 2; }
 
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-restart"
 PERSIST="${CLAUDE_PERSIST_SH:-$HOME/.claude/hooks/claude-persist.sh}"
@@ -42,6 +44,12 @@ while :; do
   mv "$intent" "$used" || exit "$rc"
   if [ "$age" -gt "$MAX_AGE" ]; then
     log "intent is ${age}s old, not restarting (exit code $rc)"
+    exit "$rc"
+  fi
+  sid=$(jq -r '.session_id // empty' "$used" 2>/dev/null)
+  # Never start a second process on a session that is open somewhere else.
+  if [ -n "$sid" ] && other=$("$(dirname "$0")/claude-session-running" "$sid"); then
+    log "$sid is already running as pid $other, not restarting"
     exit "$rc"
   fi
   entry=$(jq -r '.entry_file // empty' "$used" 2>/dev/null)

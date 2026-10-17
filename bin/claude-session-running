@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# claude-session-running: is a Claude session already open in a live process?
+#
+#   claude-session-running SESSION_ID [IGNORE_PID]
+#
+# Prints the pid of a live Claude process on SESSION_ID and exits 0, or exits 1
+# when there is none. IGNORE_PID is left out of the search (a caller's own old
+# process). A sessions file from before this boot does not count: its pid may
+# belong to another process now. Background (kind bg) sessions count.
+#
+# Two processes on one session write to the same transcript and can corrupt it.
+# The fish `claude` function, claude-tab-run and claude-version-restart use this
+# to refuse a second resume. On 2026-10-17 a leftover pane's "claude --resume"
+# hint, typed by hand, started a second copy of two restarted sessions.
+#
+# CLAUDE_SESSIONS_DIR overrides ~/.claude/sessions (for tests).
+
+set -u
+sid=${1:?session id}
+ignore=${2:-}
+dir=${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}
+boot=$(awk '/^btime/{print $2}' /proc/stat)
+
+for f in "$dir"/*.json; do
+  [ -e "$f" ] || continue
+  grep -qF -- "\"$sid\"" "$f" 2>/dev/null || continue
+  pid=$(basename "$f" .json)
+  [ "$pid" = "$ignore" ] && continue
+  [ -d "/proc/$pid" ] || continue
+  [ "$(stat -c %Y "$f")" -ge "$boot" ] || continue
+  [ "$(jq -r '.sessionId // empty' "$f" 2>/dev/null)" = "$sid" ] || continue
+  echo "$pid"
+  exit 0
+done
+exit 1
