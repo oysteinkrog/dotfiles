@@ -9,11 +9,15 @@
     "MCP_TOOL_TIMEOUT": "120000",
     "CLAUDE_CODE_TMPDIR": "/var/tmp/claude",
     "MSBUILDDISABLENODEREUSE": "1",
-    "CLAUDE_CODE_TETHER_LIVE": "0"
+    "CLAUDE_CODE_TETHER_LIVE": "0",
+    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
   },
   "permissions": {
     "defaultMode": "auto"
   },
+  "disabledMcpjsonServers": [
+    "mcp-agent-mail"
+  ],
   "skillOverrides": {
     "ab-testing": "off",
     "admin-page-for-nextjs-sites": "off",
@@ -425,8 +429,5 @@
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
-  "voiceEnabled": true,
-  "disabledMcpjsonServers": [
-    "mcp-agent-mail"
-  ]
+  "voiceEnabled": true
 }
