@@ -185,6 +185,9 @@ class Env:
         self.sys = FakeSystem(self)
         self.respawn_after_kill = None
         self.dup_on_kill = False
+        # Most tests are about other checks and use plain sessions, which only
+        # pass with --allow-new-tab. The needs-new-tab tests turn it off.
+        self.allow_new_tab = True
         self.next_tab = 0
 
     def add(
@@ -257,7 +260,9 @@ class Env:
         return tfile
 
     def monitor(self, mode="dry-run"):
-        args = SimpleNamespace(recheck_delay=30.0, verbose=False)
+        args = SimpleNamespace(
+            recheck_delay=30.0, verbose=False, allow_new_tab=self.allow_new_tab
+        )
         return cvr.Monitor(
             self.sys,
             args,
@@ -487,6 +492,26 @@ class MonitorTests(unittest.TestCase):
         e.sys.procs[60] = {"parent": 50}
         e.run()
         self.assertIn("in the same pane (claude-tab-run)", e.log())
+
+    def test_new_tab_session_skipped_without_flag(self):
+        e = Env()
+        e.allow_new_tab = False
+        e.add(100, "s")
+        self.assertTrue(e.run()[100].startswith("skip: needs-new-tab"))
+        self.assertIn('reason="needs-new-tab', e.log())
+
+    def test_tab_run_session_is_candidate_without_flag(self):
+        e = Env()
+        e.allow_new_tab = False
+        e.add(100, "s", environ={"WEZTERM_PANE": "100", "CLAUDE_TAB_RUN": "50"})
+        e.sys.procs[50] = {"parent": 1}
+        e.sys.procs[100]["parent"] = 50
+        self.assertEqual(e.run()[100], "candidate")
+        self.assertIn("in the same pane (claude-tab-run)", e.log())
+
+    def test_timer_command_has_no_allow_new_tab(self):
+        unit = (DOT / ".config/systemd/user/claude-version-restart.service").read_text()
+        self.assertNotIn("--allow-new-tab", unit)
 
     def test_per_run_limit(self):
         e = Env()
