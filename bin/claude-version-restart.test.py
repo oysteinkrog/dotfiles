@@ -454,7 +454,14 @@ class MonitorTests(unittest.TestCase):
             e.add(100 + i, f"s{i}")
         res = e.run()
         self.assertEqual(sum(1 for d in res.values() if d == "candidate"), 3)
-        self.assertEqual(sum(1 for d in res.values() if "over the limit of 3" in d), 2)
+        self.assertEqual(
+            sum(
+                1
+                for d in res.values()
+                if d == "skip: over the limit of 3 restarts per run"
+            ),
+            2,
+        )
 
     def test_backoff_after_failure(self):
         e = Env()
