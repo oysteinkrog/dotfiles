@@ -70,6 +70,8 @@ BACKOFF_SECONDS = 24 * 3600
 TERM_TIMEOUT = 20
 VERIFY_TIMEOUT = 60
 EXCLUDE_NAMES = re.compile(r"^manager")
+BULK_WINDOW = 2.0  # seconds; see Monitor.bulk_input
+BULK_SHARE = 0.25
 MAX_PER_RUN = 3  # restarts per run; the rest wait for the next run
 LOG_MAX = 5 << 20  # decisions.log moves to decisions.log.1 above this size
 
@@ -442,7 +444,11 @@ class Monitor:
         tty = self.sys.tty(s.pid)
         if tty:
             at = self.sys.tty_atime(tty)
-            if at is not None and now - at < QUIET_SECONDS:
+            if (
+                at is not None
+                and now - at < QUIET_SECONDS
+                and not self.bulk_input(at, ctx["tty_atimes"])
+            ):
                 raise Skip(f"input in its terminal {int(now - at)}s ago")
         panes = ctx["panes"]
         if panes is None:
@@ -534,8 +540,34 @@ class Monitor:
 
     # -------------------------------------------------------------- run
 
+    def claude_tty_atimes(self) -> list[float]:
+        """The tty access time of every live interactive Claude session."""
+        out = []
+        for s in self.read_sessions():
+            if s.data.get("kind") != "interactive" or not self.sys.alive(s.pid):
+                continue
+            tty = self.sys.tty(s.pid)
+            at = self.sys.tty_atime(tty) if tty else None
+            if at is not None:
+                out.append(at)
+        return out
+
+    @staticmethod
+    def bulk_input(at: float, atimes: list[float]) -> bool:
+        """Was this tty access time part of a burst that touched many panes at
+        once? The FrankenTerm GUI writes to every pane together (focus or
+        attach events), which sets each tty's access time like typing does.
+        On 2026-10-17, 37 of 44 ptys showed input from the same second. A burst
+        is at least 2 panes and at least BULK_SHARE of all Claude panes within
+        BULK_WINDOW seconds of this one."""
+        if not atimes:
+            return False
+        near = sum(1 for a in atimes if abs(a - at) <= BULK_WINDOW)
+        return near >= 2 and near >= BULK_SHARE * len(atimes)
+
     def context(self) -> dict:
         return {
+            "tty_atimes": self.claude_tty_atimes(),
             "boot": self.sys.boot_time(),
             "ancestors": self.ancestors(),
             "installed": self.sys.installed_version(),
