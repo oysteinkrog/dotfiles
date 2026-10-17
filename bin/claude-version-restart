@@ -581,8 +581,11 @@ class Monitor:
                 if not self.lock(s.key):
                     raise Skip("locked by another run")
             except Skip as e:
-                self.log(s or s1, "skip", "second read: " + str(e))
-                results.append((s or s1, "skip: second read: " + str(e)))
+                why = str(e)
+                if not why.startswith("over the limit"):
+                    why = "second read: " + why
+                self.log(s or s1, "skip", why)
+                results.append((s or s1, "skip: " + why))
                 continue
             acted += 1
             try:

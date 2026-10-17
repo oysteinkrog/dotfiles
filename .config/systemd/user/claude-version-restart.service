@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart idle Claude Code sessions that run an old version (dry-run unless ~/.config/claude-restart/mode says live)
+After=frankenterm-mux.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/bin/claude-version-restart
+# 30 s recheck, then up to 3 restarts of 20 s stop plus 60 s verify each
+TimeoutStartSec=10min
+Nice=10
