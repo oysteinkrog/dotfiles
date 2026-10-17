@@ -160,6 +160,13 @@ These rules hold whether or not a skill is loaded:
   Pull the strongest model in for the decision, not for the whole job, and keep its brief
   small. Do not reintroduce a `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one
   model everywhere and breaks per-call overrides.
+- **Review a change once, not once per branch.** A backport or cherry-pick of a change
+  that was already reviewed gets no second Astra, Fable or Opus review when its diff is
+  the same. Check it mechanically: `git show <orig> | git patch-id --stable` and the same
+  for the backport commit. Equal ids mean the same change, so skip the review and say so
+  in the PR. Different ids mean the pick needed conflict fixes: review only the hunks that
+  differ (`git range-diff <orig>^! <pick>^!`), with a short brief. On 2026-10-17, S3
+  backports reviewed separately at high effort used 10.7M Astra tokens in one hour.
 - Tell teammates to read CLAUDE.md first, and name the files they will touch so reservations
   can prevent conflicts.
 
