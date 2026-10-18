@@ -1,0 +1,10 @@
+[Unit]
+Description=Move memory of long-idle Claude Code sessions to swap (dry-run unless ~/.config/claude-idle-swap/mode says live)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/bin/claude-idle-swap
+# Writes to memory.reclaim only. Never kills, stops or limits a session.
+TimeoutStartSec=5min
+Nice=19
+MemoryHigh=200M
