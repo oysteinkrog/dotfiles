@@ -22,6 +22,12 @@ the client, and restores the layout. Stopping matters: mstsc reconnects by itsel
 server restart. KRDP starts again once the office keyboard and mouse have been idle for
 HOLD seconds.
 
+The resize hook and this watcher both change the layout, so they take a lock file first.
+Without it a client reconnecting during a restore left the monitors in remote mode with
+no saved layout (2026-10-17). As a fallback, this keeps the last layout with two or more
+monitors on, seen while no client was connected, and restores that when the saved layout
+is missing.
+
 `krdp-remote-mode WIDTH HEIGHT` is the resize hook for a patched KRDP (see
 KRDP_OUTPUT_RESIZE_HOOK in the localbuilds krdp recipe). KRDP calls it with the
 RDP client's window size. It saves the layout if remote mode has not already,
@@ -29,6 +35,8 @@ turns the other monitors off, and sets the kept monitor to that size: one of its
 own modes if one matches, otherwise a KWin custom mode. The restore on
 disconnect puts the saved mode back.
 """
+import contextlib
+import fcntl
 import json
 import os
 import signal
@@ -42,12 +50,15 @@ KEEP = os.environ.get("KRDP_KEEP_OUTPUT")
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "krdp-remote-mode"
 SAVED = STATE / "layout.json"
 TAKEOVER = STATE / "office-takeover"  # exists while KRDP is held stopped after a takeover
+LOCAL = STATE / "local-layout.json"  # the office layout, the fallback when SAVED is missing
+LOCK = STATE / "lock"
 POLL = 2
 ON_AFTER = 3   # seconds connected before switching on (skips failed handshakes)
 OFF_AFTER = 5  # seconds disconnected before restoring (rides out quick reconnects)
 RETRY = 60     # seconds between restore attempts when KWin rejects one
 HOLD = 600     # seconds of office idle after a takeover before KRDP starts again
-LOCAL_INPUT = Path("/run/local-input/last")  # touched by local-input-watch.service
+LOCAL_EVERY = 30  # seconds between refreshes of LOCAL
+LOCAL_INPUT = Path(os.environ.get("KRDP_LOCAL_INPUT", "/run/local-input/last"))  # local-input-watch
 ROTATION = {1: "none", 2: "left", 4: "inverted", 8: "right"}
 KRDP_UNIT = "app-org.kde.krdpserver.service"
 KRDP_DROPIN = (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
@@ -56,6 +67,15 @@ KRDP_DROPIN = (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
 
 def log(msg):
     print(msg, flush=True)
+
+
+@contextlib.contextmanager
+def locked():
+    """Hold the lock that keeps the resize hook and the watcher from changing the layout at once."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(LOCK, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def connected():
@@ -133,6 +153,11 @@ def set_mode(keep, mode):
 
 def resize(width, height):
     """Set the kept monitor to the RDP client's size. Called by KRDP's resize hook."""
+    with locked():
+        _resize(width, height)
+
+
+def _resize(width, height):
     width = max(640, min(width, 3840)) // 8 * 8   # CVT timings want a width in steps of 8
     height = max(480, min(height, 2160)) // 2 * 2
     remote_on()
@@ -241,18 +266,48 @@ def layout_matches(saved):
     return True
 
 
+def restore_target():
+    """The layout to put back: the saved one, else the office layout if the screens differ from it."""
+    if SAVED.exists():
+        return json.loads(SAVED.read_text()), "saved"
+    if LOCAL.exists():
+        local = json.loads(LOCAL.read_text())
+        if not layout_matches(local):
+            return local, "office (no saved layout)"
+    return None, None
+
+
 def remote_off():
-    if not SAVED.exists():
-        return
-    log("client gone: restoring saved layout")
-    saved = json.loads(SAVED.read_text())
-    doctor(restore_args(saved))
-    time.sleep(1)  # let the re-enabled outputs reach the Wayland registry
-    if not layout_matches(saved):
-        log("restore did not apply; keeping the saved layout to retry")
-        return
-    SAVED.unlink()
+    with locked():
+        # A client may have reconnected while this waited for the lock.
+        if connected():
+            log("client connected again; not restoring")
+            return
+        target, which = restore_target()
+        if target is None:
+            return
+        log(f"restoring the {which} layout")
+        doctor(restore_args(target))
+        time.sleep(1)  # let the re-enabled outputs reach the Wayland registry
+        if not layout_matches(target):
+            log("restore did not apply; keeping the saved layout to retry")
+            return
+        if SAVED.exists():
+            SAVED.unlink()
     sync_krdp_monitor()
+
+
+def remember_local():
+    """Keep the office layout as the fallback. Only call with no client and remote mode off."""
+    outputs = layout()["outputs"]
+    if sum(o["enabled"] for o in outputs) < 2:
+        return  # one monitor on looks like a stuck remote layout; never keep that
+    text = json.dumps(outputs)
+    if LOCAL.exists() and LOCAL.read_text() == text:
+        return
+    tmp = LOCAL.with_suffix(".tmp")
+    tmp.write_text(text)
+    tmp.replace(LOCAL)
 
 
 def local_input():
@@ -264,7 +319,7 @@ def local_input():
 
 
 def takeover():
-    log("key press or click at the office while remote mode is on: stopping KRDP")
+    log("key press or click at the office during remote mode: stopping KRDP")
     STATE.mkdir(parents=True, exist_ok=True)
     TAKEOVER.touch()
     subprocess.run(["systemctl", "--user", "stop", KRDP_UNIT])
@@ -281,9 +336,11 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     on = SAVED.exists()  # a layout left saved means the last run ended in remote mode
+    remote_since = SAVED.stat().st_mtime if on else time.time()
     since = time.monotonic()
     last = connected()
     last_restore = 0.0
+    last_local = 0.0
     log(f"watching port {PORT}; remote mode {'on' if on else 'off'}")
     if not on and not last:
         try:
@@ -296,29 +353,34 @@ def main():
             since, last = time.monotonic(), now
         # The resize hook saves the layout itself, sometimes before this loop sees the
         # client. A saved layout means remote mode is on, whoever turned it on.
-        on = on or SAVED.exists()
+        if not on and SAVED.exists():
+            on, remote_since = True, time.time()
         held = time.monotonic() - since
         try:
             if TAKEOVER.exists():
-                if SAVED.exists() and time.monotonic() - last_restore >= RETRY:
+                if time.monotonic() - last_restore >= RETRY:
                     last_restore = time.monotonic()
                     remote_off()
                 if time.time() - local_input() >= HOLD:
                     TAKEOVER.unlink()
                     log(f"office idle for {HOLD} s: starting KRDP again")
                     subprocess.run(["systemctl", "--user", "start", KRDP_UNIT])
-                on = SAVED.exists()
-            elif on and SAVED.exists() and local_input() > SAVED.stat().st_mtime + ON_AFTER:
+                on = False
+            elif on and local_input() > remote_since + ON_AFTER:
                 last_restore = time.monotonic()
                 takeover()
-                on = SAVED.exists()
+                on = False
             elif now and not on and held >= ON_AFTER:
-                remote_on()
-                on = True
+                with locked():
+                    remote_on()
+                on, remote_since = True, time.time()
             elif not now and on and held >= OFF_AFTER and time.monotonic() - last_restore >= RETRY:
                 last_restore = time.monotonic()
                 remote_off()
                 on = SAVED.exists()
+            elif not now and not on and held >= OFF_AFTER and time.monotonic() - last_local >= LOCAL_EVERY:
+                last_local = time.monotonic()
+                remember_local()
         except Exception as e:  # keep watching; a failed switch retries next poll
             log(f"error: {e}")
         time.sleep(POLL)
