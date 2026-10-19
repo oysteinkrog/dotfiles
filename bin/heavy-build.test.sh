@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Tests for heavy-build's give-up clock and the manager hold file.
+# Tests for heavy-build's give-up clock, the manager hold file, estimates,
+# classes and the critical-first switch.
 # Runs heavy-build in shadow mode against private runtime, state, config and
 # cgroup dirs. A live blocker ticket sits first in line, so no build starts.
 #
@@ -219,5 +220,81 @@ for c in \
   check "classify: '$cmd' is $want (got '$out')" '[[ $out == "$want" ]]'
 done
 rm -rf -- "$T"
+
+
+# 8. The critical-first switch. The admission awk (ADMIT_AWK) and
+# critical_first_on are taken from heavy-build and run against fake input.
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo"
+adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|reason|prioheld"
+  local me=$1; shift
+  (
+    eval "$(sed -n "/^ADMIT_AWK='/,/^}'\$/p" "$HB")"
+    awk -v now=1000000 -v me="$me" -v cpuquiet=999 -v cpuhold=30 -v meminfo="$A/meminfo" \
+      -v slicemax="$A/none" -v slicehigh="$A/none" -v cpupsifile="$A/none" -v claudepsifile="$A/none" \
+      -v apppsifile="$A/none" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi=60 -v maxmempsi=5 \
+      -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
+      -v agesecs=3600 -v ageslots=1 -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
+      | awk -F'\t' '{print $1 "|" $3 "|" $5}'
+  )
+}
+RUN_N='R u1 999000 4 2 1000600 4294967296 - 0 normal -'
+RUN_C='R u2 999000 4 2 1000600 4294967296 - 0 critical -'
+W_N='W 0000000999000000000-1-n 999000 normal 4 2 600 -'
+W_L='W 0000000999000000000-1-n 999000 low 4 2 600 -'
+W_C='W 0000000999000000000-2-c 999000 critical 4 2 600 -'
+W_H='W 0000000999000000000-3-h 999000 high 4 2 600 -'
+W_BIG='W 0000000999000000000-1-n 999000 normal 30 2 600 -'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | adm 0000000999000000000-1-n 0 1 12)
+check "critical-first off: a normal build starts next to a normal one (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | adm 0000000999000000000-1-n "" "" "")
+check "critical-first unset: same as off (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | adm 0000000999000000000-1-n 1 1 12)
+check "critical-first: the non-critical slot is full, so a normal build waits, clock held (got '$out')" '[[ $out == "wait|critical-first: 1 normal or low builds run, the limit is 1 while critical builds go first|1" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_L" | adm 0000000999000000000-1-n 1 1 12)
+check "critical-first: a low build waits too (got '$out')" '[[ $out == wait\|critical-first:* ]]'
+out=$(printf '%s\n' "$RUN_C" "$W_N" | adm 0000000999000000000-1-n 1 1 12)
+check "critical-first: a running critical build does not use the non-critical slot (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | adm 0000000999000000000-1-n 1 2 12)
+check "critical-first: noncrit_slots=2 lets a second normal build start (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$W_BIG" | adm 0000000999000000000-1-n 0 1 12)
+check "critical-first off: a 30 GiB build starts with 40 GiB free (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$W_BIG" | adm 0000000999000000000-1-n 1 1 12)
+check "critical-first: a 30 GiB normal build would leave 10 of 12 GiB, so it waits (got '$out')" '[[ $out == wait\|critical-first:\ needs\ 30.0\ GiB* ]]'
+out=$(printf '%s\n' "$W_BIG" | adm 0000000999000000000-1-n 1 1 10)
+check "critical-first: reserve_gib=10 lets it start (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_C" | adm 0000000999000000000-2-c 1 1 12)
+check "critical-first: a critical build is not held by the slot cap (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_H" | adm 0000000999000000000-3-h 1 1 12)
+check "critical-first: a high build is not held by the slot cap (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' 'W 0000000999000000000-2-c 999000 critical 30 2 600 -' | adm 0000000999000000000-2-c 1 1 12)
+check "critical-first: a 30 GiB critical build uses the normal reserve (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_C" "$W_N" | adm 0000000999000000000-1-n 1 1 12)
+check "critical-first: the normal build behind a started critical one still waits (got '$out')" '[[ $out == wait\|critical-first:* ]]'
+
+cfo() {  # prints "rc cf_on cf_slots cf_reserve expiry-log-lines"
+  (
+    CRITF=$A/cf STATE=$A/state MODE=live jobid=test critf_expired_logged=
+    eval "$(sed -n '/^log_line()/,/^}/p;/^critical_first_on()/,/^}/p' "$HB")"
+    critical_first_on; rc=$?
+    critical_first_on
+    echo "$rc $cf_on $cf_slots $cf_reserve $(cat "$A/state/live.log" 2>/dev/null | grep -c critical-first-expired)"
+  )
+}
+rm -f "$A/cf"
+out=$(cfo)
+check "critical-first: no switch file means off (got '$out')" '[[ $out == "1 0 1 12 0" ]]'
+: > "$A/cf"
+out=$(cfo)
+check "critical-first: an empty switch file is on with defaults (got '$out')" '[[ $out == "0 1 1 12 0" ]]'
+printf 'kpp sprint\nnoncrit_slots=2\nreserve_gib=16\nexpires=%s\n' "$(( EPOCHSECONDS + 600 ))" > "$A/cf"
+out=$(cfo)
+check "critical-first: reads noncrit_slots, reserve_gib and a future expires (got '$out')" '[[ $out == "0 1 2 16 0" ]]'
+printf 'expires=%s kpp sprint\n' "$(( EPOCHSECONDS - 60 ))" > "$A/cf"
+out=$(cfo)
+check "critical-first: an expired switch is off and logged once (got '$out')" '[[ $out == "1 0 1 12 1" ]]'
+check "critical-first: the switch file is left in place" '[[ -e $A/cf ]]'
+rm -rf -- "$A"
 
 exit "$fail"

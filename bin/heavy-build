@@ -88,6 +88,23 @@
 #   Example for 18 min: echo "expires=$(( $(date +%s) + 1080 )) <reason>" >
 #   $XDG_RUNTIME_DIR/heavy-build.hold. A hold without such a line lasts until
 #   the file is removed.
+# - Critical-first switch (the manager session's kpp priority switch; only the
+#   live rule uses it): while $XDG_RUNTIME_DIR/heavy-build.critical-first
+#   exists, a normal or low build (aged ones too) may start only when
+#   (a) fewer than noncrit_slots normal or low builds run (default 1; a scope
+#   in builds.slice without a live heavy-build counts as one unless idle), and
+#   (b) MemAvailable, minus the memory running builds are still expected to
+#   take, minus its own estimate, leaves reserve_gib GiB (default 12, so a
+#   headless MotionCatalyst lane can launch). Every normal check still
+#   applies. High and critical builds are not affected, and running builds
+#   are never stopped. Such a wait is logged as decision=wait
+#   reason="critical-first: ..." and, like the hold, does not run the give-up
+#   clock. Optional lines, each on its own line: noncrit_slots=<N>,
+#   reserve_gib=<G>, and expires=<unix epoch seconds> as for the hold (logged
+#   once as event=critical-first-expired). It lives in /run, so a reboot
+#   clears it. Example for 4 h:
+#   printf 'kpp sprint\nexpires=%s\nnoncrit_slots=1\nreserve_gib=12\n' \
+#   "$(( $(date +%s) + 14400 ))" > $XDG_RUNTIME_DIR/heavy-build.critical-first
 # - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
 #   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
 # - Estimates each build's memory, cores and wall time. Memory is the largest
@@ -219,6 +236,8 @@ MIN_SWAP_ROOM_GIB=${HEAVY_BUILD_MIN_SWAP_ROOM_GIB:-10}
 POLL=${HEAVY_BUILD_POLL:-5}
 HOLD=$RUNDIR/heavy-build.hold
 hold_expired_logged=
+CRITF=$RUNDIR/heavy-build.critical-first
+critf_expired_logged=
 QDIR=$RUNDIR/heavy-build.queue
 JDIR=$RUNDIR/heavy-build.jobs
 ADMIT=$RUNDIR/heavy-build.admit
@@ -1067,6 +1086,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_cur[nr] = cur; r_high[nr] = (prio == "high")
   T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high"); T_aged += (prio ~ /:aged$/)
+  T_nc += (prio !~ /^(high|critical)(:aged)?$/)
   hold(keys, id)
 }
 function why_not(i, nrun, cpu, tc, held, av, nhigh) {
@@ -1078,6 +1098,14 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
   if (av - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available, %.1f still to come for running builds, reserve %d", w_mem[i], av, tc, reserve)
   if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
+  return ""
+}
+# The critical-first switch (cf=1): a normal or low waiter also needs a free
+# non-critical slot and cfreserve GiB left after its estimate. "" when it may go on.
+function cf_why(i, nnc, tc, av) {
+  if (!cf || w_pr[i] == "high" || w_pr[i] == "critical") return ""
+  if (nnc >= cfslots) return sprintf("critical-first: %d normal or low builds run, the limit is %d while critical builds go first", nnc, cfslots)
+  if (av - tc - w_mem[i] < cfreserve) return sprintf("critical-first: needs %.1f GiB; %.1f available, %.1f still to come for running builds, normal and low builds must leave %d", w_mem[i], av, tc, cfreserve)
   return ""
 }
 function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct); picked[i] = 1 }
@@ -1175,6 +1203,7 @@ END {
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (!headi) {
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+      if (r == "") r = cf_why(i, T_nc, T_tc, avail)
       if (r == "") { pick(i); why[i] = "fits: next in order"; continue }
       # An aged head never starves the queue: high and critical builds that
       # fit pass it, so it holds only the slot it gets next.
@@ -1184,6 +1213,7 @@ END {
     }
     if (starving) { why[i] = sprintf("starve: %s has waited %d min, so nothing may pass it", w_id[headi], (now - w_arr[headi]) / 60); continue }
     r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+    if (r == "") r = cf_why(i, T_nc, T_tc, avail)
     if (r != "" && !critw && w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
     if (r != "") { why[i] = r; continue }
     if (w_aged[headi] && w_rank[i] <= 1) { pick(i); why[i] = "fits: the aged build " w_id[headi] " does not fit yet, and " w_pr[i] " builds may pass it"; continue }
@@ -1196,9 +1226,10 @@ END {
     if (w_id[i] != me) continue
     if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of critical builds (%s)", (now - w_arr[i]) / 60, why[i])
     # prioheld: this build waits only because a higher-priority build is
-    # ahead of it, so its give-up clock does not run.
+    # ahead of it, or for the critical-first switch, so its give-up clock
+    # does not run.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
-    if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || kind == "critical-first" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
   }
@@ -1215,6 +1246,7 @@ decide() {
     dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0 capinfo=-
     return
   fi
+  critical_first_on
   psi_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
@@ -1223,7 +1255,8 @@ decide() {
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
-    -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" "$ADMIT_AWK")
+    -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" \
+    -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
@@ -1262,6 +1295,31 @@ hold_on() {
     log_line "event=hold-expired expires=$exp reason=\"hold expired; the hold file is still there\""
   fi
   return 1
+}
+
+# The critical-first switch ($CRITF, see the header). Sets cf_on (1 while the
+# file exists and its expires= time, if any, has not come), cf_slots
+# (noncrit_slots=, default 1) and cf_reserve (reserve_gib=, default 12).
+# Logs "critical-first expired" once per expiry time. Returns 0 when on.
+critical_first_on() {
+  local line exp=
+  cf_on=0 cf_slots=1 cf_reserve=12
+  [[ -e $CRITF ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%$'\r'}
+    if [[ -z $exp && $line =~ ^expires=([0-9]{1,15})([^0-9]|$) ]]; then exp=$(( 10#${BASH_REMATCH[1]} ))
+    elif [[ $line =~ ^noncrit_slots=([0-9]{1,3})[[:space:]]*$ ]]; then cf_slots=$(( 10#${BASH_REMATCH[1]} ))
+    elif [[ $line =~ ^reserve_gib=([0-9]{1,4})[[:space:]]*$ ]]; then cf_reserve=$(( 10#${BASH_REMATCH[1]} ))
+    fi
+  done 2>/dev/null < "$CRITF"
+  if [[ -n $exp ]] && (( EPOCHSECONDS >= exp )); then
+    if [[ $critf_expired_logged != "$exp" ]]; then
+      critf_expired_logged=$exp
+      log_line "event=critical-first-expired expires=$exp reason=\"critical-first expired; the switch file is still there\""
+    fi
+    return 1
+  fi
+  cf_on=1
 }
 
 # Logs the budget decision when it, its reason kind or the actual outcome
