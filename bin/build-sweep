@@ -31,7 +31,7 @@ Safety rules:
   - Never deletes a dir that contains a .git entry.
   - ~/.cache/build belongs to localbuild and is never touched.
 """
-import argparse, fcntl, json, os, re, shutil, sys, time
+import argparse, fcntl, hashlib, json, os, re, shutil, sys, time
 from collections import defaultdict
 from pathlib import Path
 
@@ -256,8 +256,8 @@ MC_CACHE_DAYS = 7
 
 
 def dir_signature(b):
-    """mtime_ns of b and of every dir one and two levels below it. A build that
-    creates, removes or renames files in those dirs changes the signature."""
+    """Hash of the mtime_ns of b and of every dir one and two levels below it. A
+    build that creates, removes or renames files in those dirs changes it."""
     sig = []
     try:
         sig.append(["", os.lstat(b).st_mtime_ns])
@@ -271,7 +271,7 @@ def dir_signature(b):
     except OSError:
         return None
     sig.sort()
-    return sig
+    return hashlib.sha1(json.dumps(sig).encode()).hexdigest()
 
 
 def load_mc_cache():
@@ -315,6 +315,8 @@ def plan_mcbuild(args, now, live, excl):
             why = f"whole>{args.mc_hours}h"
             sig = dir_signature(b)
             ent = old.get(str(b))
+            if isinstance(ent, dict) and isinstance(ent.get("sig"), list):  # first cache format
+                ent["sig"] = hashlib.sha1(json.dumps(ent["sig"]).encode()).hexdigest()
             if (ent and sig is not None and ent["sig"] == sig
                     and now - ent["measured_at"] < MC_CACHE_DAYS * 86400
                     and ent["newest"] <= cutoff):
@@ -334,8 +336,11 @@ def plan_mcbuild(args, now, live, excl):
     return plan
 
 
-# Dumps are written by test runs, not by builds, so the dump walk skips these.
-DUMP_PRUNE = {".git", "node_modules", "bin", "obj", "target"}
+# Dumps are written by test runs, not by builds, so the dump walk skips build
+# output dirs: these names, and names starting with DUMP_PRUNE_PREFIX (BUILD_x64,
+# bin_race and the like; perf/PerfHarness alone has over 100 bin_* dirs).
+DUMP_PRUNE = {".git", "node_modules", "bin", "obj", "target", ".venv"}
+DUMP_PRUNE_PREFIX = ("BUILD", "bin_", "obj_")
 DUMP_EXTRA_ROOTS = [Path("/var/tmp/claude")]
 
 
@@ -351,7 +356,7 @@ def plan_dumps(args, now, live, excl):
         for cur, dirs, files in os.walk(root, followlinks=False):
             dirs_seen += 1
             # another root (.scratch inside work/desktop) gets its own walk
-            dirs[:] = [x for x in dirs if x not in DUMP_PRUNE and not x.startswith("BUILD")
+            dirs[:] = [x for x in dirs if x not in DUMP_PRUNE and not x.startswith(DUMP_PRUNE_PREFIX)
                        and os.path.join(cur, x) not in root_strs]
             for f in files:
                 if not f.lower().endswith(".dmp"):
@@ -434,6 +439,7 @@ def self_test():
         fresh = scr / "lane/src/motioncatalyst/BUILD_x/x64_Debug"
         mk(fresh / "c.dll", 4096, mtime=time.time())
         mk(scr / "lane/artifacts/res/In/x.dmp", 60 * 2**20)
+        mk(scr / "lane/perf/H/bin_race/y.dmp", 60 * 2**20)
         for d in sorted(tmp.rglob("*"), reverse=True):
             if d.is_dir():
                 os.utime(d, (old, old))
