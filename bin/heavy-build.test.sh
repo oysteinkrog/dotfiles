@@ -50,6 +50,7 @@ start=$SECONDS
 wait "$hbpid"; rc=$?
 check "no hold: gives up with exit 75" '(( rc == 75 ))'
 check "no hold: gives up within 10 s" '(( SECONDS - start <= 10 ))'
+check "no hold: says exit 75, nothing ran, and the next step" 'grep -q "heavy-build: exit 75, not run: gave up after .*Nothing ran. Do not resubmit at once; try again later or tell the manager session." "$T/out"'
 teardown
 
 # 2. With a hold the clock stays at 0; when the hold lifts it starts from 0.
@@ -111,6 +112,7 @@ start=$SECONDS
 wait "$hbpid"; rc=$?
 check "rerun guard: two fails outside git, then refused with exit 76 (got $rc)" '(( rc == 76 ))'
 check "rerun guard: refused at once" '(( SECONDS - start <= 2 ))'
+check "rerun guard: starts with exit 76 and says to filter" 'grep -q "heavy-build: exit 76, not run: this exact command failed.*rerun only the failing test with a filter" "$T/out"'
 check "rerun guard: says why and how to override" 'grep -q "failed 2 times in a row in the last 30 min with no change in $T/work; read the last log.*HEAVY_BUILD_ALLOW_RERUN=1" "$T/out"'
 check "rerun guard: logs decision=rerun-refuse" 'grep -q "decision=rerun-refuse reason=\"rerun: failed 2 times" "$T/state/heavy-build/shadow.log"'
 run_hb HEAVY_BUILD_ALLOW_RERUN=1
@@ -209,6 +211,7 @@ printf '101\n102\n' > "$W/scope/cgroup.procs"
 wo() {  # job-WINEPREFIX (or -) ; prints wine_orphans output on one line
   (
     PROC=$W/proc WINE_TMP=$W/winetmp HOME=$W/home
+    eval "$(grep -m1 '^WINE_LEFTOVERS=' "$HB")"
     eval "$(sed -n '/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p' "$HB")"
     if [[ $1 == - ]]; then unset WINEPREFIX; else export WINEPREFIX=$1; fi
     wine_orphans "$W/scope" | tr '\n' ' '
@@ -223,11 +226,196 @@ check "wine: no job prefix, unknown process skipped, not ~/.wine (got '$out')" '
 out=$(wo "$W/pfxA")
 check "wine: job prefix with a live wineserver is no orphan (got '$out')" '[[ -z $out ]]'
 out=$(wo "$W/pfxB")
-check "wine: job prefix without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxB " ]]'
+check "wine: job prefix with only Wine service processes left is shutting down, no orphan (got '$out')" '[[ -z $out ]]'
+fakeproc 103 testhost.exe PATH=/usr/bin
+printf '101\n102\n103\n' > "$W/scope/cgroup.procs"
+out=$(wo "$W/pfxB")
+check "wine: job prefix with a test client and no wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxB " ]]'
+printf '101\n102\n' > "$W/scope/cgroup.procs"
 rm -f "$W/proc/201/cwd"
 out=$(wo -)
-check "wine: own WINEPREFIX without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxA ?1 " ]]'
+check "wine: a process's own WINEPREFIX that is not the job's is only noted (got '$out')" '[[ $out == "~$W/pfxA ?1 " ]]'
+out=$(wo "$W/pfxA")
+check "wine: the job's own prefix without a wineserver is an orphan (got '$out')" '[[ $out == "$W/pfxA " ]]'
 rm -rf -- "$W"
+
+# 3b. Only the run's own prefixes count. wine_own lists them, wine_fb is the
+# prefix for a process without WINEPREFIX, wine_runs the base of run-tests.sh's
+# -run<pid> fallback.
+W=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+mkdir -p "$W/proc" "$W/winetmp" "$W/home" "$W/own" "$W/own-run42" "$W/other" "$W/scope"
+T=$W; : > "$T/out"
+wo2() {  # own fb runs ; prints wine_orphans output on one line
+  (
+    PROC=$W/proc WINE_TMP=$W/winetmp HOME=$W/home
+    eval "$(grep -m1 '^WINE_LEFTOVERS=' "$HB")"
+    eval "$(sed -n '/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p' "$HB")"
+    unset WINEPREFIX
+    wine_own=$1 wine_fb=$2 wine_runs=$3
+    wine_orphans "$W/scope" | tr '\n' ' '
+  )
+}
+fakeproc 401 testhost.exe "WINEPREFIX=$W/other"
+fakeproc 402 winedevice.exe "WINEPREFIX=$W/own"
+printf '401\n402\n' > "$W/scope/cgroup.procs"
+out=$(wo2 "$W/own" "" "")
+check "wine own: another prefix without a wineserver is only noted, own leftovers are no orphan (got '$out')" '[[ $out == "~$W/other " ]]'
+fakeproc 403 dotnet.exe "WINEPREFIX=$W/own/"
+printf '401\n402\n403\n' > "$W/scope/cgroup.procs"
+out=$(wo2 "$W/own" "" "")
+check "wine own: own prefix with a test client and no wineserver is an orphan (got '$out')" '[[ $out == "$W/own ~$W/other " ]]'
+fakeproc 404 testhost.exe "WINEPREFIX=$W/own-run42"
+printf '404\n' > "$W/scope/cgroup.procs"
+out=$(wo2 "$W/own" "" "$W/own")
+check "wine own: run-tests.sh's <prefix>-run<pid> counts as own (got '$out')" '[[ $out == "$W/own-run42 " ]]'
+out=$(wo2 "$W/x"$'\n'"$W/own-run42" "" "")
+check "wine own: a wine: key prefix in the list counts as own (got '$out')" '[[ $out == "$W/own-run42 " ]]'
+out=$(wo2 "$W/own" "" "")
+check "wine own: <prefix>-run<pid> without wine_runs is another prefix (got '$out')" '[[ $out == "~$W/own-run42 " ]]'
+fakeproc 405 testhost.exe
+printf '405\n' > "$W/scope/cgroup.procs"
+out=$(wo2 "$W/own" "$W/own" "")
+check "wine own: a process without WINEPREFIX uses wine_fb (got '$out')" '[[ $out == "$W/own " ]]'
+out=$(wo2 "$W/own" "" "$W/own")
+check "wine own: with no wine_fb it is skipped, not guessed (got '$out')" '[[ $out == "?1 " ]]'
+rm -r -f -- "$W"
+
+# 3c. sample_scope end to end with HEAVY_BUILD_WINE_ORPHAN=stop: a run that
+# stops a second prefix of its own is left alone; a run whose own wineserver
+# dies is warned and stopped. Also the idle Wine log (log only).
+X=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+mkdir -p "$X/proc" "$X/winetmp" "$X/home" "$X/own" "$X/second" "$X/bs/u.scope"
+xproc() {  # pid comm [env...]
+  local p=$1 c=$2; shift 2
+  mkdir -p "$X/proc/$p"
+  echo "$c" > "$X/proc/$p/comm"
+  echo "0::/user.slice/x" > "$X/proc/$p/cgroup"
+  if (( $# )); then printf '%s\0' "$@" > "$X/proc/$p/environ"; else : > "$X/proc/$p/environ"; fi
+}
+echo 1000000 > "$X/bs/u.scope/memory.current"
+echo 'populated 1' > "$X/bs/u.scope/cgroup.events"
+# ss PLAN: one sample per word: i (no CPU used), a (10 s of CPU), s (sleep
+# 1.2 s, then no CPU). Settings: OWN, AGO (s since last activity), IDLE, CLS.
+ss() {
+  (
+    PROC=$X/proc WINE_TMP=$X/winetmp HOME=$X/home BSLICE=$X/bs unit=u cmdline=x
+    eval "$(sed -n '/^WINE_LEFTOVERS=/p;/^now_us()/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p;/^sample_scope()/,/^}/p' "$HB")"
+    say() { echo "say: $*"; }
+    log_line() { echo "log: $*"; }
+    systemctl() { echo "systemctl $*"; }
+    write_state() { :; }
+    psi_watch() { :; }
+    unset WINEPREFIX
+    S_t=() S_u=() s_lo=0 peak=0 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since=
+    orphan_warned= orphan_stopped= orph_unknown_logged= orph_other_logged= wine_idle_logged=
+    STALL_SECS=600 WINE_IDLE_SECS=${IDLE:-900} ORPHAN_STOP_SECS=0 HEAVY_BUILD_WINE_ORPHAN=stop
+    cls=${CLS:-wine-run-tests} wine_own=${OWN-} wine_fb=${OWN-} wine_runs= wine_main=${OWN-}
+    last_active=$(( $(now_us) - ${AGO:-0} * 1000000 ))
+    local u=1000 w
+    for w in $1; do
+      [[ $w == a ]] && u=$(( u + 10000000 ))
+      [[ $w == s ]] && sleep 1.2
+      echo "usage_usec $u" > "$X/bs/u.scope/cpu.stat"
+      sample_scope
+      sleep 0.01
+    done
+  )
+}
+xproc 501 wineserver
+sdir=$(PROC=$X/proc WINE_TMP=$X/winetmp; eval "$(sed -n '/^wine_server_dir()/,/^}/p' "$HB")"; wine_server_dir "$X/own")
+mkdir -p "$sdir" && ln -s "$sdir" "$X/proc/501/cwd"
+xproc 502 dotnet.exe "WINEPREFIX=$X/own"
+xproc 503 winedevice.exe "WINEPREFIX=$X/second"
+xproc 504 services.exe "WINEPREFIX=$X/second"
+xproc 505 explorer.exe "WINEPREFIX=$X/second"
+printf '502\n503\n504\n505\n' > "$X/bs/u.scope/cgroup.procs"
+T=$X
+OWN=$X/own ss "i i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine stop: a second prefix the run stopped itself gives no warning" '! grep -q "wineserver for" "$X/out1"'
+check "wine stop: and no stop with HEAVY_BUILD_WINE_ORPHAN=stop" '! grep -q "^systemctl" "$X/out1"'
+check "wine stop: it is logged once as event=wine-orphan-other" '(( $(grep -c "event=wine-orphan-other unit=u prefix=$X/second " "$X/out1") == 1 ))'
+xproc 506 testhost.exe "WINEPREFIX=$X/second"
+printf '502\n503\n506\n' > "$X/bs/u.scope/cgroup.procs"
+OWN=$X/own ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine stop: even a client left in the second prefix stops nothing" '! grep -q "wineserver for\|^systemctl" "$X/out1"'
+ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine stop: a run with no Wine prefix of its own is never warned or stopped" '! grep -q "wineserver for\|^systemctl" "$X/out1"'
+rm -f "$X/proc/501/cwd"
+OWN=$X/own ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine stop: the run's own wineserver gone still warns" 'grep -q "say: warning: the wineserver for $X/own is gone" "$X/out1"'
+check "wine stop: and HEAVY_BUILD_WINE_ORPHAN=stop still stops it" 'grep -q "^systemctl --user stop u.scope" "$X/out1"'
+check "wine stop: logged as event=wine-orphan with the own prefix" 'grep -q "event=wine-orphan unit=u prefix=$X/own " "$X/out1"'
+xproc 507 winedevice.exe "WINEPREFIX=$X/own"
+printf '507\n504\n' > "$X/bs/u.scope/cgroup.procs"
+OWN=$X/own ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine stop: own prefix with only service processes left is shutting down, no warning, no stop" '! grep -q "wineserver for\|^systemctl" "$X/out1"'
+
+# Idle Wine test runs: one line per idle spell, never a stop.
+: > "$X/bs/u.scope/cgroup.procs"
+OWN=$X/own AGO=5 IDLE=1 ss "i i i a s i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine idle: logged once per idle spell (2 spells, 2 lines)" '(( $(grep -c "log: event=wine-idle prefix=$X/own idle_s=[0-9]* unit=u " "$X/out1") == 2 ))'
+check "wine idle: one stderr note per spell" '(( $(grep -c "say: note: this Wine test run has used under 0.05 cores" "$X/out1") == 2 ))'
+check "wine idle: nothing is stopped" '! grep -q "^systemctl" "$X/out1"'
+check "wine idle: idle_s counts from the last activity" 'grep -m1 "event=wine-idle" "$X/out1" | grep -q "idle_s=5 "'
+CLS=other OWN=$X/own AGO=5 IDLE=1 ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine idle: not logged for other classes" '! grep -q "event=wine-idle" "$X/out1"'
+CLS=wine-run-tests-prebuilt AGO=5 IDLE=1 ss "i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine idle: logged for wine-run-tests-prebuilt, prefix - when unknown" 'grep -q "event=wine-idle prefix=- idle_s=" "$X/out1"'
+OWN=$X/own AGO=5 ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
+check "wine idle: not before HB_WINE_IDLE_SECS (900 s)" '! grep -q "event=wine-idle" "$X/out1"'
+rm -r -f -- "$X"
+
+# 3d. The wine: lock key of a run-tests.sh command follows the prefix that
+# tree's run-tests.sh will use. Three fake trees: the guard script (PR #13900),
+# the per-worktree script without the guard (master today), an old script.
+K=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+mkdir -p "$K/proc" "$K/winetmp" "$K/home/.local/share/wineprefixes/motioncatalyst"
+for t in lane-new lane-mid lane-old; do
+  mkdir -p "$K/$t/tools/wine"
+  echo 'WINEPREFIX=${WINEPREFIX:-$HOME/.local/share/wineprefixes/motioncatalyst}' > "$K/$t/tools/wine/wine-env.sh"
+done
+printf '%s\n' 'WINEPREFIX=$HOME/.local/share/wineprefixes/motioncatalyst-tests-x' 'MC_TESTS_SHARED_PREFIX' > "$K/lane-new/tools/wine/run-tests.sh"
+printf '%s\n' 'WINEPREFIX=$HOME/.local/share/wineprefixes/motioncatalyst-tests-x' > "$K/lane-mid/tools/wine/run-tests.sh"
+printf '%s\n' 'source wine-env.sh' > "$K/lane-old/tools/wine/run-tests.sh"
+SH=$K/home/.local/share/wineprefixes/motioncatalyst
+wk() {  # top cmd... ; prints wine_key output; WINEPREFIX etc. come from the caller (- as top: unset WINEPREFIX first)
+  (
+    cd "$1" || exit 1
+    [[ ${NOPFX:-} == 1 ]] && unset WINEPREFIX
+    PROC=$K/proc WINE_TMP=$K/winetmp HOME=$K/home
+    eval "$(sed -n '/^WINE_DEFAULT_LINE=/p;/^SHARED_WINEPREFIX=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_cmd()/,/^}/p;/^run_tests_prefix()/,/^}/p;/^wine_key()/,/^}/p' "$HB")"
+    wine_key "$@"
+  )
+}
+T=$K; : > "$T/out"
+out=$(WINEPREFIX=$SH wk "$K/lane-new" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: new script with WINEPREFIX = shared prefix gets no wine key (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH/ wk "$K/lane-new" bash -c "tools/wine/run-tests.sh Foo.Tests")
+check "wine key: same with a trailing slash, inside bash -c (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH MC_TESTS_SHARED_PREFIX=1 wk "$K/lane-new" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: new script with MC_TESTS_SHARED_PREFIX=1 keeps wine:<shared> (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(WINEPREFIX=$K/mine wk "$K/lane-new" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: new script with another WINEPREFIX keys on it (got '$out')" '[[ $out == "wine:$K/mine" ]]'
+out=$(NOPFX=1 wk "$K/lane-new" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: new script without WINEPREFIX gets no wine key (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-mid" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: per-worktree script without the guard runs in WINEPREFIX = shared, keeps wine:<shared> (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(NOPFX=1 wk "$K/lane-mid" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: per-worktree script without WINEPREFIX gets no wine key (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-old" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: old script with WINEPREFIX = shared keeps wine:<shared> (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(NOPFX=1 wk "$K/lane-old" tools/wine/run-tests.sh Foo.Tests)
+check "wine key: old script without WINEPREFIX keeps the shared default key (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-old" "$K/lane-new/tools/wine/run-tests.sh" Foo.Tests)
+check "wine key: the command's own run-tests.sh decides, not the current tree's (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start)
+check "wine key: other Wine commands keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-new" cargo test)
+check "wine key: a non-Wine command gets none (got '$out')" '[[ -z $out ]]'
+out=$(cd "$K/lane-new" && PROC=$K/proc HOME=$K/home AgentOutputSuffix=-a && unset WINEPREFIX \
+  && eval "$(sed -n '/^SHARED_WINEPREFIX=/p;/^run_tests_prefix()/,/^}/p' "$HB")" && run_tests_prefix "$K/lane-new" tools/wine/run-tests.sh)
+check "wine key: run_tests_prefix names the per-worktree prefix with the suffix (got '$out')" '[[ $out == "own $K/home/.local/share/wineprefixes/motioncatalyst-tests-lane-new-a" ]]'
+rm -r -f -- "$K"
 
 # 6. Memory estimates. class_table and estimate() are taken from heavy-build
 # and run against a fake history.tsv.
@@ -503,7 +691,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v slicemax="$A/none" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="$A/none" \
       -v apppsifile="$A/none" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
-      -v agesecs=3600 -v ageslots=1 -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
+      -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -674,5 +862,163 @@ check "history trim: default keeps 5,000 lines, no 2,000 cut (got '$out')" '[[ $
 grep -q 'setting HEAVY_BUILD_HISTORY_LINES 20000' "$HB"
 check "history trim: HEAVY_BUILD_HISTORY_LINES defaults to 20000 in the settings list" '(( $? == 0 ))'
 rm -rf -- "$H"
+
+
+# 11. App runs (class app-run): detection, options, the app-run cap, the
+# --wait-timeout and the --ready-file, and the scope stop when the command ends.
+T=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX"); : > "$T/out"
+for c in \
+  "app-run|tools/wine/headless-mc.sh start one --hive /x" \
+  "app-run|/home/x/work/desktop/lane/tools/wine/run-mc.sh" \
+  "app-run|bash tools/wine/run-mc.sh convert-take-to-raw-data a b" \
+  "app-run|wine MotionCatalyst.exe --hiveDir Z:\\h" \
+  "app-run|env WINEPREFIX=/p wine64 /b/MotionCatalyst.exe" \
+  "app-run|bash -c cd /b && exec wine UiMcpHost.exe --transport http --port 5000" \
+  "wine-script|wine SwingCatalyst.Tool.exe" \
+  "other|cat MotionCatalyst.exe.config" \
+  "other|my-headless-mc.shx start" \
+  "wine-run-tests|tools/wine/run-tests.sh MotionCatalyst.Test.UI" ; do
+  want=${c%%|*} cmd=${c#*|}
+  # shellcheck disable=SC2086
+  out=$(cd "$T" && cls $cmd)
+  check "classify: '$cmd' is $want (got '$out')" '[[ $out == "$want" ]]'
+done
+out=$(cd "$T" && CLASS_ARG=app-run cls cargo build)
+check "classify: --class app-run wins over the command (got '$out')" '[[ $out == app-run ]]'
+rm -rf -- "$T"
+
+# Bad options are usage errors (exit 2), before anything queues.
+T=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX"); : > "$T/out"
+hbx() { (cd "$T" && exec env XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" "$HB" "$@") > "$T/out" 2>&1; }
+hbx --class build true; rc=$?
+check "options: --class takes only app-run (exit 2, got $rc)" '(( rc == 2 )) && grep -q "takes only app-run" "$T/out"'
+hbx --wait-timeout soon true; rc=$?
+check "options: --wait-timeout must be seconds (exit 2, got $rc)" '(( rc == 2 ))'
+hbx --class app-run; rc=$?
+check "options: no command after the options is exit 2 (got $rc)" '(( rc == 2 ))'
+hbx --ready-file; rc=$?
+check "options: --ready-file needs a path (exit 2, got $rc)" '(( rc == 2 ))'
+rm -rf -- "$T"
+
+# The app-run cap in the admission walk. Running R lines carry the class in
+# field 12, W lines in field 9. Old lines without a class still read.
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 60 * 1048576 )) > "$A/meminfo"
+RUN_A1='R a1 999000 8 1 1014400 4294967296 - 0 normal - app-run'
+RUN_A2='R a2 999000 8 1 1014400 4294967296 - 0 normal - app-run'
+RUN_B='R b1 999000 4 2 1000600 4294967296 - 0 normal - cargo-test'
+W_APP='W 0000000999000000000-1-a 999000 normal 8 1.5 14400 - app-run'
+W_APPC='W 0000000999000000000-1-a 999000 critical 8 1.5 14400 - app-run'
+W_BLD='W 0000000999000000001-2-b 999001 normal 4 2 600 - cargo-test'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_B" "$W_APP" | adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: a second app run starts next to one (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" | adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: a third app run waits, and its give-up clock runs (got '$out')" '[[ $out == "wait|app-cap: 2 app runs hold job slots, the limit is 2|0" ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APPC" | adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: a critical app run waits for the cap too (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" "$W_BLD" | adm 0000000999000000001-2-b 0 1 12)
+check "app-cap: a build behind a capped app run starts as next in order, not as backfill (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" | ADM_MAXAPP=3 adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: HEAVY_BUILD_MAX_APP_RUNS=3 lets a third start (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" | ADM_MAXAPP=0 adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: HEAVY_BUILD_MAX_APP_RUNS=0 turns the cap off (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' 'W 0000000999000000000-1-a 999000 normal 8 1.5 14400 - app-run' 'W 0000000999000000000-1-c 999000 normal 8 1.5 14400 - app-run' 'W 0000000999000000000-1-d 999000 normal 8 1.5 14400 - app-run' | adm 0000000999000000000-1-d 0 1 12)
+check "app-cap: of three app runs let in at once, the third waits (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" 'R b1 999000 4 2 1000600 4294967296 - 0 normal -' 'R b2 999000 4 2 1000600 4294967296 - 0 normal -' 'R b3 999000 4 2 1000600 4294967296 - 0 normal -' 'R b4 999000 4 2 1000600 4294967296 - 0 normal -' "$W_BLD" | adm 0000000999000000001-2-b 0 1 12)
+check "app runs count as jobs: 2 app runs and 4 old-format builds fill the 6 slots (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+rm -rf -- "$A"
+
+# Estimates: runs that ended by a signal (stopped or cancelled) still count
+# for app-run, and the 6 GiB floor holds.
+E=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+est2() { (HIST=$E/hist; eval "$(sed -n '/^class_table()/,/^}/p;/^estimate()/,/^}/p' "$HB")"; EST_MEM_MAX_GIB=22; estimate "$1" "$2"); }
+: > "$E/hist"
+out=$(est2 k1 app-run)
+check "app estimate: no history gives 8 GiB and 4 h (got '$out')" '[[ $out == "8.0 1.5 14400 class,mem=class" ]]'
+for i in 1 2 3 4 5 6; do printf '%s\tapp-run\tk%s\t3600\t900\t%s\t143\tstopped\t12884901888\t10737418240\t-\t-\n' "$EPOCHSECONDS" "$i" "$(( 3 * G ))" >> "$E/hist"; done
+out=$(est2 k9 app-run)
+check "app estimate: stopped runs count, and the 6 GiB floor holds (got '$out')" '[[ $out == "6.0 0.2 3600 class-history,mem=floor" ]]'
+printf '%s\tapp-run\tk1\t3600\t900\t%s\t143\tcancelled\t12884901888\t10737418240\t-\t-\n' "$EPOCHSECONDS" "$(( 9 * G ))" >> "$E/hist"
+out=$(est2 k1 app-run)
+check "app estimate: a cancelled run's 9 GiB peak counts for its key (got '$out')" '[[ $out == 9.0\ * ]]'
+printf '%s\tcargo-test\tk2\t60\t60\t%s\t143\tfail\tNA\tNA\t-\t-\n' "$EPOCHSECONDS" "$(( 20 * G ))" >> "$E/hist"
+out=$(est2 k2 cargo-test)
+check "estimate: other classes still skip signal-ended runs (got '$out')" '[[ $out == 13.3\ * ]]'
+rm -rf -- "$E"
+
+# End to end with fake systemd-run and systemctl on PATH (no real scope).
+# setup2: a sandbox with no blocker, 64 GiB free, shadow mode.
+setup2() {
+  T=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+  mkdir -p "$T/run/heavy-build.queue" "$T/state" "$T/config" "$T/cg" "$T/work" "$T/bin" "$T/proc"
+  printf 'MemTotal: %d kB\nMemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 96 * 1048576 )) $(( 64 * 1048576 )) > "$T/proc/meminfo"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "systemd-run $*" >> "$HBT/calls"' \
+    'while (( $# )); do case $1 in -p) shift 2 ;; --*) shift ;; *) break ;; esac; done' 'exec "$@"' > "$T/bin/systemd-run"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "systemctl $*" >> "$HBT/calls"' > "$T/bin/systemctl"
+  chmod +x "$T/bin/systemd-run" "$T/bin/systemctl"
+}
+teardown2() { rm -rf -- "$T"; }
+hbe() {  # VAR=value... -- args ; runs heavy-build in the sandbox in the background
+  local -a ev=()
+  while [[ $1 != -- ]]; do ev+=("$1"); shift; done; shift
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_TIMEOUT HBT="$T" PATH="$T/bin:$PATH" \
+    XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
+    HB_CGROUP="$T/cg" HB_PROC="$T/proc" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
+    HEAVY_BUILD_WAIT=100 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none "${ev[@]}" \
+    "$HB" "$@") > "$T/out" 2>&1 &
+  hbpid=$!
+}
+setup2
+echo stale > "$T/ready"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'for _ in $(seq 1 50); do grep -q ^unit= "$1" 2>/dev/null && break; sleep 0.1; done' \
+  'cp -- "$1" "$1.seen"; env > "$1.env"; kill -TERM $$' > "$T/app.sh"
+chmod +x "$T/app.sh"
+hbe -- --class app-run --ready-file "$T/ready" "$T/app.sh" "$T/ready"
+wait "$hbpid"; rc=$?
+check "ready file: an app run that dies from TERM exits 143 (got $rc)" '(( rc == 143 ))'
+check "ready file: the stale file is replaced by one that names the scope" 'grep -q "^unit=heavy-build-[0-9]*-[0-9]*\.scope$" "$T/ready.seen" && grep -q "^admitted=[0-9]*$" "$T/ready.seen" && grep -q "^child_pid=[0-9]*$" "$T/ready.seen" && ! grep -q stale "$T/ready.seen"'
+check "ready file: removed when heavy-build exits" '[[ ! -e $T/ready ]]'
+u=$(sed -n 's/^unit=//p' "$T/ready.seen")
+check "ready file: the command sees HEAVY_BUILD_UNIT=$u and no HEAVY_BUILD_READY_FILE or HEAVY_BUILD_CLASS" 'grep -qx "HEAVY_BUILD_UNIT=$u" "$T/ready.env" && ! grep -q "^HEAVY_BUILD_READY_FILE=\|^HEAVY_BUILD_CLASS=" "$T/ready.env"'
+check "app scope: MemoryHigh=10G, MemoryMax=12G, no RuntimeMaxSec" 'grep -q "MemoryHigh=10G -p MemoryMax=12G" "$T/calls" && ! grep -q RuntimeMaxSec "$T/calls"'
+check "app scope: the whole scope is stopped when the command ends" 'grep -qx "systemctl --user stop $u" "$T/calls"'
+check "app history: class app-run, exit 143, reason stopped, MemoryHigh 10 GiB" 'awk -F"\t" -v g=$G '\''$2 == "app-run" && $7 == 143 && $8 == "stopped" && $10 == 10 * g'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+teardown2
+
+# A detected app run takes HEAVY_BUILD_APP_MEM_HIGH_GIB from the conf file.
+setup2
+printf 'HEAVY_BUILD_APP_MEM_HIGH_GIB=14\n' > "$T/config/heavy-build.conf"
+mkdir -p "$T/w2/tools/wine"; printf '#!/bin/sh\nexit 0\n' > "$T/w2/tools/wine/run-mc.sh"; chmod +x "$T/w2/tools/wine/run-mc.sh"
+hbe -- "$T/w2/tools/wine/run-mc.sh" a
+wait "$hbpid"; rc=$?
+check "app scope: run-mc.sh is detected and HEAVY_BUILD_APP_MEM_HIGH_GIB=14 gives MemoryHigh=14G (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=14G -p MemoryMax=16G" "$T/calls" && awk -F"\t" '\''$2 == "app-run" && $7 == 0 && $8 == "ok"'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+teardown2
+
+# A build's ready file works the same, and a build keeps its own caps.
+setup2
+hbe -- --ready-file "$T/r2" bash -c 'for _ in $(seq 1 50); do [[ -s $0 ]] && exit 0; sleep 0.1; done; exit 9' "$T/r2"
+wait "$hbpid"; rc=$?
+check "ready file: works for a build too (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=16G" "$T/calls"'
+teardown2
+
+# --wait-timeout: gives up with exit 77 after that long in line, even on hold.
+setup
+echo "test hold" > "$T/run/heavy-build.hold"
+run_hb HEAVY_BUILD_WAIT=100 HEAVY_BUILD_WAIT_TIMEOUT=3
+start=$SECONDS
+wait "$hbpid"; rc=$?
+check "wait timeout: exit 77 during a hold (got $rc)" '(( rc == 77 ))'
+check "wait timeout: within 10 s" '(( SECONDS - start <= 10 ))'
+check "wait timeout: logged as decision=refuse reason=wait-timeout" 'grep -q "decision=refuse reason=\"wait-timeout: not let in within 3s" "$T/state/heavy-build/shadow.log"'
+check "wait timeout: says exit 77, nothing ran, and the next step" 'grep -q "heavy-build: exit 77, not run: --wait-timeout 3s ran out.*Nothing ran. Try again later, or give a longer --wait-timeout." "$T/out"'
+teardown
+
+# --help: no chained build in an example, no background-shell advice.
+help=$("$HB" --help 2>&1)
+check "help: no cargo build && cargo test example" '! grep -q "heavy-build bash -c .*cargo build && cargo test" <<< "$help"'
+check "help: no advice to run in the background" '! grep -q "run it in the$" <<< "$help" && ! grep -qi "run it in the background" <<< "$help"'
+check "help: suggests a systemd user unit for long builds" 'grep -q "systemd-run --user --unit=<name> --collect --same-dir heavy-build <cmd>" <<< "$help"'
 
 exit "$fail"
