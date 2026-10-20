@@ -108,7 +108,8 @@
 #   applies. High and critical builds are not affected, and running builds
 #   are never stopped. Such a wait is logged as decision=wait
 #   reason="critical-first: ..." and, like the hold, does not run the give-up
-#   clock. Optional lines, each on its own line: noncrit_slots=<N>,
+#   clock. While the switch is on, a normal or low build's wait for memory
+#   (reason "memory: ...") does not run the clock either. Optional lines, each on its own line: noncrit_slots=<N>,
 #   reserve_gib=<G>, and expires=<unix epoch seconds> as for the hold (logged
 #   once as event=critical-first-expired). It lives in /run, so a reboot
 #   clears it. Example for 4 h:
@@ -180,8 +181,10 @@
 #   a higher-priority build is ahead of it (a critical build that goes first,
 #   or a first build in order with a higher priority). In both modes it stays
 #   at 0 while the hold is on, and starts from 0 when the hold lifts.
-#   It does run while the build is first in order, or waits for a lock key,
-#   swap or interactive memory pressure. A wait can be long: run it in the
+#   Nor does it run while the critical-first switch is on and a normal or
+#   low build waits for memory or for the switch itself.
+#   Otherwise it does run while the build is first in order, or waits for a
+#   lock key, swap or interactive memory pressure. A wait can be long: run it in the
 #   background when your tool call has a timeout.
 # - Every exit 75 (gave up, or low disk) is logged as decision=refuse.
 # - Refuses when the filesystem of the current directory has less than
@@ -1317,9 +1320,11 @@ END {
     if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of critical builds (%s)", (now - w_arr[i]) / 60, why[i])
     # prioheld: this build waits only because a higher-priority build is
     # ahead of it, or for the critical-first switch, so its give-up clock
-    # does not run.
+    # does not run. While the switch is on, a normal or low build that waits
+    # for memory counts as held too: the critical builds it lets in take that
+    # memory. On 2026-10-20 a 26.1 beta test gave up after 7201 s of such waits.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
-    if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || kind == "critical-first" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || kind == "critical-first" || (cf && kind == "memory" && w_pr[i] != "high" && w_pr[i] != "critical") || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
     if (picked[i] && swx > 0) why[i] = why[i] swxnote
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
