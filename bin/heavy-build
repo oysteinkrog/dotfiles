@@ -43,7 +43,16 @@
 #   no heavy-build state file is expected to take 2 GiB more than it holds now,
 #   and its unit name is logged as untracked=unit:GiB. When such a scope used
 #   under 0.05 cores over the last 2 min, it is logged as unit:GiB:idle and
-#   is not counted as a running build, for the job limit or for cores;
+#   is not counted as a running build, for the job limit or for cores.
+#   Swap headroom: while system memory pressure (/proc/pressure/memory, some
+#   avg10 and avg60) is under 1.0%, HEAVY_BUILD_SWAP_HEADROOM_PCT percent
+#   (default 25) of SwapFree, at most HEAVY_BUILD_SWAP_HEADROOM_GIB (default
+#   8), counts as available here and in the critical-first check, and the
+#   reason says "+<GiB> swap headroom". It is never added when the pressure is
+#   higher or cannot be read, and not for the first build (the solo rule).
+#   The swap room and pressure gates below still apply. On the night to
+#   2026-10-20 builds waited 3004 times for memory with memory pressure near
+#   0 and about 64 GiB of zram swap free. Either setting at 0 turns it off;
 # - the memory builds hold plus its estimate fits under the builds.slice cap.
 #   The cap is the lower of builds.slice memory.max (MemoryMax) and
 #   memory.high (MemoryHigh); "max" means no limit. Both files are read again
@@ -341,6 +350,8 @@ read_conf() {
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
+  setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
+  setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
 }
 
 setting() {
@@ -1106,6 +1117,12 @@ waiter_lines() {
 # shellcheck disable=SC2016
 ADMIT_AWK='
 function max(a, b) { return a > b ? a : b }
+# "avg10 avg60" of the some line of pressure file f, or "-1 -1".
+function psi1060(f,   l, a, b, c, v) {
+  v = "-1 -1"
+  while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); split(a[3], c, "="); v = (b[2] + 0) " " (c[2] + 0) }
+  close(f); return v
+}
 function psi10(f,   l, a, b, v) {
   v = -1
   while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
@@ -1159,7 +1176,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (cpu + w_cores[i] > cpubudget) return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
-  if (av - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available, %.1f still to come for running builds, reserve %d", w_mem[i], av, tc, reserve)
+  if (av + swx - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, reserve %d", w_mem[i], av, swxnote, tc, reserve)
   if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
   return ""
 }
@@ -1168,7 +1185,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
 function cf_why(i, nnc, tc, av) {
   if (!cf || w_pr[i] == "high" || w_pr[i] == "critical") return ""
   if (nnc >= cfslots) return sprintf("critical-first: %d normal or low builds run, the limit is %d while critical builds go first", nnc, cfslots)
-  if (av - tc - w_mem[i] < cfreserve) return sprintf("critical-first: needs %.1f GiB; %.1f available, %.1f still to come for running builds, normal and low builds must leave %d", w_mem[i], av, tc, cfreserve)
+  if (av + swx - tc - w_mem[i] < cfreserve) return sprintf("critical-first: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, normal and low builds must leave %d", w_mem[i], av, swxnote, tc, cfreserve)
   return ""
 }
 function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct); picked[i] = 1 }
@@ -1200,6 +1217,16 @@ BEGIN {
   if ((getline l < slicehigh) > 0 && l ~ /^[0-9]+$/ && l / 1073741824 < slicecap) { slicecap = l / 1073741824; capsrc = "high" }
   close(slicehigh)
   capinfo = (capsrc == "none") ? "none" : sprintf("%.1fG(%s)", slicecap, capsrc)
+  # Swap headroom: while system memory pressure (some avg10 and avg60) is
+  # under 1.0%, swpct percent of SwapFree, at most swcap GiB, counts as
+  # available for the memory and critical-first checks. Never when the
+  # pressure is higher or cannot be read.
+  swx = 0; swxnote = ""
+  split(mempsifile == "" ? "-1 -1" : psi1060(mempsifile), mp, " ")
+  if (swpct > 0 && swcap > 0 && swf > 0 && mp[1] >= 0 && mp[1] < 1.0 && mp[2] >= 0 && mp[2] < 1.0) {
+    swx = swf / 1048576 * swpct / 100; if (swx > swcap) swx = swcap
+    swxnote = sprintf(" (+%.1f swap headroom)", swx)
+  }
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
   claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
 }
@@ -1293,6 +1320,7 @@ END {
     # does not run.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
     if (!picked[i] && kind !~ /^(swap|interactive|key|writer)$/ && (kind == "critical" || kind == "critical-first" || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    if (picked[i] && swx > 0) why[i] = why[i] swxnote
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
   }
@@ -1319,7 +1347,8 @@ decide() {
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" \
-    -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" "$ADMIT_AWK")
+    -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
+    -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
