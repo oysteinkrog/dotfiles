@@ -28,9 +28,9 @@ from pathlib import Path
 SYNDICATION_URL = "https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&lang=en&token=x"
 GRAPHQL_TWEET_URL = "https://x.com/i/api/graphql/tmhPpO5sDermwYmq3h034A/TweetResultByRestId"
 BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-COOKIES_ENV = Path.home() / ".." / ".." / "c" / "work" / "life" / "data" / "x-cookies.env"
+COOKIES_ENV = Path.home() / "work" / "life" / "data" / "x-cookies.env"
 # Also try direct path
-COOKIES_ENV_ALT = Path("/c/work/life/data/x-cookies.env")
+COOKIES_ENV_ALT = Path(os.path.expanduser("~/work/life/data/x-cookies.env"))
 
 
 def extract_tweet_id(arg: str) -> str | None:
