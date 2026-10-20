@@ -14,7 +14,10 @@ What it touches (and nothing else):
                     older than --variant-hours (default 24)
   mcbuild MotionCatalyst <worktree>/src/motioncatalyst/BUILD[_*] with no file
           newer than --mc-hours (default 48). Same scope as the WSL-era
-          purge-stale-builds that Oystein approved.
+          purge-stale-builds that Oystein approved. In a dry run the size of a
+          stale BUILD dir is cached in $STATE/mcbuild-cache.json and reused for up
+          to 7 days while its dir mtimes (two levels deep) are unchanged; those
+          lines end in [cached]. --apply and --no-cache always re-measure.
   dump    *.dmp files under worktrees and /var/tmp/claude older than --dump-days
           (default 3).
   scratch Claude session scratchpads under /var/tmp/claude/claude-<uid>/: REPORT ONLY.
@@ -84,31 +87,62 @@ def in_use(p, live):
     return any(x.startswith(s) or x == str(p) for x in live)
 
 
+def scan(p, stop_after=None):
+    """One walk of p with os.scandir. Returns (newest mtime, allocated bytes, complete).
+
+    Newest mtime covers files and dirs; bytes count non-dir entries. Never follows
+    symlinks. Once something newer than stop_after is seen it stops early and
+    returns complete=False (the byte count is then partial and must not be used).
+    """
+    newest, total, stack = 0.0, 0, [str(p)]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    st = e.stat(follow_symlinks=False)
+                    is_dir = e.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if st.st_mtime > newest:
+                    newest = st.st_mtime
+                    if stop_after and newest > stop_after:
+                        return newest, total, False
+                if is_dir:
+                    stack.append(e.path)
+                else:
+                    total += st.st_blocks * 512
+    return newest, total, True
+
+
 def size_of(p):
-    total = 0
-    for root, dirs, files in os.walk(p, followlinks=False):
-        for f in files:
-            try:
-                total += os.lstat(os.path.join(root, f)).st_blocks * 512
-            except OSError:
-                pass
-    return total
+    return scan(p)[1]
 
 
 def newest_mtime(p, stop_after=None):
     """Newest mtime under p. Returns early once a file newer than stop_after is seen."""
-    newest = 0.0
-    for root, dirs, files in os.walk(p, followlinks=False):
-        for name in files + dirs:
-            try:
-                m = os.lstat(os.path.join(root, name)).st_mtime
-            except OSError:
-                continue
-            if m > newest:
-                newest = m
-                if stop_after and newest > stop_after:
-                    return newest
-    return newest
+    return scan(p, stop_after)[0]
+
+
+class Progress:
+    """Prints one line per phase (and every `every` items) so the journal shows
+    where the time goes even when a run is killed."""
+    def __init__(self, phase, every=0):
+        self.phase, self.every, self.n, self.t0 = phase, every, 0, time.monotonic()
+        print(f"phase {phase}: start", flush=True)
+
+    def tick(self, what=""):
+        self.n += 1
+        if self.every and self.n % self.every == 0:
+            print(f"phase {self.phase}: {self.n} items, {time.monotonic() - self.t0:.0f} s {what}",
+                  flush=True)
+
+    def done(self, extra=""):
+        print(f"phase {self.phase}: done, {self.n} items, {time.monotonic() - self.t0:.0f} s {extra}",
+              flush=True)
 
 
 def is_cargo_dir(d):
@@ -170,7 +204,9 @@ class Locks:
 
 def plan_cargo(args, now, live, excl):
     plan = []
+    prog = Progress("cargo", every=20)
     for d in find_cargo_dirs():
+        prog.tick()
         if any(str(d).startswith(e) for e in excl):
             plan.append(("cargo", "skip-excluded", d, 0)); continue
         if in_use(d, live):
@@ -178,14 +214,16 @@ def plan_cargo(args, now, live, excl):
         scratch_parent = d.parent in (Path("/var/tmp"), Path("/var/tmp/claude"))
         days = args.scratch_days if scratch_parent else args.cargo_days
         cutoff = now - days * 86400
-        if newest_mtime(d, stop_after=cutoff) <= cutoff:
-            plan.append(("cargo", f"whole>{days}d", d, size_of(d)))
+        newest, size, _ = scan(d)  # one full walk gives both the age and the size
+        if newest <= cutoff:
+            plan.append(("cargo", f"whole>{days}d", d, size))
             continue
-        plan.append(("cargo", "keep", d, size_of(d)))
+        plan.append(("cargo", "keep", d, size))
         try:
             plan += plan_variants(args, now, d)
         except OSError:
             pass  # the dir changed under us; the next run sees it
+    prog.done()
     return plan
 
 
@@ -213,39 +251,123 @@ def plan_variants(args, now, d):
     return plan
 
 
+MC_CACHE = STATE / "mcbuild-cache.json"
+MC_CACHE_DAYS = 7
+
+
+def dir_signature(b):
+    """mtime_ns of b and of every dir one and two levels below it. A build that
+    creates, removes or renames files in those dirs changes the signature."""
+    sig = []
+    try:
+        sig.append(["", os.lstat(b).st_mtime_ns])
+        for e1 in os.scandir(b):
+            if not e1.is_dir(follow_symlinks=False):
+                continue
+            sig.append([e1.name, e1.stat(follow_symlinks=False).st_mtime_ns])
+            for e2 in os.scandir(e1.path):
+                if e2.is_dir(follow_symlinks=False):
+                    sig.append([f"{e1.name}/{e2.name}", e2.stat(follow_symlinks=False).st_mtime_ns])
+    except OSError:
+        return None
+    sig.sort()
+    return sig
+
+
+def load_mc_cache():
+    try:
+        return json.loads(MC_CACHE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_mc_cache(cache):
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        tmp = MC_CACHE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, MC_CACHE)
+    except OSError as e:
+        print(f"warning: could not write {MC_CACHE}: {e}", flush=True)
+
+
 def plan_mcbuild(args, now, live, excl):
+    """A stale BUILD dir needs a full walk to prove it is stale and to size it. That
+    result is cached per dir and reused while the dir signature (dir mtimes two
+    levels deep) is unchanged and the entry is under MC_CACHE_DAYS old. --apply and
+    --no-cache always re-measure."""
     plan, cutoff = [], now - args.mc_hours * 3600
+    use_cache = not (args.apply or args.no_cache)
+    old = load_mc_cache() if use_cache else {}
+    new, reused = {}, 0
+    prog = Progress("mcbuild", every=25)
+    seen = set()
     for root in WT_ROOTS:
         for b in sorted(root.glob("*/src/motioncatalyst/BUILD*")):
-            if not b.is_dir() or b.is_symlink():
+            if b in seen or not b.is_dir() or b.is_symlink():
                 continue
+            seen.add(b)
+            prog.tick(f"(cached {reused})")
             if any(str(b).startswith(e) for e in excl):
                 plan.append(("mcbuild", "skip-excluded", b, 0)); continue
             if in_use(b, live):
                 plan.append(("mcbuild", "skip-live", b, 0)); continue
-            if newest_mtime(b, stop_after=cutoff) <= cutoff:
-                plan.append(("mcbuild", f"whole>{args.mc_hours}h", b, size_of(b)))
+            why = f"whole>{args.mc_hours}h"
+            sig = dir_signature(b)
+            ent = old.get(str(b))
+            if (ent and sig is not None and ent["sig"] == sig
+                    and now - ent["measured_at"] < MC_CACHE_DAYS * 86400
+                    and ent["newest"] <= cutoff):
+                new[str(b)] = ent
+                reused += 1
+                plan.append(("mcbuild", why, b, ent["size"], "cached"))
+                continue
+            newest, size, complete = scan(b, stop_after=cutoff)
+            if complete and newest <= cutoff:
+                plan.append(("mcbuild", why, b, size))
+                if sig is not None:
+                    new[str(b)] = {"sig": sig, "newest": newest, "size": size,
+                                   "measured_at": now}
+    if use_cache:
+        save_mc_cache(new)
+    prog.done(f"(cached {reused})")
     return plan
+
+
+# Dumps are written by test runs, not by builds, so the dump walk skips these.
+DUMP_PRUNE = {".git", "node_modules", "bin", "obj", "target"}
+DUMP_EXTRA_ROOTS = [Path("/var/tmp/claude")]
 
 
 def plan_dumps(args, now, live, excl):
     plan, cutoff = [], now - args.dump_days * 86400
-    roots = WT_ROOTS + [Path("/var/tmp/claude")]
+    roots = WT_ROOTS + DUMP_EXTRA_ROOTS
+    root_strs = {str(r) for r in roots}
+    prog = Progress("dump")
+    dirs_seen = 0
     for root in roots:
         if not root.is_dir():
             continue
         for cur, dirs, files in os.walk(root, followlinks=False):
-            dirs[:] = [x for x in dirs if x not in (".git", "node_modules")]
+            dirs_seen += 1
+            # another root (.scratch inside work/desktop) gets its own walk
+            dirs[:] = [x for x in dirs if x not in DUMP_PRUNE and not x.startswith("BUILD")
+                       and os.path.join(cur, x) not in root_strs]
             for f in files:
                 if not f.lower().endswith(".dmp"):
                     continue
                 p = Path(cur) / f
-                st = os.lstat(p)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                prog.tick()
                 if st.st_mtime > cutoff or st.st_size < 50 * 2**20:
                     continue
                 if any(str(p).startswith(e) for e in excl) or str(p) in live:
                     continue
                 plan.append(("dump", f">{args.dump_days}d", p, st.st_blocks * 512))
+    prog.done(f"({dirs_seen} dirs walked)")
     return plan
 
 
@@ -255,6 +377,7 @@ def plan_scratch(args, now):
     base = Path(f"/var/tmp/claude/claude-{UID}")
     if not base.is_dir():
         return plan
+    prog = Progress("scratch")
     for proj in base.iterdir():
         if not proj.is_dir() or not proj.name.startswith("-"):
             continue  # bash-edit-diff and similar are Claude Code internals
@@ -268,9 +391,12 @@ def plan_scratch(args, now):
                 log_m = 0
             if log_m > cutoff:
                 continue
-            if newest_mtime(sess, stop_after=cutoff) > cutoff:
+            prog.tick()
+            newest, size, complete = scan(sess, stop_after=cutoff)
+            if not complete or newest > cutoff:
                 continue
-            plan.append(("scratch", "report-only", sess, size_of(sess)))
+            plan.append(("scratch", "report-only", sess, size))
+    prog.done()
     return plan
 
 
@@ -284,6 +410,61 @@ def remove(p):
     return "removed"
 
 
+def self_test():
+    """Checks the walk, the dump pruning and the BUILD cache on a small tree under
+    /var/tmp/claude. Deletes only that temp tree."""
+    import tempfile
+    global WT_ROOTS, STATE, MC_CACHE, DUMP_EXTRA_ROOTS
+    base = Path("/var/tmp/claude"); base.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="build-sweep-selftest-", dir=base))
+    try:
+        old = time.time() - 10 * 86400
+        desk, scr = tmp / "desktop", tmp / "desktop/.scratch"
+        WT_ROOTS = [desk, scr]
+        DUMP_EXTRA_ROOTS = []
+        STATE = tmp / "state"; MC_CACHE = STATE / "mcbuild-cache.json"
+        def mk(p, size=0, mtime=old):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "wb") as fh:
+                fh.truncate(size) if size == 0 else fh.write(b"x" * size)
+            os.utime(p, (mtime, mtime))
+        stale = desk / "wt1/src/motioncatalyst/BUILD/x64_Debug"
+        mk(stale / "a.dll", 8192); mk(stale / "sub/b.dll", 4096)
+        mk(desk / "wt1/src/motioncatalyst/BUILD/x64_Debug/sub/hidden.dmp", 60 * 2**20)
+        fresh = scr / "lane/src/motioncatalyst/BUILD_x/x64_Debug"
+        mk(fresh / "c.dll", 4096, mtime=time.time())
+        mk(scr / "lane/artifacts/res/In/x.dmp", 60 * 2**20)
+        for d in sorted(tmp.rglob("*"), reverse=True):
+            if d.is_dir():
+                os.utime(d, (old, old))
+        args = argparse.Namespace(mc_hours=48, dump_days=3, apply=False, no_cache=False)
+        now = time.time()
+        sb = desk / "wt1/src/motioncatalyst/BUILD"
+
+        n, sz, done = scan(sb)
+        assert done and sz >= 8192 + 4096 + 60 * 2**20, (n, sz)
+        assert not scan(fresh.parent, stop_after=now - 3600)[2], "fresh dir must stop early"
+
+        p1 = plan_mcbuild(args, now, set(), [])
+        assert [x[2] for x in p1] == [sb], p1
+        assert len(p1[0]) == 4, "first run must measure"
+        p2 = plan_mcbuild(args, now, set(), [])
+        assert p2[0][3] == p1[0][3] and p2[0][4:] == ("cached",), p2
+        mk(stale / "sub/new.dll", 4096)  # a build adds a file: sub mtime changes
+        p3 = plan_mcbuild(args, now, set(), [])
+        assert len(p3) == 0, "new file is recent, so the dir is no longer stale"
+        args.no_cache = True
+        assert plan_mcbuild(args, now + 3 * 86400, set(), [])[0][4:] == (), "--no-cache must measure"
+
+        dumps = plan_dumps(args, now, set(), [])
+        paths = [str(x[2]) for x in dumps]
+        assert paths == [str(scr / "lane/artifacts/res/In/x.dmp")], paths  # once, not twice; BUILD pruned
+        print("self-test ok")
+        return 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="delete; without it this is a dry run")
@@ -295,7 +476,14 @@ def main():
     ap.add_argument("--dump-days", type=float, default=3)
     ap.add_argument("--scratch-report-days", type=float, default=7)
     ap.add_argument("--verbose", action="store_true", help="list every variant file")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="re-measure every stale BUILD dir instead of reusing cached sizes")
+    ap.add_argument("--self-test", action="store_true",
+                    help="run the built-in checks on a small temp tree and exit")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
+    t_start = time.monotonic()
     only = set(args.only.split(","))
     now, live, excl = time.time(), live_paths(), load_excludes()
 
@@ -307,7 +495,8 @@ def main():
 
     totals = defaultdict(int)
     variants = defaultdict(lambda: [0, 0])
-    for cat, why, p, sz in plan:
+    n_cached = 0
+    for cat, why, p, sz, *flags in plan:
         if why.startswith("skip"):
             print(f"SKIP   {why:14} {p}")
             continue
@@ -318,13 +507,15 @@ def main():
             variants[top][0] += 1; variants[top][1] += sz
             continue
         verb = "REPORT" if cat == "scratch" else "KEEP  " if why == "keep" else ("WOULD " if not args.apply else "DEL   ")
-        print(f"{verb} {cat:8} {why:12} {sz / 2**30:8.2f} GiB  {p}")
+        mark = "  [cached]" if "cached" in flags else ""
+        n_cached += bool(mark)
+        print(f"{verb} {cat:8} {why:12} {sz / 2**30:8.2f} GiB  {p}{mark}")
     for top, (n, sz) in sorted(variants.items(), key=lambda x: -x[1][1]):
         verb = "WOULD " if not args.apply else "DEL   "
         print(f"{verb} cargo    variant      {sz / 2**30:8.2f} GiB  {top} ({n} stale hash variants)")
 
     if args.apply:
-        for cat, why, p, sz in plan:
+        for cat, why, p, sz, *_ in plan:
             if why.startswith("skip") or why == "keep" or cat == "scratch":
                 continue
             if cat == "cargo":
@@ -347,6 +538,10 @@ def main():
         if cat != "scratch" and why != "keep":
             grand += sz
     print(f"  {'deletable':21} {grand / 2**30:8.2f} GiB  ({'deleted' if args.apply else 'dry run'})")
+    if n_cached:
+        print(f"  {n_cached} BUILD dir sizes marked [cached] come from {MC_CACHE} "
+              f"(measured within {MC_CACHE_DAYS} days, dir mtimes unchanged)")
+    print(f"  total run time {time.monotonic() - t_start:.0f} s", flush=True)
     STATE.mkdir(parents=True, exist_ok=True)
     hist = STATE / "history.jsonl"
     try:
