@@ -10,4 +10,4 @@ Nice=19
 IOSchedulingClass=idle
 # Its tree walk filled 11.5G of dentry/inode cache and pushed apps into swap (2026-10-17).
 MemoryHigh=2G
-TimeoutStartSec=1h
+TimeoutStartSec=2h
