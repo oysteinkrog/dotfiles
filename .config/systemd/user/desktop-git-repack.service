@@ -1,0 +1,9 @@
+[Unit]
+Description=Geometric repack of the desktop monorepo object store (desktop-git-repack)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/desktop-git-repack
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h

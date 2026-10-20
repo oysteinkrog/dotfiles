@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Weekly geometric repack of the desktop monorepo object store.
+# Do NOT use incremental-repack or multi-pack-index repack: on this partial
+# clone they merge promisor packs into non-promisor packs.
+set -u
+repo="$HOME/work/desktop/master"
+
+if pgrep -f "git .*-C $repo .*(repack|gc)|git (repack|gc)" >/dev/null; then
+  echo "git repack/gc already running, skipping"
+  exit 0
+fi
+if [ -e "$repo/.git/objects/maintenance.lock" ]; then
+  echo "maintenance.lock exists, skipping"
+  exit 0
+fi
+
+export HEAVY_BUILD_PRIORITY=low
+export HEAVY_BUILD_REASON="weekly desktop monorepo geometric repack"
+
+heavy-build git -C "$repo" -c core.compression=1 repack --geometric=2 -d -l --write-midx || exit $?
+git -C "$repo" multi-pack-index verify
