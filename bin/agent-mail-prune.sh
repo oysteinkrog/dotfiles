@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-HOME_DIR="${HOME:-/c/users/oystein}"
+HOME_DIR="${HOME:-/home/oystein}"
 DB="$HOME_DIR/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
 LOG="$HOME_DIR/bin/logs/agent-mail-prune.log"
 ECOSYSTEM="$HOME_DIR/.config/pm2/ecosystem.config.js"
@@ -23,7 +23,7 @@ KEEP=5000
 HEALTH_URL="http://127.0.0.1:8765/health"
 RPC_URL="http://127.0.0.1:8765/mcp/"
 PM2_NAME="mcp-agent-mail"
-PROJECT_KEY="/c/work/desktop/metrics"
+PROJECT_KEY="$HOME_DIR/work/desktop/metrics"
 
 export PATH="$HOME_DIR/.nvm/versions/node/v22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 

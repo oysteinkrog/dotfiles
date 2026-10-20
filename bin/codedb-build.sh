@@ -14,13 +14,13 @@
 #
 # Prerequisites:
 #   - Windows Zig 0.15.0+ at C:\tools\zig-0.15.0\zig-x86_64-windows-0.15.0\
-#   - codedb repo cloned at /c/work/codedb with the compat.zig patch applied
+#   - codedb repo cloned at ~/work/codedb with the compat.zig patch applied
 #
 # Usage: ./codedb-build.sh [--install]
 
 set -euo pipefail
 
-CODEDB_REPO="/c/work/codedb"
+CODEDB_REPO="$HOME/work/codedb"
 ZIG_WIN="C:\\tools\\zig-0.15.0\\zig-x86_64-windows-0.15.0\\zig.exe"
 OUTPUT="$CODEDB_REPO/zig-out/bin/codedb"
 INSTALL_TO="$(dirname "$0")/codedb"
