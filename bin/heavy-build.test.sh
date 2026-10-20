@@ -650,4 +650,29 @@ check "critical-first: an expired switch is off and logged once (got '$out')" '[
 check "critical-first: the switch file is left in place" '[[ -e $A/cf ]]'
 rm -rf -- "$A"
 
+# append_history trims to HISTORY_LINES (default 20000, kept at 10% over).
+H=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+ah() {  # $1 = HISTORY_LINES value or empty; prints line count after one append
+  (
+    HIST=$H/hist STATE=$H start_ts=$EPOCHSECONDS EPOCHSECONDS=$EPOCHSECONDS usec_last= peak=0 cls=other hash=k sig=- tstate=-
+    [[ -n $1 ]] && HISTORY_LINES=$1
+    say() { :; }; log_line() { :; }
+    eval "$(sed -n '/^append_history()/,/^}/p' "$HB")"
+    append_history 0 ok
+    wc -l < "$HIST"
+  )
+}
+seq 1 2000 | sed 's/.*/1\tother\tk\t1\t1\t1\t0\tok/' > "$H/hist"
+out=$(ah 1000)
+check "history trim: HISTORY_LINES=1000 trims 2,000 lines to 1000 (got '$out')" '[[ $out == 1000 ]]'
+seq 1 1050 | sed 's/.*/1\tother\tk\t1\t1\t1\t0\tok/' > "$H/hist"
+out=$(ah 1000)
+check "history trim: within 10% over the limit nothing is trimmed (got '$out')" '[[ $out == 1051 ]]'
+seq 1 5000 | sed 's/.*/1\tother\tk\t1\t1\t1\t0\tok/' > "$H/hist"
+out=$(ah "")
+check "history trim: default keeps 5,000 lines, no 2,000 cut (got '$out')" '[[ $out == 5001 ]]'
+grep -q 'setting HEAVY_BUILD_HISTORY_LINES 20000' "$HB"
+check "history trim: HEAVY_BUILD_HISTORY_LINES defaults to 20000 in the settings list" '(( $? == 0 ))'
+rm -rf -- "$H"
+
 exit "$fail"
