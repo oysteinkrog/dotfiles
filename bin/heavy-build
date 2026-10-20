@@ -211,9 +211,12 @@
 #   refusal. A success, a cancel, a timeout or an OOM run in between ends the
 #   run of failures. Logged as decision=rerun-refuse. HEAVY_BUILD_ALLOW_RERUN=1
 #   skips the guard (logged as event=rerun-allowed);
-#   HEAVY_BUILD_RERUN_FAILS=0 turns it off. Over 37.7 h to 2026-10-20, 40% of
+#   HEAVY_BUILD_RERUN_FAILS=0 turns it off.
+#   Over 37.7 h to 2026-10-20, 40% of
 #   build CPU went to failed runs; one lane ran the same failing test filter
 #   29 times in a row.
+#   HEAVY_BUILD_HISTORY_LINES (default 20000, minimum 100) is how many lines of
+#   history.tsv are kept; it is trimmed when 10% over.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
@@ -385,6 +388,7 @@ read_conf() {
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
   setting HEAVY_BUILD_RERUN_FAILS 2
   setting HEAVY_BUILD_RERUN_SECS 1800
+  setting HEAVY_BUILD_HISTORY_LINES 20000
 }
 
 setting() {
@@ -590,9 +594,9 @@ SIG_DAYS=14
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
-  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
+  LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
     -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" '
-    function srt(a, n,   i, j, x) { for (i = 2; i <= n; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
+    function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
       if ($7 >= 128 && !oom) next
@@ -1814,7 +1818,9 @@ append_history() {
   {
     flock 6
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" >&6
-    if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
+    local hl=${HISTORY_LINES:-20000}; (( hl >= 100 )) || hl=20000
+    # Keep HISTORY_LINES lines (about 2 weeks at 1,300 builds a day); trim at 10% over.
+    if (( $(wc -l < "$HIST") > hl + hl / 10 )); then tail -n "$hl" -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
 
