@@ -3,7 +3,7 @@
 # Moved off /c (drvfs) to / (wslfs) on 2026-09-15. SQLite in WAL mode on drvfs
 # does not get the file locking and fsync behaviour it needs, and the store went
 # corrupt on nearly every day from 2026-08-25. The old root at
-# /c/users/oystein/.mcp_agent_mail_git_mailbox_repo is kept as a backup.
+# ~/.mcp_agent_mail_git_mailbox_repo is kept as a backup.
 #
 # wslfs is not reachable from Windows tools, which is part of the point: no
 # Windows indexer or antivirus touches the database any more.

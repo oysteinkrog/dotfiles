@@ -34,7 +34,7 @@ which requires ONNX native libraries that don't work on WSL1. Our fork replaces 
 with an Ollama HTTP backend — embeddings are computed GPU-side via Ollama's `/api/embed`.
 
 Fork: `oysteinkrog/cass_memory_system` branch `feat/ollama-embedding-backend`.
-Source: `/c/work/cass_memory_system/`. Rebuild: `cd /c/work/cass_memory_system && bun run build:current && cp dist/cass-memory ~/.local/bin/cm`
+Source: `~/work/cass_memory_system/`. Rebuild: `cd ~/work/cass_memory_system && bun run build:current && cp dist/cass-memory ~/.local/bin/cm`
 
 ## Install (new machine)
 
@@ -96,8 +96,8 @@ cmd.exe /c "mklink /J C:\Users\%USERNAME%\.claude C:\Users\%USERNAME%\.dotfiles\
 ### 4. Build and install cm (procedural memory)
 
 ```bash
-git clone https://github.com/oysteinkrog/cass_memory_system.git /c/work/cass_memory_system
-cd /c/work/cass_memory_system
+git clone https://github.com/oysteinkrog/cass_memory_system.git ~/work/cass_memory_system
+cd ~/work/cass_memory_system
 git checkout feat/ollama-embedding-backend
 npm install
 bun run build:current

@@ -138,7 +138,7 @@ files verify, remove the empty staging dir.
 
 ## GPU-accelerated semantic embedding (DirectML)
 
-Custom build, branch `gpu-embedding` at `/c/work/cass-gpu`
+Custom build, branch `gpu-embedding` at `~/work/cass-gpu`
 (fork: `oysteinkrog/coding_agent_session_search`; 2 commits on upstream main).
 Measured on RTX 5070 Ti: **634 chunks/s GPU vs 49 CPU (12.8x)**; CPU/GPU
 embedding parity exact (cosine 1.000000, vectors L2-normalized).

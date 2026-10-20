@@ -6,7 +6,7 @@ including multi-agent orchestration, secrets and the writing contract.
 ## Grove worktree manager
 
 `grove` manages git worktrees for a mono-repo workflow, each worktree a "project" with a
-short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `/c/work/grove`.
+short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `~/work/grove`.
 Never read worktree lists from the stale files in `~/.config/grove/`; `grove-workflow`
 names the live config and registry paths.
 
