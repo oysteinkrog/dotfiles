@@ -1,4 +1,4 @@
-projects_base = "/c/WORK"
+projects_base = "/home/oystein/work"
 
 [agent_mail]
 enabled = true
