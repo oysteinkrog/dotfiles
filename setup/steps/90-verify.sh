@@ -40,6 +40,3 @@ if pgrep -af 'ld-linux-x86-64.so.2 .*claude' >/dev/null; then
 else
   ok "no Claude session runs through ld-linux"
 fi
-for l in /c/users/"$(id -un)" /c/work; do
-  [ -e "$l" ] && ok "$l" || warn "$l missing (system step)"
-done
