@@ -164,6 +164,35 @@ check "estimate: exit 137 without a cap counts as 1.25 x its peak (got '$out')" 
 row cargo-check oomkey 9 1 oom 14
 out=$(est oomkey cargo-check)
 check "estimate: an OOM run counts as at least its recorded cap (got '$out')" '[[ $out == "14.0 history,mem=key" ]]'
+# A run held at its MemoryHigh is censored: it counts as 1.25 x that cap.
+rowh() {  # class key peak_gib exit reason max_gib high_gib ; peak may have decimals, high may be -
+  awk -v c="$1" -v k="$2" -v p="$3" -v e="$4" -v r="$5" -v m="$6" -v h="$7" -v G="$G" 'BEGIN {
+    printf "1\t%s\t%s\t10\t20\t%d\t%s\t%s\t%d%s\n", c, k, p * G, e, r, m * G, (h == "-" ? "" : sprintf("\t%d", h * G)) }' >> "$E/hist"
+}
+: > "$E/hist"
+rowh cargo-check capkey 16 0 ok 18 16
+out=$(est capkey cargo-check)
+check "estimate: an ok run at 100% of its 16 GiB MemoryHigh counts as 20 GiB (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capkey 15.7 1 fail 18 16
+out=$(est capkey cargo-check)
+check "estimate: a failed run at 98% of MemoryHigh counts as capped too (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capkey 15.6 0 ok 18 16
+out=$(est capkey cargo-check)
+check "estimate: a run at 97.5% of MemoryHigh keeps its own peak (got '$out')" '[[ $out == "15.6 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capkey 16 0 ok 18 -
+out=$(est capkey cargo-check)
+check "estimate: an older line without column 10 uses MemoryMax minus 2 GiB as the cap (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capkey 10 0 ok 18 16
+out=$(est capkey cargo-check)
+check "estimate: a run well under its cap keeps its own peak (got '$out')" '[[ $out == "10.0 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capkey 20 0 ok 24 20
+out=$(est capkey cargo-check)
+check "estimate: a capped run never goes past the 22 GiB estimate cap (got '$out')" '[[ $out == "22.0 history,mem=cap" ]]'
 : > "$E/hist"
 for i in $(seq 1 6); do row wine-run-tests "w$i" 2 0 ok; done
 out=$(est newkey wine-run-tests)
@@ -188,6 +217,22 @@ check "estimate: a new jb-inspectcode key gets 18 GiB (got '$out')" '[[ $out == 
 for i in $(seq 1 6); do row jb-inspectcode "j$i" 4 0 ok; done
 out=$(est newkey jb-inspectcode)
 check "estimate: the jb-inspectcode floor (18) wins over a lower p90 (got '$out')" '[[ $out == "18.0 class-history,mem=floor" ]]'
+
+# append_history writes MemoryHigh in column 10 and logs a capped run.
+ah() {  # peak_bytes ; prints "col9 col10 capped-log-lines"
+  (
+    STATE=$E/st HIST=$E/st/history.tsv MODE=live jobid=t unit=u cmdline=x est_mem=6.6 cls=dotnet-build hash=h
+    start_ts=$EPOCHSECONDS usec_last=1000000 cap_high=16 peak=$1
+    eval "$(sed -n '/^say()/p;/^log_line()/,/^}/p;/^append_history()/,/^}/p' "$HB")"
+    mkdir -p "$E/st"; : > "$HIST"; : > "$E/st/live.log"
+    append_history 0 ok 2>/dev/null
+    echo "$(cut -f9,10 "$HIST" | tr '\t' ' ') $(grep -c event=capped "$E/st/live.log")"
+  )
+}
+out=$(ah $(( 16 * G )))
+check "history: a run at its cap gets MemoryHigh in column 10 and event=capped (got '$out')" '[[ $out == "$(( 18 * G )) $(( 16 * G )) 1" ]]'
+out=$(ah $(( 8 * G )))
+check "history: a run under its cap is not logged as capped (got '$out')" '[[ $out == "$(( 18 * G )) $(( 16 * G )) 0" ]]'
 rm -rf -- "$E"
 
 # 7. Classes for Wine test runs. run-tests.sh builds nothing when every
