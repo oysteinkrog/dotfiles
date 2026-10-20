@@ -112,7 +112,12 @@
 #   directory, the p90 peak of the last 50 runs of its class (cargo test,
 #   dotnet build, Wine run-tests and so on), and the class floor, at most
 #   22 GiB. An OOM-killed run counts with a peak of at least its MemoryMax
-#   (column 9), else 1.25 times its peak. Cores and wall time come from the
+#   (column 9), else 1.25 times its peak. A run whose peak reached 98% of its
+#   scope's MemoryHigh (column 10, else column 9 minus 2 GiB) was held at the
+#   cap, so its real need is unknown: it counts with a peak of at least 1.25
+#   times that MemoryHigh, and is logged as event=capped when it ends. On
+#   2026-10-20 a dotnet build estimated at 6.6 GiB sat at its 16 GiB cap and
+#   left the machine 1 GiB. Cores and wall time come from the
 #   last 5 runs of the same command, then from the class, then 8 cores and
 #   600 s. History: ~/.local/state/heavy-build/history.tsv,
 #   one line per finished build, tab separated, with no header line. Columns:
@@ -120,8 +125,9 @@
 #   4 wall time in seconds (not the exit code), 5 CPU seconds, 6 peak memory
 #   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
 #   INT or HUP), timeout (exit 124) or oom (the scope's memory.events shows an
-#   oom_kill), 9 the scope's MemoryMax in bytes. Lines written before
-#   2026-10-09 have no column 8, and lines before 2026-10-16 no column 9.
+#   oom_kill), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
+#   bytes. Lines written before 2026-10-09 have no column 8, lines before
+#   2026-10-16 no column 9, and lines before 2026-10-20 no column 10.
 # - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
 #   heavy-build is gone is stopped when it holds only Wine leftovers
 #   (winedevice.exe, wineserver, services.exe and the like) or used under
@@ -428,13 +434,17 @@ EST_MEM_MAX_GIB=22
 
 # estimate KEY CLASS -> "mem_gib cores wall_s source".
 # history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code
-# reason cap_bytes. Older lines have no column 9 (and some no column 8).
+# reason cap_bytes high_bytes. Older lines have no column 10 (some no 9 or 8).
 # Memory is the largest of: the key's highest peak in its last 10 runs, the
 # class p90 peak over its last 50 runs (the class_table value when the class
 # has under 5 runs), and the class floor. It is capped at EST_MEM_MAX_GIB.
 # An OOM-killed run (exit 137 or reason oom, but not cancelled or timeout)
 # counts with a peak of at least its scope's MemoryMax (column 9), or its
-# peak times 1.25 when column 9 is missing. Exit 75, 124 and other signals
+# peak times 1.25 when column 9 is missing. A run that is not OOM-killed but
+# whose peak reached 98% of its MemoryHigh (column 10; for older lines column
+# 9 minus 2 GiB, as MemoryMax has always been MemoryHigh + 2G) counts with a
+# peak of at least 1.25 x that MemoryHigh: it was throttled at the cap, so
+# its peak is a lower bound, not a measurement. Exit 75, 124 and other signals
 # (exit 128 and above) are left out. Wall time and cores come from the key's
 # last 5 runs, else from the class, and never from OOM-killed runs.
 # source: history, class-history, class or default (where wall and cores
@@ -452,6 +462,9 @@ estimate() {
       if (oom && pk != "NA") {
         if ($9 ~ /^[0-9]+$/) { if ($9 + 0 > pk + 0) pk = $9 + 0 }
         else pk = pk * 1.25
+      } else if (pk != "NA") {
+        hi = ($10 ~ /^[0-9]+$/) ? $10 + 0 : ($9 ~ /^[0-9]+$/) ? $9 - 2147483648 : 0
+        if (hi > 0 && pk + 0 >= 0.98 * hi && hi * 1.25 > pk + 0) pk = hi * 1.25
       }
       if ($3 == k) { kmn++; kmp[kmn] = pk }
       if ($2 == c) { cmn++; cmp[cmn] = pk }
@@ -1573,13 +1586,19 @@ append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
   (( wall < 1 )) && wall=1
   [[ -n $usec_last ]] && cpu=$(printf '%d.%03d' $(( usec_last / 1000000 )) $(( usec_last % 1000000 / 1000 )))
-  local capb=NA
+  local capb=NA highb=NA
   (( peak > 0 )) && pk=$peak
-  [[ -n ${cap_high:-} ]] && capb=$(( (cap_high + 2) * 1073741824 ))
+  if [[ -n ${cap_high:-} ]]; then
+    capb=$(( (cap_high + 2) * 1073741824 )) highb=$(( cap_high * 1073741824 ))
+    if (( peak * 100 >= highb * 98 )); then
+      say "warning: this build's memory reached its ${cap_high}G MemoryHigh and was held there; its next estimate is at least $(( cap_high * 5 / 4 )) GiB"
+      log_line "event=capped unit=$unit peak=$peak high=$highb est=${est_mem}G cmd=\"$cmdline\""
+    fi
+  fi
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" >&6
     if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
