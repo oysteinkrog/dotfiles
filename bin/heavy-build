@@ -141,8 +141,9 @@
 #   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
 #   INT or HUP), timeout (exit 124) or oom (the scope's memory.events shows an
 #   oom_kill), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
-#   bytes. Lines written before 2026-10-09 have no column 8, lines before
-#   2026-10-16 no column 9, and lines before 2026-10-20 no column 10.
+#   bytes, 11 the tree state when the build started (see the rerun guard).
+#   Lines written before 2026-10-09 have no column 8, lines before
+#   2026-10-16 no column 9, and lines before 2026-10-20 no column 10 or 11.
 # - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
 #   heavy-build is gone is stopped when it holds only Wine leftovers
 #   (winedevice.exe, wineserver, services.exe and the like) or used under
@@ -190,6 +191,21 @@
 #   lock key, swap or interactive memory pressure. A wait can be long: run it in the
 #   background when your tool call has a timeout.
 # - Every exit 75 (gave up, or low disk) is logged as decision=refuse.
+# - Rerun guard: refuses at once, with exit code 76, when the same command in
+#   the same directory (the history key) failed (reason fail) in each of its
+#   last HEAVY_BUILD_RERUN_FAILS runs (default 2), all of them ended in the
+#   last HEAVY_BUILD_RERUN_SECS seconds (default 1800), and its git tree has
+#   not changed since the last failure. The tree state is the git HEAD of the
+#   toplevel plus a hash of `git status --porcelain` and the size and mtime of
+#   each path it lists, taken when the build starts (history column 11).
+#   Outside git it is "-", and then time alone decides. When git status takes
+#   over 5 s only HEAD counts. History lines without column 11 never cause a
+#   refusal. A success, a cancel, a timeout or an OOM run in between ends the
+#   run of failures. Logged as decision=rerun-refuse. HEAVY_BUILD_ALLOW_RERUN=1
+#   skips the guard (logged as event=rerun-allowed);
+#   HEAVY_BUILD_RERUN_FAILS=0 turns it off. Over 37.7 h to 2026-10-20, 40% of
+#   build CPU went to failed runs; one lane ran the same failing test filter
+#   29 times in a row.
 # - Refuses when the filesystem of the current directory has less than
 #   HEAVY_BUILD_REFUSE_GIB free (default 60). Exit code 75.
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
@@ -220,7 +236,8 @@
 #   2 times its estimated cores (at least 2) in threads that stayed runnable
 #   without ever sleeping between two checks, for 60 s (HB_BUSY_SECS).
 # - Exit codes: the command's own status; 128 + signal on a signal death (137
-#   after an OOM kill); 75 when refused or when the wait gave up; 124 when
+#   after an OOM kill); 75 when refused or when the wait gave up; 76 when the
+#   rerun guard refused a command that keeps failing; 124 when
 #   HEAVY_BUILD_TIMEOUT or HEAVY_BUILD_WINE_ORPHAN=stop ended it; 2 for a usage
 #   error; 70 when it came back to the queue after its build started (the
 #   script was changed in place under an older heavy-build). TERM, INT or
@@ -358,6 +375,8 @@ read_conf() {
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
+  setting HEAVY_BUILD_RERUN_FAILS 2
+  setting HEAVY_BUILD_RERUN_SECS 1800
 }
 
 setting() {
@@ -1668,6 +1687,44 @@ cpu_guard() {
   done
 }
 
+# ---------------------------------------------------------------- rerun guard
+
+# The state of the git tree the build runs in: "<HEAD 12>-<hash 8>", where
+# the hash covers `git status --porcelain` and the size and mtime of each
+# path it lists, so an edit to a file that was already modified counts as a
+# change. "<HEAD 12>" alone when git status fails or takes over 5 s, "-"
+# outside git. --no-optional-locks keeps it off the index lock that builds
+# and agents in the same tree use. About 0.5 s in the monorepo.
+tree_state() {
+  local top head list meta
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo -; return; }
+  head=$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null) || head=none
+  if ! list=$(cd "$top" && timeout 5 git --no-optional-locks status --porcelain -z --untracked-files=normal 2>/dev/null | tr '\0' '\n'); then
+    echo "${head:0:12}"
+    return
+  fi
+  meta=$(cd "$top" && cut -c4- <<< "$list" | xargs -r -d '\n' stat -c '%n %s %Y' -- 2>/dev/null)
+  echo "${head:0:12}-$(printf '%s\n%s\n' "$list" "$meta" | md5sum | cut -c1-8)"
+}
+
+# rerun_check KEY STATE: prints "<fails> <seconds since the last one>" when
+# the last RERUN_FAILS runs of KEY in history all failed within RERUN_SECS
+# and the tree state is the same as at the last failure (or either state is
+# "-", so time alone decides). Prints nothing when the build may run.
+rerun_check() {
+  (( RERUN_FAILS > 0 )) || return 0
+  [[ -r $HIST ]] || return 0
+  awk -F'\t' -v k="$1" -v st="$2" -v n="$RERUN_FAILS" -v win="$RERUN_SECS" -v now="$EPOCHSECONDS" '
+    $3 == k { m++; t[m] = $1; e[m] = $7; r[m] = $8; s[m] = $11; has[m] = (NF >= 11) }
+    END {
+      if (m < n) exit
+      for (i = m - n + 1; i <= m; i++) if (r[i] != "fail" || e[i] == 0 || now - t[i] > win) exit
+      if (!has[m]) exit
+      if (s[m] != "-" && st != "-" && s[m] != st) exit
+      print n, now - t[m]
+    }' "$HIST" 2>/dev/null
+}
+
 # append_history EXIT_CODE REASON. Columns: see the help text at the top.
 append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
@@ -1685,7 +1742,7 @@ append_history() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" >&6
     if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
@@ -1758,6 +1815,22 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 read_conf
+
+# The rerun guard (see the help text). tstate goes into history column 11.
+tstate=-
+(( RERUN_FAILS > 0 )) && tstate=$(tree_state)
+rr=$(rerun_check "$hash" "$tstate")
+if [[ -n $rr ]]; then
+  rtree=$(git rev-parse --show-toplevel 2>/dev/null) || rtree=$PWD
+  read -r rr_n rr_ago <<< "$rr"
+  if [[ ${HEAVY_BUILD_ALLOW_RERUN:-} == 1 ]]; then
+    log_line "event=rerun-allowed fails=$rr_n last_fail_s=$rr_ago tree=$rtree state=$tstate cmd=\"$cmdline\""
+  else
+    say "this exact command failed $rr_n times in a row in the last $(( RERUN_SECS / 60 )) min with no change in $rtree; read the last log or change something before running it again. Set HEAVY_BUILD_ALLOW_RERUN=1 to override."
+    log_line "decision=rerun-refuse reason=\"rerun: failed $rr_n times in a row in the last $(( RERUN_SECS / 60 )) min, the last ${rr_ago}s ago, with no change in the tree\" tree=$rtree state=$tstate prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
+    exit 76
+  fi
+fi
 
 reentry_guard
 # The give-up clock: seconds of waiting without moving up in line, not counted
