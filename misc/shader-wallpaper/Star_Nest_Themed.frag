@@ -34,11 +34,11 @@ const vec3  deepColor   = vec3(0.078, 0.086, 0.094); // @color @label("Deep colo
 const vec3  midColor    = vec3(0.239, 0.682, 0.914); // @color @label("Mid colour") @theme(Selection.BackgroundNormal)
 const vec3  brightColor = vec3(0.988, 0.988, 0.988); // @color @label("Bright colour") @theme(View.ForegroundNormal)
 const float themeMix    = 1.0;  // @range(0.0, 1.0, 0.01) @label("Theme colours (0 = original)")
-const float deepLevel   = 0.25; // @range(0.0, 1.0, 0.01) @label("Deep colour brightness (0 = black)")
+const float deepLevel   = 0.4; // @range(0.0, 1.0, 0.01) @label("Deep colour brightness (0 = black)")
 const float accentAmount = 0.35; // @range(0.0, 1.0, 0.01) @label("Mid colour strength (0 = grey)")
 const float midPoint    = 0.75; // @range(0.1, 0.95, 0.01) @label("Mid colour position")
-const float exposure    = 1.4;  // @range(0.2, 8.0, 0.05) @label("Exposure")
-const float gradeGamma  = 1.8;  // @range(0.3, 4.0, 0.01) @label("Contrast (gamma)")
+const float exposure    = 1.75; // @range(0.2, 8.0, 0.05) @label("Exposure")
+const float gradeGamma  = 1.4;  // @range(0.3, 4.0, 0.01) @label("Contrast (gamma)")
 
 vec3 grade(float t)
 {
