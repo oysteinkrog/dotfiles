@@ -111,7 +111,9 @@
 #   of: the highest peak in the last 10 runs of the same command in the same
 #   directory, the p90 peak of the last 50 runs of its class (cargo test,
 #   dotnet build, Wine run-tests and so on), and the class floor, at most
-#   22 GiB. An OOM-killed run counts with a peak of at least its MemoryMax
+#   22 GiB. A dotnet build, test or msbuild of a whole .sln or .slnx (named,
+#   or picked by MSBuild from the directory) has class dotnet-build-sln and
+#   gets 16 GiB until that class has 5 runs. An OOM-killed run counts with a peak of at least its MemoryMax
 #   (column 9), else 1.25 times its peak. A run whose peak reached 98% of its
 #   scope's MemoryHigh (column 10, else column 9 minus 2 GiB) was held at the
 #   cap, so its real need is unknown: it counts with a peak of at least 1.25
@@ -374,11 +376,51 @@ wine_tests_prebuilt() {
   (( n > 0 ))
 }
 
+# dotnet_sln WORD...: true when a `dotnet build|test|msbuild` or a
+# plain `msbuild` builds a whole solution: its project argument ends in .sln
+# or .slnx, or it has none (or names a directory) and that directory holds a
+# .sln or .slnx and no project file, so MSBuild picks the solution. Words are
+# split on blanks, so `bash -c 'cd x && dotnet build'` looks in the current
+# directory, not in x.
+dotnet_sln() {
+  local w seen= skip= proj= f end=
+  for w in "$@"; do
+    [[ -n $end ]] && break
+    case $w in ';'|'&&'|'||'|'|'|'&') [[ -n $seen ]] && break; seen=; continue ;; esac
+    if [[ $w == ?*[\;\&\|\)] ]]; then end=1; w=${w%%[\;\&\|\)]*}; fi
+    w=${w##*[\;\&\|\(]}
+    [[ -n $w ]] || continue
+    if [[ -z $seen ]]; then
+      if [[ ${w##*/} == msbuild || ${w##*/} == msbuild.exe ]]; then seen=1
+      elif [[ ${w##*/} == dotnet ]]; then seen=d
+      fi
+      continue
+    fi
+    if [[ $seen == d ]]; then
+      case $w in build|test|msbuild) seen=1 ;; *) seen= ;; esac
+      continue
+    fi
+    if [[ -n $skip ]]; then skip=; continue; fi
+    case $w in
+      -c|-f|-o|-r|-v|-a|-s|-l|--configuration|--framework|--output|--runtime|--verbosity|--arch|--os|--source|--logger|--filter|--settings|--results-directory|--collect|--blame-hang-timeout|--property) skip=1 ;;
+      -*|/*:*) ;;
+      /*) [[ ${w:1} == */* ]] && { proj=$w; break; } ;;
+      *) proj=$w; break ;;
+    esac
+  done
+  [[ -n $seen && $seen != d ]] || return 1
+  [[ $proj == *.sln || $proj == *.slnx ]] && return 0
+  [[ -z $proj ]] && proj=.
+  [[ -d $proj ]] || return 1
+  for f in "$proj"/*.*proj; do [[ -e $f ]] && return 1; done
+  for f in "$proj"/*.sln "$proj"/*.slnx; do [[ -e $f ]] && return 0; done
+  return 1
+}
+
 classify() {
-  local c=" $* "
+  local c=" $* " words
   local rc='(^|[^[:alnum:]_-])cargo[[:space:]]+(\+[^[:space:]]+[[:space:]]+)?'
   if [[ $c == *run-tests.sh* ]]; then
-    local -a words
     read -ra words <<< "$*"
     if wine_tests_prebuilt "${words[@]}"; then echo wine-run-tests-prebuilt
     else echo wine-run-tests
@@ -389,6 +431,8 @@ classify() {
   elif [[ $c =~ ${rc}check ]]; then echo cargo-check
   elif [[ $c =~ ${rc}(test|nextest) ]]; then echo cargo-test
   elif [[ $c =~ ${rc}build ]]; then echo cargo-build
+  elif [[ ${c,,} =~ (dotnet[[:space:]]+(build|test|msbuild)|msbuild(\.exe)?)[[:space:]] ]] && read -ra words <<< "$*" && dotnet_sln "${words[@]}"; then
+    echo dotnet-build-sln
   elif [[ $c =~ dotnet[[:space:]]+test ]]; then echo dotnet-test
   elif [[ $c =~ dotnet[[:space:]]+(build|publish|run) ]]; then echo dotnet-build
   elif [[ ${c,,} == *wine* ]]; then echo wine-script
@@ -409,7 +453,12 @@ classify() {
 # while it was estimated at 3.6 GB as "other". Its floor is 18 GiB; the scope
 # gets MemoryHigh 22G and MemoryMax 24G. Cores and wall time are guesses until
 # it has history. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
-# 33 s); its wall time is a guess until it has history.
+# 33 s); its wall time is a guess until it has history. dotnet-build-sln is a
+# dotnet build, test or msbuild of a whole .sln or .slnx (see dotnet_sln). On
+# 2026-10-20 one of MotionCatalyst.sln was estimated at 6.6 GiB from the
+# dotnet-build p90 and sat at its 16 GiB cap. It gets 16 GiB (no floor) until
+# the class has 5 runs of its own; from then on its p90 decides, and capped
+# runs count as 1.25 x their cap. Its wall time is a guess.
 class_table() {
   case $1 in
     cargo-release)  echo "16.3 3.4 4500 0" ;;
@@ -420,6 +469,7 @@ class_table() {
     cargo-clippy)   echo "7.6 2.6 42 6" ;;
     dotnet-build)   echo "5 8.0 17 5" ;;
     dotnet-test)    echo "5.2 6.9 45 0" ;;
+    dotnet-build-sln) echo "16 9.2 120 0" ;;
     cargo-check)    echo "3.9 1.7 26 0" ;;
     jb-inspectcode) echo "18 2.0 600 18" ;;
     *)              echo "8 8 600 0" ;;
