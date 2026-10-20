@@ -11,10 +11,10 @@ Description=Claude Code sessions started by aiolos-rc
 # MemorySwapMax caps how much of the oomd swap budget all sessions together can take.
 # Above it nothing is killed: anonymous memory stays in RAM and reclaim drops page cache
 # or swaps other cgroups instead. At 14:05 the sessions held 15.5 GiB of swap, so 20G
-# leaves room.
+# was enough then. On 2026-10-20 it had refused 45.6M swap attempts, so it is 32G.
 #
 # CPUWeight 80 sits between builds (20) and the desktop (100). Sessions used 3.8 cores
 # in total at 13:40, median 0.01 per session, so this matters only under contention.
 [Slice]
 CPUWeight=80
-MemorySwapMax=20G
+MemorySwapMax=32G
