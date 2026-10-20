@@ -27,12 +27,14 @@ teardown() {
   rm -rf -- "$T"
 }
 
-# Runs heavy-build in the sandbox in the background; sets hbpid.
+# Runs heavy-build in the sandbox in the background; sets hbpid. Arguments
+# are extra VAR=value settings for its environment.
 run_hb() {
-  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE \
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN \
+    -u HEAVY_BUILD_RERUN_FAILS -u HEAVY_BUILD_RERUN_SECS \
     XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
     HB_CGROUP="$T/cg" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
-    HEAVY_BUILD_WAIT=3 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 \
+    HEAVY_BUILD_WAIT=3 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 "$@" \
     "$HB" true) > "$T/out" 2>&1 &
   hbpid=$!
 }
@@ -91,6 +93,103 @@ check "hold with expires: gives up with 75 after it expires (took ${took}s, want
 check "hold with expires: logged once" '(( $(grep -c "event=hold-expired" "$T/state/heavy-build/shadow.log") == 1 ))'
 check "hold file is left in place" '[[ -e $T/run/heavy-build.hold ]]'
 teardown
+
+# 10. The rerun guard, end to end. heavy-build runs `true` in $T/work, so its
+# history key is the hash of that directory and command.
+hkey() { printf '%s\0' "$T/work" true | md5sum | cut -c1-8; }
+hrow() {  # seconds_ago exit reason [state] ; appends a history line for `true` in $T/work
+  local st=
+  (( $# >= 4 )) && st=$'\t'$4
+  mkdir -p "$T/state/heavy-build"
+  printf '%s\tother\t%s\t10\t5\t1000\t%s\t%s\t%s\t%s%s\n' "$(( EPOCHSECONDS - $1 ))" "$(hkey)" "$2" "$3" 19327352832 17179869184 "$st" >> "$T/state/heavy-build/history.tsv"
+}
+setup
+hrow 300 1 fail -
+hrow 200 1 fail -
+run_hb
+start=$SECONDS
+wait "$hbpid"; rc=$?
+check "rerun guard: two fails outside git, then refused with exit 76 (got $rc)" '(( rc == 76 ))'
+check "rerun guard: refused at once" '(( SECONDS - start <= 2 ))'
+check "rerun guard: says why and how to override" 'grep -q "failed 2 times in a row in the last 30 min with no change in $T/work; read the last log.*HEAVY_BUILD_ALLOW_RERUN=1" "$T/out"'
+check "rerun guard: logs decision=rerun-refuse" 'grep -q "decision=rerun-refuse reason=\"rerun: failed 2 times" "$T/state/heavy-build/shadow.log"'
+run_hb HEAVY_BUILD_ALLOW_RERUN=1
+wait "$hbpid"; rc=$?
+check "rerun guard: HEAVY_BUILD_ALLOW_RERUN=1 lets it queue (gives up with 75, got $rc)" '(( rc == 75 ))'
+check "rerun guard: the override is logged" 'grep -q "event=rerun-allowed fails=2" "$T/state/heavy-build/shadow.log"'
+run_hb HEAVY_BUILD_RERUN_FAILS=0
+wait "$hbpid"; rc=$?
+check "rerun guard: HEAVY_BUILD_RERUN_FAILS=0 turns it off (got $rc)" '(( rc == 75 ))'
+hrow 100 0 ok -
+run_hb
+wait "$hbpid"; rc=$?
+check "rerun guard: a success after the fails resets it (got $rc)" '(( rc == 75 ))'
+teardown
+
+# In a git tree: a new commit or an edit since the last failure lets it run.
+setup
+G1() { git -C "$T/work" -c user.name=t -c user.email=t@t "$@" >/dev/null 2>&1; }
+G1 init -q && echo a > "$T/work/f" && G1 add f && G1 commit -qm one
+tst() { (cd "$T/work" && eval "$(sed -n '/^tree_state()/,/^}/p' "$HB")" && tree_state); }
+s1=$(tst)
+check "tree state: HEAD plus a status hash in a git tree (got '$s1')" '[[ $s1 =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]]'
+hrow 300 1 fail "$s1"
+hrow 200 1 fail "$s1"
+run_hb
+wait "$hbpid"; rc=$?
+check "rerun guard: two fails with the same tree state, refused (got $rc)" '(( rc == 76 ))'
+echo b > "$T/work/f"
+s2=$(tst)
+check "tree state: an edit changes it (got '$s2')" '[[ $s2 != "$s1" ]]'
+run_hb
+wait "$hbpid"; rc=$?
+check "rerun guard: an edit since the last failure lets it run (got $rc)" '(( rc == 75 ))'
+G1 commit -qam two
+s3=$(tst)
+check "tree state: a new commit changes HEAD (got '$s3')" '[[ ${s3:0:12} != "${s1:0:12}" ]]'
+run_hb
+wait "$hbpid"; rc=$?
+check "rerun guard: a new HEAD since the last failure lets it run (got $rc)" '(( rc == 75 ))'
+teardown
+
+# rerun_check against fake history lines.
+R=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$R; : > "$T/out"
+rr() {  # state ; prints rerun_check output
+  (
+    HIST=$R/hist RERUN_FAILS=${RF:-2} RERUN_SECS=1800
+    eval "$(sed -n '/^rerun_check()/,/^}/p' "$HB")"
+    rerun_check k "$1"
+  )
+}
+rl() { printf '%s\tother\tk\t10\t5\t1000\t%s\t%s\t1\t1\t%s\n' "$(( EPOCHSECONDS - $1 ))" "$2" "$3" "$4" >> "$R/hist"; }
+: > "$R/hist"; rl 900 1 fail S; rl 600 2 fail S
+out=$(rr S)
+check "rerun_check: two fails, same state, refused (got '$out')" '[[ $out == "2 600" ]]'
+out=$(rr S2)
+check "rerun_check: a different state allows it (got '$out')" '[[ -z $out ]]'
+out=$(rr -)
+check "rerun_check: unknown current state falls back to time only (got '$out')" '[[ $out == "2 600" ]]'
+: > "$R/hist"; rl 900 1 fail S; rl 800 0 ok S; rl 600 1 fail S
+out=$(rr S)
+check "rerun_check: fail, ok, fail is not two in a row (got '$out')" '[[ -z $out ]]'
+: > "$R/hist"; rl 2000 1 fail S; rl 600 1 fail S
+out=$(rr S)
+check "rerun_check: a fail older than 30 min does not count (got '$out')" '[[ -z $out ]]'
+: > "$R/hist"; rl 900 1 fail S; rl 600 1 cancelled S
+out=$(rr S)
+check "rerun_check: a cancelled run ends the streak (got '$out')" '[[ -z $out ]]'
+: > "$R/hist"; rl 600 1 fail S
+out=$(rr S)
+check "rerun_check: one fail is not enough (got '$out')" '[[ -z $out ]]'
+: > "$R/hist"
+printf '%s\tother\tk\t10\t5\t1000\t1\tfail\t1\t1\n' "$(( EPOCHSECONDS - 900 ))" "$(( EPOCHSECONDS - 600 ))" >> "$R/hist"
+out=$(rr S)
+check "rerun_check: lines from before column 11 never refuse (got '$out')" '[[ -z $out ]]'
+: > "$R/hist"; rl 900 1 fail S; rl 700 1 fail S; rl 600 1 fail S
+out=$(RF=3 rr S)
+check "rerun_check: HEAVY_BUILD_RERUN_FAILS=3 needs three (got '$out')" '[[ $out == "3 600" ]]'
+rm -rf -- "$R"
 
 # 3. The wineserver check uses the job's WINEPREFIX, and never guesses
 # ~/.wine for a Wine process without one. The functions are taken from
