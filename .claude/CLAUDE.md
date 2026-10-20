@@ -267,50 +267,21 @@ and re-storing them.
 
 ## Builds
 
-**Run every heavy build or test through `heavy-build`.** That covers cargo build, test,
-check, clippy and doc, dotnet build and test, `build.cmd`, `localbuild build`, cmake and
-ninja. Example: `heavy-build cargo test -p mux --lib`.
+**Run every heavy build or test through `heavy-build`**: cargo build, test, check, clippy
+and doc; dotnet build and test; `build.sh`, `build.cmd`, `tools/wine/run-tests.sh`;
+`localbuild build`, cmake and ninja. **Load the `heavy-build` skill before your first build
+or test in a session.** It has the exit codes, the test loop, Wine prefixes, priority and
+how to keep a long build alive.
 
-heavy-build has two admission rules, and `~/.config/heavy-build.conf` picks one. **It runs
-in live mode (since 2026-10-08), so the budget rule decides.** It estimates each build's
-memory, cores and run time from its last 5 runs, and starts it when it fits the budget: at
-most 6 builds, 28 cores, 6 GiB of memory left over, and low memory pressure in the agent
-sessions. CPU pressure must stay under its limit for 30 s before a build starts next to
-others. A build that shares a cargo workspace, a worktree (dotnet and Wine) or a Wine
-prefix with a running build waits, and does not block builds behind it. Decisions go to
-`~/.local/state/heavy-build/live.log`. Only the manager session changes the mode. Setting
-`HEAVY_BUILD_MODE=shadow` there brings back the old rule: up to 3 builds at once, first
-come, first served, at least 12 GiB of memory available (8 GiB when no build runs).
-
-Both modes wait for 10 GiB of swap room below the systemd-oomd limit (90%), and refuse
-(exit 75) when the disk has less than 60 GiB free or after 7200 s of waiting without moving
-up in line. Each build runs in its own memory-capped scope (16G to 22G, from its estimate)
-inside `builds.slice` (42G for all builds), so an OOM kills only the build and not every
-terminal tab. The wait can be long, so run it in the background when your tool call has a
-timeout. On an OOM kill (exit 137), retry once, then tell the manager session.
-
-`~/.local/state/heavy-build/history.tsv` has one line per finished build, tab separated:
-end time, class, key, wall seconds, CPU seconds, peak memory bytes, exit code, and reason
-(`ok`, `fail`, `cancelled`, `timeout` or `oom`). Column 4 is wall time, not the exit code,
-and older lines have no reason. heavy-build stops its own scope on every exit it can catch.
-When a killed heavy-build leaves a scope behind, the next build that asks to start stops it
-if the scope is idle or holds only Wine leftovers, and logs `event=sweep` in `live.log`.
-
-- **`HEAVY_BUILD_PRIORITY=high` is only for a P0 bug or the last local check before a PR.**
-  Set `HEAVY_BUILD_REASON` with it. Everything else stays at the default, `normal`; use
-  `low` for builds that can wait. Builds from a critical session in
-  `~/.config/machine/sessions.toml`, or from a grove lane it owns or works in (kpp and its
-  swarm lanes), default to `critical`: after `high`, before `normal`, and still held by
-  every memory, swap, disk and lock-key check.
-- `HEAVY_BUILD_TIMEOUT=<seconds>` stops a build after that long (exit 124). heavy-build warns
-  on stderr when a build has used almost no CPU for 10 minutes, or when its wineserver is
-  gone, but it does not kill it. `heavy-build --help` has the full rules.
-
-- **Never set `CARGO_BUILD_BUILD_DIR` or `build.build-dir`.** `~/.cargo/config.toml` keeps
-  cargo's intermediate files (deps, incremental files, test binaries) in the workspace's own
-  `target/`. They are reused by every build of that checkout and go away with the worktree.
-  A `CARGO_TARGET_DIR` or `--target-dir` now moves only the final binaries, so a repo
-  AGENTS.md that asks for one per agent is harmless. Do not invent new ones, though. On
+- **Never run a build that can wait or take over 10 minutes as a Claude background
+  shell.** Claude Code kills background shells when memory runs low, and the build and its
+  place in line are lost. Use the detached form in the skill.
+- **Exit 75, 76 or 77 (77 once the staged heavy-build is installed) means heavy-build did
+  not run your command.** Read its last `heavy-build:` line and follow it. Never resubmit in
+  a loop, and never cancel a waiting build to resubmit it: it goes to the back of the line.
+- On an OOM kill (exit 137), retry once, then tell the manager session.
+- **Never set `CARGO_BUILD_BUILD_DIR` or `build.build-dir`.** Cargo keeps its intermediate
+  files in the workspace's own `target/`. Do not invent new `CARGO_TARGET_DIR`s either: on
   2026-10-02 per-agent target dirs added about 200 GiB to this disk in one day.
 - **Never clone, add a worktree or build in `/tmp`** (see above).
 - **Never build in an upstream clone under `~/src`.** Use `localbuild build`.
@@ -318,8 +289,8 @@ if the scope is idle or holds only Wine leftovers, and logs `event=sweep` in `li
   `git worktree add ~/lane-wt/...`. Run `grove done <tag>` when the lane's work is merged.
 - If `heavy-build` refuses for low disk, stop and tell Oystein or the manager session. Do
   not delete other sessions' build output to make room.
-- A subagent prompt that builds must say "use `heavy-build`". Do not copy the long
-  `flock ... systemd-run ...` line into prompts any more.
+- A subagent prompt that builds must say "use `heavy-build` and load the `heavy-build`
+  skill".
 
 The `build-guard` PreToolUse hook blocks a build dir override, `/tmp` builds and clones,
 and monorepo worktrees outside grove. An unwrapped heavy build gets a warning. For a
