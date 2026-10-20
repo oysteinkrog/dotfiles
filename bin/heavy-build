@@ -33,9 +33,12 @@
 #   HEAVY_BUILD_CPU_BUDGET (default 28). A running build is charged its
 #   estimate for 2 min, then what it used over the last 60 s;
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
-#   (default 40), and has stayed at or under it for HEAVY_BUILD_CPU_PSI_SECS
+#   (default 75), and has stayed at or under it for HEAVY_BUILD_CPU_PSI_SECS
 #   seconds (default 30), as sampled by waiters and running builds. Only
-#   checked for builds estimated at 2 cores or more;
+#   checked for builds estimated at 2 cores or more. The default was 40, and
+#   60 in heavy-build.conf from 2026-10-08; on 2026-10-20 it went to 75,
+#   because one 12-core Wine test pushes CPU pressure over 60% while cores
+#   are still free;
 # - MemAvailable, minus the memory running builds are still expected to take,
 #   minus its own estimate, leaves HEAVY_BUILD_MEM_RESERVE_GIB (default 8).
 #   A running build is expected to take HEAVY_BUILD_TC_PCT percent (default
@@ -346,7 +349,7 @@ read_conf() {
   setting HEAVY_BUILD_MAX_JOBS 6
   setting HEAVY_BUILD_CPU_BUDGET 28
   setting HEAVY_BUILD_MEM_RESERVE_GIB 8
-  setting HEAVY_BUILD_MAX_CPU_PSI 40
+  setting HEAVY_BUILD_MAX_CPU_PSI 75
   setting HEAVY_BUILD_CPU_PSI_SECS 30
   setting HEAVY_BUILD_MAX_MEM_PSI 5
   setting HEAVY_BUILD_TC_PCT 50

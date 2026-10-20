@@ -303,8 +303,8 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
     eval "$(sed -n "/^ADMIT_AWK='/,/^}'\$/p" "$HB")"
     awk -v now=1000000 -v me="$me" -v cpuquiet=999 -v cpuhold=30 -v meminfo="${ADM_MEMINFO:-$A/meminfo}" \
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
-      -v slicemax="$A/none" -v slicehigh="$A/none" -v cpupsifile="$A/none" -v claudepsifile="$A/none" \
-      -v apppsifile="$A/none" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi=60 -v maxmempsi=5 \
+      -v slicemax="$A/none" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="$A/none" \
+      -v apppsifile="$A/none" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
@@ -364,6 +364,16 @@ check "give-up clock: critical-first on, a high build's memory wait still runs t
 out=$(printf '%s\n' "$RUN_N" "$W_36N" | ADM_MEMINFO=$A/meminfo-lowswap adm 0000000999000000000-1-n 1 2 12)
 check "give-up clock: critical-first on, a swap wait still runs the clock (got '$out')" '[[ $out == wait\|swap:*\|0 ]]'
 
+# CPU pressure: 70% passes the 75% default limit, 80% does not.
+printf 'some avg10=70.00 avg60=50.00 avg300=40.00 total=1\n' > "$A/cpupsi70"
+printf 'some avg10=80.00 avg60=50.00 avg300=40.00 total=1\n' > "$A/cpupsi80"
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CPUPSI=$A/cpupsi70 adm 0000000999000000000-1-n 0 1 12)
+check "cpu pressure: 70% is under the 75% limit, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CPUPSI=$A/cpupsi80 adm 0000000999000000000-1-n 0 1 12)
+check "cpu pressure: 80% is over the 75% limit, so it waits (got '$out')" '[[ $out == "wait|cpu-pressure: 80.0%, the limit is 75%|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CPUPSI=$A/cpupsi70 ADM_MAXCPUPSI=60 adm 0000000999000000000-1-n 0 1 12)
+check "cpu pressure: a limit of 60% holds a build at 70% (got '$out')" '[[ $out == wait\|cpu-pressure:* ]]'
+
 # 9. Swap headroom. 20 GiB available, a normal build of 16 GiB next to a
 # running one: 20 - 16 = 4 is under the 6 GiB reserve without headroom.
 printf 'MemAvailable: %d kB\nSwapTotal: %d kB\nSwapFree: %d kB\n' $(( 20 * 1048576 )) $(( 96 * 1048576 )) $(( 64 * 1048576 )) > "$A/meminfo-sw"
@@ -412,6 +422,12 @@ check "settings: swap headroom defaults are 25% and 8 GiB (got '$out')" '[[ $out
 printf 'HEAVY_BUILD_SWAP_HEADROOM_PCT=10\nHEAVY_BUILD_SWAP_HEADROOM_GIB=4\n' > "$A/hb.conf"
 out=$(HEAVY_BUILD_SWAP_HEADROOM_GIB=0 rconf SWAP_HEADROOM_PCT SWAP_HEADROOM_GIB)
 check "settings: the file sets them and the environment wins (got '$out')" '[[ $out == "10 0 " ]]'
+rm -f "$A/hb.conf"
+out=$(unset HEAVY_BUILD_MAX_CPU_PSI; rconf MAX_CPU_PSI)
+check "settings: the CPU pressure limit defaults to 75% (got '$out')" '[[ $out == "75 " ]]'
+echo HEAVY_BUILD_MAX_CPU_PSI=60 > "$A/hb.conf"
+out=$(unset HEAVY_BUILD_MAX_CPU_PSI; rconf MAX_CPU_PSI)
+check "settings: HEAVY_BUILD_MAX_CPU_PSI in the file still wins over the default (got '$out')" '[[ $out == "60 " ]]'
 
 cfo() {  # prints "rc cf_on cf_slots cf_reserve expiry-log-lines"
   (
