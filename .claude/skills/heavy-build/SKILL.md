@@ -37,7 +37,7 @@ with no admission and no estimate of its own.
 | the command's own | The build ran | Read its output |
 | 75 | Not run: waited 7200 s without moving up in line, or less than 60 GiB free disk | Do not resubmit at once. Try later or tell the manager session. For low disk, stop and tell Oystein or the manager session, and never delete other sessions' build output |
 | 76 | Not run: the same command failed twice in a row within 30 min and the git tree did not change | Read the last log and change something first. Set `HEAVY_BUILD_ALLOW_RERUN=1` only when the change is outside the tree (prefix, environment) |
-| 77 (once the staged heavy-build is installed) | Not run: your `--wait-timeout` ran out | Decide whether to wait longer. Nothing started |
+| 77 | Not run: your `--wait-timeout` ran out | Decide whether to wait longer. Nothing started |
 | 124 | Stopped by `HEAVY_BUILD_TIMEOUT` or `HEAVY_BUILD_WINE_ORPHAN=stop` | Read the log. Raise the timeout only with a reason |
 | 137 | OOM kill | Retry once, then tell the manager session |
 | 70 | heavy-build was replaced while your build ran | Run it again |
@@ -124,7 +124,8 @@ fine.
 - Two lanes never share one prefix.
 
 Headless MotionCatalyst has its own rules for display, prefix and memory: load the
-`headless-app-ui` skill.
+`headless-app-ui` skill. Start a headless MC through
+`heavy-build --class app-run [--ready-file PATH] [--wait-timeout S] -- <cmd>`.
 
 ## 9. Priority
 
