@@ -1,0 +1,10 @@
+[Unit]
+Description=Run desktop-git-repack every Sunday at 13:00
+
+[Timer]
+OnCalendar=Sun *-*-* 13:00:00
+RandomizedDelaySec=10min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
