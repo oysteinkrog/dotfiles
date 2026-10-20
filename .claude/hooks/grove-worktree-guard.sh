@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Bash. Blocks raw `git worktree add`, `git clone`, and
 # `gh repo clone` invocations whose TARGET resolves under a grove-managed
-# work_dir (from ~/.config/grove/repos.json, falling back to /c/work/desktop),
+# work_dir (from ~/.config/grove/repos.json, falling back to $HOME/work/desktop),
 # because worktrees/clones created by hand bypass grove's registry and pile
 # up as sprawl that `grove list`/`grove status`/`grove gc` never learn about.
 #
@@ -63,7 +63,7 @@ fi
 # directory known to be guarded if the registry is missing/unparseable.
 workdirs=$(jq -r '.repos[]?.work_dir // empty' ~/.config/grove/repos.json 2>/dev/null || true)
 if [[ -z ${workdirs:-} ]]; then
-  workdirs="/c/work/desktop"
+  workdirs="$HOME/work/desktop"
 fi
 
 hit=$(GROVE_GUARD_COMMAND="$command" GROVE_GUARD_CWD="$cwd" GROVE_GUARD_WORKDIRS="$workdirs" python3 "$here/grove-worktree-detect.py" 2>/dev/null || true)
