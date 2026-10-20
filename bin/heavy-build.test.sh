@@ -217,6 +217,11 @@ check "estimate: a new jb-inspectcode key gets 18 GiB (got '$out')" '[[ $out == 
 for i in $(seq 1 6); do row jb-inspectcode "j$i" 4 0 ok; done
 out=$(est newkey jb-inspectcode)
 check "estimate: the jb-inspectcode floor (18) wins over a lower p90 (got '$out')" '[[ $out == "18.0 class-history,mem=floor" ]]'
+out=$(est newkey dotnet-build-sln)
+check "estimate: a new dotnet-build-sln key gets 16 GiB (got '$out')" '[[ $out == "16.0 class,mem=class" ]]'
+for i in $(seq 1 5); do row dotnet-build-sln "s$i" 7 0 ok; done
+out=$(est newkey dotnet-build-sln)
+check "estimate: dotnet-build-sln uses its own p90 once it has 5 runs (got '$out')" '[[ $out == "7.0 class-history,mem=class-p90" ]]'
 
 # append_history writes MemoryHigh in column 10 and logs a capped run.
 ah() {  # peak_bytes ; prints "col9 col10 capped-log-lines"
@@ -239,7 +244,7 @@ rm -rf -- "$E"
 # project it is given ends in .dll.
 cls() {
   (
-    eval "$(sed -n '/^wine_tests_prebuilt()/,/^}/p;/^classify()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^wine_tests_prebuilt()/,/^}/p;/^dotnet_sln()/,/^}/p;/^classify()/,/^}/p' "$HB")"
     classify "$@"
   )
 }
@@ -258,12 +263,32 @@ for c in \
   "jb-inspectcode|inspectcode Foo.sln --output=x.xml" \
   "jb-inspectcode|dotnet jb inspectcode Foo.sln" \
   "jb-inspectcode|/opt/jb/inspectcode.sh Foo.sln" \
-  "dotnet-build|dotnet build Foo.sln" ; do
+  "dotnet-build-sln|dotnet build Foo.sln" \
+  "dotnet-build-sln|dotnet test Foo.slnx -c Release" \
+  "dotnet-build-sln|dotnet msbuild -m src/motioncatalyst/MotionCatalyst.sln" \
+  "dotnet-build-sln|msbuild /m /p:Configuration=Release /home/x/Foo.sln" \
+  "dotnet-build-sln|bash -c dotnet build Foo.sln; echo done" \
+  "dotnet-build|dotnet build Foo.csproj" \
+  "dotnet-test|dotnet test Foo.Tests.csproj" \
+  "dotnet-build|dotnet publish Foo.sln" ; do
   want=${c%%|*} cmd=${c#*|}
   # shellcheck disable=SC2086
-  out=$(cls $cmd)
+  out=$(cd "$T" && cls $cmd)
   check "classify: '$cmd' is $want (got '$out')" '[[ $out == "$want" ]]'
 done
+# No project argument, or a directory: MSBuild picks the .sln when the
+# directory has one and no project file.
+mkdir -p "$T/s" "$T/p" "$T/b" && : > "$T/s/A.sln" && : > "$T/p/A.csproj" && : > "$T/b/A.slnx" && : > "$T/b/A.csproj"
+out=$(cd "$T/s" && cls dotnet build)
+check "classify: 'dotnet build' in a dir with only a .sln is dotnet-build-sln (got '$out')" '[[ $out == dotnet-build-sln ]]'
+out=$(cd "$T/s" && cls dotnet test --filter X)
+check "classify: 'dotnet test --filter X' there is dotnet-build-sln (got '$out')" '[[ $out == dotnet-build-sln ]]'
+out=$(cd "$T" && cls dotnet build -c Release s)
+check "classify: 'dotnet build -c Release s' (a dir with a .sln) is dotnet-build-sln (got '$out')" '[[ $out == dotnet-build-sln ]]'
+out=$(cd "$T/p" && cls dotnet build)
+check "classify: 'dotnet build' in a dir with a project file is dotnet-build (got '$out')" '[[ $out == dotnet-build ]]'
+out=$(cd "$T/b" && cls dotnet build)
+check "classify: 'dotnet build' in a dir with both is dotnet-build (got '$out')" '[[ $out == dotnet-build ]]'
 rm -rf -- "$T"
 
 
