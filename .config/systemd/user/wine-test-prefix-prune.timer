@@ -1,0 +1,10 @@
+[Unit]
+Description=Run wine-test-prefix-prune once a day
+
+[Timer]
+OnCalendar=*-*-* 04:30
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
