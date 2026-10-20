@@ -11,4 +11,4 @@ ExecStart=%h/bin/grove-autoreap
 Nice=19
 IOSchedulingClass=idle
 MemoryMax=2G
-TimeoutStartSec=1h
+TimeoutStartSec=2h
