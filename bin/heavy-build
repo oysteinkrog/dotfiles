@@ -148,7 +148,8 @@
 #   4 wall time in seconds (not the exit code), 5 CPU seconds, 6 peak memory
 #   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
 #   INT or HUP), timeout (exit 124), oom (the scope's memory.events shows an
-#   oom_kill) or stopped (an app run whose command died from a signal), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
+#   oom_kill) or stopped (an app run whose command died from a signal, or
+#   that heavy-build stopped on TERM, INT or HUP), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
 #   bytes, 11 the tree state when the build started (see the rerun guard),
 #   12 the Wine test sig (see wine_sig; - for other classes).
 #   Lines written before 2026-10-09 have no column 8, lines before
@@ -311,8 +312,13 @@
 #   4 h until it has history.
 # - No "it may be hung" warning when it idles; it still stops being charged
 #   cores and expected memory after 10 min idle.
-# - A run whose command dies from a signal (the normal way to stop an app) is
-#   logged with reason stopped, and its peak still counts for the estimate.
+# - A run whose command dies from a signal, or that ends because heavy-build
+#   itself got TERM, INT or HUP (headless-mc.sh stop), is logged with reason
+#   stopped, not cancelled, and its peak still counts for the estimate.
+# - No shared-prefix wine: key. It keys on its own prefix
+#   motioncatalyst-ui-<name> when WINEPREFIX names one, or when the command
+#   says headless-mc.sh start <name>; otherwise it gets no wine: key (the
+#   tree: key, if any, stays).
 # Priority, the hold file, the critical-first switch, lock keys and every
 # memory gate apply as for builds. When the command ends, heavy-build stops the
 # whole scope: every process left in it (wineserver, winedevice.exe, a mock
@@ -876,6 +882,10 @@ run_tests_prefix() {
 wine_key() {
   local top=$1 p rt
   shift
+  if [[ ${cls:-} == app-run ]]; then
+    p=$(app_prefix "$@") && echo "wine:$p"
+    return 0
+  fi
   wine_cmd "$@" || return 0
   if rt=$(run_tests_prefix "$top" "$@"); then
     [[ $rt == own\ * ]] && return 0
@@ -889,6 +899,21 @@ wine_key() {
   fi
   [[ $(wineservers_for "$p") == *outside* ]] && return 0
   echo "wine:$p"
+}
+
+# The own prefix of an app run, or nothing (exit 1): WINEPREFIX when it names
+# a motioncatalyst-ui-<name> prefix, else the <name> after
+# headless-mc.sh start in the command (also inside bash -c). Never the shared
+# prefix, since each instance has its own.
+app_prefix() {
+  local w n= i
+  if [[ ${WINEPREFIX:-} =~ /motioncatalyst-ui-[^/]+/?$ ]]; then echo "${WINEPREFIX%/}"; return 0; fi
+  read -ra w <<< "$*"
+  for (( i = 0; i + 2 < ${#w[@]}; i++ )); do
+    if [[ ${w[i]} =~ (^|/)headless-mc\.sh$ && ${w[i+1]} == start && ${w[i+2]} =~ ^[[:alnum:]_.-]+$ ]]; then n=${w[i+2]}; break; fi
+  done
+  [[ -n $n ]] || return 1
+  echo "$HOME/.local/share/wineprefixes/motioncatalyst-ui-$n"
 }
 
 # Lock keys for this build, one per line. Spaces in a key become %20.
@@ -2358,9 +2383,9 @@ elif [[ -n $TIMEOUT ]] && (( rc > 128 && EPOCHSECONDS - start_ts >= TIMEOUT - 1 
 fi
 if (( oom > 0 )); then reason=oom
 elif (( rc == 124 )); then reason=timeout
+elif [[ $cls == app-run ]] && { [[ -n $cancel_sig ]] || (( rc > 128 )); }; then reason=stopped
 elif [[ -n $cancel_sig ]]; then reason=cancelled
 elif (( rc == 0 )); then reason=ok
-elif [[ $cls == app-run ]] && (( rc > 128 )); then reason=stopped
 else reason=fail
 fi
 append_history "$rc" "$reason"
