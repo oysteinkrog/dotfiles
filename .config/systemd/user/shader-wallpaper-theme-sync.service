@@ -1,0 +1,7 @@
+[Unit]
+Description=Copy Plasma theme colours into the themed shader wallpaper
+# Started by shader-wallpaper-theme-sync.path when kdeglobals changes.
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/shader-wallpaper-theme-sync

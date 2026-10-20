@@ -1,0 +1,48 @@
+#!/bin/bash
+# Keep the themed Star Nest wallpaper shader in step with the Plasma colour scheme.
+#
+# The live shader is ~/.local/share/shader-wallpaper/Star_Nest_Themed.frag. On the
+# first run it is copied from the template in ~/.dotfiles/misc/shader-wallpaper.
+# After that only the lines tagged @theme(Group.Key) change: each gets the RGB
+# value of [Colors:Group] Key from kdeglobals. Every other line, including values
+# saved from the plugin's Shader Tweaks panel, is left alone. Setting
+# followTheme = false in the shader turns the sync off.
+#
+# Run by shader-wallpaper-theme-sync.path whenever kdeglobals changes. The
+# wallpaper plugin reloads the file itself when watchSourceFile is on.
+
+set -euo pipefail
+
+TEMPLATE="$HOME/.dotfiles/misc/shader-wallpaper/Star_Nest_Themed.frag"
+SHADER="$HOME/.local/share/shader-wallpaper/Star_Nest_Themed.frag"
+
+if [ ! -f "$SHADER" ]; then
+    mkdir -p "$(dirname "$SHADER")"
+    cp "$TEMPLATE" "$SHADER"
+fi
+
+if grep -qE '^\s*const\s+bool\s+followTheme\s*=\s*false\s*;' "$SHADER"; then
+    exit 0
+fi
+
+tmp=$(mktemp "$SHADER.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ @theme\(([A-Za-z]+)\.([A-Za-z]+)\) ]]; then
+        rgb=$(kreadconfig6 --file kdeglobals --group "Colors:${BASH_REMATCH[1]}" --key "${BASH_REMATCH[2]}")
+        if [[ $rgb =~ ^([0-9]+),([0-9]+),([0-9]+) ]]; then
+            vec=$(awk -v r="${BASH_REMATCH[1]}" -v g="${BASH_REMATCH[2]}" -v b="${BASH_REMATCH[3]}" \
+                'BEGIN { printf "vec3(%.3f, %.3f, %.3f)", r/255, g/255, b/255 }')
+            line=$(sed -E "s/vec3\([^)]*\)/$vec/" <<<"$line")
+        fi
+    fi
+    printf '%s\n' "$line"
+done <"$SHADER" >"$tmp"
+
+# Leave the file untouched when nothing changed, so the plugin does not reload.
+if cmp -s "$tmp" "$SHADER"; then
+    exit 0
+fi
+mv "$tmp" "$SHADER"
+trap - EXIT
