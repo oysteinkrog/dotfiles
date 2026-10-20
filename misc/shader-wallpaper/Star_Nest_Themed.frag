@@ -22,6 +22,7 @@ const float speed      = 0.01;  // @range(0.0, 0.05, 0.0005) @label("Drift speed
 const float rotationX  = 0.5;   // @range(-3.14, 3.14, 0.01) @label("Rotation X")
 const float rotationY  = 0.8;   // @range(-3.14, 3.14, 0.01) @label("Rotation Y")
 const bool  useMouse   = true;  // @label("Rotate with the mouse")
+const float mouseAmount = 0.1;  // @range(0.0, 1.0, 0.01) @label("Mouse rotation amount")
 
 // Original colouring
 const float brightness = 0.0015; // @range(0.0002, 0.005, 0.0001) @label("Brightness")
@@ -51,12 +52,14 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 	vec3 dir=vec3(uv*zoom,1.);
 	float time=iTime*speed+.25;
 
-	//rotation
-	float a1=rotationX;
-	float a2=rotationY;
+	//rotation; the original added iMouse/iResolution*2, which is 1.0 with the
+	//cursor in the centre, so that 1.0 is kept and only the offset is scaled
+	float a1=rotationX+1.;
+	float a2=rotationY+1.;
 	if (useMouse) {
-		a1+=iMouse.x/iResolution.x*2.;
-		a2+=iMouse.y/iResolution.y*2.;
+		vec2 m=(iMouse.xy/iResolution.xy-.5)*2.*mouseAmount;
+		a1+=m.x;
+		a2+=m.y;
 	}
 	mat2 rot1=mat2(cos(a1),sin(a1),-sin(a1),cos(a1));
 	mat2 rot2=mat2(cos(a2),sin(a2),-sin(a2),cos(a2));
