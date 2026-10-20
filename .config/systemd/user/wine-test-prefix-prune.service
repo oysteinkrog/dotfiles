@@ -1,0 +1,11 @@
+[Unit]
+Description=Remove unused Wine test prefixes (wine-test-prefix-prune)
+
+[Service]
+Type=oneshot
+# Live pass: deletes for real. Add --dry-run here to stop deleting.
+ExecStart=%h/bin/wine-test-prefix-prune
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=1G
+TimeoutStartSec=2h

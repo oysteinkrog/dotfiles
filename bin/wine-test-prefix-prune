@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# wine-test-prefix-prune: remove the Wine test prefixes that run-tests.sh made and nobody uses.
+#
+# Runs once a day from wine-test-prefix-prune.timer. It runs the copy of
+# tools/wine/prune-test-prefixes.sh on monorepo master (if/master), so the rules for what is
+# kept stay in the monorepo: a prefix whose lock a run holds, one a process uses, and one
+# changed in the last 3 days are all kept. Extra arguments are passed on; without --dry-run
+# it deletes.
+set -euo pipefail
+
+git_dir=$HOME/work/desktop/master/.git
+ref=if/master:tools/wine/prune-test-prefixes.sh
+apply=--apply
+args=()
+for a in "$@"; do
+    case "$a" in
+        --dry-run) apply= ;;
+        *) args+=("$a") ;;
+    esac
+done
+
+tmp=$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$UID}/wine-test-prefix-prune.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+git --git-dir="$git_dir" show "$ref" >"$tmp/prune-test-prefixes.sh"
+chmod +x "$tmp/prune-test-prefixes.sh"
+env -u WINEPREFIX "$tmp/prune-test-prefixes.sh" ${apply:+"$apply"} --min-idle-days 3 "${args[@]}"
