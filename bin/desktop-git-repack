@@ -2,6 +2,8 @@
 # Weekly geometric repack of the desktop monorepo object store.
 # Do NOT use incremental-repack or multi-pack-index repack: on this partial
 # clone they merge promisor packs into non-promisor packs.
+# Every git call passes maintenance.auto=false and gc.auto=0 so it can never
+# start the automatic maintenance repack on its own.
 set -u
 repo="$HOME/work/desktop/master"
 
@@ -17,5 +19,5 @@ fi
 export HEAVY_BUILD_PRIORITY=low
 export HEAVY_BUILD_REASON="weekly desktop monorepo geometric repack"
 
-heavy-build git -C "$repo" -c core.compression=1 repack --geometric=2 -d -l --write-midx || exit $?
-git -C "$repo" multi-pack-index verify
+heavy-build git -C "$repo" -c maintenance.auto=false -c gc.auto=0 -c core.compression=1 repack --geometric=2 -d -l --write-midx || exit $?
+git -C "$repo" -c maintenance.auto=false -c gc.auto=0 multi-pack-index verify
