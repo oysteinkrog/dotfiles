@@ -12,10 +12,17 @@
 #                work_dir (the old ~/lane-wt pattern).
 #
 # Warns, without blocking:
-#   no_wrapper   a heavy cargo or dotnet command, or build.cmd/build.sh, that
-#                does not run under heavy-build. The warning reaches the agent
+#   no_wrapper   a heavy cargo or dotnet command, build.cmd/build.sh or the
+#                monorepo's tools/wine/run-tests.sh, that does not run under
+#                heavy-build. The warning reaches the agent
 #                as additional context. For dotnet it also says that the
 #                Roslyn compiler server would escape heavy-build's budget.
+#   no_incremental  dotnet build/test/msbuild/publish with --no-incremental or
+#                a Rebuild target, wrapped or not: a full rebuild every time.
+#   background   heavy-build or an unwrapped heavy build started with
+#                run_in_background (tool_input.run_in_background, checked on
+#                a real payload 2026-10-20). Claude Code kills background
+#                shells when memory runs low, and the build is lost.
 #   cpu_pin      taskset, numactl --physcpubind, realtime chrt (-f, -r) or a
 #                `while :; do :; done` busy loop. On 2026-10-13 40 pinned busy
 #                loops froze the desktop. heavy-build undoes pinning inside its
@@ -35,16 +42,17 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || exit 0
 payload=$(cat) || exit 0
 command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null) || exit 0
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null) || cwd=
+background=$(printf '%s' "$payload" | jq -r 'if .tool_input.run_in_background == true then 1 else 0 end' 2>/dev/null) || background=0
 
 # Cheap pre-filter so most Bash calls never start python.
-if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
+if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|run-tests\.sh|heavy-build|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
   exit 0
 fi
 if [[ $command == *"noqa: build-guard"* ]]; then
   exit 0
 fi
 
-out=$(BUILD_GUARD_COMMAND="$command" BUILD_GUARD_CWD="$cwd" \
+out=$(BUILD_GUARD_COMMAND="$command" BUILD_GUARD_CWD="$cwd" BUILD_GUARD_BACKGROUND="$background" \
   timeout 10 python3 "$here/build-detect.py" 2>/dev/null) || exit 0
 [[ -n $out ]] || exit 0
 
@@ -99,7 +107,7 @@ fi
 msg=
 warn=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "no_wrapper"' | head -1 | cut -f3-)
 if [[ -n $warn ]]; then
-  msg="build-guard: this looks like a heavy build without heavy-build ($warn). Machine rule (~/.claude/CLAUDE.md, \"Builds\"): run every cargo build/test/check/clippy and dotnet build/test as \`heavy-build <command>\`. It takes the shared build lock, so it may wait; run it in the background if your tool call has a timeout. The command was allowed this time."
+  msg="build-guard: this looks like a heavy build without heavy-build ($warn). Machine rule (~/.claude/CLAUDE.md, \"Builds\"): run every cargo build/test/check/clippy, dotnet build/test and tools/wine/run-tests.sh as \`heavy-build <command>\`. It takes the shared build lock, so it may wait. For a build that can wait or take over 10 minutes, do not use a Claude background shell; start it with \`systemd-run --user --unit=<name> --collect --same-dir heavy-build <command>\` and follow it with \`journalctl --user -u <name> -f\`. The command was allowed this time."
   # dotnet run/build/test start a Roslyn compiler server (VBCSCompiler) that
   # outlives the command, and later heavy-build builds can end up using it.
   # On 2026-10-11 one started by an unwrapped `dotnet run` held 12.7 GB and
@@ -107,6 +115,16 @@ if [[ -n $warn ]]; then
   if [[ $warn == dotnet* ]]; then
     msg+=" For dotnet this matters more: the compile starts a Roslyn compiler server (VBCSCompiler) in your session's cgroup. It stays alive after the command ends and does compile work outside heavy-build's memory cap and budget. Under heavy-build it runs in the build scope and stops with it."
   fi
+fi
+noinc=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "no_incremental"' | head -1 | cut -f3-)
+if [[ -n $noinc ]]; then
+  [[ -n $msg ]] && msg+=" "
+  msg+="build-guard: this dotnet command forces a full rebuild ($noinc). --no-incremental or a Rebuild target rebuilds the project and all its dependencies every time, which costs minutes and several GiB per run on this shared machine. Drop it unless an incremental build gave a result you cannot explain. The command was allowed this time."
+fi
+bg=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "background"' | head -1 | cut -f3-)
+if [[ -n $bg ]]; then
+  [[ -n $msg ]] && msg+=" "
+  msg+="build-guard: this build runs as a Claude background shell (run_in_background). Claude Code kills background shells when memory runs low, and the build and its place in the heavy-build queue are lost. For a build that can wait or take over 10 minutes, start it as a systemd user unit instead: \`systemd-run --user --unit=<name> --collect --same-dir heavy-build <command>\`, then follow it with \`journalctl --user -u <name> -f\` (the journal also records its exit status). The command was allowed this time."
 fi
 pin=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "cpu_pin"' | head -1 | cut -f3-)
 if [[ -n $pin ]]; then
