@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch kdeglobals for Plasma colour scheme changes (themed shader wallpaper)
+
+[Path]
+PathChanged=%h/.config/kdeglobals
+
+[Install]
+WantedBy=default.target
