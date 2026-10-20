@@ -237,16 +237,18 @@ through `heavy-build`. On master it starts its own Xvfb display for each run, so
 windows do not reach the real screen. For Wine prefixes, exit codes and the test loop,
 load the `heavy-build` skill.
 
-Each headless MC uses 5 to 9 GiB of memory. heavy-build does not admit or count it yet.
-Until it does, start one only when more than 10 GiB is available:
+Each headless MC uses 5 to 9 GiB of memory. Start it through heavy-build as class
+`app-run`, so it waits for admission:
 
 ```bash
-awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo   # GiB available
+heavy-build --class app-run --ready-file "$READY" --wait-timeout 600 -- headless-mc.sh start <name>
 ```
 
-Run `headless-mc.sh stop --rm <name>` as soon as you are done. Once the staged
-heavy-build is installed and DESKTOP-15795 is merged, `start` waits for admission and can
-end with heavy-build's exit 75, 76 or 77.
+heavy-build writes `--ready-file` once the command is let in and started, and removes it
+when heavy-build exits. `--wait-timeout` gives up with exit 77 if the run is not let in in
+time. A command that names `headless-mc.sh` is `app-run` already. Run
+`headless-mc.sh stop --rm <name>` as soon as you are done. `start` can also end with
+heavy-build's exit 75 or 76.
 
 ## Known limits
 

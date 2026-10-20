@@ -283,7 +283,7 @@ how to keep a long build alive.
 - **Never run a build that can wait or take over 10 minutes as a Claude background
   shell.** Claude Code kills background shells when memory runs low, and the build and its
   place in line are lost. Use the detached form in the skill.
-- **Exit 75, 76 or 77 (77 once the staged heavy-build is installed) means heavy-build did
+- **Exit 75, 76 or 77 means heavy-build did
   not run your command.** Read its last `heavy-build:` line and follow it. Never resubmit in
   a loop, and never cancel a waiting build to resubmit it: it goes to the back of the line.
 - On an OOM kill (exit 137), retry once, then tell the manager session.
