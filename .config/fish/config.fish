@@ -11,7 +11,7 @@ starship init fish | source
 set -q FZF_DEFAULT_OPTS; or set -U FZF_DEFAULT_OPTS "--height 40% --layout=reverse --border"
 
 # opam configuration
-#source /c/users/oystein/.opam/opam-init/init.fish > /dev/null 2> /dev/null; or true
+#source ~/.opam/opam-init/init.fish > /dev/null 2> /dev/null; or true
 
 # Node v22 via nvm — prepend directly to avoid the ~8s `nvm use` cost on every shell.
 # If you switch node versions, update this path (or run `nvm use` manually).
@@ -47,7 +47,7 @@ else
 end
 
 # opencode
-fish_add_path /c/users/oystein/.opencode/bin
+fish_add_path $HOME/.opencode/bin
 
 # Folded in from former one-line conf.d files (each conf.d file costs a
 # DrvFs stat per shell start; one file beats five).
