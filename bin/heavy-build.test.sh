@@ -383,7 +383,7 @@ wk() {  # top cmd... ; prints wine_key output; WINEPREFIX etc. come from the cal
     cd "$1" || exit 1
     [[ ${NOPFX:-} == 1 ]] && unset WINEPREFIX
     PROC=$K/proc WINE_TMP=$K/winetmp HOME=$K/home
-    eval "$(sed -n '/^WINE_DEFAULT_LINE=/p;/^SHARED_WINEPREFIX=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_cmd()/,/^}/p;/^run_tests_prefix()/,/^}/p;/^wine_key()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^WINE_DEFAULT_LINE=/p;/^SHARED_WINEPREFIX=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_cmd()/,/^}/p;/^run_tests_prefix()/,/^}/p;/^app_prefix()/,/^}/p;/^wine_key()/,/^}/p' "$HB")"
     wine_key "$@"
   )
 }
@@ -412,6 +412,17 @@ out=$(WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start)
 check "wine key: other Wine commands keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(WINEPREFIX=$SH wk "$K/lane-new" cargo test)
 check "wine key: a non-Wine command gets none (got '$out')" '[[ -z $out ]]'
+UI=$K/home/.local/share/wineprefixes/motioncatalyst-ui
+out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" bash -c "tools/wine/headless-mc.sh start hbc --hive /x")
+check "wine key: app run gets its own ui-<name> prefix from headless-mc.sh start, not the shared one (got '$out')" '[[ $out == "wine:$UI-hbc" ]]'
+out=$(cls=app-run WINEPREFIX=$UI-env/ wk "$K/lane-new" tools/wine/run-mc.sh a)
+check "wine key: app run with WINEPREFIX = a ui-<name> prefix keys on it (got '$out')" '[[ $out == "wine:$UI-env" ]]'
+out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" tools/wine/run-mc.sh a)
+check "wine key: app run with no instance name gets no wine key (got '$out')" '[[ -z $out ]]'
+out=$(cls=app-run NOPFX=1 wk "$K/lane-old" wine MotionCatalyst.exe)
+check "wine key: app run in an old tree does not get the shared default key (got '$out')" '[[ -z $out ]]'
+out=$(cls=wine-run-tests WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start hbc)
+check "wine key: other classes keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(cd "$K/lane-new" && PROC=$K/proc HOME=$K/home AgentOutputSuffix=-a && unset WINEPREFIX \
   && eval "$(sed -n '/^SHARED_WINEPREFIX=/p;/^run_tests_prefix()/,/^}/p' "$HB")" && run_tests_prefix "$K/lane-new" tools/wine/run-tests.sh)
 check "wine key: run_tests_prefix names the per-worktree prefix with the suffix (got '$out')" '[[ $out == "own $K/home/.local/share/wineprefixes/motioncatalyst-tests-lane-new-a" ]]'
@@ -986,6 +997,19 @@ check "app scope: MemoryHigh=10G, MemoryMax=12G, no RuntimeMaxSec" 'grep -q "Mem
 check "app scope: the whole scope is stopped when the command ends" 'grep -qx "systemctl --user stop $u" "$T/calls"'
 check "app history: class app-run, exit 143, reason stopped, MemoryHigh 10 GiB" 'awk -F"\t" -v g=$G '\''$2 == "app-run" && $7 == 143 && $8 == "stopped" && $10 == 10 * g'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
 teardown2
+
+# heavy-build itself gets TERM (headless-mc.sh stop): an app run logs
+# reason stopped, a build logs cancelled.
+for c in app-run:stopped build:cancelled; do
+  setup2
+  printf '#!/usr/bin/env bash\nsleep 30\n' > "$T/slow.sh"; chmod +x "$T/slow.sh"
+  if [[ ${c%%:*} == app-run ]]; then hbe -- --class app-run --ready-file "$T/ready" "$T/slow.sh"
+  else hbe -- --ready-file "$T/ready" "$T/slow.sh"; fi
+  for _ in $(seq 1 100); do [[ -e $T/ready ]] && break; sleep 0.1; done
+  kill -TERM "$hbpid"; wait "$hbpid"; rc=$?
+  check "TERM to heavy-build: ${c%%:*} exits 143 and logs reason ${c#*:} (rc $rc)" '(( rc == 143 )) && awk -F"\t" -v r="${c#*:}" '\''$7 == 143 && $8 == r'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+  teardown2
+done
 
 # A detected app run takes HEAVY_BUILD_APP_MEM_HIGH_GIB from the conf file.
 setup2
