@@ -13,9 +13,17 @@ cwd from BUILD_GUARD_CWD. Prints one line per finding,
                       tmpfs, so every byte there is RAM.
   block grove_lane    git worktree add from a grove repo (the monorepo) to a
                       path outside grove's work_dir. Use grove new --ephemeral.
-  warn  no_wrapper    a heavy cargo or dotnet command, or build.cmd/build.sh,
-                      that does not run under heavy-build or the old
+  warn  no_wrapper    a heavy cargo or dotnet command, build.cmd/build.sh or
+                      the monorepo's tools/wine/run-tests.sh, that does not run under heavy-build or the old
                       `flock ... systemd-run` rule.
+  warn  no_incremental  a dotnet build, test, msbuild or publish with
+                      --no-incremental or a Rebuild target, wrapped or not.
+                      It forces a full rebuild of the project and its
+                      dependencies.
+  warn  background    BUILD_GUARD_BACKGROUND=1 (the Bash call has
+                      run_in_background) and the command runs heavy-build or
+                      a heavy build directly. Claude Code kills background
+                      shells when memory runs low.
   warn  cpu_pin       taskset, numactl --physcpubind (or -C), realtime chrt
                       (-f, -r), or a `while :; do :; done` busy loop. On
                       2026-10-13 40 busy loops pinned to CPUs 30 and 31 starved
@@ -66,6 +74,50 @@ CARGO_HEAVY = {
 }  # fmt: skip
 CARGO_LIGHT_FLAGS = {"-h", "--help", "-V", "--version", "--list"}
 DOTNET_HEAVY = {"build", "test", "publish", "pack", "msbuild", "run", "vstest"}
+DOTNET_REBUILDABLE = {"build", "test", "publish", "msbuild"}
+REBUILD_TARGET_RE = re.compile(
+    r"^[-/](?:t|target):(?:.*[;,])?Rebuild(?:[;,].*)?$", re.I
+)
+SCRIPT_SHELLS = {"bash", "sh", "dash", "zsh"}
+
+
+def is_wine_run_tests(path, cwd):
+    """True for the monorepo's tools/wine/run-tests.sh, however it is named."""
+    if os.path.basename(path) != "run-tests.sh":
+        return False
+    full = os.path.normpath(os.path.join(cwd or "", expand(path)))
+    return full.endswith(os.path.join("tools", "wine", "run-tests.sh"))
+
+
+def script_head(tokens):
+    """`bash tools/wine/run-tests.sh ...` -> the script path, else tokens[0]."""
+    if os.path.basename(tokens[0]) in SCRIPT_SHELLS:
+        for t in tokens[1:]:
+            if t.startswith("-"):
+                if t == "-c" or (not t.startswith("--") and "c" in t[1:]):
+                    return tokens[0]
+                continue
+            return t
+    return tokens[0]
+
+
+def forced_rebuild(tokens):
+    """Flag text when tokens contain a dotnet build/test/msbuild/publish that
+    forces a full rebuild. Looks past wrappers such as heavy-build."""
+    for i, t in enumerate(tokens):
+        if os.path.basename(t) != "dotnet":
+            continue
+        args = tokens[i + 1 :]
+        sub = next((a for a in args if not a.startswith("-")), None)
+        if sub not in DOTNET_REBUILDABLE:
+            return None
+        for a in args:
+            if a == "--no-incremental":
+                return a
+            if REBUILD_TARGET_RE.match(a):
+                return a
+        return None
+    return None
 
 
 def load_segmenter():
@@ -192,6 +244,16 @@ def is_heavy(tokens):
     return None
 
 
+def is_heavy_in(tokens, cwd):
+    """is_heavy plus the monorepo's Wine test runner."""
+    label = is_heavy(tokens)
+    if label:
+        return label
+    if is_wine_run_tests(script_head(tokens), cwd):
+        return "tools/wine/run-tests.sh"
+    return None
+
+
 def grove_repos():
     """[(work_dir, common_git_dir)] for each repo in ~/.config/grove/repos.json."""
     try:
@@ -254,6 +316,10 @@ def check_segment(seg, tokens, cwd, findings, grove):
 
     head = os.path.basename(rest[0])
 
+    flag = forced_rebuild(rest)
+    if flag:
+        findings.append(("warn", "no_incremental", f"{flag}: {seg.strip()}"))
+
     if head == "cd":
         target = rest[1] if len(rest) > 1 else HOME
         return seg_mod.resolve_dir(expand(target), cwd) if target != "-" else None
@@ -275,6 +341,9 @@ def check_segment(seg, tokens, cwd, findings, grove):
                         break
         return cwd
 
+    if head == "heavy-build" and BACKGROUND:
+        findings.append(("warn", "background", seg.strip()))
+
     if head in LOCKED_HEADS:
         # Still check a build dir override written after the wrapper.
         inner_assigns = {
@@ -288,8 +357,10 @@ def check_segment(seg, tokens, cwd, findings, grove):
             findings.append(("block", "build_dir", seg.strip()))
         return cwd
 
-    label = is_heavy(rest)
+    label = is_heavy_in(rest, cwd)
     if label:
+        if BACKGROUND:
+            findings.append(("warn", "background", seg.strip()))
         if label.startswith("cargo") and config_build_dir(rest):
             findings.append(("block", "build_dir", seg.strip()))
         td = target_dir_arg(rest) or assigns.get("CARGO_TARGET_DIR")
@@ -423,11 +494,13 @@ def cpu_pin_finding(command):
 
 
 seg_mod = None
+BACKGROUND = False
 
 
 def main():
-    global seg_mod
+    global seg_mod, BACKGROUND
     command = os.environ.get("BUILD_GUARD_COMMAND", "")
+    BACKGROUND = os.environ.get("BUILD_GUARD_BACKGROUND") == "1"
     cwd = os.environ.get("BUILD_GUARD_CWD", "") or None
     if not command:
         return 0

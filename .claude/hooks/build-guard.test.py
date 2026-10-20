@@ -132,6 +132,28 @@ cases = [
     ("while read -r l; do echo $l; done < f", CWD, OK),
     ("rg taskset ~/src", CWD, OK),
     ('git commit -m "warn on taskset" -- a.sh', CWD, OK),
+    # --- forced dotnet rebuilds: warned, wrapped or not ---
+    ("heavy-build dotnet build X.csproj -c Debug --no-incremental", CWD, W),
+    ("dotnet test X.csproj --no-incremental", CWD, W),
+    ("heavy-build dotnet msbuild X.sln -t:Rebuild", CWD, W),
+    ("heavy-build dotnet build X.sln '/t:Clean;Rebuild'", CWD, W),
+    ("heavy-build dotnet build X.sln -target:Rebuild", CWD, W),
+    ("heavy-build dotnet build X.sln -t:Build", CWD, OK),
+    ("heavy-build dotnet build X.csproj --no-restore", CWD, OK),
+    ('git commit -m "drop --no-incremental from dotnet build" -- a.sh', CWD, OK),
+    ("rg -- --no-incremental tools/", CWD, OK),
+    # --- monorepo Wine test runner: warned when not under heavy-build ---
+    ("tools/wine/run-tests.sh --filter Foo Bar.Tests", MONO, W),
+    ("./tools/wine/run-tests.sh Bar.Tests", MONO, W),
+    ("bash tools/wine/run-tests.sh Bar.Tests", MONO, W),
+    ("./run-tests.sh --filter Foo Bar.Tests", f"{MONO}/tools/wine", W),
+    ("cd ~/work/desktop/master && tools/wine/run-tests.sh X", CWD, W),
+    ("heavy-build tools/wine/run-tests.sh --filter Foo Bar.Tests", MONO, OK),
+    ("HEAVY_BUILD_PRIORITY=low heavy-build ./tools/wine/run-tests.sh X", MONO, OK),
+    ("./run-tests.sh", CWD, OK),
+    ("sed -n 1,20p tools/wine/run-tests.sh", MONO, OK),
+    # --- heavy-build in the foreground: no background warning ---
+    ("heavy-build --help", CWD, OK),
     # --- bypass ---
     ("CARGO_BUILD_BUILD_DIR=/var/tmp/x cargo test # noqa: build-guard", CWD, OK),
     # --- unrelated ---
@@ -140,13 +162,36 @@ cases = [
 ]
 
 
-def run(command, cwd):
+# Run with tool_input.run_in_background = true (shape checked on a real
+# payload 2026-10-20: the key is present and true only for background calls).
+bg_cases = [
+    ("heavy-build cargo test -p mux", CWD, W),
+    ("heavy-build dotnet build Foo.sln", CWD, W),
+    ("HEAVY_BUILD_PRIORITY=low heavy-build tools/wine/run-tests.sh X", MONO, W),
+    ("nohup heavy-build cargo build > log 2>&1", CWD, W),
+    ("cd ~/src/frankenterm && heavy-build cargo build", CWD, W),
+    ("cargo test", CWD, W),
+    (
+        "systemd-run --user --unit=hb-x --collect --same-dir heavy-build cargo test",
+        CWD,
+        OK,
+    ),
+    ("sleep 30; echo done", CWD, OK),
+    ("tail -f ~/.local/state/heavy-build/live.log", CWD, OK),
+    ("heavy-build cargo test # noqa: build-guard", CWD, OK),
+]
+
+
+def run(command, cwd, background=None):
+    tool_input = {"command": command}
+    if background is not None:
+        tool_input["run_in_background"] = background
     payload = json.dumps(
         {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "cwd": cwd,
-            "tool_input": {"command": command},
+            "tool_input": tool_input,
         }
     )
     return subprocess.run(["bash", HOOK], input=payload, capture_output=True, text=True)
@@ -177,6 +222,45 @@ def main():
             print(f"FAIL got={got} want={expected}  {command!r} (cwd={cwd})")
             if result.stderr.strip():
                 print("   stderr:", result.stderr.strip()[:300])
+
+    for command, cwd, expected in bg_cases:
+        got = outcome(run(command, cwd, background=True))
+        if got != expected:
+            fails += 1
+            print(f"FAIL background got={got} want={expected}  {command!r}")
+
+    # run_in_background false or a non-boolean value: no background warning.
+    for value in (False, "true", 1):
+        got = outcome(run("heavy-build cargo test", CWD, background=value))
+        if got != OK:
+            fails += 1
+            print(f"FAIL run_in_background={value!r} got={got} want={OK}")
+
+    # The warnings name the right advice.
+    checks = (
+        (
+            ("heavy-build cargo test", CWD, True),
+            ("background shell", "systemd-run --user"),
+        ),
+        (
+            ("dotnet build X.csproj --no-incremental", CWD, None),
+            ("full rebuild", "heavy-build <command>"),
+        ),
+        (
+            ("tools/wine/run-tests.sh X", MONO, None),
+            ("tools/wine/run-tests.sh", "heavy-build <command>"),
+        ),
+    )
+    for (command, cwd, background), wants in checks:
+        text = run(command, cwd, background).stdout
+        for want in wants:
+            if want not in text:
+                fails += 1
+                print(f"FAIL warning for {command!r} lacks {want!r}")
+    # The no_wrapper warning no longer suggests a background shell.
+    if "in the background if" in run("cargo test", CWD).stdout:
+        fails += 1
+        print("FAIL no_wrapper warning still suggests a background shell")
 
     # A garbage payload must fail open.
     bad = subprocess.run(
@@ -226,7 +310,7 @@ def main():
             fails += 1
             print(f"FAIL pin warning lacks {want!r}")
 
-    total = len(cases) + 2 + 3 + 4
+    total = len(cases) + len(bg_cases) + 3 + 6 + 1 + 2 + 3 + 4
     print(f"{total - fails}/{total} correct")
     sys.exit(1 if fails else 0)
 
