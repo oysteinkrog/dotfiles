@@ -30,20 +30,6 @@ else
   sudo chsh -s /usr/bin/fish "$me"; ok "login shell set to fish (log out to apply)"
 fi
 
-# Old WSL paths. Hooks, scripts and old transcripts still use /c/users/oystein and /c/work.
-mkdir -p "$HOME/work"
-sudo mkdir -p /c/users
-for pair in "/c/users/$me:$HOME" "/c/work:$HOME/work"; do
-  link="${pair%%:*}"; target="${pair#*:}"
-  if [ "$(readlink "$link" 2>/dev/null)" = "$target" ]; then
-    ok "$link -> $target"
-  elif [ -e "$link" ] || [ -L "$link" ]; then
-    warn "$link exists and is not a link to $target, left alone"
-  else
-    sudo ln -s "$target" "$link"; ok "created $link -> $target"
-  fi
-done
-
 # Docker and Tailscale
 if [[ ",$(getent group docker | cut -d: -f4)," == *",$me,"* ]]; then
   ok "$me is in the docker group"
