@@ -126,7 +126,7 @@
           },
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           },
           {
@@ -152,7 +152,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -174,7 +174,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -195,7 +195,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -207,7 +207,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -219,7 +219,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -251,7 +251,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -267,7 +267,7 @@
           },
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -317,7 +317,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -356,7 +356,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]
@@ -368,7 +368,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/c/users/oystein/.dotfiles/bin/aiolos-hook-forwarder",
+            "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           }
         ]

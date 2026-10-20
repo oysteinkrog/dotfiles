@@ -119,12 +119,12 @@ The patched binary in `bin/codedb` adds a runtime statx probe — if the kernel 
 support statx, all stat calls fall back to `fstat`/`fstatat64`. Zero overhead on normal
 Linux kernels that support statx.
 
-**Patch source**: `/c/work/codedb/src/compat.zig` (fork of `justrach/codedb`)
+**Patch source**: `~/work/codedb/src/compat.zig` (fork of `justrach/codedb`)
 
 **To rebuild** after upstream updates:
 
 ```bash
-cd /c/work/codedb
+cd ~/work/codedb
 git pull                          # get upstream changes
 # verify src/compat.zig is present and imported in store/watcher/snapshot/index/telemetry/main
 bin/codedb-build.sh --install     # cross-compile via Windows Zig, install to dotfiles
