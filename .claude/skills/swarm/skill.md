@@ -201,10 +201,11 @@ the files the bead names.
    match any file(s) known to git`).
    If git fails on `index.lock`, another teammate is committing. Wait a few seconds
    and retry. Never delete the lock file.
-5. Run project checks (tests, linting — see CLAUDE.md).
-   - For .NET/MSBuild projects: pass `--no-dependencies` (or equivalent) when
-     multiple teammates may be building simultaneously, to avoid MSB3021 lock
-     conflicts.
+5. Run project checks (tests, linting; see CLAUDE.md) through `heavy-build`, and load
+   the `heavy-build` skill first. Iterate on your own failing test with a filter, then
+   run the full suite once before you report. For parallel .NET builds in one
+   checkout, follow the repo's own guidance (monorepo: `AgentOutputSuffix`,
+   `docs/dev/recovery.md`). Never pass `--no-dependencies`: it risks stale DLLs.
 6. If checks fail, fix and commit a follow-up with the same pathspec: git add <only your files> && git commit -m "..." -- <your files>. Never amend.
 7. If you reserved files, release them with release_file_reservations.
 8. Close: br close {BEAD_ID} --reason "<what changed, commit sha>"
@@ -293,8 +294,9 @@ Don't busy-poll; the notifications are the primary signal.
 
 - **Orphaned files**: Teammates may hit context limits before committing. Monitor
   `git status --short` after each batch.
-- **Concurrent build locks (MSBuild)**: Tell teammates to build with
-  `--no-dependencies` in the prompt template (already embedded in section 4, step 5).
+- **Concurrent build locks (MSBuild)**: heavy-build makes builds of one tree wait on
+  a lock key. For parallel .NET builds in one checkout, follow the repo's own guidance
+  (monorepo: `AgentOutputSuffix`, `docs/dev/recovery.md`). See the `heavy-build` skill.
 - **Beads committed but not closed**: Check `git log` for bead IDs and close manually.
 - **Task claimed but teammate crashed**: see stuck-task rescue in `/swarm-status`.
 - **Unexpected branch switch / rewritten HEAD** (a teammate violated the no-switch
