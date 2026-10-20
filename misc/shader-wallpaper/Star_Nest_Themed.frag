@@ -1,0 +1,99 @@
+// Star Nest by Pablo Roman Andrioli (Kali), MIT License.
+// https://www.shadertoy.com/view/XlfGRj
+//
+// Themed variant for the Shader Wallpaper plugin. Every setting is a top-level
+// const so the plugin's Shader Tweaks panel shows it. The colour grade maps the
+// original brightness onto three colours. While followTheme is true,
+// shader-wallpaper-theme-sync rewrites the lines tagged @theme(...) from
+// ~/.config/kdeglobals whenever the Plasma colour scheme changes.
+
+// Shape
+const int   iterations = 17;    // @range(4, 24, 1) @label("Fractal iterations")
+const float formuparam = 0.53;  // @range(0.3, 0.8, 0.005) @label("Formula parameter")
+const int   volsteps   = 20;    // @range(4, 30, 1) @label("Volume steps")
+const float stepsize   = 0.1;   // @range(0.02, 0.3, 0.005) @label("Step size")
+const float zoom       = 0.8;   // @range(0.1, 3.0, 0.01) @label("Zoom")
+const float tile       = 0.85;  // @range(0.3, 1.5, 0.005) @label("Tile size")
+const float darkmatter = 0.3;   // @range(0.0, 1.0, 0.01) @label("Dark matter")
+const float distfading = 0.73;  // @range(0.3, 1.0, 0.005) @label("Distance fading")
+
+// Motion
+const float speed      = 0.01;  // @range(0.0, 0.05, 0.0005) @label("Drift speed")
+const float rotationX  = 0.5;   // @range(-3.14, 3.14, 0.01) @label("Rotation X")
+const float rotationY  = 0.8;   // @range(-3.14, 3.14, 0.01) @label("Rotation Y")
+const bool  useMouse   = true;  // @label("Rotate with the mouse")
+
+// Original colouring
+const float brightness = 0.0015; // @range(0.0002, 0.005, 0.0001) @label("Brightness")
+const float saturation = 0.85;   // @range(0.0, 1.0, 0.01) @label("Saturation (original colours)")
+
+// Colour grade
+const bool  followTheme = true; // @label("Follow Plasma theme colours")
+const vec3  deepColor   = vec3(0.078, 0.086, 0.094); // @color @label("Deep colour") @theme(View.BackgroundNormal)
+const vec3  midColor    = vec3(0.239, 0.682, 0.914); // @color @label("Mid colour") @theme(Selection.BackgroundNormal)
+const vec3  brightColor = vec3(0.988, 0.988, 0.988); // @color @label("Bright colour") @theme(View.ForegroundNormal)
+const float themeMix    = 1.0;  // @range(0.0, 1.0, 0.01) @label("Theme colours (0 = original)")
+const float midPoint    = 0.55; // @range(0.1, 0.9, 0.01) @label("Mid colour position")
+const float exposure    = 2.0;  // @range(0.2, 8.0, 0.05) @label("Exposure")
+const float gradeGamma  = 1.0;  // @range(0.3, 3.0, 0.01) @label("Contrast (gamma)")
+
+vec3 grade(float t)
+{
+	if (t < midPoint) return mix(deepColor, midColor, t / midPoint);
+	return mix(midColor, brightColor, (t - midPoint) / (1.0 - midPoint));
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+	//get coords and direction
+	vec2 uv=fragCoord.xy/iResolution.xy-.5;
+	uv.y*=iResolution.y/iResolution.x;
+	vec3 dir=vec3(uv*zoom,1.);
+	float time=iTime*speed+.25;
+
+	//rotation
+	float a1=rotationX;
+	float a2=rotationY;
+	if (useMouse) {
+		a1+=iMouse.x/iResolution.x*2.;
+		a2+=iMouse.y/iResolution.y*2.;
+	}
+	mat2 rot1=mat2(cos(a1),sin(a1),-sin(a1),cos(a1));
+	mat2 rot2=mat2(cos(a2),sin(a2),-sin(a2),cos(a2));
+	dir.xz*=rot1;
+	dir.xy*=rot2;
+	vec3 from=vec3(1.,.5,0.5);
+	from+=vec3(time*2.,time,-2.);
+	from.xz*=rot1;
+	from.xy*=rot2;
+
+	//volumetric rendering
+	float s=0.1,fade=1.;
+	vec3 v=vec3(0.);
+	for (int r=0; r<volsteps; r++) {
+		vec3 p=from+s*dir*.5;
+		p = abs(vec3(tile)-mod(p,vec3(tile*2.))); // tiling fold
+		float pa,a=pa=0.;
+		for (int i=0; i<iterations; i++) {
+			p=abs(p)/dot(p,p)-formuparam; // the magic formula
+			a+=abs(length(p)-pa); // absolute sum of average change
+			pa=length(p);
+		}
+		float dm=max(0.,darkmatter-a*a*.001); //dark matter
+		a*=a*a; // add contrast
+		if (r>6) fade*=1.-dm; // dark matter, don't render near
+		v+=fade;
+		v+=vec3(s,s*s,s*s*s*s)*a*brightness*fade; // coloring based on distance
+		fade*=distfading; // distance fading
+		s+=stepsize;
+	}
+	v=mix(vec3(length(v)),v,saturation); //color adjust
+	vec3 original=v*.01;
+
+	//colour grade: brightness onto deep -> mid -> bright
+	float lum=dot(original,vec3(0.2126,0.7152,0.0722));
+	float t=pow(clamp(1.-exp(-lum*exposure),0.,1.),gradeGamma);
+	vec3 themed=grade(t);
+
+	fragColor = vec4(mix(original,themed,themeMix),1.);
+}
