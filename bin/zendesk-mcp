@@ -1,6 +1,6 @@
 #!/bin/bash
 # Wrapper that launches the Zendesk MCP server with credentials
-# Uses local forked repo at /c/WORK/zendesk-mcp-server2
+# Uses local forked repo at $HOME/work/zendesk-mcp-server2
 SECRETS_FILE="$HOME/.config/secrets/.env"
 if [ -f "$SECRETS_FILE" ]; then
     while IFS= read -r line; do
@@ -13,4 +13,4 @@ fi
 export ZENDESK_EMAIL="$ZENDESK_EMAIL"
 export ZENDESK_API_TOKEN="$ZENDESK_API_TOKEN"
 export ZENDESK_SUBDOMAIN="$ZENDESK_SUBDOMAIN"
-exec node /c/WORK/zendesk-mcp-server2/src/index.js "$@"
+exec node $HOME/work/zendesk-mcp-server2/src/index.js "$@"

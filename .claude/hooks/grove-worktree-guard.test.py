@@ -6,7 +6,7 @@ from pathlib import Path
 HOOK = str(Path(__file__).with_name("grove-worktree-guard.sh"))
 
 UNGUARDED_CWD = "/home/oystein/elsewhere"
-GUARDED_CWD = "/c/work/desktop/master"
+GUARDED_CWD = "/home/oystein/work/desktop/master"
 
 # (command, cwd, should_block) -- the required cases from the bead are
 # marked inline; the rest exercise the edges the required cases don't reach
@@ -14,30 +14,30 @@ GUARDED_CWD = "/c/work/desktop/master"
 # multiple guarded dirs, gh with an explicit dest).
 cases = [
     # --- required: blocked ---
-    ("git worktree add /c/work/desktop/foo", UNGUARDED_CWD, True),
-    ("git -C /c/work/desktop worktree add foo", UNGUARDED_CWD, True),
+    ("git worktree add /home/oystein/work/desktop/foo", UNGUARDED_CWD, True),
+    ("git -C /home/oystein/work/desktop worktree add foo", UNGUARDED_CWD, True),
     ("git clone https://github.com/foo/bar.git", GUARDED_CWD, True),
     ("gh repo clone owner/repo", GUARDED_CWD, True),
     # --- required: allowed ---
     ("git worktree list", GUARDED_CWD, False),
     ("git worktree prune", GUARDED_CWD, False),
-    ("git worktree remove /c/work/desktop/foo", GUARDED_CWD, False),
+    ("git worktree remove /home/oystein/work/desktop/foo", GUARDED_CWD, False),
     ("git clone https://github.com/foo/bar.git /tmp/bar", GUARDED_CWD, False),
-    ("git clone https://github.com/foo/bar.git /c/work/desktop/.scratch/bar", UNGUARDED_CWD, False),
+    ("git clone https://github.com/foo/bar.git /home/oystein/work/desktop/.scratch/bar", UNGUARDED_CWD, False),
     (
-        'br update bd-1 --description "run git worktree add /c/work/desktop/foo instead" -p 1',
+        'br update bd-1 --description "run git worktree add /home/oystein/work/desktop/foo instead" -p 1',
         GUARDED_CWD,
         False,
     ),
-    ("git worktree add /c/work/desktop/foo  # noqa: grove-worktree", UNGUARDED_CWD, False),
+    ("git worktree add /home/oystein/work/desktop/foo  # noqa: grove-worktree", UNGUARDED_CWD, False),
     # --- extra: worktree lock/unlock, also read/maintenance ops ---
-    ("git worktree lock /c/work/desktop/foo", GUARDED_CWD, False),
-    ("git worktree unlock /c/work/desktop/foo", GUARDED_CWD, False),
+    ("git worktree lock /home/oystein/work/desktop/foo", GUARDED_CWD, False),
+    ("git worktree unlock /home/oystein/work/desktop/foo", GUARDED_CWD, False),
     # --- extra: -C moves the effective cwd OUT of the guard ---
     ("git -C /tmp worktree add relbranchdir", GUARDED_CWD, False),
     # --- extra: compound command, guarded call is the second segment ---
-    ("echo hi && git worktree add /c/work/desktop/bar", UNGUARDED_CWD, True),
-    ("git worktree list && git worktree add /c/work/desktop/bar", UNGUARDED_CWD, True),
+    ("echo hi && git worktree add /home/oystein/work/desktop/bar", UNGUARDED_CWD, True),
+    ("git worktree list && git worktree add /home/oystein/work/desktop/bar", UNGUARDED_CWD, True),
     # --- extra: indeterminate target, but cwd is NOT guarded -> allow ---
     ("git clone --depth 1", UNGUARDED_CWD, False),
     # --- extra: indeterminate target, cwd IS guarded -> fail closed ---
@@ -58,7 +58,7 @@ cases = [
     ("grove --repo desktop list", UNGUARDED_CWD, True),
     ("grove -v list --short", UNGUARDED_CWD, True),
     ("~/.cargo/bin/grove list", UNGUARDED_CWD, True),
-    ("cd /c/work/desktop && grove list | head", UNGUARDED_CWD, True),
+    ("cd /home/oystein/work/desktop && grove list | head", UNGUARDED_CWD, True),
     # --- grove list: allowed near-misses ---
     ("grove list --help", UNGUARDED_CWD, False),
     ("grove list -h", UNGUARDED_CWD, False),
