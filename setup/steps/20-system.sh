@@ -30,6 +30,8 @@ else
   sudo chsh -s /usr/bin/fish "$me"; ok "login shell set to fish (log out to apply)"
 fi
 
+mkdir -p "$HOME/work"
+
 # Docker and Tailscale
 if [[ ",$(getent group docker | cut -d: -f4)," == *",$me,"* ]]; then
   ok "$me is in the docker group"
