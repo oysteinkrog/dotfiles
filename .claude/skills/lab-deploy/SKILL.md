@@ -44,8 +44,14 @@ lab-deploy.sh logs 3                                                    # newest
   (about 4 min and 20 s). `ri-push` swaps the Wine bridges (FLIR_GenTL_v140.cti, Bertec ftd2xx.dll)
   for the Windows originals; a build copied any other way hangs at the Spinnaker start. Run it in a
   test hive like any `C:\LabQa\ri` build. Use a CI installer only when the installer itself is
-  under test (`release-installers` finds the link, then `push`). Until the labqa-push PR merges,
-  `ri-push` exists only in the lane `~/work/desktop/.scratch/labqa-push`.
+  under test (`release-installers` finds the link, then `push`).
+  `ri-push --name <name>` installs under `C:\LabQa\ri\<name>`, so several builds can sit side by side.
+- **Portable tools are fine on Hawk without asking.** Oystein, 2026-10-20: a self-contained
+  tool you copy in and can delete again (a signed Sysinternals exe, a static binary) goes in
+  `C:\LabQa\perf\tools` or another `C:\LabQa` task folder. Download it from the vendor's site,
+  check the Authenticode signature (`(Get-AuthenticodeSignature <exe>).Status` must be `Valid`)
+  and report the path. Installers, services, drivers and registry changes still need a yes.
+  RAMMap64.exe is already at `C:\LabQa\perf\tools` (startup timing cold-cache runs).
 - **The Windows password is only for someone sitting at the PC.** It is `LAB_DEPLOY_PASSWORD`
   in the secrets file. Never put it in a file or a command line.
 - **Adding a key:** append it to `C:\ProgramData\ssh\administrators_authorized_keys` (the account

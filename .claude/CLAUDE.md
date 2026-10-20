@@ -60,6 +60,13 @@ same gate on anything about to reach a person and hands back findings on failure
   manager (`pacman`, or `apt` and `apt-get`), so you can run `sudo pacman -S <pkg>` or
   `sudo apt install <pkg>` yourself, but name the packages and get approval first. Anything
   needing broader sudo goes to Oystein to run.
+- **Portable single-use tools need no approval, on any machine.** Oystein, 2026-10-20: a
+  self-contained tool you copy into place and can delete again (for example a signed
+  Sysinternals exe such as RAMMap, or a static binary) is fine on this desktop, Hawk, the
+  pool hosts or a VM. Put it in a task folder (on Hawk `C:\LabQa\perf\tools`), take it from
+  the vendor's own site, check its signature or hash, and say where it went. This does not
+  cover package managers, installers, services, drivers or registry changes: those still
+  need approval.
 - **Always use `AskUserQuestion` when you need input.** A question in plain text does not
   reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
   multiple-choice or clarifying question, and for open questions too, so there is a clear
