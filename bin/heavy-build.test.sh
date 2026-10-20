@@ -238,11 +238,11 @@ row() {  # class key peak_gib exit reason [cap_gib]
   [[ -n ${6:-} ]] && cap=$'\t'$(( $6 * G ))
   printf '1\t%s\t%s\t10\t20\t%s\t%s\t%s%s\n' "$1" "$2" "$(( $3 * G ))" "$4" "$5" "$cap" >> "$E/hist"
 }
-est() {  # key class ; prints "mem source"
+est() {  # key class [sig filtered] ; prints "mem source"
   (
     HIST=$E/hist
-    eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^estimate()/,/^}/p' "$HB")"
-    estimate "$1" "$2" | awk '{print $1, $4}'
+    eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^SIG_DAYS=/p;/^estimate()/,/^}/p' "$HB")"
+    estimate "$@" | awk '{print $1, $4}'
   )
 }
 T=$E; : > "$T/out"
@@ -322,6 +322,55 @@ for i in $(seq 1 5); do row dotnet-build-sln "s$i" 7 0 ok; done
 out=$(est newkey dotnet-build-sln)
 check "estimate: dotnet-build-sln uses its own p90 once it has 5 runs (got '$out')" '[[ $out == "7.0 class-history,mem=class-p90" ]]'
 
+# Filtered Wine test runs are estimated from their sig (history column 12).
+rows() {  # class key peak_gib sig [age_s] [max_gib high_gib] ; peak may have decimals
+  awk -v c="$1" -v k="$2" -v p="$3" -v s="$4" -v a="${5:-60}" -v m="${6:-24}" -v h="${7:-22}" -v now="$EPOCHSECONDS" -v G="$G" 'BEGIN {
+    printf "%d\t%s\t%s\t10\t20\t%d\t0\tok\t%d\t%d\t-\t%s\n", now - a, c, k, p * G, m * G, h * G, s }' >> "$E/hist"
+}
+classrows() { local i; for i in $(seq 1 20); do rows wine-run-tests "c$i" "$i" other; done; }
+: > "$E/hist"; classrows
+out=$(est newkey wine-run-tests)
+check "sig: without a sig the class p90 still decides (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
+out=$(est newkey wine-run-tests sigA 1)
+check "sig: a filtered run with no sig history gets the class p75 (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
+for i in 1 2 3 4; do rows wine-run-tests "a$i" 7 sigA; done
+out=$(est newkey wine-run-tests sigA 1)
+check "sig: under 5 sig runs falls back to the class p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
+rows wine-run-tests a5 7 sigA
+out=$(est newkey wine-run-tests sigA 1)
+check "sig: 5 sig runs use their p90 (got '$out')" '[[ $out == "7.0 class-history,mem=sig-p90" ]]'
+rows wine-run-tests a6 17 sigA 1300000
+out=$(est newkey wine-run-tests sigA 1)
+check "sig: a sig run older than 14 days does not count (got '$out')" '[[ $out == "7.0 class-history,mem=sig-p90" ]]'
+rows wine-run-tests a7 18 sigA 60 20 16
+out=$(est newkey wine-run-tests sigA 1)
+check "sig: a capped sig run counts as 1.25 x its MemoryHigh (got '$out')" '[[ $out == "20.0 class-history,mem=sig-p90" ]]'
+: > "$E/hist"; classrows
+rows wine-run-tests big 12 sigB
+out=$(est newkey wine-run-tests sigB 1)
+check "sig: under 5 sig runs, a sig peak under the class p75 keeps the p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
+rows wine-run-tests big 21 sigB
+out=$(est newkey wine-run-tests sigB 1)
+check "sig: under 5 sig runs, the highest sig peak wins when over the p75 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
+out=$(est big wine-run-tests)
+check "sig: a full-suite run keeps the key peak over the class p90 (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
+out=$(est big wine-run-tests sigB 0)
+check "sig: a run without a filter ignores its sig (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
+: > "$E/hist"
+for i in $(seq 1 20); do rows wine-run-tests "c$i" 2 other; done
+for i in $(seq 1 9); do rows wine-run-tests "s$i" 3 sigC; done
+out=$(est newkey wine-run-tests sigC 1)
+check "sig: under 10 sig runs, the 6 GiB class floor holds (got '$out')" '[[ $out == "6.0 class-history,mem=floor" ]]'
+rows wine-run-tests s10 3 sigC
+out=$(est newkey wine-run-tests sigC 1)
+check "sig: 10 sig runs may go down to 4 GiB (got '$out')" '[[ $out == "4.0 class-history,mem=floor" ]]'
+for i in $(seq 1 10); do rows wine-run-tests "d$i" 4.5 sigD; done
+out=$(est newkey wine-run-tests sigD 1)
+check "sig: 10 sig runs between 4 and 6 GiB use their own p90 (got '$out')" '[[ $out == "4.5 class-history,mem=sig-p90" ]]'
+for i in $(seq 1 10); do rows wine-run-tests-prebuilt "e$i" 1 sigE; done
+out=$(est newkey wine-run-tests-prebuilt sigE 1)
+check "sig: the 3 GiB prebuilt floor is not raised to 4 (got '$out')" '[[ $out == "3.0 class-history,mem=floor" ]]'
+
 # append_history writes MemoryHigh in column 10 and logs a capped run.
 ah() {  # peak_bytes ; prints "col9 col10 capped-log-lines"
   (
@@ -337,6 +386,13 @@ out=$(ah $(( 16 * G )))
 check "history: a run at its cap gets MemoryHigh in column 10 and event=capped (got '$out')" '[[ $out == "$(( 18 * G )) $(( 16 * G )) 1" ]]'
 out=$(ah $(( 8 * G )))
 check "history: a run under its cap is not logged as capped (got '$out')" '[[ $out == "$(( 18 * G )) $(( 16 * G )) 0" ]]'
+out=$(
+  STATE=$E/st HIST=$E/st/history.tsv MODE=live jobid=t unit=u cmdline=x est_mem=6 cls=wine-run-tests hash=h
+  start_ts=$EPOCHSECONDS usec_last=1000000 cap_high=16 peak=$G sig=abc12345 tstate=
+  eval "$(sed -n '/^say()/p;/^log_line()/,/^}/p;/^append_history()/,/^}/p' "$HB")"
+  : > "$HIST"; append_history 0 ok 2>/dev/null; cut -f11,12 "$HIST" | tr '\t' ' '
+)
+check "history: the Wine test sig goes in column 12 (got '$out')" '[[ $out == "- abc12345" ]]'
 rm -rf -- "$E"
 
 # 7. Classes for Wine test runs. run-tests.sh builds nothing when every
@@ -389,6 +445,48 @@ check "classify: 'dotnet build' in a dir with a project file is dotnet-build (go
 out=$(cd "$T/b" && cls dotnet build)
 check "classify: 'dotnet build' in a dir with both is dotnet-build (got '$out')" '[[ $out == dotnet-build ]]'
 rm -rf -- "$T"
+
+# 7b. Wine test sigs: the same tests from another tree, lane or prefix get the
+# same sig; other projects, flags or filters get another.
+sg() {
+  (
+    eval "$(sed -n '/^wine_sig()/,/^}/p' "$HB")"
+    wine_sig "$@"
+  )
+}
+a=$(sg wine-run-tests bash tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Windows --filter 'FullyQualifiedName~A|FullyQualifiedName~B')
+b=$(sg wine-run-tests /home/x/work/desktop/lane-2/tools/wine/run-tests.sh --filter "FullyQualifiedName~A|FullyQualifiedName~B" SwingCatalyst.Test.Unit.Windows)
+c=$(sg wine-run-tests tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Windows --filter FullyQualifiedName~C)
+d=$(sg wine-run-tests tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Windows)
+e=$(sg wine-run-tests tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Windows --all-categories)
+f=$(sg wine-run-tests-prebuilt tools/wine/run-tests.sh --filter=X /a/BUILD/SwingCatalyst.Test.Unit.dll)
+g=$(sg wine-run-tests-prebuilt tools/wine/run-tests.sh --filter=X /b/other/SwingCatalyst.Test.Unit.dll)
+h=$(sg wine-run-tests tools/wine/run-tests.sh A B --filter-for A=X)
+i=$(sg wine-run-tests tools/wine/run-tests.sh B A --filter-for A=X)
+check "wine_sig: a filtered run is marked 1 (got '$a')" '[[ $a == "1 "???????? ]]'
+check "wine_sig: order, quotes and the tree path do not change the sig ('$a' vs '$b')" '[[ $a == "$b" ]]'
+check "wine_sig: another filter gets another sig ('$a' vs '$c')" '[[ $a != "$c" ]]'
+check "wine_sig: no filter is marked 0, another flag changes the sig ('$d' vs '$e')" '[[ $d == "0 "???????? && $d != "$e" ]]'
+check "wine_sig: a .dll from another build dir has the same sig ('$f' vs '$g')" '[[ $f == "1 "* && $f == "$g" ]]'
+check "wine_sig: --filter-for counts as a filter, project order does not matter ('$h' vs '$i')" '[[ $h == "1 "* && $h == "$i" ]]'
+out=$(sg wine-run-tests cargo test)
+check "wine_sig: no run-tests.sh prints nothing (got '$out')" '[[ -z $out ]]'
+
+# End to end: a filtered run-tests.sh command is estimated from its sig's
+# history, logged as mem=sig-p90. The blocker ticket keeps it from starting.
+setup
+read -r _ s <<< "$(sg wine-run-tests tools/wine/run-tests.sh Foo.Tests --filter Name~Bar)"
+mkdir -p "$T/state/heavy-build"
+for i in $(seq 1 6); do
+  printf '%d\twine-run-tests\tk%d\t10\t20\t%d\t0\tok\t%d\t%d\t-\t%s\n' "$(( EPOCHSECONDS - 60 ))" "$i" "$(( 7 * G ))" "$(( 24 * G ))" "$(( 22 * G ))" "$s" >> "$T/state/heavy-build/history.tsv"
+done
+(cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN \
+  XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
+  HB_CGROUP="$T/cg" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
+  HEAVY_BUILD_WAIT=3 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none \
+  "$HB" tools/wine/run-tests.sh Foo.Tests --filter Name~Bar) > "$T/out" 2>&1
+check "sig: a filtered run-tests.sh command logs est=7.0G...mem=sig-p90" 'grep -q "est=7.0G/[^ ]*mem=sig-p90)" "$T/state/heavy-build/shadow.log"'
+teardown
 
 
 # 8. The critical-first switch. The admission awk (ADMIT_AWK) and

@@ -132,7 +132,13 @@
 #   cap, so its real need is unknown: it counts with a peak of at least 1.25
 #   times that MemoryHigh, and is logged as event=capped when it ends. On
 #   2026-10-20 a dotnet build estimated at 6.6 GiB sat at its 16 GiB cap and
-#   left the machine 1 GiB. Cores and wall time come from the
+#   left the machine 1 GiB. A Wine test run with --filter or --filter-for
+#   is estimated from the runs of the same tests instead (same projects,
+#   flags and filters, from any tree or lane; history column 12) in the last
+#   14 days: their p90 peak once there are 5, else the class p75. The class
+#   floor holds, except that 10 or more runs may go down to 4 GiB. A run
+#   without a filter keeps the rule above. See estimate(). Cores and wall
+#   time come from the
 #   last 5 runs of the same command, then from the class, then 8 cores and
 #   600 s. History: ~/.local/state/heavy-build/history.tsv,
 #   one line per finished build, tab separated, with no header line. Columns:
@@ -141,9 +147,11 @@
 #   bytes, 7 exit code, 8 reason: ok, fail, cancelled (heavy-build got TERM,
 #   INT or HUP), timeout (exit 124) or oom (the scope's memory.events shows an
 #   oom_kill), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
-#   bytes, 11 the tree state when the build started (see the rerun guard).
+#   bytes, 11 the tree state when the build started (see the rerun guard),
+#   12 the Wine test sig (see wine_sig; - for other classes).
 #   Lines written before 2026-10-09 have no column 8, lines before
-#   2026-10-16 no column 9, and lines before 2026-10-20 no column 10 or 11.
+#   2026-10-16 no column 9, lines before 2026-10-20 no column 10 or 11, and
+#   lines before the sig change (2026-10-20 afternoon) no column 12.
 # - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
 #   heavy-build is gone is stopped when it holds only Wine leftovers
 #   (winedevice.exe, wineserver, services.exe and the like) or used under
@@ -412,6 +420,36 @@ wine_tests_prebuilt() {
   (( n > 0 ))
 }
 
+# wine_sig CLASS WORD... -> "<filtered> <sig>" for a run-tests.sh command:
+# filtered is 1 when it has a --filter or --filter-for, else 0 (the full suite
+# of its projects). sig is an 8-character hash of the class, the test project
+# names (directory and .dll cut off), the other flags and the filter values,
+# each sorted, so the same tests run from another tree, lane or WINEPREFIX
+# get the same sig. Quotes are dropped. Prints nothing without run-tests.sh.
+wine_sig() {
+  local c=$1 w seen= skip= f=0 p
+  local -a parts=()
+  shift
+  for w in "$@"; do
+    w=${w//[\'\"]/}
+    if [[ -z $seen ]]; then
+      [[ $w == *run-tests.sh ]] && seen=1
+      continue
+    fi
+    if [[ -n $skip ]]; then parts+=("f:$skip=$w"); skip=; continue; fi
+    case $w in
+      ';'|'&&'|'||'|'|'|'&') break ;;
+      --filter|--filter-for) skip=$w f=1 ;;
+      --filter=*|--filter-for=*) parts+=("f:$w"); f=1 ;;
+      -*) parts+=("o:$w") ;;
+      '') ;;
+      *) p=${w##*/}; parts+=("p:${p%.dll}") ;;
+    esac
+  done
+  [[ -n $seen ]] || return 0
+  echo "$f $(printf '%s\n' "$c" "${parts[@]}" | LC_ALL=C sort | md5sum | cut -c1-8)"
+}
+
 # dotnet_sln WORD...: true when a `dotnet build|test|msbuild` or a
 # plain `msbuild` builds a whole solution: its project argument ends in .sln
 # or .slnx, or it has none (or names a directory) and that directory holds a
@@ -517,13 +555,26 @@ class_table() {
 # gets more than 22G before it is throttled. A larger estimate would only
 # hold back other builds for memory this build cannot be given.
 EST_MEM_MAX_GIB=22
+# How many days of history a Wine test sig's runs count for (see estimate).
+SIG_DAYS=14
 
-# estimate KEY CLASS -> "mem_gib cores wall_s source".
+# estimate KEY CLASS [SIG FILTERED] -> "mem_gib cores wall_s source".
 # history.tsv columns: end_epoch class key wall_s cpu_s peak_bytes exit_code
-# reason cap_bytes high_bytes. Older lines have no column 10 (some no 9 or 8).
+# reason cap_bytes high_bytes tree_state sig. Older lines have no column 12
+# (some no 11, 10, 9 or 8).
 # Memory is the largest of: the key's highest peak in its last 10 runs, the
 # class p90 peak over its last 50 runs (the class_table value when the class
 # has under 5 runs), and the class floor. It is capped at EST_MEM_MAX_GIB.
+# A Wine test run with a filter (SIG from wine_sig, FILTERED 1) is estimated
+# from its sig instead (history column 12, runs in the last SIG_DAYS days):
+# with 5 or more such runs, their p90 peak (mem=sig-p90); with fewer, the
+# class p75 (mem=class-p75), or the highest peak of those few runs when that
+# is more (mem=sig-max). The key's own peak does not apply. The class floor
+# still applies, except that a sig with 10 or more runs may go down to 4 GiB.
+# On 2026-10-20 wine-run-tests was planned at 8.5 to 9.8 GB from the class
+# p90 while 1,383 runs peaked at 5.6 GB on average, and memory was the main
+# reason Wine runs waited (median 12 min). A run without a filter (the full
+# suite of its projects) keeps the rule above.
 # An OOM-killed run (exit 137 or reason oom, but not cancelled or timeout)
 # counts with a peak of at least its scope's MemoryMax (column 9), or its
 # peak times 1.25 when column 9 is missing. A run that is not OOM-killed but
@@ -534,12 +585,13 @@ EST_MEM_MAX_GIB=22
 # (exit 128 and above) are left out. Wall time and cores come from the key's
 # last 5 runs, else from the class, and never from OOM-killed runs.
 # source: history, class-history, class or default (where wall and cores
-# came from), then ",mem=" and what set memory: key, class-p90, class,
-# default, floor or cap.
+# came from), then ",mem=" and what set memory: key, class-p90, class-p75,
+# sig-p90, sig-max, class, default, floor or cap.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
-  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" '
+  awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
+    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" '
     function srt(a, n,   i, j, x) { for (i = 2; i <= n; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
@@ -554,6 +606,7 @@ estimate() {
       }
       if ($3 == k) { kmn++; kmp[kmn] = pk }
       if ($2 == c) { cmn++; cmp[cmn] = pk }
+      if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk }
       if (oom) next
       if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5 }
       if ($2 == c) { cn++; cw[cn] = $4; cc[cn] = $5 }
@@ -572,10 +625,28 @@ estimate() {
         if (sw > 0) cores = sc / sw
         src = "class-history"
       }
+      filt = (s != "" && sf == 1)
+      cmem = mem
       if (cmn >= 5) {
         m = 0
         for (i = (cmn > 50 ? cmn - 49 : 1); i <= cmn; i++) if (cmp[i] != "NA") p[++m] = cmp[i]
-        if (m > 0) { srt(p, m); i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824; msrc = "class-p90" }
+        if (m > 0) {
+          srt(p, m)
+          i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824; msrc = "class-p90"
+          i = int(0.75 * m) + 1; if (i > m) i = m; cmem = p[i] / 1073741824
+        }
+      }
+      if (filt) {
+        if (smn >= 5) {
+          srt(smp, smn); i = int(0.9 * smn) + 1; if (i > smn) i = smn
+          mem = smp[i] / 1073741824; msrc = "sig-p90"
+          if (smn >= 10 && floor > 4) floor = 4
+        } else {
+          mem = cmem; if (msrc == "class-p90") msrc = "class-p75"
+          mx = -1
+          for (i = 1; i <= smn; i++) if (smp[i] + 0 > mx) mx = smp[i] + 0
+          if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = "sig-max" }
+        }
       }
       if (kn >= 1) {
         n = 0; s = 0; nc = 0
@@ -587,7 +658,7 @@ estimate() {
         if (nc > 0) cores = s / nc
         src = "history"
       }
-      if (kmn >= 1) {
+      if (kmn >= 1 && !filt) {
         mx = -1
         for (i = (kmn > 10 ? kmn - 9 : 1); i <= kmn; i++) if (kmp[i] != "NA" && kmp[i] + 0 > mx) mx = kmp[i] + 0
         if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = "key" }
@@ -1742,7 +1813,7 @@ append_history() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" >&6
     if (( $(wc -l < "$HIST") > 2200 )); then tail -n 2000 -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
   } 6>>"$HIST"
 }
@@ -1754,7 +1825,13 @@ cmdline="$*"
 cmdline=${cmdline//\"/\'}
 (( ${#cmdline} > 160 )) && cmdline="${cmdline:0:157}..."
 cls=$(classify "$@")
-read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls")"
+sig=- sig_f=0
+if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
+  read -ra sig_words <<< "$*"
+  read -r sig_f sig <<< "$(wine_sig "$cls" "${sig_words[@]}")"
+  [[ -n $sig ]] || sig=- sig_f=0
+fi
+read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
 keys_out=$(lock_keys "$@")
 keys_note=$(grep '^!' <<< "$keys_out" | sed 's/^!//' | paste -sd' ' -)
 keys_csv=$(grep -v '^!' <<< "$keys_out" | sed 's/ /%20/g' | paste -sd, -)
