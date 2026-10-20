@@ -48,17 +48,13 @@ screen was locked.
 driven through its own UI broker, with its own licence mock. Its docs are in
 `tools/wine/README.md`, section "Headless MC on its own display".
 
-**It is only on branch `kpp` for now** (commit `1d83beb3af5d`, worktree
-`~/work/desktop/kpp`). It does not stand alone on master yet, because the licence
-mock tests need the kpp-only `ANALYSIS_PROFILER` flag. kpp is preparing a trimmed
-master PR, #12194. That PR does not carry `run` or the consent setting yet, so the
-master version lacks both. From another lane, run it by
-its path in the kpp worktree and pass your own build with `--build-dir`, or wait
-until it is merged. Do not cherry-pick it into other branches. The kpp copy starts
-kpp's broker build unless you export `MC_BROKER_DIR` first.
+It is on master: `start`, `env`, `shot`, `stop` and `reap`. Run it from your own
+worktree. Only the `run` verb is still on branch `kpp` alone (worktree
+`~/work/desktop/kpp`). Check what master has with
+`git show if/master:tools/wine/headless-mc.sh | sed -n 2,12p`.
 
 ```bash
-K=~/work/desktop/kpp/tools
+K=<your worktree>/tools
 $K/qa/hive/setup-hive.sh /var/tmp/claude/<hive> --profile minimal
 $K/wine/headless-mc.sh start one --hive /var/tmp/claude/<hive> --licence profiler \
     --build-dir <your src/motioncatalyst/BUILD/x64_Debug>
@@ -109,10 +105,12 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
   data-sharing consent dialog blocks MC's UI thread, and neither `wpf_click_point`
   nor `WM_CLOSE` gets past it under Wine. If you start MC yourself with
   `mc_connect`, set it first. kpp saw no dialog after 90 s with the setting.
-- For a CLI call or Wine command that goes through `heavy-build`, use `run`:
+- For a CLI call or Wine command that goes through `heavy-build`, use `run`. It is on
+  kpp only, so call it by its kpp path. The kpp copy starts kpp's broker build unless
+  you export `MC_BROKER_DIR` first:
 
   ```bash
-  $K/wine/headless-mc.sh run one -- sh -c 'cd "$MC_BUILD_DIR" && wine MotionCatalyst-cli.exe import-takes --dir Z:/var/tmp/claude/takes --hiveDir Z:/var/tmp/claude/<hive>'
+  ~/work/desktop/kpp/tools/wine/headless-mc.sh run one -- sh -c 'cd "$MC_BUILD_DIR" && wine MotionCatalyst-cli.exe import-takes --dir Z:/var/tmp/claude/takes --hiveDir Z:/var/tmp/claude/<hive>'
   ```
 
   `run` starts `heavy-build` with the real `XDG_RUNTIME_DIR=/run/user/$UID` and user
@@ -232,14 +230,23 @@ Inside the session:
 - A QA lane reported on 2026-10-04 that a nested KWin kept working while the screen
   was locked. Not re-tested. Whether it gets the NVIDIA GPU is not checked.
 
-## Builds and the Wine test runner
+## Builds, the Wine test runner and memory
 
-Build MC with `heavy-build`, as for any heavy build. `tools/wine/run-tests.sh` also
-goes through `heavy-build`, and it gives each worktree and `AgentOutputSuffix` its
-own prefix already. It sources `wine-env.sh`, which fills in `DISPLAY=:0` and
-`WAYLAND_DISPLAY=wayland-0` when they are unset, so a test that opens a window lands
-on the real screen. Whether any test project opens a window is not checked. Export a
-private `DISPLAY` and `WAYLAND_DISPLAY` first anyway.
+Build MC with `heavy-build`, as for any heavy build. `tools/wine/run-tests.sh` also goes
+through `heavy-build`. On master it starts its own Xvfb display for each run, so test
+windows do not reach the real screen. For Wine prefixes, exit codes and the test loop,
+load the `heavy-build` skill.
+
+Each headless MC uses 5 to 9 GiB of memory. heavy-build does not admit or count it yet.
+Until it does, start one only when more than 10 GiB is available:
+
+```bash
+awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo   # GiB available
+```
+
+Run `headless-mc.sh stop --rm <name>` as soon as you are done. Once the staged
+heavy-build is installed and DESKTOP-15795 is merged, `start` waits for admission and can
+end with heavy-build's exit 75, 76 or 77.
 
 ## Known limits
 
