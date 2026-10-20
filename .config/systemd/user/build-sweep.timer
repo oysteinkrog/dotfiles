@@ -2,7 +2,7 @@
 Description=Run build-sweep twice a day
 
 [Timer]
-OnCalendar=*-*-* 04,16:30
+OnCalendar=*-*-* 07,16:30:00
 RandomizedDelaySec=15min
 Persistent=true
 

@@ -2,7 +2,7 @@
 Description=Run grove-autoreap daily
 
 [Timer]
-OnCalendar=*-*-* 05:30:00
+OnCalendar=*-*-* 07:50:00
 RandomizedDelaySec=15min
 Persistent=true
 
