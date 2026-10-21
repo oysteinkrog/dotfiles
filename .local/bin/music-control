@@ -1,15 +1,66 @@
 #!/bin/sh
-# Send a playback command to whichever player is running: fooyin if it is open, otherwise foobar2000.
+# Send a playback command to the active player. Fooyin gets it when it is playing or paused, or when
+# foobar2000 is not running; otherwise foobar2000 gets it.
 # Usage: music-control playpause|next|random|back
+#
+# Several fooyin instances can run at once (the main one and fooyin-experimental). Each listens on a socket
+# in its own TMPDIR, so a command goes through that instance's binary with its TMPDIR. The target is the
+# instance that is playing, otherwise the newest one.
 action="$1"
 
-if pgrep -x fooyin >/dev/null; then
+# Playing: the instance has an uncorked audio stream. Works for every instance.
+playing_pids=$(pactl -f json list sink-inputs 2>/dev/null |
+    jq -r '.[] | select(.corked == false) | .properties."application.process.id" // empty' 2>/dev/null)
+
+# Paused: only the instance that owns the MPRIS name can tell us; a second instance cannot register it.
+mpris_pid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.GetConnectionUnixProcessID org.mpris.MediaPlayer2.fooyin 2>/dev/null |
+    sed -E 's/^\(uint32 ([0-9]+),\)$/\1/')
+mpris_status=$(gdbus call --session --dest org.mpris.MediaPlayer2.fooyin --object-path /org/mpris/MediaPlayer2 \
+    --method org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null)
+
+target=""
+active=no
+for pid in $(pgrep -x fooyin); do
+    if echo "$playing_pids" | grep -qx "$pid"; then
+        target=$pid
+        active=yes
+        break
+    fi
+done
+# Nothing playing: the newest instance, which is most likely the one in use. A long-paused older
+# instance must not win over a window that was just opened.
+if [ -z "$target" ]; then
+    target=$(pgrep -n -x fooyin)
+    case "$mpris_status" in
+        *Paused*) [ "$target" = "$mpris_pid" ] && active=yes ;;
+    esac
+fi
+
+use_fooyin=no
+if [ -n "$target" ]; then
+    if [ "$active" = yes ] || ! pgrep -f 'foobar2000\.exe' >/dev/null; then
+        use_fooyin=yes
+    fi
+fi
+
+if [ "$use_fooyin" = yes ]; then
+    # Talk to the target instance: its own binary (a portable copy for the experimental one) and TMPDIR.
+    exe=$(readlink "/proc/$target/exe" | sed 's/ (deleted)$//')
+    tmpdir=$(tr '\0' '\n' <"/proc/$target/environ" | sed -n 's/^TMPDIR=//p')
+    fy() {
+        if [ -n "$tmpdir" ]; then
+            TMPDIR="$tmpdir" "$exe" "$@"
+        else
+            env -u TMPDIR "$exe" "$@"
+        fi
+    }
     case "$action" in
-        playpause) exec fooyin --play-pause ;;
-        next) exec fooyin --next ;;
+        playpause) fy --play-pause; exit ;;
+        next) fy --next; exit ;;
         # foobar2000's "Random" jumps to one random track; do the same without leaving shuffle on.
-        random) fooyin --shuffle random && fooyin --next && exec fooyin --shuffle off ;;
-        back) exec fooyin --previous ;;
+        random) fy --shuffle random && fy --next && fy --shuffle off; exit ;;
+        back) fy --previous; exit ;;
     esac
 else
     case "$action" in

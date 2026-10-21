@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=fooyin (experimental)
+Type=Application
+GenericName=fooyin Music Player
+Comment=Separate fooyin instance for trying new styles
+Exec=/home/oystein/.local/bin/fooyin-experimental %F
+Icon=org.fooyin.fooyin
+Terminal=false
+Categories=AudioVideo;Player;Qt;Audio;
+StartupNotify=false

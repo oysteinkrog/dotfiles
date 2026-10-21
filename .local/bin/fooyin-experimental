@@ -1,0 +1,19 @@
+#!/bin/sh
+# Start the experimental fooyin instance in ~/.local/opt/fooyin-experimental.
+# It runs in portable mode (PORTABLE file next to the binary), so config and library live in its
+# own bin/config and bin/data. A private TMPDIR gives it its own single-instance socket, so it runs
+# beside the main fooyin and the music-control shortcuts keep talking to the main one.
+# Usage: fooyin-experimental [fooyin args...]
+root="$HOME/.local/opt/fooyin-experimental"
+
+# Portable mode keys off the real binary's folder, so the binary is a copy, not a symlink.
+# Refresh it after a package upgrade.
+if [ /usr/bin/fooyin -nt "$root/bin/fooyin" ]; then
+    cp --reflink=auto -p /usr/bin/fooyin "$root/bin/fooyin.new" && mv -f "$root/bin/fooyin.new" "$root/bin/fooyin"
+fi
+
+# Pick up a Plasma accent change made while it was closed.
+"$HOME/.local/bin/fooyin-theme-sync" || true
+
+mkdir -p "$root/tmp"
+TMPDIR="$root/tmp" exec "$root/bin/fooyin" "$@"
