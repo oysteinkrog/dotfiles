@@ -25,8 +25,9 @@ Environment=CASS_CODEX_MAX_SOURCE_BYTES=268435456
 # sized from measured peaks (preflight alone reached 15 GB on 2026-10-03).
 # Swap stays low so the kernel drops page cache instead of parking idle heap.
 # MemoryHigh was 4G as a runtime override and hit that every night at about 04:06,
-# so it is 6G here since 2026-10-20 (MemoryMax stays the hard cap).
-MemoryHigh=6G
+# so it was 6G from 2026-10-20. The 2026-10-21 run peaked at 9G and swapped for
+# almost 2 h at 6G, so it is 10G since then (MemoryMax stays the hard cap).
+MemoryHigh=10G
 MemoryMax=30G
 MemorySwapMax=8G
 OOMPolicy=kill
