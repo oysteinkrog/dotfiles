@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""wine-fix-launchers: make every Wine launcher for an MC prefix start MC the same way.
+
+Wine's winemenubuilder writes a .desktop file for each Start-menu shortcut and file type
+(for example wine-extension-take.desktop for a double-clicked .take). Its Exec line runs a
+bare `wine` with only WINEPREFIX set, so MC starts without the prefix's dxvk.conf. Without
+d3d9.deferSurfaceCreation, WPF popups go black, and without dxgi.hideNvidiaGpu = False, MC
+cannot see the NVIDIA card. Wine rewrites these files when an installer registers its
+shortcuts again, so wine-fix-launchers.path runs this whenever the folders change.
+
+For each .desktop file under ~/.local/share/applications whose Exec line sets a WINEPREFIX
+that holds a dxvk.conf (tools/wine/setup-prefix.sh writes one into every MC prefix), it
+adds DXVK_CONFIG_FILE and WINEDEBUG=fixme-all if missing, and runs
+~/.local/share/motioncatalyst-wine/current/bin/wine. Other files are left alone. It is
+idempotent. --dry-run prints what would change.
+"""
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+APPS = HOME / ".local/share/applications"
+WINE = str(HOME / ".local/share/motioncatalyst-wine/current/bin/wine")
+
+# env, then NAME=value assignments (quoted or not), then the command, then its arguments.
+EXEC = re.compile(r'^(Exec=env)((?:\s+(?:"[A-Za-z_]+=[^"]*"|[A-Za-z_]+=\S*))+)\s+(\S+)(.*)$')
+PREFIX = re.compile(r'WINEPREFIX=([^"\s]+)')
+
+
+def fix_exec(line):
+    m = EXEC.match(line)
+    if not m:
+        return line
+    head, assigns, cmd, rest = m.groups()
+    p = PREFIX.search(assigns)
+    if not p or not (Path(p.group(1)) / "dxvk.conf").is_file():
+        return line
+    if cmd != "wine" and not cmd.endswith("/bin/wine"):
+        return line
+    if "DXVK_CONFIG_FILE=" not in assigns:
+        assigns += f' "DXVK_CONFIG_FILE={p.group(1)}/dxvk.conf"'
+    if "WINEDEBUG=" not in assigns:
+        assigns += ' "WINEDEBUG=fixme-all"'
+    return f"{head}{assigns} {WINE}{rest}"
+
+
+def main():
+    dry = "--dry-run" in sys.argv[1:]
+    changed = 0
+    for f in sorted(APPS.rglob("*.desktop")):
+        text = f.read_text(encoding="utf-8", errors="surrogateescape")
+        lines = text.split("\n")
+        new = [fix_exec(l) if l.startswith("Exec=") else l for l in lines]
+        if new == lines:
+            continue
+        changed += 1
+        print(f"{'would fix' if dry else 'fixed'}: {f}")
+        if not dry:
+            tmp = f.with_name(f.name + ".wfl-tmp")
+            tmp.write_text("\n".join(new), encoding="utf-8", errors="surrogateescape")
+            tmp.chmod(f.stat().st_mode & 0o7777)
+            tmp.replace(f)
+    if changed and not dry:
+        subprocess.run(["update-desktop-database", str(APPS)], check=False)
+
+
+if __name__ == "__main__":
+    main()
