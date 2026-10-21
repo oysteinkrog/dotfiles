@@ -1,0 +1,9 @@
+[Unit]
+Description=Start MC Wine launchers with the prefix's dxvk.conf and our Wine (wine-fix-launchers)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/wine-fix-launchers
+
+[Install]
+WantedBy=default.target
