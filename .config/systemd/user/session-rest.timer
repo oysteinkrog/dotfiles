@@ -1,0 +1,10 @@
+[Unit]
+Description=Look for long-idle Claude Code sessions to swap out every 5 minutes
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

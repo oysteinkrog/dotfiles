@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Push the memory of long-idle Claude Code sessions out to swap.
 
-    claude-idle-swap [--dry-run] [--verbose]
-    claude-idle-swap --only PID [--live | --dry-run] [--verbose]
+    session-rest [--dry-run] [--verbose]
+    session-rest --only PID [--live | --dry-run] [--verbose]
 
-A systemd user timer runs this every 15 minutes (claude-idle-swap.timer). It
+A systemd user timer runs this every 5 minutes (session-rest.timer). It
 never kills, stops, signals or limits a process. For each Claude scope in
 claude.slice it may write a byte count to the scope's cgroup v2
 memory.reclaim, which makes the kernel move that much of the scope's memory
@@ -18,25 +18,46 @@ A scope is reclaimed only when all of these hold:
   an ancestor of this process (rules shared with claude-version-restart);
 - no input in its terminal (tty access time, ignoring the GUI's bulk bursts,
   as claude-version-restart does), no status change and no transcript write
-  for at least idle_minutes (default 120);
+  for at least idle_minutes (default 30);
+- the scope used at most max_cpu_pct (default 3) percent of one core on
+  average over the last idle_minutes, from cpu.stat samples kept in the state
+  file (an idle Claude TUI uses about 1%; a scope is skipped until it has
+  that much history);
+- neither its name nor its cwd basename matches the exclude_names regex;
 - every process in the scope is a Claude process, its launcher or an MCP
   server, so nothing like a build or a test runs there;
-- its anon memory is above floor_mb (default 100), and it has grown by at
+- its anon memory is above floor_mb (default 160), and it has grown by at
   least regrow_mb (default 200) since the last reclaim of that scope.
+
+With swap_target = disk (the default) the pages must go to disk swap, not
+zram: a pass does nothing while a zram area with room has a higher priority
+than the disk swap (the kernel has no per-cgroup choice of swap device), or
+while disk swap has under disk_margin_mb (default 4096) free. Before it
+reclaims a scope it writes 0 to that scope's memory.zswap.max, so with zswap
+in front of the disk swap the pages skip the compressed pool and go straight
+to disk. When the session is used again it writes "max" back. Set
+swap_target = any to reclaim into whatever swap the kernel picks.
+
+Reclaim goes in chunk_mb (default 64) steps. It stops when claude.slice
+memory pressure (some avg10, or the stall time of the last step) reaches
+max_slice_psi (default 2, under heavy-build's 5% interactive gate), when the
+scope uses CPU during a step, when a step frees nothing, or after
+run_budget_s (default 90) seconds.
 
 Nothing is reclaimed when swap use is above max_swap_pct (default 70) of all
 swap, when /proc/pressure/memory "some avg60" is above max_psi (default 20),
 or when claude.slice is within slice_swap_margin_mb (default 2048) of its
 MemorySwapMax. The amount per pass is cut to fit under that cap.
 
-Settings: ~/.config/claude-idle-swap/settings, "key = value" lines, keys as
-named above. Mode: ~/.config/claude-idle-swap/mode, "live" or "dry-run"
+Settings: ~/.config/session-rest/settings, "key = value" lines, keys as
+named above. Mode: ~/.config/session-rest/mode, "live" or "dry-run"
 (missing means dry-run). --only PID looks at the one scope holding that
 Claude pid, and --live acts on it whatever the mode file says; --live needs
 --only, so the timer can never use it.
 
-Log: ~/.local/state/claude-idle-swap/decisions.log, one line per scope.
-State: ~/.local/state/claude-idle-swap/state.json (anon after last reclaim).
+Log: ~/.local/state/session-rest/log, one line per scope.
+State: ~/.local/state/session-rest/state.json (anon after last reclaim,
+CPU samples).
 """
 
 from __future__ import annotations
@@ -64,12 +85,19 @@ SLICE = (
 LOG_MAX = 5 << 20
 
 DEFAULTS = {
-    "idle_minutes": 120,
-    "floor_mb": 100,
+    "idle_minutes": 30,
+    "max_cpu_pct": 3.0,
+    "floor_mb": 160,
     "regrow_mb": 200,
+    "chunk_mb": 64,
+    "max_slice_psi": 2.0,
+    "run_budget_s": 90,
     "max_swap_pct": 70,
     "max_psi": 20.0,
     "slice_swap_margin_mb": 2048,
+    "exclude_names": "",
+    "swap_target": "disk",
+    "disk_margin_mb": 4096,
 }
 
 
@@ -102,6 +130,9 @@ def read_settings(path: Path) -> dict:
         k, sep, v = line.partition("=")
         k, v = k.strip(), v.strip()
         if sep and k in DEFAULTS:
+            if isinstance(DEFAULTS[k], str):
+                out[k] = v
+                continue
             try:
                 out[k] = type(DEFAULTS[k])(v)
             except ValueError:
@@ -156,12 +187,93 @@ def swap_used_pct() -> float:
     return 100.0 * (total - info.get("SwapFree", 0)) / total
 
 
-def psi_some_avg60() -> float:
-    for line in Path("/proc/pressure/memory").read_text().splitlines():
-        if line.startswith("some "):
-            m = re.search(r"avg60=([\d.]+)", line)
-            return float(m.group(1)) if m else 0.0
+def psi_some(path: Path, key: str = "avg60") -> float:
+    """ "some <key>" of a pressure file, 0.0 when it cannot be read."""
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith("some "):
+                m = re.search(key + r"=([\d.]+)", line)
+                return float(m.group(1)) if m else 0.0
+    except OSError:
+        pass
     return 0.0
+
+
+def swap_devices() -> list[dict]:
+    """Active swap areas from /proc/swaps, highest priority first."""
+    out = []
+    try:
+        lines = Path("/proc/swaps").read_text().splitlines()[1:]
+    except OSError:
+        return out
+    for line in lines:
+        f = line.split()
+        if len(f) < 5:
+            continue
+        out.append(
+            {
+                "name": f[0],
+                "zram": os.path.basename(f[0]).startswith("zram"),
+                "free": (int(f[2]) - int(f[3])) * 1024,
+                "prio": int(f[4]),
+            }
+        )
+    out.sort(key=lambda d: -d["prio"])
+    return out
+
+
+def disk_swap_check(margin: int) -> tuple[int | None, str]:
+    """With swap_target=disk, swapped pages must land on a disk swap area.
+    The kernel fills the highest-priority area that has room first, and no
+    cgroup control picks a swap device, so the first area with room must not
+    be zram. Returns (free bytes on disk swap, "") or (None, why not)."""
+    devs = swap_devices()
+    disk_free = sum(d["free"] for d in devs if not d["zram"])
+    if not disk_free:
+        return None, "no disk swap is active"
+    for d in devs:
+        if d["free"] > margin:
+            if d["zram"]:
+                return (
+                    None,
+                    f"{d['name']} (prio {d['prio']}) would take the pages first",
+                )
+            break
+    if disk_free <= margin:
+        return None, f"disk swap has only {disk_free // MB}M free"
+    return disk_free - margin, ""
+
+
+def set_zswap_max(cg: Path, value: str) -> bool:
+    """memory.zswap.max=0 makes the scope's swap-outs skip zswap and go to
+    the swap device; "max" puts it back. False when the file is missing."""
+    try:
+        (cg / "memory.zswap.max").write_text(value)
+        return True
+    except OSError:
+        return False
+
+
+def psi_some_avg60() -> float:
+    return psi_some(Path("/proc/pressure/memory"))
+
+
+def cpu_usec(cg: Path) -> int | None:
+    try:
+        for line in (cg / "cpu.stat").read_text().splitlines():
+            k, _, v = line.partition(" ")
+            if k == "usage_usec":
+                return int(v)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def mem_available() -> int:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) * 1024
+    return 0
 
 
 def is_claude_proc(argv: list[str]) -> bool:
@@ -177,6 +289,71 @@ def is_claude_proc(argv: list[str]) -> bool:
         if base in ("claude-tab-run", "aiolos-rc"):
             return True
     return False
+
+
+def chunked_reclaim(cg: Path, target: int, cfg: dict) -> dict:
+    """Reclaim up to target bytes from cg in chunk_mb steps. Before each step
+    stop when claude.slice memory pressure (some avg10) is at max_slice_psi or
+    more, when the last step stalled claude.slice tasks for more than
+    max_slice_psi percent of its wall time (from the "total" counter, which
+    is not smoothed like avg10), when the scope used more than 10% of a core
+    during the step (someone is using the session), when a step freed
+    nothing, or when run_budget_s is spent. One write can still block for a
+    while: the budget is checked between writes, not during one."""
+    chunk = max(16, cfg["chunk_mb"]) * MB
+    pressure = SLICE / "memory.pressure"
+    t0 = time.monotonic()
+    done, steps, worst, stop = 0, 0, 0.0, "target reached"
+    while done < target:
+        avg10 = psi_some(pressure, "avg10")
+        worst = max(worst, avg10)
+        if avg10 >= cfg["max_slice_psi"]:
+            stop = f"claude.slice pressure avg10={avg10}"
+            break
+        if time.monotonic() - t0 > cfg["run_budget_s"]:
+            stop = "time budget"
+            break
+        total0 = slice_stall_usec()
+        cpu0 = cpu_usec(cg) or 0
+        anon0 = stat_value(cg, "anon")
+        s0 = time.monotonic()
+        ok, why = reclaim(cg, min(chunk, target - done))
+        wall = max(time.monotonic() - s0, 1e-3)
+        steps += 1
+        freed = anon0 - stat_value(cg, "anon")
+        done += max(0, freed)
+        stall_pct = 100 * (slice_stall_usec() - total0) / 1e6 / wall
+        cpu_pct = 100 * ((cpu_usec(cg) or 0) - cpu0) / 1e6 / wall
+        worst = max(worst, stall_pct)
+        if not ok:
+            stop = why
+            break
+        if stall_pct > cfg["max_slice_psi"]:
+            stop = f"claude.slice stalled {stall_pct:.1f}% during a step"
+            break
+        if cpu_pct > 10:
+            stop = f"scope used {cpu_pct:.0f}% CPU during a step"
+            break
+        if freed < MB:
+            stop = f"step freed {freed // 1024}K ({why})"
+            break
+    return {
+        "ok": steps > 0,
+        "steps": steps,
+        "secs": time.monotonic() - t0,
+        "psi_max": worst,
+        "stop": stop,
+    }
+
+
+def slice_stall_usec() -> int:
+    try:
+        for line in (SLICE / "memory.pressure").read_text().splitlines():
+            if line.startswith("some "):
+                return int(line.rsplit("total=", 1)[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
 
 
 def reclaim(cg: Path, nbytes: int) -> tuple[bool, str]:
@@ -210,7 +387,7 @@ class Pass:
         self.cfg = settings
         self.mode = mode
         self.state_dir = state_dir
-        self.log_path = state_dir / "decisions.log"
+        self.log_path = state_dir / "log"
         self.state_path = state_dir / "state.json"
         self.sys = cvr.System(
             HOME / ".claude", HOME / ".claude/hooks/claude-persist.sh"
@@ -221,7 +398,9 @@ class Pass:
         except (OSError, ValueError):
             self.state = {}
 
-    def log(self, pid, who, idle_min, before, after, swap_delta, decision, reason):
+    def log(
+        self, pid, who, idle_min, before, after, swap_delta, decision, reason, cwd="-"
+    ):
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(self.now))
 
         def mb(v):
@@ -229,6 +408,7 @@ class Pass:
 
         line = (
             f"{stamp} mode={self.mode} pid={pid} name={shlex.quote(who or '-')}"
+            f" cwd={shlex.quote(cwd or '-')}"
             f" idle_min={'-' if idle_min is None else int(idle_min)}"
             f" anon_before={mb(before)} anon_after={mb(after)}"
             f" swap_delta={'-' if swap_delta is None else f'{swap_delta // MB:+d}M'}"
@@ -236,7 +416,7 @@ class Pass:
         )
         try:
             if self.log_path.stat().st_size > LOG_MAX:
-                self.log_path.replace(self.log_path.with_name("decisions.log.1"))
+                self.log_path.replace(self.log_path.with_name("log.1"))
         except OSError:
             pass
         with open(self.log_path, "a") as fh:
@@ -283,6 +463,37 @@ class Pass:
         if at is not None and not cvr.Monitor.bulk_input(at, atimes):
             t = max(t, at)
         return t
+
+    def restore_all(self) -> None:
+        """Put zswap back on for every scope this tool turned it off for."""
+        for name, ent in self.state.items():
+            if ent.pop("zswap_off", None):
+                set_zswap_max(SLICE / name, "max")
+
+    def cpu_idle_pct(self, cg: Path, window_s: float) -> tuple[float | None, str]:
+        """Record this pass's cpu.stat usage_usec for the scope, and return
+        the scope's average CPU (percent of one core) over at least window_s.
+        None while the history is shorter than window_s. With --only and no
+        history, sample for 30 seconds instead (a manual test run)."""
+        now_usec = cpu_usec(cg)
+        if now_usec is None:
+            return None, "cannot read cpu.stat"
+        ent = self.state.setdefault(cg.name, {})
+        hist = [h for h in ent.get("cpu", []) if h[1] <= now_usec]  # scope reused
+        hist.append([self.now, now_usec])
+        old = [h for h in hist if h[0] <= self.now - window_s]
+        keep_from = old[-1][0] if old else 0
+        ent["cpu"] = [h for h in hist if h[0] >= keep_from]
+        if old:
+            t, u = old[-1]
+            span = self.now - t
+            return 100 * (now_usec - u) / 1e6 / span, f"over {span / 60:.0f} min"
+        if self.args.only:
+            time.sleep(30)
+            u2 = cpu_usec(cg) or now_usec
+            return 100 * (u2 - now_usec) / 1e6 / 30, "over a 30 s sample"
+        have = (self.now - hist[0][0]) / 60
+        return None, f"collecting CPU history ({have:.0f} of {window_s / 60:.0f} min)"
 
     def check_session(self, pid, d, classes, ancestors) -> str | None:
         """Return a skip reason, or None when the session may be reclaimed.
@@ -352,6 +563,15 @@ class Pass:
                 f"memory pressure some avg60={psi} > {cfg['max_psi']}",
             )
             return 0
+        disk_budget = None
+        if cfg["swap_target"] == "disk":
+            disk_budget, why = disk_swap_check(cfg["disk_margin_mb"] * MB)
+            if disk_budget is None:
+                self.log("-", "-", None, None, None, None, "skip-all", why)
+                self.restore_all()
+                if not self.args.only:
+                    self.save_state()
+                return 0
         slice_max = read_int(SLICE / "memory.swap.max")
         slice_cur = read_int(SLICE / "memory.swap.current") or 0
         budget = None
@@ -384,12 +604,31 @@ class Pass:
                 or os.path.basename(str(d0.get("cwd") or ""))
                 or "-"
             )
+            cwd = str(d0.get("cwd") or "-").replace(str(HOME), "~", 1)
             anon = stat_value(cg, "anon")
             last = max(self.last_activity(p, d, atimes) for p, d in sessions)
             idle_min = (self.now - last) / 60
+            cpu_pct, cpu_note = self.cpu_idle_pct(cg, idle_s)
 
-            def skip(reason, _pid=pid, _who=who, _idle=idle_min, _anon=anon):
-                self.log(_pid, _who, _idle, _anon, None, None, "skip", reason)
+            def skip(reason, _pid=pid, _who=who, _idle=idle_min, _anon=anon, _cwd=cwd):
+                self.log(_pid, _who, _idle, _anon, None, None, "skip", reason, _cwd)
+
+            excl = cfg["exclude_names"]
+            if excl and (
+                re.search(excl, who) or re.search(excl, os.path.basename(cwd))
+            ):
+                skip("excluded by exclude_names")
+                continue
+
+            ent = self.state.get(cg.name, {})
+            if ent.get("zswap_off") and (
+                last > ent.get("at", 0) or (cpu_pct or 0) > cfg["max_cpu_pct"]
+            ):
+                set_zswap_max(cg, "max")
+                ent.pop("zswap_off", None)
+                self.log(
+                    pid, who, idle_min, anon, None, None, "woke", "zswap back on", cwd
+                )
 
             reason = None
             if not any(d.get("kind") == "interactive" for _, d in sessions):
@@ -408,6 +647,14 @@ class Pass:
             if self.now - last < idle_s:
                 skip(f"active {int(idle_min)} min ago, needs {cfg['idle_minutes']}")
                 continue
+            if cpu_pct is None:
+                skip(cpu_note)
+                continue
+            if cpu_pct > cfg["max_cpu_pct"]:
+                skip(
+                    f"scope CPU {cpu_pct:.1f}% {cpu_note}, limit {cfg['max_cpu_pct']}%"
+                )
+                continue
             busy = self.busy_process(cg, sessions)
             if busy:
                 skip(f"busy: {busy}")
@@ -417,7 +664,11 @@ class Pass:
                 skip(f"anon {anon // MB}M is at the floor")
                 continue
             prev = self.state.get(cg.name)
-            if prev and anon < prev.get("anon_after", 0) + cfg["regrow_mb"] * MB:
+            if (
+                prev
+                and "anon_after" in prev
+                and anon < prev["anon_after"] + cfg["regrow_mb"] * MB
+            ):
                 skip(
                     f"reclaimed before; anon grew {(anon - prev.get('anon_after', 0)) // MB}M, needs {cfg['regrow_mb']}M"
                 )
@@ -427,6 +678,12 @@ class Pass:
                     skip("claude.slice is near its MemorySwapMax")
                     continue
                 target = min(target, budget)
+            if disk_budget is not None:
+                if disk_budget < 16 * MB:
+                    skip("disk swap is full")
+                    continue
+                target = min(target, disk_budget)
+                disk_budget -= target
             picked += 1
             total += anon
             if self.mode != "live":
@@ -438,15 +695,20 @@ class Pass:
                     None,
                     None,
                     "would-reclaim",
-                    f"{target // MB}M",
+                    f"{target // MB}M, scope CPU {cpu_pct:.1f}% {cpu_note}",
+                    cwd,
                 )
                 if budget is not None:
                     budget -= target
                 continue
             swap0 = read_int(cg / "memory.swap.current") or 0
-            ok, why = reclaim(cg, target)
+            avail0 = mem_available()
+            zoff = cfg["swap_target"] == "disk" and set_zswap_max(cg, "0")
+            zsw0 = read_int(cg / "memory.zswap.current") or 0
+            res = chunked_reclaim(cg, target, cfg)
             after = stat_value(cg, "anon")
             swap1 = read_int(cg / "memory.swap.current") or 0
+            avail1 = mem_available()
             if budget is not None:
                 budget -= max(0, swap1 - swap0)
             self.log(
@@ -456,17 +718,26 @@ class Pass:
                 anon,
                 after,
                 swap1 - swap0,
-                "reclaimed" if ok else "failed",
-                f"asked {target // MB}M: {why}",
+                "reclaimed" if res["ok"] else "failed",
+                f"asked {target // MB}M in {res['steps']} steps, {res['secs']:.1f}s,"
+                f" MemAvailable {(avail1 - avail0) // MB:+d}M,"
+                f" slice psi max {res['psi_max']:.1f}%, stop: {res['stop']},"
+                f" zswap {zsw0 // MB}M->{(read_int(cg / 'memory.zswap.current') or 0) // MB}M",
+                cwd,
             )
-            if ok:
-                self.state[cg.name] = {"anon_after": after, "at": int(self.now)}
+            if res["ok"]:
+                ent = self.state.setdefault(cg.name, {})
+                ent["anon_after"] = after
+                ent["at"] = int(self.now)
+                if zoff:
+                    ent["zswap_off"] = True
+            elif zoff:
+                set_zswap_max(cg, "max")
         # Forget scopes that no longer exist.
         if not self.args.only:
             live = {c.name for c in SLICE.glob("*.scope")}
             self.state = {k: v for k, v in self.state.items() if k in live}
-        if self.mode == "live":
-            self.save_state()
+        self.save_state()  # CPU history is kept in dry-run too
         print(
             f"{self.mode}: {len(seen_scopes)} scopes, {picked} picked,"
             f" {total // MB} MB anon in picked scopes"
@@ -498,14 +769,18 @@ def main(argv=None) -> int:
         metavar="N",
         help="override idle_minutes from the settings file for this run",
     )
+    ap.add_argument(
+        "--swap-target",
+        choices=("disk", "any"),
+        help="override swap_target from the settings file for this run",
+    )
     ap.add_argument("--verbose", "-v", action="store_true", help="print decisions too")
     args = ap.parse_args(argv)
     if args.live and (not args.only or args.dry_run):
         ap.error("--live needs --only PID and cannot go with --dry-run")
-    conf = HOME / ".config/claude-idle-swap"
+    conf = HOME / ".config/session-rest"
     state = (
-        Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
-        / "claude-idle-swap"
+        Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "session-rest"
     )
     state.mkdir(parents=True, exist_ok=True)
     if args.dry_run:
@@ -518,9 +793,11 @@ def main(argv=None) -> int:
     try:
         fcntl.flock(run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        print("another claude-idle-swap run is active", file=sys.stderr)
+        print("another session-rest run is active", file=sys.stderr)
         return 0
     settings = read_settings(conf / "settings")
+    if args.swap_target:
+        settings["swap_target"] = args.swap_target
     if args.idle_minutes is not None:
         settings["idle_minutes"] = args.idle_minutes
     return Pass(args, settings, mode, state).run()
