@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch kdeglobals for Plasma colour scheme changes (experimental fooyin)
+
+[Path]
+PathChanged=%h/.config/kdeglobals
+
+[Install]
+WantedBy=default.target
