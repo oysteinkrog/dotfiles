@@ -1,0 +1,12 @@
+[Unit]
+Description=Rerun wine-fix-launchers when Wine writes new launchers
+
+[Path]
+# Wine writes file-type launchers here and Start-menu shortcuts under wine/Programs.
+PathChanged=%h/.local/share/applications
+PathChanged=%h/.local/share/applications/wine/Programs
+PathChanged=%h/.local/share/applications/wine/Programs/Swing Catalyst
+Unit=wine-fix-launchers.service
+
+[Install]
+WantedBy=default.target
