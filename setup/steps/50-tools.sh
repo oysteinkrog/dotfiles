@@ -52,6 +52,17 @@ fi
 ln -sfn /usr/bin/cass "$HOME/.local/bin/cass"
 ln -sfn /usr/bin/cass "$HOME/.local/bin/cass-gpu"
 
+step "tools: Shader Wallpaper (localbuilds recipe shader-wallpaper)"
+# The Plasma wallpaper plugin online.knowmad.shaderwallpaper v4, from the pacman package
+# plasma-wallpaper-shader-local. The KDE Store copy (3.0.3) cannot save its settings.
+if pacman -Q plasma-wallpaper-shader-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q plasma-wallpaper-shader-local)"
+else
+  "$HOME/.local/bin/localbuild" build shader-wallpaper
+  "$HOME/.local/bin/localbuild" install shader-wallpaper
+fi
+"$HOME/bin/shader-wallpaper-theme-sync" && ok "themed Star Nest shader in ~/.local/share/shader-wallpaper"
+
 step "tools: aiolos-rc"
 if [ -f "$DOTFILES/.config/aiolos-rc/preload.so" ]; then
   ok "preload.so built"

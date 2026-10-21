@@ -72,3 +72,37 @@ if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
 else
   warn "plasmashell not running; taskbar pins skipped"
 fi
+
+step "desktop: Star Nest shader wallpaper"
+# Desktops and lock screen use the themed Star Nest shader written by
+# ~/bin/shader-wallpaper-theme-sync (tools step). Needs plasma-wallpaper-shader-local.
+shader_plugin=online.knowmad.shaderwallpaper
+shader_url="file://$HOME/.local/share/shader-wallpaper/Star_Nest_Themed.frag"
+if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
+  lock() { kw --file kscreenlockerrc --group Greeter --group Wallpaper --group $shader_plugin --group General --key "$1" -- "$2"; }
+  kw --file kscreenlockerrc --group Greeter --key WallpaperPlugin $shader_plugin
+  lock selectedShaderPath "$shader_url"
+  lock shaderSpeed 0.025
+  lock targetFps 30
+  lock resolutionScale 0.8
+  if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
+    qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
+      desktops().forEach(function (d) {
+        d.wallpaperPlugin = '$shader_plugin';
+        d.currentConfigGroup = ['Wallpaper', '$shader_plugin', 'General'];
+        d.writeConfig('selectedShaderCode', '');
+        d.writeConfig('selectedShaderPath', '$shader_url');
+        d.writeConfig('shaderSpeed', 0.025);
+        d.writeConfig('targetFps', 30);
+        d.writeConfig('resolutionScale', 0.8);
+        d.writeConfig('pauseMode', 1);
+        d.writeConfig('watchSourceFile', true);
+        d.writeConfig('enableShaderTweaks', true);
+        d.reloadConfig();
+      });" >/dev/null && ok "desktops and lock screen: themed Star Nest"
+  else
+    ok "lock screen: themed Star Nest"; warn "plasmashell not running; desktop wallpapers skipped"
+  fi
+else
+  warn "$shader_plugin not installed; wallpaper skipped (tools step)"
+fi
