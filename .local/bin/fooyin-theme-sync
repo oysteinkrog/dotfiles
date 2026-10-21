@@ -1,0 +1,46 @@
+#!/bin/bash
+# Keep the experimental fooyin's accent colour in step with the Plasma colour scheme.
+#
+# The experimental instance has no saved theme, so fooyin follows the Plasma palette live. Only the
+# accent inside playlist text scripts is a fixed colour. This writes the Plasma selection colour there,
+# using fyhelper (source in ~/.dotfiles/misc/fooyin-theme, built on first use).
+#
+# Run by fooyin-theme-sync.path whenever kdeglobals changes, and by fooyin-experimental before it starts.
+# fooyin keeps these settings in memory and saves them on exit, so nothing is written while it runs:
+# the new accent then applies at its next start.
+
+set -euo pipefail
+
+ROOT="$HOME/.local/opt/fooyin-experimental"
+CONF="$ROOT/bin/config/fooyin.conf"
+SRC="$HOME/.dotfiles/misc/fooyin-theme"
+BUILD="$HOME/.local/share/fooyin-theme"
+HELPER="$BUILD/fyhelper"
+STAMP="$BUILD/accent"
+
+[ -f "$CONF" ] || exit 0
+if pgrep -f "^$ROOT/bin/fooyin( |$)" >/dev/null; then
+    exit 0
+fi
+
+rgb=$(kreadconfig6 --file kdeglobals --group Colors:Selection --key BackgroundNormal)
+if ! [[ $rgb =~ ^([0-9]+),([0-9]+),([0-9]+) ]]; then
+    echo "fooyin-theme-sync: no selection colour in kdeglobals" >&2
+    exit 1
+fi
+accent=$(printf '#%02x%02x%02x' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+
+if [ ! -x "$HELPER" ] || [ "$SRC/main.cpp" -nt "$HELPER" ]; then
+    mkdir -p "$BUILD"
+    # shellcheck disable=SC2046
+    g++ -std=c++23 -fPIC -O1 "$SRC/main.cpp" -o "$HELPER.new" -I/usr/include/fooyin -I"$SRC" \
+        $(pkg-config --cflags --libs Qt6Widgets)
+    mv -f "$HELPER.new" "$HELPER"
+    rm -f "$STAMP"
+fi
+
+if [ "$(cat "$STAMP" 2>/dev/null)" = "$accent" ]; then
+    exit 0
+fi
+QT_QPA_PLATFORM=offscreen "$HELPER" "$CONF" plasma "$accent"
+echo "$accent" >"$STAMP"

@@ -190,9 +190,14 @@ if [ -n "$native_linux" ]; then
     .local/share/applications/foobar2000-next.desktop
     .local/share/applications/foobar2000-playpause.desktop
     .local/share/applications/foobar2000-random.desktop
+    .local/share/applications/fooyin-experimental.desktop
     .local/share/icons/hicolor/256x256/apps/foobar2000.png
     .local/bin/foobar2000
     .local/bin/music-control
+    .local/bin/fooyin-experimental
+    .local/bin/fooyin-theme-sync
+    .config/systemd/user/fooyin-theme-sync.path
+    .config/systemd/user/fooyin-theme-sync.service
     .local/bin/streamcam-mic-enable
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh

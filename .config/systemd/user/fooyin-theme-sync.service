@@ -1,0 +1,7 @@
+[Unit]
+Description=Copy the Plasma accent colour into the experimental fooyin
+# Started by fooyin-theme-sync.path when kdeglobals changes.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/fooyin-theme-sync
