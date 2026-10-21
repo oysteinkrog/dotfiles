@@ -198,6 +198,8 @@ if [ -n "$native_linux" ]; then
     .local/bin/fooyin-theme-sync
     .config/systemd/user/fooyin-theme-sync.path
     .config/systemd/user/fooyin-theme-sync.service
+    .config/systemd/user/shader-wallpaper-theme-sync.path
+    .config/systemd/user/shader-wallpaper-theme-sync.service
     .local/bin/streamcam-mic-enable
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
