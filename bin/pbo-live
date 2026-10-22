@@ -10,7 +10,7 @@ Usage:
   pbo-live set tdc AMPS     [--dry-run]
   pbo-live set edc AMPS     [--dry-run]
   pbo-live set scalar N     [--dry-run]  integer 1..10
-  pbo-live set fmax MHZ     [--dry-run] --unverified
+  pbo-live set fmax MHZ     [--dry-run]  3000..BIOS fmax (GET 0x6E): lowers the ceiling only
   pbo-live set co-all N     [--dry-run]  -30..+30
   pbo-live set co-core C N  [--dry-run]  C = core 0..15 (Linux core = BIOS core, inferred)
   pbo-live revert [--all]   [--dry-run]  put back the BIOS values
@@ -76,7 +76,7 @@ BOUNDS = {
     "tdc": (60, 160),
     "edc": (90, 220),
     "scalar": (1, 10),
-    "fmax": (3000, 5050),
+    "fmax": (3000, 5050),  # also capped at the live BIOS fmax (GET 0x6E), see plan()
     "co": (-30, 30),
 }
 
@@ -129,8 +129,9 @@ ALLOWED: dict[tuple[str, int], tuple[str, str, str]] = {
     ),
     ("mp1", 0x2B): (
         "SetBoostLimitFrequencyAllCores",
-        "set-unverified",
-        "ZenMaster only",
+        "set",
+        "ZenMaster, UXTU. Tested here 2026-10-22: 3900 capped every core at 3900 MHz; "
+        "4150 changed nothing (BIOS fmax 4050 is the ceiling). GET 0x6E and PM flim do not show it",
     ),
     ("rsmu", 0x7C): (
         "GetDldoPsmMargin (CO read)",
@@ -530,7 +531,9 @@ def current(knob: str, core: int | None = None) -> str:
     if not have_hw():
         return "unknown (not root)"
     if knob == "fmax":
-        return f"{smu_get(0x6E)} MHz"
+        cap = ch.get("fmax")
+        note = f", pbo-live cap {cap} MHz this boot" if cap is not None else ""
+        return f"GET 0x6E {smu_get(0x6E)} MHz{note}"
     if knob == "scalar":
         sc = smu_get(0x6C)
         return (
@@ -558,6 +561,13 @@ def plan(
         bios_ok = allow_bios and BIOS.get(knob) == v
         if not (lo <= v <= hi or bios_ok):
             raise Refused(f"{knob} {v} outside {lo}..{hi}")
+        if knob == "fmax" and have_hw():
+            ceiling = smu_get(0x6E)
+            if ceiling is not None and v > ceiling:
+                raise Refused(
+                    f"fmax {v} is above the BIOS fmax {ceiling} MHz (GET 0x6E). MP1 0x2B only "
+                    "lowers the ceiling; raising it needs the BIOS setting (tested 2026-10-22)"
+                )
         if knob == "ppt":
             return "rsmu", 0x53, (v * 1000,), f"PPT {v} W"
         if knob == "tdc":
@@ -586,9 +596,14 @@ def plan(
 
 def verify(knob: str, values: list[int]) -> str:
     time.sleep(1.0)
-    if knob in ("ppt", "tdc", "edc", "scalar", "fmax"):
+    if knob in ("ppt", "tdc", "edc", "scalar"):
         return current(knob)
     pm = read_pm()
+    if knob == "fmax":
+        if pm is None:
+            return "no PM table"
+        top = max(pm[PM_CORE["freq"] + c] for c in range(16)) * 1000
+        return f"no readback (GET 0x6E keeps the BIOS value); highest core clock now {top:.0f} MHz"
     if pm is None:
         return "no PM table"
     if knob == "co-core":
@@ -644,11 +659,6 @@ def apply(knob: str, values: list[int], dry: bool, allow_bios: bool = False) -> 
 
 def cmd_set(a) -> int:
     knob = a.knob
-    if knob == "fmax" and not a.unverified:
-        raise Refused(
-            "fmax uses MP1 0x2B, which only ZenMaster lists for Vermeer. "
-            "Add --unverified to send it anyway (watch GET 0x6E afterwards)."
-        )
     return apply(knob, a.values, a.dry_run)
 
 
@@ -663,7 +673,9 @@ def cmd_revert(a) -> int:
     if a.all or "scalar" in ch:
         steps.append(("scalar", [1]))
     if "fmax" in ch:
-        steps.append(("fmax", [4050]))
+        # Sending the BIOS fmax itself lifts the pbo-live cap (0x2B cannot exceed it anyway).
+        bios_fmax = (smu_get(0x6E) if have_hw() else None) or BIOS["fmax"]
+        steps.append(("fmax", [bios_fmax]))
     if "ppt" in ch:
         print(
             "PPT: the BIOS value is Auto and unknown (PM slot 0 read 0 before any change). "
@@ -713,7 +725,9 @@ def main(argv: list[str]) -> int:
     s.add_argument("values", nargs="+", type=int)
     s.add_argument("--dry-run", "-n", action="store_true")
     s.add_argument(
-        "--unverified", action="store_true", help="allow the single-source fmax command"
+        "--unverified",
+        action="store_true",
+        help="no longer needed; kept for old scripts",
     )
     s.set_defaults(fn=cmd_set)
     s = sub.add_parser("revert", help="put back BIOS values changed this boot")
