@@ -1,0 +1,45 @@
+#!/bin/sh
+# Drive the three radiator fans (motherboard headers pwm3, pwm4, pwm6 on the nct6797)
+# from the CPU temperature with fancontrol. Other headers stay in BIOS SmartFan mode.
+# The headers were identified on 2026-10-22 by dropping each one to 39 % and watching
+# which fan slowed down: fan3, fan4 and fan6 (about 2000 rpm each) are the radiator
+# fans. This is inferred from the rpm, not from tracing cables.
+#
+# The hwmon numbers change between boots, so the config is built from the chip names.
+# Curve: 70 % duty at 40 C and below, 100 % at 70 C Tctl, linear in between.
+# Fail-safe: fancontrol puts the headers back in BIOS mode when it stops cleanly, and
+# the unit's ExecStopPost does the same after a crash.
+set -eu
+find_hwmon() {
+  for h in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$h/name")" = "$1" ] && { basename "$h"; return 0; }
+  done
+  echo "radiator-fancontrol: no hwmon named $1" >&2
+  return 1
+}
+cpu=$(find_hwmon k10temp)
+mb=$(find_hwmon nct6797)
+dev() { readlink -f "/sys/class/hwmon/$1/device" | sed 's#^/sys/##'; }
+conf=/run/radiator-fancontrol.conf
+{
+  echo "INTERVAL=3"
+  echo "DEVPATH=$cpu=$(dev "$cpu") $mb=$(dev "$mb")"
+  echo "DEVNAME=$cpu=k10temp $mb=nct6797"
+  for k in FCTEMPS FCFANS MINTEMP MAXTEMP MINSTART MINSTOP MINPWM MAXPWM; do
+    printf '%s=' "$k"
+    for n in 3 4 6; do
+      case $k in
+        FCTEMPS) printf '%s/pwm%s=%s/temp1_input ' "$mb" "$n" "$cpu" ;;
+        FCFANS) printf '%s/pwm%s=%s/fan%s_input ' "$mb" "$n" "$mb" "$n" ;;
+        MINTEMP) printf '%s/pwm%s=40 ' "$mb" "$n" ;;
+        MAXTEMP) printf '%s/pwm%s=70 ' "$mb" "$n" ;;
+        MINSTART) printf '%s/pwm%s=180 ' "$mb" "$n" ;;
+        MINSTOP) printf '%s/pwm%s=180 ' "$mb" "$n" ;;
+        MINPWM) printf '%s/pwm%s=180 ' "$mb" "$n" ;;
+        MAXPWM) printf '%s/pwm%s=255 ' "$mb" "$n" ;;
+      esac
+    done
+    echo
+  done
+} > "$conf"
+exec /usr/bin/fancontrol "$conf"

@@ -1,0 +1,18 @@
+# Radiator fans on motherboard headers pwm3, pwm4 and pwm6, driven by CPU Tctl.
+# See bin/radiator-fancontrol. Installed by the host_system function in the Life
+# machine profile. If this service stops for any reason, the headers go back to BIOS
+# SmartFan mode (pwm_enable 5), never stay at a low fixed duty.
+[Unit]
+Description=Radiator fan curve from CPU temperature
+After=lm_sensors.service
+Wants=lm_sensors.service
+
+[Service]
+ExecStart=/home/oystein/.dotfiles/bin/radiator-fancontrol
+ExecStopPost=/bin/sh -c 'for h in /sys/class/hwmon/hwmon*; do [ "$$(cat $$h/name)" = nct6797 ] && for n in 3 4 6; do echo 5 > $$h/pwm$${n}_enable; done; done; exit 0'
+ExecStartPre=-/bin/rm -f /run/fancontrol.pid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
