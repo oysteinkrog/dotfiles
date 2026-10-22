@@ -30,6 +30,13 @@ A script that calls heavy-build for each of its steps must not itself run under
 heavy-build. Inside a build scope, a nested heavy-build runs its command straight away,
 with no admission and no estimate of its own.
 
+Stress tests, benchmarks and canaries go through heavy-build too, or through
+`systemd-run --user --slice=builds.slice -p CPUQuota=800% ...` with a quota that fits the
+job. Never use a bare `systemd-run --user`: it puts the job in app.slice next to
+Oystein's apps. On 2026-10-22 a bare systemd-run y-cruncher run used 32 threads, pushed
+the load to about 700 and made the UI lag. The `systemd-run-slice-guard.sh` hook warns
+when a slice is missing.
+
 ## 2. Exit codes
 
 | Code | Meaning | What to do |
