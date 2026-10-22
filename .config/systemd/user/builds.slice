@@ -2,7 +2,8 @@
 Description=Heavy builds started by heavy-build
 
 # heavy-build puts each build in its own scope here, capped at 16G to 22G high
-# (2G more for the hard max) by its memory estimate. This slice caps all builds
+# by its memory estimate, with a hard max of twice that (at most this slice's 42G)
+# and 8G of swap each. This slice caps all builds
 # together, so they cannot take the memory that the terminal and the agent
 # sessions need. CPUWeight 20 (default 100) keeps interactive work responsive
 # while builds run. It was 50 until 2026-10-13, when builds at load 60 to 100
@@ -13,7 +14,10 @@ Description=Heavy builds started by heavy-build
 [Slice]
 MemoryHigh=32G
 MemoryMax=42G
-MemorySwapMax=6G
+# MemorySwapMax 32G since 2026-10-22 (Oystein approved; it was 6G). At 6G builds hit
+# the swap cap while the disk swap was mostly free, and a build held at its cap can be
+# OOM-killed. pressure-coordinator pauses new builds when this slice reaches 90% of it.
+MemorySwapMax=32G
 CPUWeight=20
 
 # oomd pressure kill is off since 2026-10-21: Oystein chose slowdown over killed builds. MemoryMax still caps the slice.
