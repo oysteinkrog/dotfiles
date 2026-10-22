@@ -103,6 +103,10 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
   else
     ok "lock screen: themed Star Nest"; warn "plasmashell not running; desktop wallpapers skipped"
   fi
+  # Login screen (Plasma Login Manager): needs a copy outside the home folder; uses sudo.
+  if systemctl is-enabled -q plasmalogin.service 2>/dev/null; then
+    "$HOME/bin/shader-wallpaper-greeter-setup" && ok "login screen: themed Star Nest"
+  fi
 else
   warn "$shader_plugin not installed; wallpaper skipped (tools step)"
 fi

@@ -1,8 +1,10 @@
 [Unit]
-Description=Watch kdeglobals for Plasma colour scheme changes (themed shader wallpaper)
+Description=Watch kdeglobals and the themed shader wallpaper for changes
 
 [Path]
 PathChanged=%h/.config/kdeglobals
+# Tweaks saved from the plugin's panel; the service copies them for the login screen.
+PathChanged=%h/.local/share/shader-wallpaper/Star_Nest_Themed.frag
 
 [Install]
 WantedBy=default.target
