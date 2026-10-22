@@ -8,13 +8,15 @@ Description=Claude Code sessions started by aiolos-rc
 # systemd-oomd kills on swap at 90%. On 2026-10-09 a per-session MemoryHigh=8G pushed
 # 2.3 GiB of one session (VBCSCompiler) into swap in 10 minutes while 23 GiB RAM was free.
 #
-# MemorySwapMax caps how much of the oomd swap budget all sessions together can take.
-# Above it nothing is killed: anonymous memory stays in RAM and reclaim drops page cache
-# or swaps other cgroups instead. At 14:05 the sessions held 15.5 GiB of swap, so 20G
-# was enough then. On 2026-10-20 it had refused 45.6M swap attempts, so it is 32G.
+# MemorySwapMax is infinity since 2026-10-22 (Oystein approved). A cap does not kill,
+# but it stops a session's anonymous memory from going to swap, so the memory stays in
+# RAM and a runaway can push the whole machine into OOM with disk swap still free. Idle
+# sessions are sent to disk swap on purpose (session-rest). History: 20G,
+# then 32G on 2026-10-20 after 45.6M refused swap attempts. pressure-coordinator watches
+# swap use; it pauses builds when swap room runs low.
 #
 # CPUWeight 80 sits between builds (20) and the desktop (100). Sessions used 3.8 cores
 # in total at 13:40, median 0.01 per session, so this matters only under contention.
 [Slice]
 CPUWeight=80
-MemorySwapMax=32G
+MemorySwapMax=infinity
