@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync X bookmarks into the Field Theory archive (ft-sync)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/ft-sync --max-minutes 20
+Nice=10
