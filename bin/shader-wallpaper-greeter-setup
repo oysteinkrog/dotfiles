@@ -1,0 +1,26 @@
+#!/bin/bash
+# Point the Plasma Login Manager greeter at the themed Star Nest shader. Needs sudo.
+#
+# The greeter runs as the plasmalogin user and cannot read the home folder, so
+# shader-wallpaper-theme-sync keeps a world-readable copy in /var/lib/shader-wallpaper.
+# This script creates that directory (owned by the desktop user, so the sync needs
+# no root) and writes the greeter settings into /etc/plasmalogin.conf. Safe to re-run.
+
+set -euo pipefail
+
+PLUGIN=online.knowmad.shaderwallpaper
+DIR=/var/lib/shader-wallpaper
+CONF=/etc/plasmalogin.conf
+USER_NAME=$(id -un)
+
+sudo install -d -o "$USER_NAME" -g "$(id -gn)" -m 755 "$DIR"
+"$HOME/bin/shader-wallpaper-theme-sync"
+
+w() { sudo kwriteconfig6 --file "$CONF" --group Greeter --group Wallpaper --group "$PLUGIN" --group General --key "$1" -- "$2"; }
+sudo kwriteconfig6 --file "$CONF" --group Greeter --key WallpaperPluginId "$PLUGIN"
+w selectedShaderPath "file://$DIR/Star_Nest_Themed.frag"
+w shaderSpeed 0.025
+w targetFps 30
+w resolutionScale 0.8
+
+echo "login screen: themed Star Nest from $DIR (shows at the next logout or reboot)"

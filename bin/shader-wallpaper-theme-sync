@@ -8,13 +8,26 @@
 # saved from the plugin's Shader Tweaks panel, is left alone. Setting
 # followTheme = false in the shader turns the sync off.
 #
-# Run by shader-wallpaper-theme-sync.path whenever kdeglobals changes. The
-# wallpaper plugin reloads the file itself when watchSourceFile is on.
+# The login screen (Plasma Login Manager) runs as the plasmalogin user and cannot
+# read the home folder, so the shader is also copied to $GREETER_COPY when that
+# directory exists and is writable (see setup/steps/60-desktop.sh).
+#
+# Run by shader-wallpaper-theme-sync.path whenever kdeglobals or the shader
+# changes. The wallpaper plugin reloads the file itself when watchSourceFile is on.
 
 set -euo pipefail
 
 TEMPLATE="$HOME/.dotfiles/misc/shader-wallpaper/Star_Nest_Themed.frag"
 SHADER="$HOME/.local/share/shader-wallpaper/Star_Nest_Themed.frag"
+GREETER_COPY=/var/lib/shader-wallpaper/Star_Nest_Themed.frag
+
+copy_for_greeter() {
+    local dir; dir=$(dirname "$GREETER_COPY")
+    [ -d "$dir" ] && [ -w "$dir" ] || return 0
+    cmp -s "$SHADER" "$GREETER_COPY" && return 0
+    local t; t=$(mktemp "$GREETER_COPY.XXXXXX")
+    cp "$SHADER" "$t" && chmod 644 "$t" && mv "$t" "$GREETER_COPY"
+}
 
 if [ ! -f "$SHADER" ]; then
     mkdir -p "$(dirname "$SHADER")"
@@ -22,6 +35,7 @@ if [ ! -f "$SHADER" ]; then
 fi
 
 if grep -qE '^\s*const\s+bool\s+followTheme\s*=\s*false\s*;' "$SHADER"; then
+    copy_for_greeter
     exit 0
 fi
 
@@ -41,8 +55,8 @@ while IFS= read -r line || [ -n "$line" ]; do
 done <"$SHADER" >"$tmp"
 
 # Leave the file untouched when nothing changed, so the plugin does not reload.
-if cmp -s "$tmp" "$SHADER"; then
-    exit 0
+if ! cmp -s "$tmp" "$SHADER"; then
+    mv "$tmp" "$SHADER"
+    trap - EXIT
 fi
-mv "$tmp" "$SHADER"
-trap - EXIT
+copy_for_greeter
