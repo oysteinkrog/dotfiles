@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+"""pbo-live: read and change Ryzen 9 5950X (Vermeer) PBO settings live through ryzen_smu.
+
+Every change is volatile: a reboot (and possibly sleep/resume) puts the BIOS values back.
+
+Usage:
+  pbo-live show [--co --unverified]      read-only status (PM table 0x380805 + SMU GETs)
+  pbo-live map                           CO core index <-> Linux CPU <-> APIC <-> CCD
+  pbo-live set ppt WATTS    [--dry-run]
+  pbo-live set tdc AMPS     [--dry-run]
+  pbo-live set edc AMPS     [--dry-run]
+  pbo-live set scalar N     [--dry-run]  integer 1..10
+  pbo-live set fmax MHZ     [--dry-run] --unverified
+  pbo-live set co-all N     [--dry-run]  -30..+30
+  pbo-live set co-core C N  [--dry-run]  C = core 0..15 (Linux core = BIOS core, inferred)
+  pbo-live revert [--all]   [--dry-run]  put back the BIOS values
+  pbo-live log                           print the write log
+
+Sources for each command id are in the ALLOWED table below. Writes are logged to
+~/.local/state/pbo-live/log before they are sent, so a crash still leaves a record.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fcntl
+import json
+import os
+import pwd
+import struct
+import sys
+import time
+from pathlib import Path
+
+DRV = Path("/sys/kernel/ryzen_smu_drv")
+LOCK = Path("/run/lock/pbo-live.lock")
+
+# Identity this tool was written and checked against. Any SET is refused on anything else.
+EXPECT_CODENAME = 12  # ryzen_smu CODENAME_VERMEER
+EXPECT_SMU_VERSION = 0x00384C00  # 56.76.0
+EXPECT_PM_VERSION = 0x00380805
+EXPECT_MODEL = "AMD Ryzen 9 5950X"
+
+# BIOS 1.K1 values decoded from EFI on 2026-10-22 (bios-settings-decoded.md) and the live PM table.
+BIOS: dict[str, int | None] = {
+    "ppt": None,  # Auto. PM slot 0 reads 0, so the real limit is unknown.
+    "tdc": 210,
+    "edc": 215,
+    "scalar": 1,
+    "fmax": 4050,  # 5050 stock minus the -1000 MHz boost override
+}
+BIOS_CO = [
+    6,
+    6,
+    6,
+    0,
+    0,
+    0,
+    6,
+    6,
+    0,
+    9,
+    6,
+    0,
+    0,
+    6,
+    0,
+    0,
+]  # BIOS core 0..15, all-core 0
+
+# Hard bounds for `set`. Revert may send the exact BIOS values above even when they fall
+# outside these (TDC 210 A is above the 160 A bound).
+BOUNDS = {
+    "ppt": (60, 200),
+    "tdc": (60, 160),
+    "edc": (90, 220),
+    "scalar": (1, 10),
+    "fmax": (3000, 5050),
+    "co": (-30, 30),
+}
+
+# (mailbox, id) -> (name, kind, sources). Nothing outside this table is ever sent.
+# kind: "get" (read-only), "set", "get-unverified", "set-unverified".
+ALLOWED: dict[tuple[str, int], tuple[str, str, str]] = {
+    ("rsmu", 0x02): ("GetSMUVersion", "get", "ryzen_smu docs, ZenStates-Core"),
+    ("rsmu", 0x08): ("GetPMTableVersion", "get", "ryzen_smu docs, ZenStates-Core"),
+    ("rsmu", 0x59): ("GetFastestCoreOfSocket", "get", "ryzen_smu docs, ZenStates-Core"),
+    ("rsmu", 0x6C): (
+        "GetPBOScalar",
+        "get",
+        "ryzen_smu docs, ZenStates-Core, ZenMaster",
+    ),
+    ("rsmu", 0x6E): (
+        "GetMaxFrequency",
+        "get",
+        "ryzen_smu docs, ZenStates-Core, ZenMaster",
+    ),
+    ("rsmu", 0x6F): ("IsOverclockable", "get", "ryzen_smu docs, ZenStates-Core"),
+    ("rsmu", 0x53): (
+        "SetPPTLimit mW",
+        "set",
+        "ryzen_smu, ZenStates-Core, corecycler, ZenMaster, Tarca",
+    ),
+    ("rsmu", 0x54): (
+        "SetTDCLimit mA",
+        "set",
+        "ryzen_smu, ZenStates-Core, corecycler, ZenMaster",
+    ),
+    ("rsmu", 0x55): (
+        "SetEDCLimit mA",
+        "set",
+        "ryzen_smu, ZenStates-Core, corecycler, ZenMaster",
+    ),
+    ("rsmu", 0x58): (
+        "SetPBOScalar x100",
+        "set",
+        "ryzen_smu, ZenStates-Core, corecycler, ZenMaster",
+    ),
+    ("mp1", 0x35): (
+        "SetDldoPsmMargin (CO one core)",
+        "set",
+        "ZenStates-Core, corecycler, ZenMaster",
+    ),
+    ("mp1", 0x36): (
+        "SetAllDldoPsmMargin (CO all)",
+        "set",
+        "ZenStates-Core, corecycler, ZenMaster",
+    ),
+    ("mp1", 0x2B): (
+        "SetBoostLimitFrequencyAllCores",
+        "set-unverified",
+        "ZenMaster only",
+    ),
+    ("rsmu", 0x7C): (
+        "GetDldoPsmMargin (CO read)",
+        "get-unverified",
+        "ZenStates-Core, ZenMaster, g-helper",
+    ),
+}
+
+# Never sent, listed so the refusal can say why.
+DENIED = {
+    ("rsmu", 0x14): "SetVDDCRSoC (voltage)",
+    ("rsmu", 0x5A): "EnableOcMode / SetPROCHOTStatus",
+    ("rsmu", 0x5B): "DisableOcMode",
+    ("rsmu", 0x5C): "SetOverclockFreqAllCores (OC mode)",
+    ("rsmu", 0x5D): "SetOverclockFreqPerCore (OC mode)",
+    ("rsmu", 0x61): "SetOverclockCPUVID (voltage)",
+    ("mp1", 0x24): "EnableOcMode",
+    ("mp1", 0x25): "DisableOcMode",
+    ("mp1", 0x26): "SetOverclockFreqAllCores",
+    ("mp1", 0x27): "SetOverclockFreqPerCore",
+    ("mp1", 0x28): "SetOverclockCpuVid (voltage)",
+    (
+        "mp1",
+        0x33,
+    ): "SetPBO_EN (ZenStates sends it before the scalar; one source, arg unknown)",
+}
+
+STATUS = {
+    0x00: "WAITING",
+    0x01: "OK",
+    0xFF: "FAILED",
+    0xFE: "UNKNOWN COMMAND",
+    0xFD: "REJECTED PREREQ",
+    0xFC: "REJECTED BUSY",
+    0xFB: "TIMEOUT",
+    0xFA: "INVALID ARGUMENT",
+    0xF9: "UNSUPPORTED PLATFORM",
+}
+
+# PM table 0x380805 float indexes (ryzen_monitor pm_tables.c, checked live 2026-10-22).
+PM = {
+    "ppt_lim": 0,
+    "ppt_val": 1,
+    "tdc_lim": 2,
+    "tdc_val": 3,
+    "thm_lim": 4,
+    "thm_val": 5,
+    "edc_lim": 8,
+    "edc_val": 9,
+    "thm_act": 17,
+    "socket_w": 29,
+    "f_ppt": 30,
+    "vddcr_cpu": 40,
+    "cpu_a": 42,
+    "vddcr_soc": 45,
+    "fclk": 48,
+    "uclk": 50,
+    "mclk": 51,
+    "peak_temp": 140,
+    "peak_v": 141,
+    "peak_cclk": 142,
+    "cclk_lim": 147,
+}
+PM_CORE = {
+    "power": 172,
+    "volt": 188,
+    "temp": 204,
+    "freq": 252,
+    "feff": 268,
+    "c0": 284,
+    "flim": 396,
+}
+
+
+class Refused(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- paths / user
+
+
+def target_user() -> pwd.struct_passwd:
+    name = os.environ.get("SUDO_USER")
+    if name:
+        return pwd.getpwnam(name)
+    return pwd.getpwuid(os.getuid())
+
+
+def state_dir() -> Path:
+    return Path(target_user().pw_dir) / ".local/state/pbo-live"
+
+
+def boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+    u = target_user()
+    if os.geteuid() == 0:
+        for d in (p, p.parent, p.parent.parent):
+            if str(d).startswith(u.pw_dir) and d != Path(u.pw_dir):
+                os.chown(d, u.pw_uid, u.pw_gid)
+
+
+def log_line(text: str) -> None:
+    d = state_dir()
+    ensure_dir(d)
+    f = d / "log"
+    stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    with open(f, "a") as fh:
+        fh.write(f"{stamp} boot={boot_id()[:8]} {text}\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    if os.geteuid() == 0:
+        u = target_user()
+        os.chown(f, u.pw_uid, u.pw_gid)
+
+
+def load_state() -> dict:
+    f = state_dir() / "state.json"
+    try:
+        s = json.loads(f.read_text())
+    except (OSError, ValueError):
+        s = {}
+    if s.get("boot_id") != boot_id():
+        s = {"boot_id": boot_id(), "changed": {}}
+    s.setdefault("changed", {})
+    return s
+
+
+def save_state(s: dict) -> None:
+    d = state_dir()
+    ensure_dir(d)
+    f = d / "state.json"
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(s, indent=1) + "\n")
+    os.replace(tmp, f)
+    if os.geteuid() == 0:
+        u = target_user()
+        os.chown(f, u.pw_uid, u.pw_gid)
+
+
+# --------------------------------------------------------------------------- SMU access
+
+
+def have_hw() -> bool:
+    return os.geteuid() == 0 and (DRV / "rsmu_cmd").exists()
+
+
+def escalate(argv: list[str]) -> None:
+    """Re-run under sudo -n when not root. Returns only if escalation is impossible."""
+    if os.geteuid() == 0 or os.environ.get("PBO_LIVE_NO_SUDO"):
+        return
+    script = os.path.abspath(sys.argv[0])
+    try:
+        os.execvp("sudo", ["sudo", "-n", sys.executable, "-I", script, *argv])
+    except OSError:
+        return
+
+
+def smu(mailbox: str, cmd: int, args: tuple[int, ...] = ()) -> tuple[int, list[int]]:
+    """Send one allow-listed command. Returns (status, 6 result words)."""
+    if (mailbox, cmd) in DENIED:
+        raise Refused(
+            f"{mailbox.upper()} 0x{cmd:02X} is denied: {DENIED[(mailbox, cmd)]}"
+        )
+    if (mailbox, cmd) not in ALLOWED:
+        raise Refused(f"{mailbox.upper()} 0x{cmd:02X} is not on the allow-list")
+    words = list(args) + [0] * (6 - len(args))
+    if len(words) != 6 or any(not 0 <= w <= 0xFFFFFFFF for w in words):
+        raise Refused(f"bad argument words {words}")
+    cmd_file = DRV / ("rsmu_cmd" if mailbox == "rsmu" else "mp1_smu_cmd")
+    payload = struct.pack("<6I", *words)
+    with open(LOCK, "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        (DRV / "smu_args").write_bytes(payload)
+        if (DRV / "smu_args").read_bytes()[:24] != payload:
+            raise Refused("smu_args changed under us (another SMU user?); nothing sent")
+        cmd_file.write_bytes(struct.pack("<I", cmd))
+        status = struct.unpack("<I", cmd_file.read_bytes()[:4])[0]
+        res = list(struct.unpack("<6I", (DRV / "smu_args").read_bytes()[:24]))
+    return status, res
+
+
+def smu_get(cmd: int, args: tuple[int, ...] = ()) -> int | None:
+    st, res = smu("rsmu", cmd, args)
+    return res[0] if st == 0x01 else None
+
+
+def read_pm() -> list[float] | None:
+    try:
+        d = (DRV / "pm_table").read_bytes()
+    except OSError:
+        return None
+    return list(struct.unpack(f"<{len(d) // 4}f", d))
+
+
+def read_text(p: Path) -> str:
+    try:
+        return p.read_text().strip()
+    except OSError:
+        return ""
+
+
+def identity_problems() -> list[str]:
+    probs = []
+    model = ""
+    for line in read_text(Path("/proc/cpuinfo")).splitlines():
+        if line.startswith("model name"):
+            model = line.split(":", 1)[1].strip()
+            break
+    if EXPECT_MODEL not in model:
+        probs.append(f"CPU is '{model}', expected {EXPECT_MODEL}")
+    cn = read_text(DRV / "codename")
+    if cn != str(EXPECT_CODENAME):
+        probs.append(f"ryzen_smu codename {cn!r}, expected {EXPECT_CODENAME} (Vermeer)")
+    if have_hw():
+        v = smu_get(0x02)
+        if v != EXPECT_SMU_VERSION:
+            probs.append(
+                f"SMU firmware {fmt_smu(v)}, expected {fmt_smu(EXPECT_SMU_VERSION)}"
+            )
+        pv = smu_get(0x08)
+        if pv != EXPECT_PM_VERSION:
+            probs.append(
+                f"PM table 0x{pv or 0:06X}, expected 0x{EXPECT_PM_VERSION:06X}"
+            )
+    return probs
+
+
+def fmt_smu(v: int | None) -> str:
+    if v is None:
+        return "?"
+    return f"{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+
+
+# --------------------------------------------------------------------------- topology
+
+
+def core_mask(core: int) -> int:
+    """CO core mask for 5950X core 0..15: ccd<<28 | core_in_ccd<<20 (ccx always 0 on Zen 3).
+
+    All 16 cores are enabled on a 5950X, so the physical slot equals the logical index:
+    cores 0..7 are CCD0 slots 0..7, cores 8..15 are CCD1 slots 0..7.
+    """
+    if not 0 <= core <= 15:
+        raise Refused(f"core {core} outside 0..15")
+    return ((core // 8) << 28) | ((core % 8) << 20)
+
+
+def co_arg(core: int | None, value: int) -> int:
+    lo, hi = BOUNDS["co"]
+    if not lo <= value <= hi:
+        raise Refused(f"CO {value} outside {lo}..{hi}")
+    margin = value & 0xFFFF  # 16-bit two's complement, ZenStates-Core MakePsmMarginArg
+    if core is None:
+        return margin
+    return core_mask(core) | margin
+
+
+def cmd_map(_a) -> int:
+    print(
+        "CO core = BIOS CO core (inferred) = Linux core. Linux CPUs N and N+16 are the two threads."
+    )
+    print("core  CCD slot  mask        Linux CPUs  APIC IDs  BIOS CO  prefcore rank")
+    for c in range(16):
+        rank = read_text(
+            Path(f"/sys/devices/system/cpu/cpu{c}/cpufreq/amd_pstate_prefcore_ranking")
+        )
+        note = "  <- WHEA 18 core (APIC 31)" if c == 15 else ""
+        print(
+            f"{c:>4}  {c // 8:>3} {c % 8:>4}  0x{core_mask(c):08X}  {c:>3},{c + 16:<3}    "
+            f"{2 * c:>2},{2 * c + 1:<2}     {BIOS_CO[c]:+3d}      {rank:>4}{note}"
+        )
+    return 0
+
+
+# --------------------------------------------------------------------------- show
+
+
+def cmd_show(a) -> int:
+    if not have_hw():
+        print(
+            "show needs root and the ryzen_smu module (sudo -n failed or driver missing)"
+        )
+        return 2
+    probs = identity_problems()
+    for p in probs:
+        print(f"WARNING: {p}")
+    fmax = smu_get(0x6E)
+    sc = smu_get(0x6C)
+    scalar = struct.unpack("<f", struct.pack("<I", sc))[0] if sc is not None else None
+    ocf = smu_get(0x6F)
+    fast = smu_get(0x59)
+    print(f"SMU firmware {fmt_smu(smu_get(0x02))}, PM table 0x{smu_get(0x08) or 0:06X}")
+    print(f"fmax (GET 0x6E)        {fmax} MHz   (BIOS {BIOS['fmax']}, stock 5050)")
+    print(
+        f"PBO scalar (GET 0x6C)  {scalar:.2f}x"
+        if scalar is not None
+        else "PBO scalar ?"
+    )
+    print(f"OC flags (0x6F) {ocf}, fastest core (0x59) {fast}")
+    pm = read_pm()
+    if pm is None or smu_get(0x08) != EXPECT_PM_VERSION:
+        print("PM table missing or not 0x380805: not decoding it")
+        return 1
+
+    def g(k: str) -> float:
+        return pm[PM[k]]
+
+    print(
+        f"PPT  limit {g('ppt_lim'):6.1f} W   value {g('ppt_val'):6.1f} W   socket {g('socket_w'):6.1f} W"
+    )
+    print(f"TDC  limit {g('tdc_lim'):6.1f} A   value {g('tdc_val'):6.1f} A")
+    print(f"EDC  limit {g('edc_lim'):6.1f} A   value {g('edc_val'):6.1f} A")
+    print(
+        f"THM  limit {g('thm_lim'):6.1f} C   value {g('thm_val'):6.1f} C   (BIOS platform limit 80 C)"
+    )
+    tctl = read_hwmon_tctl()
+    print(
+        f"Temp PM {g('thm_act'):5.1f} C, peak {g('peak_temp'):5.1f} C, k10temp {tctl}"
+    )
+    print(
+        f"VDDCR_CPU {g('vddcr_cpu'):.3f} V ({g('cpu_a'):.1f} A), VDDCR_SOC {g('vddcr_soc'):.3f} V, "
+        f"peak core V {g('peak_v'):.3f}"
+    )
+    print(
+        f"Clock limit {g('cclk_lim') * 1000:.0f} MHz (slot 30 {g('f_ppt') * 1000:.0f}), "
+        f"peak clock {g('peak_cclk') * 1000:.0f} MHz, FCLK/UCLK/MCLK "
+        f"{g('fclk'):.0f}/{g('uclk'):.0f}/{g('mclk'):.0f}"
+    )
+    print("core  MHz  eff   C0%  volt   temp  power  flim  BIOS-CO")
+    for c in range(16):
+
+        def v(k: str, c: int = c) -> float:
+            return pm[PM_CORE[k] + c]
+
+        print(
+            f"{c:>4} {v('freq') * 1000:4.0f} {v('feff') * 1000:4.0f} {v('c0'):5.0f}  {v('volt'):.3f}"
+            f" {v('temp'):5.1f} {v('power'):5.2f}  {v('flim') * 1000:4.0f}  {BIOS_CO[c]:+3d}"
+        )
+    st = load_state()
+    if st["changed"]:
+        print(f"Changed by pbo-live this boot: {json.dumps(st['changed'])}")
+    else:
+        print("No pbo-live changes this boot (BIOS values in force).")
+    if a.co:
+        if not a.unverified:
+            print(
+                "--co needs --unverified: RSMU 0x7C is not confirmed on this firmware"
+            )
+            return 1
+        print("CO readback (RSMU 0x7C, UNVERIFIED):")
+        for c in range(16):
+            m = core_mask(c)
+            st_, res = smu("rsmu", 0x7C, (m,))
+            raw = res[0]
+            val = raw & 0xFFFF
+            val = val - 0x10000 if val >= 0x8000 else val
+            echo = " (echo of the argument: no real answer)" if raw == m else ""
+            print(
+                f"  core {c:>2}: status 0x{st_:02X} raw 0x{raw:08X} -> {val:+d}{echo}"
+            )
+    return 0
+
+
+def read_hwmon_tctl() -> str:
+    for h in Path("/sys/class/hwmon").glob("hwmon*"):
+        if read_text(h / "name") == "k10temp":
+            out = []
+            for t in sorted(h.glob("temp*_input")):
+                label = (
+                    read_text(t.with_name(t.name.replace("_input", "_label"))) or t.name
+                )
+                out.append(f"{label} {int(read_text(t)) / 1000:.1f}")
+            return ", ".join(out)
+    return "n/a"
+
+
+# --------------------------------------------------------------------------- set
+
+
+def current(knob: str, core: int | None = None) -> str:
+    """Best-effort old value for the log and dry-run."""
+    st = load_state()
+    ch = st["changed"]
+    if knob in ("co-core", "co-all"):
+        co = ch.get("co", {})
+        if core is not None:
+            if str(core) in co:
+                return f"{co[str(core)]:+d} (set by pbo-live this boot)"
+            return f"{BIOS_CO[core]:+d} (BIOS value, assumed)"
+        return "per core: " + " ".join(
+            f"{co.get(str(c), BIOS_CO[c]):+d}" for c in range(16)
+        )
+    if not have_hw():
+        return "unknown (not root)"
+    if knob == "fmax":
+        return f"{smu_get(0x6E)} MHz"
+    if knob == "scalar":
+        sc = smu_get(0x6C)
+        return (
+            f"{struct.unpack('<f', struct.pack('<I', sc))[0]:.2f}x"
+            if sc is not None
+            else "?"
+        )
+    pm = read_pm()
+    if pm is None:
+        return "?"
+    idx = {"ppt": "ppt_lim", "tdc": "tdc_lim", "edc": "edc_lim"}[knob]
+    unit = "W" if knob == "ppt" else "A"
+    return f"{pm[PM[idx]]:.1f} {unit} (PM slot {PM[idx]})"
+
+
+def plan(
+    knob: str, values: list[int], allow_bios: bool = False
+) -> tuple[str, int, tuple[int, ...], str]:
+    """Return (mailbox, id, args, description) for one change, after bounds checks."""
+    if knob in ("ppt", "tdc", "edc", "scalar", "fmax"):
+        if len(values) != 1:
+            raise Refused(f"{knob} takes one value")
+        v = values[0]
+        lo, hi = BOUNDS[knob]
+        bios_ok = allow_bios and BIOS.get(knob) == v
+        if not (lo <= v <= hi or bios_ok):
+            raise Refused(f"{knob} {v} outside {lo}..{hi}")
+        if knob == "ppt":
+            return "rsmu", 0x53, (v * 1000,), f"PPT {v} W"
+        if knob == "tdc":
+            return "rsmu", 0x54, (v * 1000,), f"TDC {v} A"
+        if knob == "edc":
+            return "rsmu", 0x55, (v * 1000,), f"EDC {v} A"
+        if knob == "scalar":
+            return "rsmu", 0x58, (v * 100,), f"PBO scalar {v}x"
+        return "mp1", 0x2B, (v & 0xFFFFF,), f"fmax {v} MHz"
+    if knob == "co-all":
+        if len(values) != 1:
+            raise Refused("co-all takes one value")
+        return "mp1", 0x36, (co_arg(None, values[0]),), f"CO all cores {values[0]:+d}"
+    if knob == "co-core":
+        if len(values) != 2:
+            raise Refused("co-core takes CORE VALUE")
+        c, v = values
+        return (
+            "mp1",
+            0x35,
+            (co_arg(c, v),),
+            f"CO core {c} (CCD{c // 8} slot {c % 8}) {v:+d}",
+        )
+    raise Refused(f"unknown knob {knob}")
+
+
+def verify(knob: str, values: list[int]) -> str:
+    time.sleep(1.0)
+    if knob in ("ppt", "tdc", "edc", "scalar", "fmax"):
+        return current(knob)
+    pm = read_pm()
+    if pm is None:
+        return "no PM table"
+    if knob == "co-core":
+        c = values[0]
+        return (
+            f"no direct readback; core {c} now {pm[PM_CORE['freq'] + c] * 1000:.0f} MHz at "
+            f"{pm[PM_CORE['volt'] + c]:.3f} V (compare with before)"
+        )
+    vs = " ".join(f"{pm[PM_CORE['volt'] + c]:.3f}" for c in range(16))
+    return f"no direct readback; per-core volts now {vs}"
+
+
+def record(knob: str, values: list[int]) -> None:
+    st = load_state()
+    ch = st["changed"]
+    if knob == "co-all":
+        ch["co"] = {str(c): values[0] for c in range(16)}
+        ch["co_all_used"] = True
+    elif knob == "co-core":
+        ch.setdefault("co", {})[str(values[0])] = values[1]
+    else:
+        ch[knob] = values[0]
+    save_state(st)
+
+
+def apply(knob: str, values: list[int], dry: bool, allow_bios: bool = False) -> int:
+    mb, cid, args, desc = plan(knob, values, allow_bios)
+    name, kind, src = ALLOWED[(mb, cid)]
+    core = values[0] if knob == "co-core" else None
+    old = current(knob, core)
+    words = " ".join(f"0x{w:08X}" for w in args)
+    print(f"{'DRY-RUN ' if dry else ''}{desc}")
+    print(f"  mailbox {mb.upper()}  id 0x{cid:02X} ({name}; {kind}; sources: {src})")
+    print(f"  args    {words} 0x00000000 x{6 - len(args)}")
+    print(f"  old     {old}")
+    if dry:
+        print("  nothing sent")
+        return 0
+    probs = identity_problems()
+    if probs:
+        raise Refused("identity check failed: " + "; ".join(probs))
+    log_line(f"SEND {knob} {values} {mb.upper()} 0x{cid:02X} args={words} old={old!r}")
+    st, _ = smu(mb, cid, args)
+    sname = STATUS.get(st, "?")
+    if st == 0x01:
+        record(knob, values)
+    after = verify(knob, values) if st == 0x01 else "-"
+    log_line(f"RESULT {knob} {values} status=0x{st:02X} {sname} new={after!r}")
+    print(f"  status  0x{st:02X} {sname}")
+    print(f"  now     {after}")
+    return 0 if st == 0x01 else 1
+
+
+def cmd_set(a) -> int:
+    knob = a.knob
+    if knob == "fmax" and not a.unverified:
+        raise Refused(
+            "fmax uses MP1 0x2B, which only ZenMaster lists for Vermeer. "
+            "Add --unverified to send it anyway (watch GET 0x6E afterwards)."
+        )
+    return apply(knob, a.values, a.dry_run)
+
+
+def cmd_revert(a) -> int:
+    st = load_state()
+    ch = st["changed"]
+    steps: list[tuple[str, list[int]]] = []
+    if a.all or "tdc" in ch:
+        steps.append(("tdc", [210]))
+    if a.all or "edc" in ch:
+        steps.append(("edc", [215]))
+    if a.all or "scalar" in ch:
+        steps.append(("scalar", [1]))
+    if "fmax" in ch:
+        steps.append(("fmax", [4050]))
+    if "ppt" in ch:
+        print(
+            "PPT: the BIOS value is Auto and unknown (PM slot 0 read 0 before any change). "
+            "It cannot be put back exactly; reboot to restore it. Leaving PPT as it is."
+        )
+    co = ch.get("co", {})
+    if a.all or ch.get("co_all_used"):
+        steps.append(("co-all", [0]))
+        steps += [("co-core", [c, BIOS_CO[c]]) for c in range(16)]
+    else:
+        steps += [("co-core", [int(c), BIOS_CO[int(c)]]) for c in sorted(co, key=int)]
+    if not steps:
+        print(
+            "Nothing changed by pbo-live this boot. Use --all to send every BIOS value anyway."
+        )
+        return 0
+    rc = 0
+    for knob, vals in steps:
+        rc |= apply(knob, vals, a.dry_run, allow_bios=True)
+    if not a.dry_run and rc == 0:
+        st = load_state()
+        st["changed"] = {k: v for k, v in st["changed"].items() if k == "ppt"}
+        save_state(st)
+    return rc
+
+
+def cmd_log(_a) -> int:
+    f = state_dir() / "log"
+    print(f.read_text() if f.exists() else f"no log yet at {f}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="pbo-live", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("show", help="read-only status")
+    s.add_argument(
+        "--co", action="store_true", help="also read CO per core (RSMU 0x7C)"
+    )
+    s.add_argument("--unverified", action="store_true")
+    s.set_defaults(fn=cmd_show)
+    sub.add_parser("map", help="core numbering table").set_defaults(fn=cmd_map)
+    s = sub.add_parser("set", help="change one setting")
+    s.add_argument(
+        "knob", choices=["ppt", "tdc", "edc", "scalar", "fmax", "co-all", "co-core"]
+    )
+    s.add_argument("values", nargs="+", type=int)
+    s.add_argument("--dry-run", "-n", action="store_true")
+    s.add_argument(
+        "--unverified", action="store_true", help="allow the single-source fmax command"
+    )
+    s.set_defaults(fn=cmd_set)
+    s = sub.add_parser("revert", help="put back BIOS values changed this boot")
+    s.add_argument("--all", action="store_true", help="send every known BIOS value")
+    s.add_argument("--dry-run", "-n", action="store_true")
+    s.set_defaults(fn=cmd_revert)
+    sub.add_parser("log", help="print the write log").set_defaults(fn=cmd_log)
+    a = p.parse_args(argv)
+    if a.cmd in ("show", "set", "revert"):
+        escalate(argv)
+    try:
+        return a.fn(a)
+    except Refused as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
