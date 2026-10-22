@@ -161,15 +161,28 @@ holds the `.headless-mc` marker that `start` writes. Do not delete them by hand.
 ## Other apps: plain Xvfb
 
 For a Wine or X11 app that has no harness, do by hand what `headless-mc.sh` does.
-Let the server pick a free display with `-displayfd`. Do not use `xvfb-run -a`: two
-runs started at the same moment both took `:99` on 2026-10-11 and one failed.
+In the monorepo, source `tools/wine/xvfb.sh` and call its start function, which picks a
+free display at `:10` or above (PR #14207, DESKTOP-15945). Elsewhere, pick the number
+yourself from `:10` up, as below.
+
+Never let Xvfb choose with a bare `-displayfd`: it takes the lowest free number, and
+when nothing held `:0` (right after a reboot, 2026-10-22) it took `:0`. Every agent
+shell has `DISPLAY=:0`, so they all drew into that hidden display, and the real
+Xwayland could not start. Do not use `xvfb-run -a` either: two runs started at the
+same moment both took `:99` on 2026-10-11 and one failed.
 
 ```bash
 run=/var/tmp/claude/<task>              # on disk, never /tmp
 mkdir -p "$run"
-Xvfb -displayfd 4 -screen 0 1920x1200x24 -nolisten tcp 4>"$run/display" 2>"$run/xvfb.log" &
-echo $! > "$run/xvfb.pid"
-until [ -s "$run/display" ]; do sleep 0.1; done
+n=10                                    # never below 10
+while :; do
+  while [ -e /tmp/.X$n-lock ] || [ -e /tmp/.X11-unix/X$n ]; do n=$((n+1)); done
+  Xvfb :$n -displayfd 4 -screen 0 1920x1200x24 -nolisten tcp 4>"$run/display" 2>"$run/xvfb.log" &
+  echo $! > "$run/xvfb.pid"
+  until [ -s "$run/display" ] || ! kill -0 "$(cat "$run/xvfb.pid")" 2>/dev/null; do sleep 0.1; done
+  [ -s "$run/display" ] && break
+  n=$((n+1))                            # lost a race for :$n; try the next number
+done
 export DISPLAY=:$(cat "$run/display") WAYLAND_DISPLAY=no-such-wl XAUTHORITY=/dev/null
 dbus-run-session -- <your launcher>
 # when done
