@@ -9,6 +9,21 @@ for l in "$HOME"/.[!.]* "$HOME"/.config/* "$HOME"/.config/systemd/user/* "$HOME"
   [ -e "$l" ] || { fail "broken link ${l#$HOME/} -> $(readlink "$l")"; broken=1; }
 done
 [ "$broken" = 0 ] && ok "no broken dotfiles links"
+
+# filter-chain.service starts fine with dangling config links and then makes
+# no nodes, so check the links whatever they point at, and that each node exists.
+step "verify: pipewire filters"
+for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
+  l="$HOME/.config/pipewire/filter-chain.conf.d/$conf"
+  if [ ! -e "$l" ]; then
+    fail "$conf missing or broken in filter-chain.conf.d (rerun install.sh)"
+    continue
+  fi
+  for node in $(sed -n 's/^[[:space:]]*node.name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
+    if pw-cli info "$node" >/dev/null 2>&1; then ok "$node"
+    else fail "$node not in PipeWire (systemctl --user restart filter-chain; journalctl --user -u filter-chain)"; fi
+  done
+done
 [ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ] && ok "~/.claude -> dotfiles" || fail "~/.claude is not the dotfiles .claude"
 
 step "verify: commands"

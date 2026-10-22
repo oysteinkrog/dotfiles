@@ -92,15 +92,17 @@ def enable_mic(dev, unit):
 
 
 def relink_filter():
-    """Restart the mic filter once PipeWire has the camera's audio node.
+    """Once PipeWire has the camera's audio node, restart filter-chain if the mic filter is gone.
 
-    mic-streamcam.conf sets node.dont-reconnect, so the filter never relinks to a
-    camera that reconnected.
+    The mic filter relinks to a reconnected camera by itself. A restart is only needed
+    when the filter is missing, and it also cuts the EQ sink for a moment, so skip it
+    when the filter is there.
     """
     for _ in range(30):
         out = subprocess.run(["pw-cli", "ls", "Node"], capture_output=True, text=True).stdout
         if AUDIO_NODE in out:
-            subprocess.run(["systemctl", "--user", "try-restart", "filter-chain.service"])
+            if "effect_input.mic_streamcam" not in out:
+                subprocess.run(["systemctl", "--user", "try-restart", "filter-chain.service"])
             return True
         time.sleep(0.5)
     return False
