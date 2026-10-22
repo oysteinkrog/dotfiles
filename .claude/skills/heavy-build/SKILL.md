@@ -170,6 +170,13 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
   8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for
   builds that started recently)". `HEAVY_BUILD_REAL_USE=0` in the conf file brings back
   the old rule, which charged every build its full estimate.
+- The slice-cap check leaves out page cache the kernel can drop at once (`inactive_file`
+  in builds.slice `memory.stat`), and the wait reason then says "(4.0 GiB inactive cache
+  not counted)". `HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0` in the conf file counts all
+  of memory.current again.
+- A filtered Wine test run whose tests have fewer than 5 runs is estimated from the
+  class p75 (logged as `mem=class-p75`, p90 before 2026-10-22). Set
+  `HEAVY_BUILD_WINE_FALLBACK_PCT` in the conf file to change it.
 - Pressure level: heavy-build reads `~/.local/state/pressure/level` from the
   pressure coordinator. At `slow` it spaces new normal and low builds: one per 30 s
   while MemAvailable is above 16 GiB, one per 120 s at or below. At `pause` it starts
