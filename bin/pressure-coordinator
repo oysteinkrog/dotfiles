@@ -14,13 +14,23 @@ Files it writes:
   ~/.local/state/pressure/level   one line, rewritten every sample (temp + mv):
       level=slow since=<epoch> updated=<epoch> reason="memory full avg10 6.1%"
       top=claude-123.scope:8.2%
-    heavy-build ignores it when updated is more than 30 s old.
+    heavy-build counts it as slow when updated is 30 s to 10 min old, and
+    ignores it after that or when updated is in the future.
   ~/.local/state/pressure/log     each level change, and one sample a minute.
     Cut to its last half when it passes log_max_bytes.
   $XDG_RUNTIME_DIR/heavy-build.hold.pressure
     Only at pause: "expires=<now + 30> pressure-coordinator: level pause (...)",
-    refreshed every sample and removed when the level drops. This is its own
+    refreshed every sample and removed when the level drops below pause. A
+    stop or restart leaves it; it runs out at its expires=. This is its own
     file. The manager's heavy-build.hold is never read, written or removed here.
+
+On start it takes over the level in the level file when that was updated less
+than 60 s ago (resume_secs), so a restart keeps slow or pause. An updated= in
+the future is stale. Timers run on monotonic time, so a wall clock jump does
+not move them. A gap between samples of more than 3 intervals starts the calm
+count again. The config file is read again when it changes; a file with NaN,
+infinity, a negative value or an out-of-range interval or hold_ttl_secs is
+rejected as a whole (event=conf-rejected) and the last good config stays.
 
 Signals (each sample):
   - memory PSI full avg10, system wide (/proc/pressure/memory);
@@ -29,8 +39,11 @@ Signals (each sample):
     the last 60 s is skipped: it is held back by its own MemoryHigh or
     MemoryMax, not by the machine. (On 2026-10-21 one Chrome unit at its own
     MemoryHigh made app.slice look stressed and blocked every build.)
-  - disk swap-in (pswpin), swap-out (pswpout), major faults (pgmajfault) and
-    zswap writeback (zswpwb), per second over the last 60 s;
+  - disk swap-in (pswpin), zswap loads (zswpin), swap-out (pswpout), major
+    faults (pgmajfault) and zswap writeback (zswpwb), per second over the
+    last 60 s; zswpin is only logged;
+  - memory.swap.current against memory.swap.max of claude.slice and
+    builds.slice, when that max is a number;
   - io PSI full avg10;
   - MemAvailable, and swap room: 90% of SwapTotal minus swap used.
 
@@ -45,14 +58,19 @@ redesign, section 4:
           swap room < 24 GiB                (slow_swap_room_gib)
   pause when any of these holds for enter_secs:
           memory full avg10 >= 5%           (pause_mem_full)
-          a session's memory full avg10 >= 10%   (pause_scope_full)
+          2 sessions' memory full avg10 >= 10% at once
+                                    (pause_scope_full, pause_scope_count);
+                                    one session alone only counts for slow
           disk swap-in >= 8000 pages/s      (pause_swapin)
           MemAvailable < 2 GiB              (pause_mem_avail_gib)
-        and at once (no wait) when swap room < 12 GiB (pause_swap_room_gib).
+        and at once (no wait) when swap room < 12 GiB (pause_swap_room_gib),
+        or when claude.slice or builds.slice uses 90% of its memory.swap.max
+        (slice_swap_pct).
 
   One level down only after leave_secs (120 s) in which every signal of the
   current level stayed under half its enter threshold (MemAvailable over twice
-  its threshold) and swap room stayed over 32 GiB (recover_swap_room_gib).
+  its threshold) and swap room stayed over 32 GiB (recover_swap_room_gib), and
+  no trigger of a higher level held.
 
 One change from the design: it named pgmajfault over 1000/s (slow) and
 4000/s (pause). Measured on 2026-10-22 at 09:01, ten minutes after a reboot,
@@ -66,6 +84,7 @@ logged only (slow_io_full and pause_io_full are 0, meaning off).
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -86,6 +105,9 @@ DEFAULTS: dict[str, float] = {
     "pause_mem_full": 5,
     "slow_scope_some": 10,
     "pause_scope_full": 10,
+    "pause_scope_count": 2,
+    "slice_swap_pct": 90,
+    "resume_secs": 60,
     "slow_swapin": 2000,
     "pause_swapin": 8000,
     "slow_majfault": 0,
@@ -102,16 +124,45 @@ DEFAULTS: dict[str, float] = {
 }
 LEVELS = ("normal", "slow", "pause")
 SLICES = ("claude.slice", "app.slice", "session.slice")
+SWAP_SLICES = ("claude.slice", "builds.slice")
 GIB = 1024**3
 
 
-def read_conf(path: Path) -> dict[str, float]:
-    """DEFAULTS, with numbers from key=value lines in path. Bad lines are skipped."""
+# Keys that must be over 0 (the rest may be 0, which turns a threshold off).
+POSITIVE = ("interval", "rate_window_secs", "hold_ttl_secs", "log_max_bytes")
+
+
+def check_conf(cfg: dict[str, float]) -> list[str]:
+    """What is wrong with cfg: NaN, infinity, a negative number, 0 where it
+    must be over 0, or a value that would break the loop or the hold."""
+    errs: list[str] = []
+    for k, v in cfg.items():
+        if not math.isfinite(v) or v < 0:
+            errs.append(f"{k}={v}")
+        elif k in POSITIVE and v <= 0:
+            errs.append(f"{k}={v} (must be over 0)")
+    if not errs:
+        if cfg["interval"] < 1 or cfg["interval"] > 60:
+            errs.append(f"interval={cfg['interval']} (1 to 60)")
+        if cfg["hold_ttl_secs"] > 600:
+            errs.append(
+                f"hold_ttl_secs={cfg['hold_ttl_secs']} (heavy-build trusts at most 600)"
+            )
+        if cfg["pause_scope_count"] < 1:
+            errs.append(f"pause_scope_count={cfg['pause_scope_count']} (at least 1)")
+    return errs
+
+
+def read_conf(path: Path) -> tuple[dict[str, float], list[str]]:
+    """DEFAULTS with numbers from key=value lines in path, and the list of
+    problems. Unknown keys are skipped. A value that is not a number, or that
+    check_conf rejects, is a problem: the caller then keeps its last good config."""
     cfg = dict(DEFAULTS)
+    errs: list[str] = []
     try:
         text = path.read_text()
     except OSError:
-        return cfg
+        return cfg, errs
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if "=" not in line:
@@ -121,8 +172,8 @@ def read_conf(path: Path) -> dict[str, float]:
             try:
                 cfg[k] = float(v)
             except ValueError:
-                pass
-    return cfg
+                errs.append(f"{k}={v!r} is not a number")
+    return cfg, errs + check_conf(cfg)
 
 
 def psi(path: Path) -> tuple[float, float]:
@@ -154,6 +205,10 @@ def kv_file(path: Path) -> dict[str, int]:
 
 
 class Coordinator:
+    """Timers (enter, leave, rates, own-limit) run on monotonic time, passed
+    as mono. Wall time (now) is only written to files: since=, updated= and
+    the hold's expires=. Without mono, now is used for both (the self-test)."""
+
     def __init__(
         self,
         cfg: dict[str, float],
@@ -173,18 +228,49 @@ class Coordinator:
         self.since = 0.0
         self.above_since: dict[int, float | None] = {1: None, 2: None}
         self.calm_since: float | None = None
+        self.last_mono: float | None = None
         self.counters: deque[tuple[float, dict[str, int]]] = deque()
         self.events: dict[str, tuple[int, float]] = {}
-        self.last_sample_log = 0.0
+        self.last_sample_log = -1e18
         self.reason = ""
+
+    # ------------------------------------------------------------ restart
+
+    def resume(self, now: float) -> str:
+        """Takes over the level of a coordinator that ran until less than
+        resume_secs ago (its level file's updated=), so a restart does not drop
+        a slow or pause level, and leaves the pressure hold in place. An
+        updated= in the future, or older, is stale: start at normal.
+        Returns what it did, for the start log line."""
+        try:
+            line = self.level_file.read_text()
+        except OSError:
+            return "level=normal resumed=no reason=no-level-file"
+        m = re.search(r"(?:^|\s)level=(normal|slow|pause)(?:\s|$)", line)
+        u = re.search(r"(?:^|\s)updated=(\d{1,15})(?:\s|$)", line)
+        sm = re.search(r"(?:^|\s)since=(\d{1,15})(?:\s|$)", line)
+        if not m or not u:
+            return "level=normal resumed=no reason=unreadable-level-file"
+        age = now - int(u.group(1))
+        if age < -5:
+            return f"level=normal resumed=no reason=updated-in-future age_s={age:.0f}"
+        if age > self.cfg["resume_secs"]:
+            return f"level=normal resumed=no reason=stale age_s={age:.0f}"
+        self.level = LEVELS.index(m.group(1))
+        self.since = float(sm.group(1)) if sm else now
+        rm = re.search(r'reason="([^"]*)"', line)
+        self.reason = "resumed: " + (rm.group(1) if rm else "")
+        return f"level={LEVELS[self.level]} resumed=yes age_s={age:.0f}"
 
     # ------------------------------------------------------------ sampling
 
-    def scopes(self, now: float) -> tuple[float, float, str]:
+    def scopes(self, mono: float) -> tuple[float, float, str, int, int]:
         """Highest some and full avg10 over children of the session slices that
-        are not at their own limit, and the name of the top one."""
+        are not at their own limit, the name of the top one, and how many are
+        at or over pause_scope_full, and over half of it."""
         best_some = best_full = 0.0
         top = ""
+        nfull = nhalf = 0
         seen: set[str] = set()
         for sl in SLICES:
             try:
@@ -199,11 +285,16 @@ class Coordinator:
                 old = self.events.get(key)
                 rose_at = old[1] if old else -1e18
                 if old is not None and n > old[0]:
-                    rose_at = now
+                    rose_at = mono
                 self.events[key] = (n, rose_at)
-                if now - rose_at < self.cfg["own_limit_secs"]:
+                if mono - rose_at < self.cfg["own_limit_secs"]:
                     continue
                 some, full = psi(kid / "memory.pressure")
+                th = self.cfg["pause_scope_full"]
+                if th > 0 and full >= th:
+                    nfull += 1
+                if th > 0 and full >= th / 2:
+                    nhalf += 1
                 if some > best_some or full > best_full:
                     if max(some, full) > max(best_some, best_full):
                         top = f"{kid.name}:{max(some, full):.1f}%"
@@ -212,54 +303,99 @@ class Coordinator:
         for key in list(self.events):
             if key not in seen:
                 del self.events[key]
-        return best_some, best_full, top
+        return best_some, best_full, top, nfull, nhalf
 
-    def sample(self, now: float) -> dict[str, float | str]:
+    def slice_swap(self) -> tuple[str, float]:
+        """The SWAP_SLICES slice whose memory.swap.current is nearest its
+        memory.swap.max (when that is a number over 0), as "name:cur/max GiB",
+        and that use in percent. ("-", 0) when none has a limit."""
+        worst, pct = "-", 0.0
+        for sl in SWAP_SLICES:
+            try:
+                mx = (self.usvc / sl / "memory.swap.max").read_text().strip()
+                cur = int((self.usvc / sl / "memory.swap.current").read_text())
+            except (OSError, ValueError):
+                continue
+            if not mx.isdigit() or int(mx) <= 0:
+                continue
+            p = 100.0 * cur / int(mx)
+            if p >= pct:
+                worst, pct = f"{sl}:{cur / GIB:.1f}/{int(mx) / GIB:.1f}GiB", p
+        return worst, pct
+
+    def sample(self, mono: float) -> dict[str, float | str]:
         cfg = self.cfg
         _, mem_full = psi(self.proc / "pressure/memory")
         _, io_full = psi(self.proc / "pressure/io")
         vm = kv_file(self.proc / "vmstat")
         mi = kv_file(self.proc / "meminfo")
-        cnt = {k: vm.get(k, 0) for k in ("pswpin", "pswpout", "pgmajfault", "zswpwb")}
-        self.counters.append((now, cnt))
+        cnt = {
+            k: vm.get(k, 0)
+            for k in ("pswpin", "pswpout", "pgmajfault", "zswpwb", "zswpin")
+        }
+        self.counters.append((mono, cnt))
         while (
             len(self.counters) > 2
-            and now - self.counters[1][0] >= cfg["rate_window_secs"]
+            and mono - self.counters[1][0] >= cfg["rate_window_secs"]
         ):
             self.counters.popleft()
         t0, c0 = self.counters[0]
-        dt = now - t0
+        dt = mono - t0
 
         def rate(k: str) -> float:
-            return (cnt[k] - c0[k]) / dt if dt > 0 else 0.0
+            return max(0.0, (cnt[k] - c0[k]) / dt) if dt > 0 else 0.0
 
         sw_total = mi.get("SwapTotal", 0) * 1024
         sw_used = sw_total - mi.get("SwapFree", 0) * 1024
-        scope_some, scope_full, top = self.scopes(now)
+        scope_some, scope_full, top, nfull, nhalf = self.scopes(mono)
+        sl_name, sl_pct = self.slice_swap()
         return {
             "mem_full": max(mem_full, 0.0),
             "io_full": max(io_full, 0.0),
             "scope_some": scope_some,
             "scope_full": scope_full,
+            "scope_full_n": nfull,
+            "scope_half_n": nhalf,
             "top": top or "-",
             "swapin": rate("pswpin"),
+            "zswpin": rate("zswpin"),
             "swapout": rate("pswpout"),
             "majfault": rate("pgmajfault"),
             "zswpwb": rate("zswpwb"),
             "mem_avail_gib": mi.get("MemAvailable", 0) / 1048576,
             "swap_used_gib": sw_used / GIB,
-            # No swap at all counts as plenty of room: the rule is about oomd
-            # and the kernel running out of swap slots.
+            # No swap at all counts as plenty of room.
             "swap_room_gib": (0.9 * sw_total - sw_used) / GIB if sw_total else 1e9,
+            "slice_swap": sl_name,
+            "slice_swap_pct": sl_pct,
         }
 
     # ------------------------------------------------------------ levels
+
+    def at_once(self, s: dict[str, float | str]) -> list[str]:
+        """Pause triggers that act on the first sample, with no enter wait:
+        global swap room under pause_swap_room_gib, or claude.slice or
+        builds.slice swap use at slice_swap_pct of its memory.swap.max."""
+        c = self.cfg
+        out: list[str] = []
+        room = float(s["swap_room_gib"])
+        if room < c["pause_swap_room_gib"]:
+            out.append(f"swap room {room:.1f} GiB")
+        th = c["slice_swap_pct"]
+        if th > 0 and float(s["slice_swap_pct"]) >= th:
+            out.append(
+                f"{s['slice_swap']} swap {float(s['slice_swap_pct']):.0f}% of its max"
+            )
+        return out
 
     def triggers(
         self, s: dict[str, float | str], lvl: int, scale: float = 1.0
     ) -> list[str]:
         """The enter conditions of level lvl that hold. scale 0.5 asks
-        "is any signal at half its threshold or more" for the leave test."""
+        "is any signal at half its threshold or more" for the leave test.
+        Per-scope pressure: one scope's some avg10 counts for slow; pause
+        needs pause_scope_count (2) scopes at pause_scope_full at once, so one
+        stalled session cannot pause every build."""
         c = self.cfg
         p = "slow" if lvl == 1 else "pause"
         out: list[str] = []
@@ -279,12 +415,12 @@ class Coordinator:
                 "%",
             )
         else:
-            ge(
-                "scope_full",
-                "pause_scope_full",
-                f"{str(s['top']).split(':')[0]} full avg10",
-                "%",
-            )
+            n = int(s["scope_full_n" if scale >= 1 else "scope_half_n"])
+            if c["pause_scope_full"] > 0 and n >= c["pause_scope_count"]:
+                out.append(
+                    f"{n} scopes at full avg10 >= {c['pause_scope_full'] * scale:.0f}%"
+                    f" (top {s['top']})"
+                )
         ge("swapin", f"{p}_swapin", "disk swap-in", " pages/s")
         ge("majfault", f"{p}_majfault", "major faults", "/s")
         ge("io_full", f"{p}_io_full", "io full avg10", "%")
@@ -292,22 +428,37 @@ class Coordinator:
         if scale < 1:
             if room <= c["recover_swap_room_gib"]:
                 out.append(f"swap room {room:.1f} GiB")
+            th = c["slice_swap_pct"]
+            if lvl == 2 and th > 0 and float(s["slice_swap_pct"]) >= th * 0.9:
+                out.append(
+                    f"{s['slice_swap']} swap {float(s['slice_swap_pct']):.0f}% of its max"
+                )
         elif room < c[f"{p}_swap_room_gib"]:
             out.append(f"swap room {room:.1f} GiB")
         if lvl == 2:
+            if scale >= 1:
+                out += [t for t in self.at_once(s) if not t.startswith("swap room")]
             avail = float(s["mem_avail_gib"])
             if avail < c["pause_mem_avail_gib"] / scale:
                 out.append(f"MemAvailable {avail:.1f} GiB")
         return out
 
-    def step(self, now: float, s: dict[str, float | str]) -> str | None:
+    def step(
+        self, mono: float, s: dict[str, float | str], now: float | None = None
+    ) -> str | None:
         """Moves the level for sample s. Returns the old level name when it changed."""
         c = self.cfg
+        now = mono if now is None else now
+        # A gap in sampling (suspend, a stuck process) proves nothing about
+        # the time in between: the calm count starts again.
+        if self.last_mono is not None and mono - self.last_mono > 3 * c["interval"]:
+            self.calm_since = None
+        self.last_mono = mono
         hot = {lvl: self.triggers(s, lvl) for lvl in (1, 2)}
         for lvl in (1, 2):
             if hot[lvl]:
                 if self.above_since[lvl] is None:
-                    self.above_since[lvl] = now
+                    self.above_since[lvl] = mono
             else:
                 self.above_since[lvl] = None
         old = self.level
@@ -316,8 +467,7 @@ class Coordinator:
             since = self.above_since[lvl]
             if lvl <= self.level or since is None:
                 continue
-            at_once = lvl == 2 and float(s["swap_room_gib"]) < c["pause_swap_room_gib"]
-            if at_once or now - since >= c["enter_secs"]:
+            if (lvl == 2 and self.at_once(s)) or mono - since >= c["enter_secs"]:
                 target = lvl
                 break
         if target > self.level:
@@ -326,18 +476,21 @@ class Coordinator:
             self.reason = "; ".join(hot[target])
         elif self.level > 0:
             warm = self.triggers(s, self.level, 0.5)
-            if warm:
+            # Never drop while a higher level's trigger holds, even one that
+            # has not held for enter_secs yet (MemAvailable falling at slow).
+            higher = [t for lvl in range(self.level + 1, 3) for t in hot[lvl]]
+            if warm or higher:
                 self.calm_since = None
-                cur = hot[self.level] or warm
+                cur = hot[self.level] or higher or warm
                 self.reason = (
                     "; ".join(cur)
-                    if hot[self.level]
+                    if hot[self.level] or higher
                     else "still over half: " + "; ".join(cur)
                 )
             else:
                 if self.calm_since is None:
-                    self.calm_since = now
-                calm = now - self.calm_since
+                    self.calm_since = mono
+                calm = mono - self.calm_since
                 if calm >= c["leave_secs"]:
                     self.level -= 1
                     self.calm_since = None
@@ -383,11 +536,14 @@ class Coordinator:
     def signals_text(self, s: dict[str, float | str]) -> str:
         return (
             f"mem_full10={s['mem_full']:.2f} scope_some10={s['scope_some']:.2f} "
-            f"scope_full10={s['scope_full']:.2f} top={s['top']} io_full10={s['io_full']:.2f} "
-            f"swapin_ps={s['swapin']:.0f} swapout_ps={s['swapout']:.0f} "
+            f"scope_full10={s['scope_full']:.2f} scope_full_n={s['scope_full_n']} "
+            f"top={s['top']} io_full10={s['io_full']:.2f} "
+            f"swapin_ps={s['swapin']:.0f} zswpin_ps={s['zswpin']:.0f} "
+            f"swapout_ps={s['swapout']:.0f} "
             f"majfault_ps={s['majfault']:.0f} zswpwb_ps={s['zswpwb']:.0f} "
             f"mem_avail_gib={s['mem_avail_gib']:.1f} swap_used_gib={s['swap_used_gib']:.1f} "
-            f"swap_room_gib={s['swap_room_gib']:.1f}"
+            f"swap_room_gib={s['swap_room_gib']:.1f} "
+            f"slice_swap={s['slice_swap']}:{float(s['slice_swap_pct']):.0f}%"
         )
 
     def log(self, now: float, text: str) -> None:
@@ -416,9 +572,10 @@ class Coordinator:
         else:
             self.hold_file.unlink(missing_ok=True)
 
-    def tick(self, now: float) -> None:
-        s = self.sample(now)
-        old = self.step(now, s)
+    def tick(self, now: float, mono: float | None = None) -> None:
+        mono = now if mono is None else mono
+        s = self.sample(mono)
+        old = self.step(mono, s, now)
         self.write_atomic(self.level_file, self.level_line(now, s))
         self.update_hold(now)
         if old is not None:
@@ -427,8 +584,8 @@ class Coordinator:
                 f'event=level from={old} to={LEVELS[self.level]} reason="{self.reason}" '
                 + self.signals_text(s),
             )
-        if now - self.last_sample_log >= self.cfg["sample_log_secs"]:
-            self.last_sample_log = now
+        if mono - self.last_sample_log >= self.cfg["sample_log_secs"]:
+            self.last_sample_log = mono
             self.log(
                 now,
                 f'event=sample level={LEVELS[self.level]} reason="{self.reason}" '
@@ -436,8 +593,10 @@ class Coordinator:
             )
 
     def shutdown(self) -> None:
-        """Takes the pressure hold away so a stopped coordinator holds nothing."""
-        self.hold_file.unlink(missing_ok=True)
+        """Leaves the level file and the pressure hold as they are. A restart
+        takes them over (resume); after a real stop the hold runs out at its
+        expires= (hold_ttl_secs) and heavy-build treats the old level file as
+        slow for 10 min. Only a real drop of the level removes the hold."""
 
 
 def default_paths() -> tuple[Path, Path, Path, Path, Path]:
@@ -453,9 +612,19 @@ def default_paths() -> tuple[Path, Path, Path, Path, Path]:
     return Path("/proc"), usvc, state, run, conf
 
 
+def load_conf(co: Coordinator, conf: Path, now: float) -> None:
+    """Reads conf into co.cfg. A file with a bad value is rejected as a
+    whole and logged; co.cfg (the last good config) stays."""
+    cfg, errs = read_conf(conf)
+    if errs:
+        co.log(now, f'event=conf-rejected errors="{"; ".join(errs)[:300]}"')
+        return
+    co.cfg = cfg
+
+
 def run_forever() -> int:
     proc, usvc, state, run, conf = default_paths()
-    co = Coordinator(read_conf(conf), proc, usvc, state, run)
+    co = Coordinator(dict(DEFAULTS), proc, usvc, state, run)
     stop = False
 
     def on_term(_sig: int, _frame: object) -> None:
@@ -464,43 +633,57 @@ def run_forever() -> int:
 
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
-    co.since = time.time()
-    co.log(co.since, "event=start level=normal")
-    conf_mtime = -1.0
+    now = time.time()
+    load_conf(co, conf, now)
+    co.since = now
+    co.log(now, "event=start " + co.resume(now))
+    conf_mtime: float | None = None
+    try:
+        conf_mtime = conf.stat().st_mtime
+    except OSError:
+        conf_mtime = 0.0
     while not stop:
         now = time.time()
+        mono = time.monotonic()
         try:
             m = conf.stat().st_mtime
         except OSError:
             m = 0.0
         if m != conf_mtime:
             conf_mtime = m
-            co.cfg = read_conf(conf)
+            load_conf(co, conf, now)
         try:
-            co.tick(now)
+            co.tick(now, mono)
         except Exception as e:  # keep running; a bad sample must not stop the brake
             try:
                 co.log(now, f'event=error error="{type(e).__name__}: {e}"')
             except OSError:
                 pass
-        end = now + co.cfg["interval"]
-        while not stop and time.time() < end:
-            time.sleep(min(0.5, max(0.0, end - time.time())))
+        end = mono + co.cfg["interval"]
+        while not stop and time.monotonic() < end:
+            time.sleep(min(0.5, max(0.0, end - time.monotonic())))
     co.shutdown()
-    co.log(time.time(), "event=stop")
+    co.log(
+        time.time(),
+        f"event=stop level={LEVELS[co.level]} (level file and hold left for a restart)",
+    )
     return 0
 
 
 def run_once() -> int:
     proc, usvc, state, run, conf = default_paths()
     co = Coordinator(
-        read_conf(conf), proc, usvc, Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        read_conf(conf)[0],
+        proc,
+        usvc,
+        Path(tempfile.mkdtemp()),
+        Path(tempfile.mkdtemp()),
     )
-    co.sample(time.time())
+    co.sample(time.monotonic())
     time.sleep(5)
-    now = time.time()
-    s = co.sample(now)
-    co.step(now, s)
+    mono = time.monotonic()
+    s = co.sample(mono)
+    co.step(mono, s, time.time())
     print(co.signals_text(s))
     print("raw slow triggers:", co.triggers(s, 1) or "none")
     print("raw pause triggers:", co.triggers(s, 2) or "none")
@@ -531,7 +714,7 @@ def self_test() -> int:
         sess = usvc / "claude.slice/claude-1.scope"
         for d in (chrome, sess):
             d.mkdir()
-        vm = {"pswpin": 0, "pswpout": 0, "pgmajfault": 0, "zswpwb": 0}
+        vm = {"pswpin": 0, "pswpout": 0, "pgmajfault": 0, "zswpwb": 0, "zswpin": 0}
 
         def setp(path: Path, some: float, full: float) -> None:
             path.write_text(
@@ -681,8 +864,16 @@ def self_test() -> int:
         )
         t = run_for(co, t, 90, chrome_full=60, chrome_high=hi)
         check(
-            "its high counter still for 60 s: now it counts, pause",
-            lvl(co) == "pause",
+            "its high counter still for 60 s: now it counts, but one scope is only slow",
+            lvl(co) == "slow",
+            co.reason,
+        )
+        t = run_for(
+            co, t, 30, chrome_full=60, chrome_high=hi, sess_some=60, sess_full=60
+        )
+        check(
+            "two scopes at full 60% for 30 s: pause",
+            lvl(co) == "pause" and "2 scopes" in co.reason,
             co.reason,
         )
 
@@ -720,16 +911,51 @@ def self_test() -> int:
         check("MemAvailable 1.5 GiB: pause", lvl(co) == "pause", co.reason)
         co.shutdown()
         check(
-            "shutdown: pressure hold removed",
-            not (run / "heavy-build.hold.pressure").exists(),
+            "shutdown: the pressure hold stays for a restart (it runs out by itself)",
+            (run / "heavy-build.hold.pressure").exists(),
         )
 
         # 10. Config file: numbers win, bad lines are skipped.
         conf = root / "pc.conf"
         conf.write_text("slow_mem_full = 1.5  # note\nbogus=1\npause_mem_full=x\n\n")
-        cfg = read_conf(conf)
+        cfg, errs = read_conf(conf)
         check("conf: slow_mem_full=1.5 read", cfg["slow_mem_full"] == 1.5)
-        check("conf: bad value keeps the default", cfg["pause_mem_full"] == 5)
+        check(
+            "conf: a value that is not a number is a problem", len(errs) == 1, str(errs)
+        )
+        conf.write_text("slow_mem_full = 1.5\nbogus=1\n")
+        cfg, errs = read_conf(conf)
+        check("conf: unknown keys are skipped, no problem", errs == [], str(errs))
+        for bad in ("nan", "inf", "-1", "-inf"):
+            conf.write_text(f"pause_mem_full={bad}\n")
+            _, errs = read_conf(conf)
+            check(f"conf: pause_mem_full={bad} is rejected", len(errs) >= 1, str(errs))
+        for bad in (
+            "interval=0",
+            "interval=0.2",
+            "hold_ttl_secs=0",
+            "hold_ttl_secs=900",
+            "rate_window_secs=0",
+        ):
+            conf.write_text(bad + "\n")
+            _, errs = read_conf(conf)
+            check(f"conf: {bad} is rejected", len(errs) >= 1, str(errs))
+        conf.write_text("slow_io_full=0\n")
+        _, errs = read_conf(conf)
+        check("conf: 0 still turns a threshold off", errs == [], str(errs))
+        co = fresh()
+        co.cfg["slow_mem_full"] = 1.5
+        conf.write_text("slow_mem_full=3\ninterval=nan\n")
+        load_conf(co, conf, 7500.0)
+        check(
+            "conf: a bad reload keeps the last good config and is logged",
+            co.cfg["slow_mem_full"] == 1.5
+            and co.cfg["interval"] == 5
+            and "event=conf-rejected" in (state / "log").read_text(),
+        )
+        conf.write_text("slow_mem_full=3\n")
+        load_conf(co, conf, 7501.0)
+        check("conf: a good reload is taken", co.cfg["slow_mem_full"] == 3)
 
         # 11. Log cap.
         co = fresh()
@@ -740,6 +966,125 @@ def self_test() -> int:
         tail = (state / "log").read_text().splitlines()[-1]
         check("log: stays under about the cap", size <= 2100, str(size))
         check("log: keeps the newest line", "n=99 " in tail)
+
+        # 13. Restart: take over a level written less than 60 s ago.
+        co = fresh()
+        run_for(co, 8000.0, 20, mem_full=6)
+        check("restart setup: pause", lvl(co) == "pause", co.reason)
+        co.shutdown()
+        co2 = Coordinator(dict(DEFAULTS), proc, usvc, state, run)
+        what = co2.resume(8040.0)
+        check("restart 20 s later: takes over pause", lvl(co2) == "pause", what)
+        check(
+            "restart: the pressure hold is still there",
+            (run / "heavy-build.hold.pressure").exists(),
+        )
+        world(mem_full=6)
+        co2.tick(8045.0)
+        check(
+            "restart: first sample at pause refreshes the hold",
+            (run / "heavy-build.hold.pressure").read_text().startswith("expires=8075 "),
+        )
+        co3 = Coordinator(dict(DEFAULTS), proc, usvc, state, run)
+        what = co3.resume(8045.0 + 61)
+        check(
+            "restart 61 s after the last update: starts at normal",
+            lvl(co3) == "normal",
+            what,
+        )
+        co4 = Coordinator(dict(DEFAULTS), proc, usvc, state, run)
+        what = co4.resume(8045.0 - 60)
+        check(
+            "restart with updated= in the future: stale, normal",
+            lvl(co4) == "normal" and "future" in what,
+            what,
+        )
+        co5 = fresh()
+        what = co5.resume(9000.0)
+        check("restart with no level file: normal", lvl(co5) == "normal", what)
+
+        # 14. A gap between samples starts the calm count again.
+        co = fresh()
+        t = run_for(co, 10000.0, 20, mem_full=6)
+        check("gap setup: pause", lvl(co) == "pause")
+        t = run_for(co, t, 10, mem_full=1)
+        t += 300
+        world(mem_full=1)
+        co.tick(t)
+        check(
+            "300 s gap after 10 s of calm: still pause, calm count restarted",
+            lvl(co) == "pause" and co.calm_since == t,
+            co.reason,
+        )
+        t = run_for(co, t, 125, mem_full=1)
+        check("then 125 s of calm samples: slow", lvl(co) == "slow", co.reason)
+
+        # 15. No drop while a higher level's trigger holds.
+        co = fresh()
+        t = run_for(co, 11000.0, 20, mem_full=3)
+        check("higher-trigger setup: slow", lvl(co) == "slow")
+        t = run_for(co, t, 10, avail_gib=1.5)
+        check(
+            "slow, calm otherwise, MemAvailable 1.5 GiB for 10 s: no drop, calm not counted",
+            lvl(co) == "slow" and co.calm_since is None,
+            co.reason,
+        )
+        t = run_for(co, t, 10, avail_gib=1.5)
+        check("and after 15 s it goes to pause", lvl(co) == "pause", co.reason)
+
+        # 16. Monotonic time: a wall clock jump does not move the timers.
+        co = fresh()
+        world(mem_full=3)
+        co.tick(12000.0, 500.0)
+        world(mem_full=3)
+        co.tick(12000.0 + 3600, 505.0)
+        check(
+            "wall clock jumps an hour, 5 s monotonic: still normal",
+            lvl(co) == "normal",
+            co.reason,
+        )
+        for i in range(3):
+            world(mem_full=3)
+            co.tick(15605.0 + 5 * i, 510.0 + 5 * i)
+        check("20 s monotonic at 3%: slow", lvl(co) == "slow", co.reason)
+        check(
+            "level file updated= is wall time",
+            "updated=15615 " in (state / "level").read_text(),
+        )
+
+        # 17. zswpin is logged; slice swap near its max pauses at once.
+        co = fresh()
+        vm["zswpin"] = 0
+        run_for(co, 13000.0, 10)
+        log = (state / "log").read_text()
+        check(
+            "log: zswpin_ps next to swapin_ps",
+            "zswpin_ps=" in log and "swapin_ps=" in log,
+        )
+        bs = usvc / "builds.slice"
+        bs.mkdir(exist_ok=True)
+        (bs / "memory.swap.max").write_text(f"{32 * GIB}\n")
+        (bs / "memory.swap.current").write_text(f"{int(29.5 * GIB)}\n")
+        (usvc / "claude.slice/memory.swap.max").write_text("max\n")
+        (usvc / "claude.slice/memory.swap.current").write_text(f"{100 * GIB}\n")
+        co = fresh()
+        run_for(co, 14000.0, 5)
+        check(
+            "builds.slice swap 29.5 of 32 GiB (92%): pause on the first sample",
+            lvl(co) == "pause" and "builds.slice" in co.reason,
+            co.reason,
+        )
+        (bs / "memory.swap.current").write_text(f"{20 * GIB}\n")
+        co = fresh()
+        run_for(co, 15000.0, 30)
+        check(
+            "builds.slice swap 20 of 32 GiB, claude.slice max: normal",
+            lvl(co) == "normal",
+            co.reason,
+        )
+        for p in ("memory.swap.max", "memory.swap.current"):
+            (bs / p).unlink()
+            (usvc / "claude.slice" / p).unlink()
 
         # 12. Never signals anything: no kill calls in this file.
         src = Path(__file__).read_text()
