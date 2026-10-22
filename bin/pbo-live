@@ -674,7 +674,7 @@ def cmd_revert(a) -> int:
         steps.append(("scalar", [1]))
     if "fmax" in ch:
         # Sending the BIOS fmax itself lifts the pbo-live cap (0x2B cannot exceed it anyway).
-        bios_fmax = (smu_get(0x6E) if have_hw() else None) or BIOS["fmax"]
+        bios_fmax = (smu_get(0x6E) if have_hw() else None) or 4050
         steps.append(("fmax", [bios_fmax]))
     if "ppt" in ch:
         print(
