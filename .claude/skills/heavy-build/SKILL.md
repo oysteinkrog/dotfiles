@@ -159,6 +159,17 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
   `MemoryHigh=32G` and `MemoryMax=42G`. Each build gets its own scope with MemoryHigh
   16G to 22G from its estimate (it slows down there), MemoryMax twice that but no more
   than 42G, and MemorySwapMax 8G. An OOM kills only that build.
+- Admission uses real use (since 2026-10-22, `HEAVY_BUILD_REAL_USE=1`). The slice-cap
+  check takes what builds.slice holds now (memory.current) plus the memory young
+  builds may still take. A build is young for its first 2 min or 70% of its expected
+  wall time, whichever is longer. The cores check takes what builds.slice used over
+  the last 30 to 120 s plus the full estimate of each build in its first 2 min. The
+  memory reserve is 5 GiB (`HEAVY_BUILD_MEM_RESERVE_GIB` in `~/.config/heavy-build.conf`,
+  6 before). Waits now read like "slice-cap: needs 6.0 GiB; builds.slice uses 19.3
+  GiB and running builds may take 4.1 more, of the 32.0 GiB cap" or "cores: needs
+  8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for
+  builds that started recently)". `HEAVY_BUILD_REAL_USE=0` in the conf file brings back
+  the old rule, which charged every build its full estimate.
 - Pressure level: heavy-build reads `~/.local/state/pressure/level` from the
   pressure coordinator. At `slow` it spaces new normal and low builds: one per 30 s
   while MemAvailable is above 16 GiB, one per 120 s at or below. At `pause` it starts
