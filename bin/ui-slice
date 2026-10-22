@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""ui-slice: give desktop UI threads a short EEVDF slice.
+
+Every few seconds this sets a custom slice (sched_attr.sched_runtime) of
+0.4 ms on the SCHED_OTHER threads of the processes that draw the desktop:
+plasmashell, Xwayland, kwin_wayland (the real session, not --virtual test
+compositors), frankenterm-gui, and Chrome's browser and GPU processes.
+A short slice gives a thread an earlier EEVDF deadline, so it gets the CPU
+sooner after a wakeup when the machine is loaded.
+
+Rules:
+- Each thread keeps its policy and nice value (read with sched_getattr and
+  passed back), so values set by ananicy-cpp survive.
+- RT, deadline, batch and idle threads are never touched.
+- A process with capabilities this user lacks is skipped with one log line:
+  the kernel needs CAP_SYS_NICE for it. kwin_wayland has CAP_SYS_NICE as a
+  file capability, so its threads stay on the default slice.
+- It never signals or kills anything.
+- Only changes and errors are logged (stdout, which systemd sends to the
+  journal).
+
+Usage: ui-slice [--once] [--dry-run] [--interval SEC] [--slice-us US]
+Turn off: systemctl --user disable --now ui-slice.service
+(threads keep their slice until they exit; ui-slice --reset puts them back
+to the kernel default).
+"""
+
+import argparse
+import ctypes
+import errno
+import os
+import sys
+import time
+
+SYS_sched_setattr = 314  # x86_64
+SYS_sched_getattr = 315
+SCHED_OTHER = 0
+SCHED_FLAG_RESET_ON_FORK = 0x01
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+
+class SchedAttr(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_uint32),
+        ("sched_policy", ctypes.c_uint32),
+        ("sched_flags", ctypes.c_uint64),
+        ("sched_nice", ctypes.c_int32),
+        ("sched_priority", ctypes.c_uint32),
+        ("sched_runtime", ctypes.c_uint64),
+        ("sched_deadline", ctypes.c_uint64),
+        ("sched_period", ctypes.c_uint64),
+        ("sched_util_min", ctypes.c_uint32),
+        ("sched_util_max", ctypes.c_uint32),
+    ]
+
+
+def getattr_(tid):
+    a = SchedAttr()
+    if libc.syscall(SYS_sched_getattr, tid, ctypes.byref(a), ctypes.sizeof(a), 0) != 0:
+        raise OSError(ctypes.get_errno(), "sched_getattr")
+    return a
+
+
+def setattr_(tid, policy, nice, flags, runtime_ns):
+    a = SchedAttr()
+    a.size = ctypes.sizeof(a)
+    a.sched_policy = policy
+    # Keep reset-on-fork as it was; no util-clamp flags, so uclamp is untouched.
+    a.sched_flags = flags & SCHED_FLAG_RESET_ON_FORK
+    a.sched_nice = nice
+    a.sched_runtime = runtime_ns
+    if libc.syscall(SYS_sched_setattr, tid, ctypes.byref(a), 0) != 0:
+        raise OSError(ctypes.get_errno(), "sched_setattr")
+
+
+def read(path, mode="r"):
+    try:
+        with open(path, mode) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def classify(pid, comm):
+    """Return a label for a target process, or None."""
+    if comm in ("plasmashell", "Xwayland", "frankenterm-gui"):
+        return comm
+    if comm not in ("kwin_wayland", "chrome"):
+        return None
+    raw = read(f"/proc/{pid}/cmdline", "rb")
+    if not raw:
+        return None
+    # Chrome rewrites its argv into one space-separated string, so split on both.
+    args = raw.replace(b"\0", b" ").split()
+    if comm == "kwin_wayland":
+        return None if b"--virtual" in args else "kwin_wayland"
+    if not args[0].endswith(b"/chrome"):
+        return None  # crashpad handler and other helpers
+    if any(a.startswith(b"--headless") or a == b"--enable-automation" for a in args):
+        return None  # agent or test browsers
+    types = [a for a in args if a.startswith(b"--type=")]
+    if not types:
+        return "chrome-browser"
+    if types[0] == b"--type=gpu-process":
+        return "chrome-gpu"
+    return None
+
+
+def starttime(pid):
+    s = read(f"/proc/{pid}/stat")
+    if not s:
+        return None
+    return s[s.rfind(")") + 2 :].split()[19]
+
+
+def cap_prm(pid):
+    s = read(f"/proc/{pid}/status")
+    if not s:
+        return None
+    for line in s.splitlines():
+        if line.startswith("CapPrm:"):
+            return int(line.split()[1], 16)
+    return None
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+class UiSlice:
+    def __init__(self, slice_ns, dry_run, reset):
+        self.slice_ns = slice_ns
+        self.dry_run = dry_run
+        self.reset = reset
+        self.uid = os.getuid()
+        self.done = {}  # (pid, starttime) -> set of tids already checked
+        self.errors_logged = set()
+        self.cap_skipped = set()  # (pid, starttime) already logged as skipped
+        self.my_caps = cap_prm("self")
+
+    def find_targets(self):
+        out = []
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            comm = read(f"/proc/{pid}/comm")
+            if comm is None:
+                continue
+            label = classify(pid, comm.strip())
+            if label is None:
+                continue
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != self.uid:
+                    continue
+            except OSError:
+                continue
+            st = starttime(pid)
+            if st is None:
+                continue
+            # The kernel refuses sched_setattr (EPERM) on a process that has
+            # capabilities we lack, unless we hold CAP_SYS_NICE. kwin_wayland
+            # has CAP_SYS_NICE as a file capability, so it lands here.
+            caps = cap_prm(pid)
+            if caps is not None and caps & ~self.my_caps:
+                if (pid, st) not in self.cap_skipped:
+                    self.cap_skipped.add((pid, st))
+                    log(
+                        f"{label}[{pid}]: skipped, it has capabilities this user "
+                        f"lacks (CapPrm {caps:x}); sched_setattr needs CAP_SYS_NICE"
+                    )
+                continue
+            out.append((pid, st, label))
+        return out
+
+    def fix_thread(self, tid):
+        """Return 'set', 'ok', 'skip' (not SCHED_OTHER) or 'gone'."""
+        try:
+            a = getattr_(tid)
+        except OSError as e:
+            if e.errno == errno.ESRCH:
+                return "gone"
+            raise
+        if a.sched_policy != SCHED_OTHER:
+            return "skip"
+        if self.reset:
+            # The kernel puts a thread back on the default slice when it
+            # gets sched_runtime 0.
+            if a.sched_runtime != self.slice_ns:
+                return "ok"
+            want = 0
+        else:
+            if a.sched_runtime == self.slice_ns:
+                return "ok"
+            want = self.slice_ns
+        if not self.dry_run:
+            setattr_(tid, a.sched_policy, a.sched_nice, a.sched_flags, want)
+        return "set"
+
+    def pass_once(self, recheck):
+        targets = self.find_targets()
+        alive = set()
+        for pid, st, label in targets:
+            key = (pid, st)
+            alive.add(key)
+            seen = self.done.get(key)
+            if seen is None or recheck:
+                seen = set()
+            try:
+                tids = [int(t) for t in os.listdir(f"/proc/{pid}/task")]
+            except OSError:
+                continue
+            counts = {"set": 0, "ok": 0, "skip": 0, "gone": 0}
+            errs = []
+            for tid in tids:
+                if tid in seen:
+                    continue
+                try:
+                    r = self.fix_thread(tid)
+                except OSError as e:
+                    errs.append(f"{tid}: {os.strerror(e.errno)}")
+                    seen.add(tid)  # retried on the next recheck pass
+                    continue
+                counts[r] += 1
+                if r != "gone":
+                    seen.add(tid)
+            seen &= set(tids)
+            self.done[key] = seen
+            if counts["set"]:
+                verb = "would set" if self.dry_run else "set"
+                what = (
+                    "default slice"
+                    if self.reset
+                    else f"{self.slice_ns / 1e6:g} ms slice"
+                )
+                log(
+                    f"{label}[{pid}]: {verb} {what} on {counts['set']} threads "
+                    f"({counts['ok']} already done, {counts['skip']} not SCHED_OTHER)"
+                )
+            if errs:
+                sig = (key, len(errs))
+                if sig not in self.errors_logged:
+                    self.errors_logged.add(sig)
+                    log(
+                        f"{label}[{pid}]: error on {len(errs)} threads, first: {errs[0]}"
+                    )
+        for key in list(self.done):
+            if key not in alive:
+                del self.done[key]
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description="Set a short EEVDF slice on desktop UI threads."
+    )
+    p.add_argument("--once", action="store_true", help="run one pass and exit")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would change, change nothing",
+    )
+    p.add_argument(
+        "--reset",
+        action="store_true",
+        help="one pass that puts the target threads back on the kernel default slice",
+    )
+    p.add_argument(
+        "--interval", type=float, default=5.0, help="seconds between passes (default 5)"
+    )
+    p.add_argument(
+        "--slice-us", type=int, default=400, help="slice in microseconds (default 400)"
+    )
+    p.add_argument(
+        "--recheck-every",
+        type=int,
+        default=12,
+        help="re-read every known thread every N passes (default 12)",
+    )
+    args = p.parse_args()
+    if not 100 <= args.slice_us <= 100000:
+        p.error("--slice-us must be between 100 and 100000 (kernel limits)")
+    u = UiSlice(args.slice_us * 1000, args.dry_run, args.reset)
+    if args.once or args.reset:
+        u.pass_once(recheck=True)
+        return 0
+    n = 0
+    while True:
+        try:
+            u.pass_once(recheck=(n % args.recheck_every == 0))
+        except Exception as e:  # keep running; log and try next pass
+            log(f"pass failed: {e!r}")
+        n += 1
+        time.sleep(args.interval)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
