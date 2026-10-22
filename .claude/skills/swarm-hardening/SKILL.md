@@ -24,13 +24,13 @@ Draft Artifact
 [Round 1] Multi-Lens Review (6 agents, Sonnet lanes; Opus for correctness and security) --> Fix issues
      |
      v
-[Round 2] Oracle Consensus (2x Pro) --> Fix corrections
+[Round 2] Oracle Consensus (2x Fable) --> Fix corrections
      |
      v
 [Round 3] Fresh-Eyes Hardening (8 agents) --> Fix + embed cross-cutting
      |
      v
-[Round 4] Final Correctness Pass (4 Sonnet verifiers + 1 Astra call) --> Verify all fixes
+[Round 4] Final Correctness Pass (4 Sonnet verifiers + 1 Fable oracle) --> Verify all fixes
      |
      v
 Hardened Artifact (ready for implementation)
@@ -140,7 +140,7 @@ After agents complete:
 
 ### Step 4: Final Correctness Pass
 
-Spawn 4 Sonnet verifiers (`model: "sonnet"`) for a final verification. Each verifier checks a slice of the artifact (e.g., one epic of beads, one section of a plan). Then run one Astra call (`codex exec`, see `/swarm-oracle`) over the whole artifact for the subtle errors the verifiers miss.
+Spawn 4 Sonnet verifiers (`model: "sonnet"`) for a final verification. Each verifier checks a slice of the artifact (e.g., one epic of beads, one section of a plan). Then spawn one fresh Fable oracle (`Agent`, `model: "fable"`, see `/swarm-oracle`) over the whole artifact for the subtle errors the verifiers miss. Add one Astra call (`codex exec`, effort `medium`) only when the artifact is high-stakes or the Fable result looks uncertain.
 
 Agent prompt template:
 

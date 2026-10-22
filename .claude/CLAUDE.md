@@ -161,7 +161,7 @@ These rules hold whether or not a skill is loaded:
   | Lookup, classify, list files, check one fact, format output | `haiku` |
   | Search, read and summarise, explore, mechanical edits, builds, tests, UI checks, log scraping | `sonnet` |
   | Writing real code, normal debugging, coordinating lanes, the session's own main thread | `opus` |
-  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult `fable` and/or Astra (`codex exec`) or Gemini 4 Argon (PAL) with a short, self-contained brief. The answer comes back as text; the lane carries on on its own model |
+  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult `fable` by default with a short, self-contained brief. Add Astra (`codex exec`, effort `medium`) for high-stakes or contested decisions, or when Fable is unavailable. Gemini 4 Argon (PAL) is currently unavailable. The answer comes back as text; the lane carries on on its own model |
   | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
   Pull the strongest model in for the decision, not for the whole job, and keep its brief

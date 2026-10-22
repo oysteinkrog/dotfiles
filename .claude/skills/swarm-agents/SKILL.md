@@ -57,7 +57,7 @@ overrides. The model table below is a prompt-level convention, not a setting.
 | Lookup, classify, list files, check one fact, format output | `haiku` |
 | Search, grep, read and summarise, explore, mechanical edits, bead work with a clear spec, running builds and tests | `sonnet` |
 | Writing real code, design, hard debugging, review of logic or security, synthesis the leader acts on | `opus` |
-| Decision points and tricky analysis | Consult `fable` and/or Astra (`codex exec`) or Gemini 4 Argon (PAL) with a short, self-contained brief |
+| Decision points and tricky analysis | Consult `fable` by default with a short, self-contained brief. Add Astra (`codex exec`, effort `medium`) for high-stakes or contested decisions. Gemini 4 Argon (PAL) is currently unavailable |
 | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
 - Pull the strongest model in for the decision, not for the whole job, and keep its brief small.

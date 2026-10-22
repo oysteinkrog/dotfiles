@@ -1,32 +1,36 @@
 ---
 name: swarm-oracle
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra sessions via Codex CLI; add two Gemini 4 Argon calls (via PAL) as a second opinion for high-stakes or contested validations, and use them as the fallback when Codex is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents (one per stance, short self-contained brief); add two GPT-6 Astra sessions via Codex CLI as a cross-provider check for high-stakes or contested validations, and use them as the fallback when Fable is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
 
 # Oracle Consensus
 
-> **Oracle policy (2026-09):** GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the
-> primary oracle — the default FOR/AGAINST debate runs as two `codex exec` calls, one
-> per stance. Astra alone is the normal shape of a validation; no pairing is required.
-> Gemini 4 Argon is the **secondary oracle**: add a Gemini FOR/AGAINST pair
-> (two `mcp__pal__chat` calls) when the validation is high-stakes or the two Astra stances leave the call contested,
-> or when the user asks for a second opinion. See `/consult-oracles` and the Oracle
-> Consultation Policy in `~/CLAUDE.md`.
+> **Oracle policy (2026-10-22):** Fable is the primary oracle. The default FOR/AGAINST
+> debate runs as two fresh Fable subagents (`Agent` tool, `model: "fable"`), one per
+> stance. Fable alone is the normal shape of a validation; no pairing is required.
+> GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the **secondary oracle**: add an
+> Astra FOR/AGAINST pair (two `codex exec` calls) when the validation is high-stakes,
+> when the two Fable stances leave the call contested or look uncertain, or when the
+> user asks for a cross-provider opinion. See `/consult-oracles`.
 >
-> **Availability fallback:** if the Codex calls fail (Codex missing, path not trusted,
-> auth error, empty output after a real attempt), run the same FOR/AGAINST debate with
-> two Gemini 4 Argon calls (`mcp__pal__chat`, one FOR, one AGAINST) and state the
-> substitution in the verdict. If PAL also fails, use Fable subagents (`Agent` tool with
-> `model: "fable"`; Fable is not reachable through PAL) and say so. Do not silently downgrade.
+> Why: 16 Claude subscription accounts against 3 OpenAI accounts, so Claude has far
+> more weekly room. On 2026-10-22 high-effort Astra reviews nearly used up all three
+> OpenAI accounts until 10-26 to 10-28.
 >
-> **Sensitive code:** the Codex calls leave the machine, but OpenAI is an approved
-> provider, as are Anthropic and Google (Gemini through PAL). Proprietary material
-> can go to Astra, Fable and Gemini 4 Argon without asking first.
+> **Availability fallback:** if the Fable spawns fail, run the same FOR/AGAINST debate
+> as two Astra calls and state the substitution in the verdict. If Codex also fails,
+> use Opus subagents (`model: "opus"`) and say so. Do not silently downgrade.
 >
-> **Third view:** for a high-stakes validation, or when Astra and Gemini split, add
-> one Fable subagent as a neutral evaluator. See `/consult-oracles`.
-
+> **Gemini 4 Argon** (via PAL) is the optional third oracle but is currently
+> unavailable: the AI Studio prepay credit ran out on 2026-10-21 and Oystein chose to
+> leave it off. Do not plan around it.
+>
+> **Sensitive code:** Anthropic, OpenAI and Google are approved providers. Proprietary
+> material can go to Fable, Astra and Gemini 4 Argon without asking first.
+>
+> **Cost rules:** short self-contained briefs, a bounded reading list named by path,
+> the change delta rather than the whole module, and one validation per change.
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
 ## When to Use
@@ -39,7 +43,7 @@ Run a structured FOR/AGAINST debate between two high-capability oracle sessions 
 
 ## Prerequisites
 
-The default Astra tier needs Codex only: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user — agents silently fall back to self-analysis without PAL, producing unreliable results. Fable subagents need no PAL, but the Gemini second opinion does.
+The default Fable tier needs nothing beyond the `Agent` tool. The Astra check needs Codex: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user, because agents silently fall back to self-analysis without PAL, producing unreliable results.
 
 ## Workflow
 
@@ -66,21 +70,35 @@ The evaluation prompt must be self-contained — models do not share context bet
 
 ### Step 2: Configure Stances
 
-**Default tier (GPT-6 Astra):** run FOR and AGAINST as two `codex exec` calls in one
-message. Each prompt is self-contained (evaluation prompt + file paths); the two
-sessions share no context. Astra is not reachable through PAL, and the explicit tier
-ID is required — the bare `gpt-6` alias hangs. See the `/codex` skill for prompting
-and exec pitfalls.
+**Default tier (Fable):** spawn two fresh Fable subagents in one message, one FOR and
+one AGAINST. Each prompt is self-contained (evaluation prompt + the file paths to
+read); the two subagents share no context. Name the files; do not ask them to explore
+the repo.
 
-`xhigh` is the default effort; switch a stance to `model_reasoning_effort=ultra`
-(subagent fan-out) only when its evaluation decomposes into parallel facets, e.g. an
-AGAINST pass over a large bead set or a design spanning several independent
-subsystems:
+```
+Agent({ subagent_type: "general-purpose", model: "fable",
+  prompt: "<evaluation prompt>\n\nStance: Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific, cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive." })
+
+Agent({ subagent_type: "general-purpose", model: "fable",
+  prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
+```
+
+Then skip to Step 4 and synthesize the two responses yourself.
+
+**Cross-provider check (GPT-6 Astra):** for high-stakes validations, or when the two
+Fable stances leave the call contested or uncertain, run an Astra FOR/AGAINST pair as
+two `codex exec` calls in a single message and synthesize all four responses. Same
+shape when Fable is unavailable, in which case the Astra pair is the whole debate.
+Astra is not reachable through PAL, and the explicit tier ID is required (the bare
+`gpt-6` alias hangs). See the `/codex` skill for prompting and exec pitfalls.
+
+`medium` is the default effort. Use `high` only for a high-stakes validation with a
+bounded file list. `xhigh`, `max` and `ultra` only when Oystein asks for them:
 
 ```bash
-codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
   -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." < /dev/null 2>/dev/null
-codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
   -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." < /dev/null 2>/dev/null
 ```
 
@@ -95,24 +113,12 @@ runs, send one cheap probe: ask Astra for the title and line count of one known 
 check both, and run `git status` afterwards to confirm it wrote nothing. A stance
 answer that cites no file or line was not read from the repo.
 
-Then skip to Step 4 and synthesize the two responses yourself.
+**Gemini 4 Argon (currently unavailable):** when it is back, a Gemini FOR/AGAINST pair
+is two `mcp__pal__chat` calls with `model: "gemini-4-argon"`, `thinking_mode: "max"`
+and the same two stance prompts.
 
-**Second opinion (Gemini 4 Argon):** for high-stakes validations, or when the two Astra
-stances leave the call contested, make a Gemini FOR/AGAINST pair of `mcp__pal__chat`
-calls in a single message and synthesize all four responses. Same shape when Codex is
-unavailable, in which case the Gemini pair is the whole debate. Use Fable subagents
-(`Agent`, `model: "fable"`, same two stance prompts) only when Codex and PAL both fail.
-
-```
-mcp__pal__chat({ model: "gemini-4-argon", thinking_mode: "max",
-  prompt: "<evaluation prompt>\n\nStance: Advocate for this design. Identify its strengths, explain why the decisions are sound, and argue that it should be approved. Be specific, cite exact decisions and explain their merit. Score honestly; 'for' does not mean blindly positive." })
-
-mcp__pal__chat({ model: "gemini-4-argon", thinking_mode: "max",
-  prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
-```
-
-*Alternate route — PAL 2x GPT-Pro* (when Codex is unavailable and the structured
-consensus flow is wanted; PAL tops out at gpt-5.5-pro):
+*Alternate route, PAL 2x GPT-Pro* (when the structured consensus flow is wanted;
+PAL tops out at gpt-5.5-pro):
 
 ```json
 {
@@ -125,7 +131,7 @@ consensus flow is wanted; PAL tops out at gpt-5.5-pro):
 
 #### Alternate Configurations (PAL route)
 
-**Architecture validation (3 models):**
+**Architecture validation (3 models; needs Gemini 4 Argon, currently unavailable):**
 ```json
 [
   {"model": "gpt-5.5-pro", "stance": "for"},
