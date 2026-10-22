@@ -77,6 +77,11 @@
 #   reserve cut from 6 to 5 GiB, gave 450 starts against 409 and a mean wait
 #   of 23 min against 29; the lowest projected MemAvailable was 6.4 GiB
 #   against 6.3 (late-peak memory model, /var/tmp/claude/hb-replay/replay.py).
+#   With HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=1 (the default) the
+#   inactive_file line of builds.slice memory.stat is taken off memory.current
+#   (never below 0), since the kernel can drop that page cache at once; the
+#   wait reason says how much was left out. Set it to 0 to count
+#   memory.current as it is.
 #   The cap is the lower of builds.slice memory.max (MemoryMax) and
 #   memory.high (MemoryHigh); "max" means no limit. Both files are read again
 #   on every decision, so a `systemctl --user set-property builds.slice
@@ -192,8 +197,8 @@
 #   is estimated from the runs of the same tests instead (same projects,
 #   flags and filters, from any tree or lane; history column 12) in the last
 #   14 days: their p90 peak once there are 5, else the class percentile
-#   HEAVY_BUILD_WINE_FALLBACK_PCT (default 90; it was the p75 until
-#   2026-10-21). The class
+#   HEAVY_BUILD_WINE_FALLBACK_PCT (default 75 since 2026-10-22; it was 90
+#   from 2026-10-21, and 75 before). The class
 #   floor holds, except that 10 or more runs may go down to 4 GiB. A run
 #   without a filter keeps the rule above. See estimate(). Cores and wall
 #   time come from the
@@ -559,6 +564,7 @@ read_conf() {
   setting HEAVY_BUILD_SLOW_FAST_MIN_GIB 16
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_REAL_USE 1
+  setting HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE 1
   setting HEAVY_BUILD_YOUNG_PCT 70
   setting HEAVY_BUILD_YOUNG_MIN_SECS 120
   setting HEAVY_BUILD_SLICE_CPU_SECS 30
@@ -568,8 +574,8 @@ read_conf() {
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
-  setting HEAVY_BUILD_WINE_FALLBACK_PCT 90
-  (( WINE_FALLBACK_PCT >= 1 && WINE_FALLBACK_PCT <= 100 )) || WINE_FALLBACK_PCT=90
+  setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
+  (( WINE_FALLBACK_PCT >= 1 && WINE_FALLBACK_PCT <= 100 )) || WINE_FALLBACK_PCT=75
   setting HEAVY_BUILD_RERUN_FAILS 2
   setting HEAVY_BUILD_RERUN_SECS 1800
   setting HEAVY_BUILD_HISTORY_LINES 20000
@@ -763,7 +769,7 @@ SIG_DAYS=14
 # A Wine test run with a filter (SIG from wine_sig, FILTERED 1) is estimated
 # from its sig instead (history column 12, runs in the last SIG_DAYS days):
 # with 5 or more such runs, their p90 peak (mem=sig-p90); with fewer, the
-# class WINE_FALLBACK_PCT percentile (default 90, logged as mem=class-p90),
+# class WINE_FALLBACK_PCT percentile (default 75, logged as mem=class-p75),
 # or the highest peak of those few runs when that
 # is more (mem=sig-max). The key's own peak does not apply. The class floor
 # still applies, except that a sig with 10 or more runs may go down to 4 GiB.
@@ -787,7 +793,7 @@ estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
-    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-90}" '
+    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" '
     function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
@@ -1596,7 +1602,7 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
   if (av + swx - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, reserve %d", w_mem[i], av, swxnote, tc, reserve)
   if (held + w_mem[i] > slicecap) {
-    if (memreal) return sprintf("slice-cap: needs %.1f GiB; builds.slice uses %.1f GiB and running builds may take %.1f more, of the %.1f GiB cap (%s)", w_mem[i], slicecur, held - slicecur, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
+    if (memreal) return sprintf("slice-cap: needs %.1f GiB; builds.slice uses %.1f GiB%s and running builds may take %.1f more, of the %.1f GiB cap (%s)", w_mem[i], slicecur, slicecache > 0 ? sprintf(" (%.1f GiB inactive cache not counted)", slicecache) : "", held - slicecur, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
     return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
   }
   return ""
@@ -1645,6 +1651,18 @@ BEGIN {
   slicecur = -1
   if (slicecurfile != "" && (getline l < slicecurfile) > 0 && l ~ /^[0-9]+$/) slicecur = l / 1073741824
   if (slicecurfile != "") close(slicecurfile)
+  # Page cache the kernel can drop at once (memory.stat inactive_file) does
+  # not count against the cap when slicestatfile is set.
+  slicecache = 0
+  if (slicecur >= 0 && slicestatfile != "") {
+    while ((getline l < slicestatfile) > 0) {
+      split(l, f, " ")
+      if (f[1] == "inactive_file" && f[2] ~ /^[0-9]+$/) { slicecache = f[2] / 1073741824; break }
+    }
+    close(slicestatfile)
+    if (slicecache > slicecur) slicecache = slicecur
+    slicecur -= slicecache
+  }
   if (sliceavg == "") sliceavg = -1
   sliceavg += 0
   # Swap headroom: while system memory pressure (some avg10 and avg60) is
@@ -1811,6 +1829,7 @@ decide() {
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
+    -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
     -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
@@ -2298,6 +2317,8 @@ if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
   read -r sig_f sig <<< "$(wine_sig "$cls" "${sig_words[@]}")"
   [[ -n $sig ]] || sig=- sig_f=0
 fi
+# Settings first, so HEAVY_BUILD_WINE_FALLBACK_PCT reaches estimate().
+read_conf
 read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
 keys_out=$(lock_keys "$@")
 keys_note=$(grep '^!' <<< "$keys_out" | sed 's/^!//' | paste -sd' ' -)

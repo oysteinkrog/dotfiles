@@ -531,12 +531,17 @@ classrows() { local i; for i in $(seq 1 20); do rows wine-run-tests "c$i" "$i" o
 out=$(est newkey wine-run-tests)
 check "sig: without a sig the class p90 still decides (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
 out=$(est newkey wine-run-tests sigA 1)
-check "sig: a filtered run with no sig history gets the class p90 (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
+check "sig: a filtered run with no sig history gets the class p75 by default (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
 out=$(WINE_FALLBACK_PCT=75 est newkey wine-run-tests sigA 1)
 check "sig: WINE_FALLBACK_PCT=75 gives the class p75 (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
+out=$(WINE_FALLBACK_PCT=90 est newkey wine-run-tests sigA 1)
+check "sig: WINE_FALLBACK_PCT=90 still gives the class p90 (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
+check "sig: the HEAVY_BUILD_WINE_FALLBACK_PCT default is 75" 'grep -q "^  setting HEAVY_BUILD_WINE_FALLBACK_PCT 75$" "$HB"'
 for i in 1 2 3 4; do rows wine-run-tests "a$i" 7 sigA; done
 out=$(est newkey wine-run-tests sigA 1)
-check "sig: under 5 sig runs falls back to the class p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
+check "sig: under 5 sig runs falls back to the class p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
+out=$(WINE_FALLBACK_PCT=90 est newkey wine-run-tests sigA 1)
+check "sig: under 5 sig runs with WINE_FALLBACK_PCT=90 falls back to the class p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
 rows wine-run-tests a5 7 sigA
 out=$(est newkey wine-run-tests sigA 1)
 check "sig: 5 sig runs use their p90 (got '$out')" '[[ $out == "7.0 class-history,mem=sig-p90" ]]'
@@ -549,10 +554,10 @@ check "sig: a capped sig run counts as 1.25 x its MemoryHigh (got '$out')" '[[ $
 : > "$E/hist"; classrows
 rows wine-run-tests big 12 sigB
 out=$(est newkey wine-run-tests sigB 1)
-check "sig: under 5 sig runs, a sig peak under the class p90 keeps the p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
+check "sig: under 5 sig runs, a sig peak under the class p75 keeps the p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
 rows wine-run-tests big 21 sigB
 out=$(est newkey wine-run-tests sigB 1)
-check "sig: under 5 sig runs, the highest sig peak wins when over the p90 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
+check "sig: under 5 sig runs, the highest sig peak wins when over the p75 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
 out=$(est big wine-run-tests)
 check "sig: a full-suite run keeps the key peak over the class p90 (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
 out=$(est big wine-run-tests sigB 0)
@@ -689,6 +694,29 @@ done
 check "sig: a filtered run-tests.sh command logs est=7.0G...mem=sig-p90" 'grep -q "est=7.0G/[^ ]*mem=sig-p90)" "$T/state/heavy-build/shadow.log"'
 teardown
 
+# End to end: under 5 sig runs, the script's default falls back to the class
+# p75 and logs mem=class-p75; HEAVY_BUILD_WINE_FALLBACK_PCT=90 brings p90 back.
+for pct in "" 90; do
+  setup
+  read -r _ s <<< "$(sg wine-run-tests tools/wine/run-tests.sh Foo.Tests --filter Name~Bar)"
+  mkdir -p "$T/state/heavy-build"
+  for i in $(seq 1 20); do
+    printf '%d\twine-run-tests\tc%d\t10\t20\t%d\t0\tok\t%d\t%d\t-\tother\n' "$(( EPOCHSECONDS - 60 ))" "$i" "$(( i * G ))" "$(( 24 * G ))" "$(( 22 * G ))" >> "$T/state/heavy-build/history.tsv"
+  done
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN -u HEAVY_BUILD_WINE_FALLBACK_PCT \
+    XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
+    HB_CGROUP="$T/cg" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
+    HEAVY_BUILD_WAIT=3 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none \
+    ${pct:+HEAVY_BUILD_WINE_FALLBACK_PCT=$pct} \
+    "$HB" tools/wine/run-tests.sh Foo.Tests --filter Name~Bar) > "$T/out" 2>&1
+  if [[ -z $pct ]]; then
+    check "sig: by default a filtered run with no sig history logs est=16.0G...mem=class-p75" 'grep -q "est=16.0G/[^ ]*mem=class-p75)" "$T/state/heavy-build/shadow.log"'
+  else
+    check "sig: HEAVY_BUILD_WINE_FALLBACK_PCT=90 logs est=19.0G...mem=class-p90" 'grep -q "est=19.0G/[^ ]*mem=class-p90)" "$T/state/heavy-build/shadow.log"'
+  fi
+  teardown
+done
+
 
 # 8. The critical-first switch. The admission awk (ADMIT_AWK) and
 # critical_first_on are taken from heavy-build and run against fake input.
@@ -705,7 +733,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
-      -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
+      -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
@@ -953,6 +981,32 @@ check "real use: 9 + 2 + 6 is over 16, so it waits (got '$out')" '[[ $out == "wa
 out=$(printf '%s\n' "$RUN_OLD" "$W_6" "W 0000000999000000001-2-n 999000 normal 6 2 600 -" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur5 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000001-2-n 0 1 12)
 check "real use: a build let in ahead in the same walk counts its full estimate (5 + 6 + 6 is over 16) (got '$out')" '[[ $out == wait\|slice-cap:*may\ take\ 6.0\ more* ]]'
 
+# Inactive page cache (memory.stat inactive_file) is taken off memory.current
+# when slicestatfile is set (HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=1).
+mstat() { printf 'anon %d\nfile %d\nactive_file %d\ninactive_file %d\n' 1 2 3 $(( $1 * 1073741824 )) > "$A/$2"; }
+mstat 4 stat4
+mstat 1 stat1
+mstat 20 stat20
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICESTAT=$A/stat4 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: 9 GiB used minus 4 GiB inactive_file leaves 5, so 5 + 2 + 6 fits 16 (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICESTAT=$A/stat1 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: 9 minus 1 leaves 8, 8 + 2 + 6 is 16 (fits at the cap) (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "W 0000000999000000000-1-n 999000 normal 7 2 600 -" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICESTAT=$A/stat1 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: the wait reason says how much was not counted (got '$out')" '[[ $out == "wait|slice-cap: needs 7.0 GiB; builds.slice uses 8.0 GiB (1.0 GiB inactive cache not counted) and running builds may take 2.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_YOUNG" "W 0000000999000000000-1-n 999000 normal 6 2 600 -" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICESTAT=$A/stat20 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: more inactive_file than memory.current floors at 0 (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 0.0 GiB (2.0 GiB inactive cache not counted) and running builds may take 11.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: switch off (no memory.stat) counts all 9 GiB and says nothing of cache (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 9.0 GiB and running builds may take 2.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICESTAT=$A/none ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: a missing memory.stat counts all 9 GiB (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 9.0 GiB and running builds may take 2.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" "$W_6" | ADM_SLICESTAT=$A/stat4 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "inactive cache: with real use off it changes nothing (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds hold 12.0 of the 16.0 GiB builds.slice cap (MemoryMax)|0" ]]'
+check "inactive cache: HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE defaults to 1" 'grep -q "^  setting HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE 1$" "$HB"'
+check "inactive cache: memory.stat is passed only when the switch and real use are on" 'grep -qF -- "-v slicestatfile=\"\$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo \"\$BSLICE/memory.stat\")\"" "$HB"'
+# Switch off end to end: the plumbing gives an empty slicestatfile.
+sw=$(SLICE_EXCLUDE_INACTIVE_FILE=0 REAL_USE=1 BSLICE=/x bash -c 'echo "[$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")]"')
+check "inactive cache: HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0 passes no memory.stat (got '$sw')" '[[ $sw == "[]" ]]'
+
 # Cores under the real-use rule.
 RUN_C_OLD='R u8 990000 4 16 990600 1073741824 22000 0 normal -'
 RUN_C_YOUNG='R u9 999950 4 10 1000550 1073741824 - 0 normal -'
@@ -1006,9 +1060,15 @@ rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_SWAP_HEADROOM_PCT HEAVY_BUILD_SWAP_HEADROOM_GIB; rconf SWAP_HEADROOM_PCT SWAP_HEADROOM_GIB)
 check "settings: swap headroom defaults are 25% and 8 GiB (got '$out')" '[[ $out == "25 8 " ]]'
 out=$(unset HEAVY_BUILD_WINE_FALLBACK_PCT; rconf WINE_FALLBACK_PCT)
-check "settings: the Wine fallback percentile defaults to 90 (got '$out')" '[[ $out == "90 " ]]'
+check "settings: the Wine fallback percentile defaults to 75 (got '$out')" '[[ $out == "75 " ]]'
 out=$(HEAVY_BUILD_WINE_FALLBACK_PCT=150 rconf WINE_FALLBACK_PCT)
-check "settings: a Wine fallback percentile over 100 goes back to 90 (got '$out')" '[[ $out == "90 " ]]'
+check "settings: a Wine fallback percentile over 100 goes back to 75 (got '$out')" '[[ $out == "75 " ]]'
+out=$(HEAVY_BUILD_WINE_FALLBACK_PCT=90 rconf WINE_FALLBACK_PCT)
+check "settings: HEAVY_BUILD_WINE_FALLBACK_PCT=90 is kept (got '$out')" '[[ $out == "90 " ]]'
+out=$(unset HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE; rconf SLICE_EXCLUDE_INACTIVE_FILE)
+check "settings: the inactive-cache switch defaults to on (got '$out')" '[[ $out == "1 " ]]'
+out=$(HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0 rconf SLICE_EXCLUDE_INACTIVE_FILE)
+check "settings: HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0 turns it off (got '$out')" '[[ $out == "0 " ]]'
 printf 'HEAVY_BUILD_SWAP_HEADROOM_PCT=10\nHEAVY_BUILD_SWAP_HEADROOM_GIB=4\n' > "$A/hb.conf"
 out=$(HEAVY_BUILD_SWAP_HEADROOM_GIB=0 rconf SWAP_HEADROOM_PCT SWAP_HEADROOM_GIB)
 check "settings: the file sets them and the environment wins (got '$out')" '[[ $out == "10 0 " ]]'
