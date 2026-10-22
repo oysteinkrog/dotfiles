@@ -49,8 +49,10 @@ command yourself when the edit is done.
 ## X/Twitter bookmarks
 
 Bookmarks are archived locally in `~/.ft-bookmarks/` and searched with the `ft` CLI. **Load
-`/fieldtheory`** before searching, browsing or syncing. Cookies expire; when a sync fails
-with an auth error, ask Oystein to re-extract them.
+`/fieldtheory`** before searching, browsing or syncing. `ft-sync.timer` syncs once an hour
+through `~/bin/ft-sync`. Plain `ft sync` fails here: the X login is in the personal Chrome
+and its cookie key is in KWallet, which `ft` cannot read. If `ft-sync` exits 2, Oystein must
+log in to x.com in the personal Chrome again.
 
 ## CASS
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ft-sync once an hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""ft-review-queue: which X bookmarks the bookmark-review loop has not looked at yet.
+
+Reads the Field Theory archive (~/.ft-bookmarks/bookmarks.jsonl, kept fresh by
+ft-sync.timer) and a list of reviewed ids (~/.local/state/ft-review/reviewed.txt,
+one id per line). Used by the bookmark-review skill.
+
+  ft-review-queue count                 unreviewed bookmarks
+  ft-review-queue next [--limit N]      JSON list of unreviewed bookmarks, newest first (default 10)
+  ft-review-queue done ID [ID ...]      mark ids as reviewed
+  ft-review-queue baseline [--keep N]   mark all as reviewed except the newest N (default 0)
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ARCHIVE = Path.home() / ".ft-bookmarks" / "bookmarks.jsonl"
+STATE = Path.home() / ".local" / "state" / "ft-review" / "reviewed.txt"
+
+
+def load_bookmarks() -> list[dict]:
+    rows = [
+        json.loads(line) for line in ARCHIVE.read_text().splitlines() if line.strip()
+    ]
+    # sortIndex is X's bookmark order: higher means bookmarked later.
+    return sorted(rows, key=lambda b: int(b.get("sortIndex") or 0), reverse=True)
+
+
+def load_reviewed() -> set[str]:
+    return set(STATE.read_text().split()) if STATE.exists() else set()
+
+
+def mark(ids: list[str]) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    new = [i for i in ids if i not in load_reviewed()]
+    with STATE.open("a") as f:
+        f.writelines(f"{i}\n" for i in new)
+
+
+def slim(b: dict) -> dict:
+    return {
+        "id": b["id"],
+        "url": b.get("url"),
+        "author": f"@{b.get('authorHandle')} ({b.get('authorName')})",
+        "postedAt": b.get("postedAt"),
+        "text": b.get("text"),
+        "links": b.get("links") or [],
+        "media": len(b.get("mediaObjects") or b.get("media") or []),
+        "likes": (b.get("engagement") or {}).get("likeCount"),
+    }
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("count")
+    nxt = sub.add_parser("next")
+    nxt.add_argument("--limit", type=int, default=10)
+    done = sub.add_parser("done")
+    done.add_argument("ids", nargs="+")
+    base = sub.add_parser("baseline")
+    base.add_argument("--keep", type=int, default=0)
+    args = p.parse_args()
+
+    if args.cmd == "done":
+        mark(args.ids)
+        return 0
+    reviewed = load_reviewed()
+    pending = [b for b in load_bookmarks() if b["id"] not in reviewed]
+    if args.cmd == "count":
+        print(len(pending))
+    elif args.cmd == "next":
+        json.dump(
+            [slim(b) for b in pending[: args.limit]],
+            sys.stdout,
+            indent=1,
+            ensure_ascii=False,
+        )
+        print()
+    elif args.cmd == "baseline":
+        mark([b["id"] for b in pending[args.keep :]])
+        print(
+            f"marked {max(len(pending) - args.keep, 0)} as reviewed, {min(args.keep, len(pending))} left"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

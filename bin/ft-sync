@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+// ft-sync: sync X bookmarks into the Field Theory archive (~/.ft-bookmarks).
+//
+// Run by ft-sync.timer once an hour. Extra arguments go to `ft sync`.
+//
+// Why not plain `ft sync`: the X login lives in the personal Chrome
+// (--user-data-dir ~/.config/google-chrome-personal, "Profile 1"), and on KDE
+// Chrome encrypts cookies with a key kept in KWallet. ft only reads the GNOME
+// keyring, whose "Chrome Safe Storage" entry is an older key that no longer
+// decrypts. So this reads the KWallet key, decrypts ct0 and auth_token, and
+// hands them to `ft sync --cookies`. Values are never printed.
+//
+// Exit 2: not logged in to X in that profile (no cookies). Log in and rerun.
+import { pbkdf2Sync, createDecipheriv } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+
+const PROFILE = process.env.FT_SYNC_PROFILE
+  ?? `${homedir()}/.config/google-chrome-personal/Profile 1`;
+const db = `file:${PROFILE}/Cookies?immutable=1`;
+const q = sql => execFileSync('sqlite3', [db, sql]).toString().trim();
+
+const ver = +q("select value from meta where key='version'");
+const pw = execFileSync('kwallet-query',
+  ['-r', 'Chrome Safe Storage', '-f', 'Chrome Keys', 'kdewallet']).toString().trim();
+const key = pbkdf2Sync(pw, 'saltysalt', 1, 16, 'sha1');
+
+function cookie(name) {
+  const hex = q(`select hex(encrypted_value) from cookies where host_key='.x.com' and name='${name}'`);
+  if (!hex) {
+    console.error(`ft-sync: no ${name} cookie for x.com in ${PROFILE}. Log in to x.com there.`);
+    process.exit(2);
+  }
+  const d = createDecipheriv('aes-128-cbc', key, Buffer.alloc(16, ' '));
+  // Strip the "v11" prefix; DB version 24+ prepends a 32-byte domain hash.
+  const out = Buffer.concat([d.update(Buffer.from(hex, 'hex').subarray(3)), d.final()]);
+  return (ver >= 24 ? out.subarray(32) : out).toString();
+}
+
+const r = spawnSync('ft', ['sync', '--cookies', cookie('ct0'), cookie('auth_token'),
+  ...process.argv.slice(2)], { stdio: 'inherit' });
+process.exit(r.status ?? 1);
