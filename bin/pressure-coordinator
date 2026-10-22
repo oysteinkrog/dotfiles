@@ -57,7 +57,9 @@ redesign, section 4:
           disk swap-in >= 2000 pages/s      (slow_swapin)
           swap room < 24 GiB                (slow_swap_room_gib)
   pause when any of these holds for enter_secs:
-          memory full avg10 >= 5%           (pause_mem_full)
+          memory full avg10 >= 5%           (pause_mem_full), only while
+                                    MemAvailable < 10 GiB (pause_mem_full_avail_gib);
+                                    with more free it caps at slow
           2 sessions' memory full avg10 >= 10% at once
                                     (pause_scope_full, pause_scope_count);
                                     one session alone only counts for slow
@@ -80,6 +82,17 @@ disk swap-in pages (pswpin) are the trigger, and pgmajfault is only logged
 unless slow_majfault or pause_majfault is set above 0. zswap hits do not
 count in pswpin, so pswpin is real disk reads. io PSI and zswap writeback are
 logged only (slow_io_full and pause_io_full are 0, meaning off).
+
+Second change, 2026-10-22: memory full avg10 alone pauses only while
+MemAvailable is under pause_mem_full_avail_gib (10 GiB). Between 09:00 and
+11:00 that day it paused 6 times on memory full 6.9% to 12% with 12 to 28 GiB
+available. The stalls came from resting Claude sessions faulting their pages
+back from zswap and disk swap (majfault 1.7k to 4.2k/s, zswpin 3k to 5.5k/s),
+not from a shortage, and each pause held new builds 5 to 7 minutes. Above the
+threshold the same signal gives slow, with the reason "memory full avg10 6.9%
+but 25 GiB free, capped at slow". The leave test uses twice the threshold, as
+for pause_mem_avail_gib. 0 turns the cap off (memory full pauses at any
+MemAvailable). Every other pause trigger is unchanged.
 """
 
 from __future__ import annotations
@@ -103,6 +116,7 @@ DEFAULTS: dict[str, float] = {
     "own_limit_secs": 60,
     "slow_mem_full": 2,
     "pause_mem_full": 5,
+    "pause_mem_full_avail_gib": 10,
     "slow_scope_some": 10,
     "pause_scope_full": 10,
     "pause_scope_count": 2,
@@ -406,7 +420,24 @@ class Coordinator:
             if th > 0 and v >= th * scale:
                 out.append(f"{label} {v:.1f}{unit}")
 
-        ge("mem_full", f"{p}_mem_full", "memory full avg10", "%")
+        avail = float(s["mem_avail_gib"])
+        # Memory full with plenty of MemAvailable is pages faulting back from
+        # swap, not a shortage: it pauses only under pause_mem_full_avail_gib
+        # (twice that in the leave test), and caps at slow above it.
+        cap = c["pause_mem_full_avail_gib"]
+        capped = cap > 0 and avail >= cap / scale
+        if lvl == 2:
+            if not capped:
+                ge("mem_full", "pause_mem_full", "memory full avg10", "%")
+        else:
+            mf = float(s["mem_full"])
+            pth = c["pause_mem_full"]
+            if scale >= 1 and capped and pth > 0 and mf >= pth:
+                out.append(
+                    f"memory full avg10 {mf:.1f}% but {avail:.0f} GiB free, capped at slow"
+                )
+            else:
+                ge("mem_full", "slow_mem_full", "memory full avg10", "%")
         if lvl == 1:
             ge(
                 "scope_some",
@@ -438,7 +469,6 @@ class Coordinator:
         if lvl == 2:
             if scale >= 1:
                 out += [t for t in self.at_once(s) if not t.startswith("swap room")]
-            avail = float(s["mem_avail_gib"])
             if avail < c["pause_mem_avail_gib"] / scale:
                 out.append(f"MemAvailable {avail:.1f} GiB")
         return out
@@ -812,8 +842,9 @@ def self_test() -> int:
             "slow: no pressure hold", not (run / "heavy-build.hold.pressure").exists()
         )
 
-        # 3. Memory full 6% for 15 s: pause, and the pressure hold is written.
-        t = run_for(co, t, 20, mem_full=6)
+        # 3. Memory full 6% for 15 s with 8 GiB available: pause, and the
+        # pressure hold is written.
+        t = run_for(co, t, 20, mem_full=6, avail_gib=8)
         hold = (
             (run / "heavy-build.hold.pressure").read_text()
             if lvl(co) == "pause"
@@ -833,7 +864,7 @@ def self_test() -> int:
         )
 
         # 4. Leave one level at a time, each after 120 s of calm.
-        t = run_for(co, t, 60, mem_full=3)
+        t = run_for(co, t, 60, mem_full=3, avail_gib=8)
         check(
             "mem full 3% (over half of 5): still pause", lvl(co) == "pause", co.reason
         )
@@ -969,7 +1000,7 @@ def self_test() -> int:
 
         # 13. Restart: take over a level written less than 60 s ago.
         co = fresh()
-        run_for(co, 8000.0, 20, mem_full=6)
+        run_for(co, 8000.0, 20, mem_full=6, avail_gib=8)
         check("restart setup: pause", lvl(co) == "pause", co.reason)
         co.shutdown()
         co2 = Coordinator(dict(DEFAULTS), proc, usvc, state, run)
@@ -979,7 +1010,7 @@ def self_test() -> int:
             "restart: the pressure hold is still there",
             (run / "heavy-build.hold.pressure").exists(),
         )
-        world(mem_full=6)
+        world(mem_full=6, avail_gib=8)
         co2.tick(8045.0)
         check(
             "restart: first sample at pause refreshes the hold",
@@ -1005,7 +1036,7 @@ def self_test() -> int:
 
         # 14. A gap between samples starts the calm count again.
         co = fresh()
-        t = run_for(co, 10000.0, 20, mem_full=6)
+        t = run_for(co, 10000.0, 20, mem_full=6, avail_gib=8)
         check("gap setup: pause", lvl(co) == "pause")
         t = run_for(co, t, 10, mem_full=1)
         t += 300
@@ -1085,6 +1116,46 @@ def self_test() -> int:
         for p in ("memory.swap.max", "memory.swap.current"):
             (bs / p).unlink()
             (usvc / "claude.slice" / p).unlink()
+
+        # 18. Memory full with plenty available caps at slow (2026-10-22).
+        co = fresh()
+        t = run_for(co, 16000.0, 60, mem_full=12, avail_gib=25)
+        check(
+            "mem full 12%, 25 GiB free for 60 s: slow, not pause, reason says capped",
+            lvl(co) == "slow"
+            and "memory full avg10 12.0% but 25 GiB free, capped at slow" in co.reason,
+            co.reason,
+        )
+        check(
+            "capped: no pressure hold",
+            not (run / "heavy-build.hold.pressure").exists(),
+        )
+        t = run_for(co, t, 20, mem_full=12, avail_gib=9.5)
+        check(
+            "then MemAvailable 9.5 GiB (under 10) for 20 s: pause",
+            lvl(co) == "pause" and "memory full avg10 12.0%" in co.reason,
+            co.reason,
+        )
+        t = run_for(co, t, 130, mem_full=4, avail_gib=15)
+        check(
+            "pause, mem full 4% with 15 GiB (under twice 10): stays pause",
+            lvl(co) == "pause",
+            co.reason,
+        )
+        t = run_for(co, t, 125, mem_full=4, avail_gib=25)
+        check(
+            "pause, mem full 4% with 25 GiB: down to slow after 120 s",
+            lvl(co) == "slow",
+            co.reason,
+        )
+        co = fresh()
+        co.cfg["pause_mem_full_avail_gib"] = 0
+        run_for(co, 16500.0, 20, mem_full=6, avail_gib=25)
+        check(
+            "pause_mem_full_avail_gib=0 turns the cap off: pause at 25 GiB",
+            lvl(co) == "pause",
+            co.reason,
+        )
 
         # 12. Never signals anything: no kill calls in this file.
         src = Path(__file__).read_text()
