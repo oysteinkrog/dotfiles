@@ -702,7 +702,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
     awk -v now=1000000 -v me="$me" -v cpuquiet=999 -v cpuhold=30 -v meminfo="${ADM_MEMINFO:-$A/meminfo}" \
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
-      -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
+      -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
@@ -807,8 +807,26 @@ out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -'
 check "pressure pause: an aged normal build ahead in line waits but does not head it, so the critical one starts (got '$out')" '[[ $out == start\|fits:* ]]'
 out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -' "$W_C" | ADM_PLEVEL=pause adm 0000000990000000000-1-n 0 1 12)
 check "pressure pause: that aged normal build waits for pressure (got '$out')" '[[ $out == wait\|pressure:* ]]'
-out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_PREASON="memory full avg10 2.4%" adm 0000000999000000000-1-n 0 1 12)
-check "pressure slow: a normal build waits while the last normal start was 50 s ago, clock held (got '$out')" '[[ $out == "wait|pressure: level slow, one new normal or low build per 120 s; the last one started 50 s ago (memory full avg10 2.4%)|1" ]]'
+# The slow gap: 30 s while MemAvailable is above 16 GiB, 120 s at or below.
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 16 * 1048576 )) > "$A/meminfo16"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 23 * 1048576 )) > "$A/meminfo23"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 16 * 1048576 + 1024 )) > "$A/meminfo16p"
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo16 ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_PREASON="memory full avg10 2.4%" adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 16 GiB free: a normal build waits while the last normal start was 50 s ago, clock held (got '$out')" '[[ $out == "wait|pressure: level slow, 16.0 GiB free, one new build per 120 s; the last one started 50 s ago (memory full avg10 2.4%)|1" ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo16 ADM_PLEVEL=slow ADM_LASTNC=999881 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 16 GiB free: still waits at 119 s (got '$out')" '[[ $out == wait\|pressure:\ level\ slow,\ 16.0\ GiB\ free,\ one\ new\ build\ per\ 120\ s* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo16 ADM_PLEVEL=slow ADM_LASTNC=999880 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 16 GiB free: starts at 120 s (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo23 ADM_PLEVEL=slow ADM_LASTNC=999950 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 23 GiB free: a normal build starts 50 s after the last normal start (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo23 ADM_PLEVEL=slow ADM_LASTNC=999980 ADM_PREASON="memory full avg10 2.4%" adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 23 GiB free: waits 20 s after the last normal start, says 30 s and the free memory, clock held (got '$out')" '[[ $out == "wait|pressure: level slow, 23.0 GiB free, one new build per 30 s; the last one started 20 s ago (memory full avg10 2.4%)|1" ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo23 ADM_PLEVEL=slow ADM_LASTNC=999970 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, 23 GiB free: starts at 30 s (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_MEMINFO=$A/meminfo16p ADM_PLEVEL=slow ADM_LASTNC=999950 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow, just over 16 GiB free: the 30 s gap applies (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$W_L" | ADM_MEMINFO=$A/meminfo23 ADM_PLEVEL=pause adm 0000000999000000000-1-n 0 1 12)
+check "pressure pause, 23 GiB free: a low build still waits (got '$out')" '[[ $out == wait\|pressure:\ level\ pause* ]]'
 out=$(printf '%s\n' "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999990 adm 0000000999000000000-1-n 0 1 12)
 check "pressure slow: a build that started 10 s ago and already ended still spaces the next one (got '$out')" '[[ $out == wait\|pressure:\ level\ slow* ]]'
 out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999000 adm 0000000999000000000-1-n 0 1 12)
@@ -1014,6 +1032,12 @@ out=$(unset HEAVY_BUILD_PRESSURE HEAVY_BUILD_PRESSURE_STALE_SECS; rconf PRESSURE
 check "settings: the pressure level is on, stale after 30 s, by default (got '$out')" '[[ $out == "1 30 " ]]'
 out=$(unset HEAVY_BUILD_PRESSURE_STALE_SLOW_SECS; rconf PRESSURE_STALE_SLOW_SECS)
 check "settings: a stale level counts as slow for 600 s by default (got '$out')" '[[ $out == "600 " ]]'
+out=$(unset HEAVY_BUILD_SLOW_GAP_SECS HEAVY_BUILD_SLOW_FAST_GAP_SECS HEAVY_BUILD_SLOW_FAST_MIN_GIB; rconf SLOW_GAP_SECS SLOW_FAST_GAP_SECS SLOW_FAST_MIN_GIB)
+check "settings: the slow gap is 120 s, or 30 s above 16 GiB free, by default (got '$out')" '[[ $out == "120 30 16 " ]]'
+printf 'HEAVY_BUILD_SLOW_GAP_SECS=90\nHEAVY_BUILD_SLOW_FAST_GAP_SECS=20\nHEAVY_BUILD_SLOW_FAST_MIN_GIB=24\n' > "$A/hb.conf"
+out=$(unset HEAVY_BUILD_SLOW_GAP_SECS HEAVY_BUILD_SLOW_FAST_GAP_SECS HEAVY_BUILD_SLOW_FAST_MIN_GIB; rconf SLOW_GAP_SECS SLOW_FAST_GAP_SECS SLOW_FAST_MIN_GIB)
+check "settings: the slow gap keys are read from heavy-build.conf (got '$out')" '[[ $out == "90 20 24 " ]]'
+rm -f "$A/hb.conf"
 rm -rf -- "$A"
 
 # sweep_stale: a scope whose heavy-build is gone is stopped only when it
