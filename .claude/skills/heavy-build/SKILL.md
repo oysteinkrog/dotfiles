@@ -160,5 +160,11 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
   16G to 22G from its estimate (it slows down there), MemoryMax twice that but no more
   than 42G, and MemorySwapMax 8G. An OOM kills only that build.
 - Pressure level: heavy-build reads `~/.local/state/pressure/level` from the
-  pressure coordinator. At `slow` it starts one new normal build at a time; at `pause`
-  it starts none. A notice hook tells sessions the level before each Bash call.
+  pressure coordinator. At `slow` it spaces new normal and low builds: one per 30 s
+  while MemAvailable is above 16 GiB, one per 120 s at or below. At `pause` it starts
+  none. High and critical builds are not held by either level. The live.log reason
+  names the free memory and the gap, for example "pressure: level slow, 23.0 GiB free,
+  one new build per 30 s". The settings are `HEAVY_BUILD_SLOW_FAST_GAP_SECS`,
+  `HEAVY_BUILD_SLOW_FAST_MIN_GIB` and `HEAVY_BUILD_SLOW_GAP_SECS` in
+  `~/.config/heavy-build.conf`. A notice hook tells sessions the level before each Bash
+  call.

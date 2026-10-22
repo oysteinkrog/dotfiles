@@ -104,7 +104,11 @@
 #   build) with no swap headroom. Normal and low builds wait with reason
 #   "pressure: ...", and take no writer preference.
 # - slow: a normal or low build may start only when no normal or low build
-#   started in the last HB_WARMUP_SECS (120 s). The time of the last such
+#   started in the last HEAVY_BUILD_SLOW_FAST_GAP_SECS (30 s) while
+#   MemAvailable is above HEAVY_BUILD_SLOW_FAST_MIN_GIB (16 GiB), or in the
+#   last HEAVY_BUILD_SLOW_GAP_SECS (120 s) at or below it. Until 2026-10-22 the
+#   gap was always 120 s, and with the level flicking between normal, slow
+#   and pause it held 39 builds back with 23 GiB free. The time of the last such
 #   start is kept in $XDG_RUNTIME_DIR/heavy-build.last-normal-start, so a
 #   build that ended quickly still counts. No swap headroom for anyone, and
 #   the first build gets the full memory test too. High and critical builds
@@ -532,6 +536,9 @@ read_conf() {
   setting HEAVY_BUILD_PRESSURE 1
   setting HEAVY_BUILD_PRESSURE_STALE_SECS 30
   setting HEAVY_BUILD_PRESSURE_STALE_SLOW_SECS 600
+  setting HEAVY_BUILD_SLOW_GAP_SECS 120
+  setting HEAVY_BUILD_SLOW_FAST_GAP_SECS 30
+  setting HEAVY_BUILD_SLOW_FAST_MIN_GIB 16
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_AGE_SECS 3600
@@ -1451,14 +1458,17 @@ function psifull10(f,   l, a, b, v) {
 }
 # The pressure level (plevel from the coordinator) holds back waiter i: at
 # pause every normal or low build, at slow a normal or low build while the
-# last normal or low build started less than warm seconds ago (lastnc, from
-# the last-normal-start file, or a pick in this walk). "" when it may go on.
-function pressure_why(i) {
+# last normal or low build started less than the slow gap ago (lastnc, from
+# the last-normal-start file, or a pick in this walk). The gap is slowfastgap
+# seconds while MemAvailable is above slowfastgib GiB, else slowgap seconds.
+# "" when it may go on.
+function pressure_why(i,   gap) {
   if (w_pr[i] == "high" || w_pr[i] == "critical") return ""
   if (plevel == "pause") return "pressure: level pause, only high and critical builds start (" preason ")"
   if (plevel != "slow") return ""
-  if (lastnc > 0 && lastnc <= now && now - lastnc < warm)
-    return sprintf("pressure: level slow, one new normal or low build per %d s; the last one started %d s ago (%s)", warm, now - lastnc, preason)
+  gap = (avail > slowfastgib) ? slowfastgap : slowgap
+  if (lastnc > 0 && lastnc <= now && now - lastnc < gap)
+    return sprintf("pressure: level slow, %.1f GiB free, one new build per %d s; the last one started %d s ago (%s)", avail, gap, now - lastnc, preason)
   return ""
 }
 # Lock keys a build holds. A tree key tree:<top>#<suffix> also marks <top>
@@ -1704,6 +1714,7 @@ decide() {
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v sessionpsifile="$USVC/session.slice/memory.pressure" \
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
+    -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
