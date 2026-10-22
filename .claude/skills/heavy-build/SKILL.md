@@ -149,5 +149,9 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
 - `~/.local/state/heavy-build/history.tsv`: one line per finished build (column 4 is
   wall seconds, not the exit code).
 - Limits: up to 6 builds and 28 cores at once. All builds share `builds.slice`, with
-  `MemoryHigh=32G` and `MemoryMax=42G`. Each build gets its own scope, capped at 16G to
-  22G from its estimate, so an OOM kills only that build.
+  `MemoryHigh=32G` and `MemoryMax=42G`. Each build gets its own scope with MemoryHigh
+  16G to 22G from its estimate (it slows down there), MemoryMax twice that but no more
+  than 42G, and MemorySwapMax 8G. An OOM kills only that build.
+- Pressure level: heavy-build reads `~/.local/state/pressure/level` from the
+  pressure coordinator. At `slow` it starts one new normal build at a time; at `pause`
+  it starts none. A notice hook tells sessions the level before each Bash call.
