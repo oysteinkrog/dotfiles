@@ -23,6 +23,11 @@ for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
     if pw-cli info "$node" >/dev/null 2>&1; then ok "$node"
     else fail "$node not in PipeWire (systemctl --user restart filter-chain; journalctl --user -u filter-chain)"; fi
   done
+  # The filter exists even when the device it feeds or reads from is missing.
+  for node in $(sed -n 's/^[[:space:]]*target.object[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
+    if pw-cli info "$node" >/dev/null 2>&1; then ok "device $node"
+    else fail "device $node not in PipeWire (unplugged, or its card profile is off: pactl list cards)"; fi
+  done
 done
 [ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ] && ok "~/.claude -> dotfiles" || fail "~/.claude is not the dotfiles .claude"
 

@@ -9,8 +9,11 @@ nothing on Linux does. This sends the same write: selector 17 = 1.
 The camera stalls that SET_CUR (EPROTO) but applies it, and GET_CUR reads 0
 afterwards, so success is judged by the audio, not by the read-back.
 
+Afterwards it checks that PipeWire has the camera's mic source, and makes
+WirePlumber probe the sound card again if not (see reprobe_audio).
+
 Run by streamcam-mic.service, which a udev rule starts when the camera
-connects. Safe to run by hand at any time.
+connects. Safe to run by hand at any time. --reprobe only does the reprobe.
 """
 import ctypes
 import errno
@@ -91,24 +94,80 @@ def enable_mic(dev, unit):
         os.close(fd)
 
 
-def relink_filter():
-    """Once PipeWire has the camera's audio node, restart filter-chain if the mic filter is gone.
+def audio_node_present():
+    out = subprocess.run(["pw-cli", "ls", "Node"], capture_output=True, text=True).stdout
+    return AUDIO_NODE in out, "effect_input.mic_streamcam" in out
 
-    The mic filter relinks to a reconnected camera by itself. A restart is only needed
-    when the filter is missing, and it also cuts the EQ sink for a moment, so skip it
-    when the filter is there.
-    """
-    for _ in range(30):
-        out = subprocess.run(["pw-cli", "ls", "Node"], capture_output=True, text=True).stdout
-        if AUDIO_NODE in out:
-            if "effect_input.mic_streamcam" not in out:
-                subprocess.run(["systemctl", "--user", "try-restart", "filter-chain.service"])
+
+def wait_for_audio_node(seconds):
+    for _ in range(seconds * 2):
+        if audio_node_present()[0]:
             return True
         time.sleep(0.5)
     return False
 
 
+def reprobe_audio():
+    """Make WirePlumber probe the camera's sound card again.
+
+    The mic-on write can make the camera drop off USB and reconnect. If WirePlumber
+    probes the sound card during that reconnect (seen at login on 2026-10-22), it
+    keeps a card with only the "off" and "pro-audio" profiles and no mic source.
+    Rebinding snd-usb-audio makes the kernel remove and re-add the card, so
+    WirePlumber probes it again. That needs root: the machine profile installs a
+    sudoers rule for exactly these two tee commands. Without it, restart WirePlumber
+    instead, which reprobes every card and glitches audio for a moment.
+    """
+    driver = "/sys/bus/usb/drivers/snd-usb-audio"
+    ifaces = [i for i in os.listdir(driver) if os.path.realpath(os.path.join(driver, i)).startswith(usb_device_path())]
+    tee = ["sudo", "-n", "/usr/bin/tee"]
+    allowed = subprocess.run(["sudo", "-n", "-l", "/usr/bin/tee", f"{driver}/unbind"], capture_output=True)
+    if ifaces and allowed.returncode == 0:
+        for i in ifaces:
+            subprocess.run([*tee, f"{driver}/unbind"], input=i, text=True, capture_output=True)
+        time.sleep(1)
+        for i in ifaces:
+            subprocess.run([*tee, f"{driver}/bind"], input=i, text=True, capture_output=True)
+        print(f"rebound snd-usb-audio on {', '.join(ifaces)}")
+    else:
+        subprocess.run(["systemctl", "--user", "restart", "wireplumber.service"])
+        print("restarted wireplumber")
+
+
+def usb_device_path():
+    """sysfs path of the StreamCam USB device, or a path that matches nothing."""
+    for dev in glob.glob("/sys/bus/usb/devices/*"):
+        try:
+            if (open(f"{dev}/idVendor").read().strip(), open(f"{dev}/idProduct").read().strip()) == (VID, PID):
+                return os.path.realpath(dev) + "/"
+        except OSError:
+            continue
+    return "/nonexistent/"
+
+
+def check_audio():
+    """Make sure PipeWire has the camera's mic source and the mic filter.
+
+    Reprobe the sound card if the source does not show up. Restart filter-chain only
+    if the mic filter is gone: it relinks to a reconnected camera by itself, and a
+    restart also cuts the EQ sink for a moment.
+    """
+    if not wait_for_audio_node(30):
+        print("PipeWire has no StreamCam mic source after 30 s; reprobing the sound card")
+        reprobe_audio()
+        if not wait_for_audio_node(30):
+            print("StreamCam mic source still missing after reprobe")
+            return False
+    if not audio_node_present()[1]:
+        subprocess.run(["systemctl", "--user", "try-restart", "filter-chain.service"])
+        print("mic filter was missing; restarted filter-chain")
+    return True
+
+
 def main():
+    if "--reprobe" in sys.argv:
+        reprobe_audio()
+        sys.exit(0 if wait_for_audio_node(30) else "StreamCam mic source still missing after reprobe")
     dev = unit = None
     for _ in range(20):
         dev, unit = find_camera()
@@ -126,8 +185,8 @@ def main():
                 sys.exit(f"mic enable failed on {dev}: {e}")
             time.sleep(1)
     print(f"sent mic enable to {dev} (unit {unit}, selector {MIC_ENABLE_SELECTOR})")
-    if "--no-relink" not in sys.argv and not relink_filter():
-        print("PipeWire audio node did not appear; filter-chain not restarted")
+    if "--no-relink" not in sys.argv:
+        check_audio()
 
 
 if __name__ == "__main__":
