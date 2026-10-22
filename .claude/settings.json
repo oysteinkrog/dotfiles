@@ -310,6 +310,10 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/build-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/pressure-notice.sh"
           }
         ]
       },
