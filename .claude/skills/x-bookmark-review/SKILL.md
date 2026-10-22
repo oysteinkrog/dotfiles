@@ -1,6 +1,6 @@
 ---
-name: bookmark-review
-description: Review Oystein's new X bookmarks one by one and say whether to adopt each tool, technique or idea, for Initial Force and for his own repos. Writes a daily review file in the Life vault. Use when the user says "review my bookmarks", "bookmark review", or runs it from /loop (for example `/loop 1h /bookmark-review`).
+name: x-bookmark-review
+description: Review Oystein's new X bookmarks one by one and say whether to adopt each tool, technique or idea, for Initial Force and for his own repos. Writes a daily review file in the Life vault. Use when the user says "review my bookmarks", "bookmark review", "x bookmark review", or runs it from /loop (for example `/loop 1h /x-bookmark-review`).
 ---
 
 # Bookmark review

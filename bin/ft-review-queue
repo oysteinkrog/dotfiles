@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ft-review-queue: which X bookmarks the bookmark-review loop has not looked at yet.
+"""ft-review-queue: which X bookmarks the x-bookmark-review loop has not looked at yet.
 
 Reads the Field Theory archive (~/.ft-bookmarks/bookmarks.jsonl, kept fresh by
 ft-sync.timer) and a list of reviewed ids (~/.local/state/ft-review/reviewed.txt,
-one id per line). Used by the bookmark-review skill.
+one id per line). Used by the x-bookmark-review skill.
 
   ft-review-queue count                 unreviewed bookmarks
   ft-review-queue next [--limit N]      JSON list of unreviewed bookmarks, newest first (default 10)
