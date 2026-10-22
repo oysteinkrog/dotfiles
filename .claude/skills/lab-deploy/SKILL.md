@@ -44,7 +44,7 @@ lab-deploy.sh logs 3                                                    # newest
   (about 4 min and 20 s). `ri-push` swaps the Wine bridges (FLIR_GenTL_v140.cti, Bertec ftd2xx.dll)
   for the Windows originals; a build copied any other way hangs at the Spinnaker start. Run it in a
   test hive like any `C:\LabQa\ri` build. Use a CI installer only when the installer itself is
-  under test (`release-installers` finds the link, then `push`).
+  under test (`desktop-classic-release-installers` finds the link, then `push`).
   `ri-push --name <name>` installs under `C:\LabQa\ri\<name>`, so several builds can sit side by side.
 - **Portable tools are fine on Hawk without asking.** Oystein, 2026-10-20: a self-contained
   tool you copy in and can delete again (a signed Sysinternals exe, a static binary) goes in
