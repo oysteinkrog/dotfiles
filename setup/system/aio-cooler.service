@@ -1,0 +1,20 @@
+# Corsair iCUE H150i RGB PRO XT (USB 1b1c:0c22): pump to extreme, steeper fan curve.
+# The cooler forgets its settings when it loses power, so this runs at boot and after
+# every resume from sleep. Installed to /etc/systemd/system by the host_system function
+# in the Life machine profile. Needs the liquidctl package.
+#
+# The fan curve runs on the cooler against the liquid temperature (25 C 30 %, 30 C 45 %,
+# 33 C 60 %, 36 C 80 %, 38 C 100 %). It only moves air if fans are plugged into the
+# cooler's own fan ports. On this desktop they are not (the cooler reports 0 rpm), so the
+# radiator fans follow the motherboard headers instead.
+[Unit]
+Description=Corsair H150i Pro XT pump and fan settings
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/liquidctl --match H150i initialize --pump-mode extreme
+ExecStart=/usr/bin/liquidctl --match H150i set fan speed 25 30 30 45 33 60 36 80 38 100
+
+[Install]
+WantedBy=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
