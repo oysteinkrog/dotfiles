@@ -1,0 +1,23 @@
+[Unit]
+Description=Memory pressure level for heavy-build and sessions (pressure-coordinator)
+Documentation=file://%h/bin/pressure-coordinator
+
+[Service]
+# background.slice with a low CPU weight: it must keep sampling under load,
+# but never compete with sessions or builds. It reads /proc and the cgroup
+# tree and writes only its own files. It never kills or signals anything.
+Slice=background.slice
+Type=simple
+ExecStartPre=/usr/bin/python3 %h/bin/pressure-coordinator --self-test
+ExecStart=/usr/bin/python3 %h/bin/pressure-coordinator
+Restart=always
+RestartSec=10
+SyslogIdentifier=pressure-coordinator
+CPUWeight=10
+Nice=10
+# MemoryHigh, not MemoryMax: at worst it slows down, it is never OOM-killed.
+MemoryHigh=64M
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
