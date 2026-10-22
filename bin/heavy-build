@@ -64,12 +64,18 @@
 #   on every decision, so a `systemctl --user set-property builds.slice
 #   MemoryHigh=...` applies at once. Each live.log decision line has
 #   cap=<GiB>G(max|high), or cap=none when neither is set;
-# - claude.slice and app.slice memory pressure (some avg10) are each under
-#   HEAVY_BUILD_MAX_MEM_PSI percent (default 5);
+# - claude.slice and session.slice memory pressure (full avg10) are each
+#   under HEAVY_BUILD_MAX_MEM_PSI percent (default 5). app.slice is not read:
+#   on 2026-10-21 one Chrome unit at its own MemoryHigh made app.slice
+#   look stressed and blocked every build for hours. Until 2026-10-22 this
+#   gate read some avg10 of claude.slice and app.slice;
+# - the pressure level allows it (see "Pressure level" below);
 # - no running build holds one of its lock keys.
 # When no build runs, a build starts once MemAvailable is at least
 # HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate (the builds.slice cap does
-# not apply), so one big build is never blocked forever. Order is priority, then
+# not apply), so one big build is never blocked forever. At pressure level
+# slow or pause that shortcut is off: the first build needs every test above
+# too. Order is priority, then
 # arrival. A build whose lock key is busy is skipped and keeps its place.
 # Writer preference: no build with a tree:<top>#<suffix> key that is behind
 # the first waiter with the plain key tree:<top> in order starts until the
@@ -88,6 +94,33 @@
 # When the first build in order does not fit, a later one may start if it fits
 # now and should end before the first one could start. That stops once the
 # first one has waited HEAVY_BUILD_STARVE seconds (default 1800).
+# Pressure level: pressure-coordinator.service writes
+# ~/.local/state/pressure/level ("level=normal|slow|pause ... updated=<epoch>
+# reason=...") every 5 s, and at pause also
+# $XDG_RUNTIME_DIR/heavy-build.hold.pressure ("expires=<epoch> <reason>").
+# - pause (the pressure hold is in force, or the level file says pause): only
+#   high and critical builds may start, and only through the full memory test
+#   (estimate plus reserve, and the builds.slice cap, even for the first
+#   build) with no swap headroom. Normal and low builds wait with reason
+#   "pressure: ...", and take no writer preference.
+# - slow: a normal or low build may start only when no normal or low build
+#   started in the last HB_WARMUP_SECS (120 s). The time of the last such
+#   start is kept in $XDG_RUNTIME_DIR/heavy-build.last-normal-start, so a
+#   build that ended quickly still counts. No swap headroom for anyone, and
+#   the first build gets the full memory test too. High and critical builds
+#   are not held.
+# - normal: no change.
+# - A level file whose updated= is more than HEAVY_BUILD_PRESSURE_STALE_SECS
+#   old (default 30) counts as slow until it is
+#   HEAVY_BUILD_PRESSURE_STALE_SLOW_SECS old (default 600). Older than that,
+#   with updated= in the future, or missing, it is ignored (level stale or
+#   none). A pressure hold counts only with an expires= that has not come and
+#   is at most 600 s away; an empty or malformed one is ignored. The
+#   manager's heavy-build.hold is a different file.
+# Running builds are never stopped. While the level holds a build back, its
+# give-up clock does not run, even when another gate (swap, interactive) is
+# the reason shown. Each decision line in live.log has pressure=<level>.
+# HEAVY_BUILD_PRESSURE=0 turns the level off.
 # Decisions are logged to ~/.local/state/heavy-build/live.log.
 # The live settings above can also be set in ~/.config/heavy-build.conf as
 # KEY=VALUE lines. The environment wins over the file.
@@ -120,8 +153,7 @@
 #   clears it. Example for 4 h:
 #   printf 'kpp sprint\nexpires=%s\nnoncrit_slots=1\nreserve_gib=12\n' \
 #   "$(( $(date +%s) + 14400 ))" > $XDG_RUNTIME_DIR/heavy-build.critical-first
-# - Waits while swap room below the systemd-oomd limit (90% of SwapTotal minus
-#   swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
+# - Waits while swap room (90% of SwapTotal minus swap used) is under HEAVY_BUILD_MIN_SWAP_ROOM_GIB (default 10).
 # - Estimates each build's memory, cores and wall time. Memory is the largest
 #   of: the highest peak in the last 10 runs of the same command in the same
 #   directory, the p90 peak of the last 50 runs of its class (cargo test,
@@ -137,7 +169,9 @@
 #   left the machine 1 GiB. A Wine test run with --filter or --filter-for
 #   is estimated from the runs of the same tests instead (same projects,
 #   flags and filters, from any tree or lane; history column 12) in the last
-#   14 days: their p90 peak once there are 5, else the class p75. The class
+#   14 days: their p90 peak once there are 5, else the class percentile
+#   HEAVY_BUILD_WINE_FALLBACK_PCT (default 90; it was the p75 until
+#   2026-10-21). The class
 #   floor holds, except that 10 or more runs may go down to 4 GiB. A run
 #   without a filter keeps the rule above. See estimate(). Cores and wall
 #   time come from the
@@ -156,10 +190,12 @@
 #   2026-10-16 no column 9, lines before 2026-10-20 no column 10 or 11, and
 #   lines before the sig change (2026-10-20 afternoon) no column 12.
 # - Sweeps stale scopes when a build asks to start: a heavy-build scope whose
-#   heavy-build is gone is stopped when it holds only Wine leftovers
-#   (winedevice.exe, wineserver, services.exe and the like) or used under
-#   0.05 cores over the last 2 min. A scope still doing work is left alone.
-#   Each sweep is logged as event=sweep with the unit and its processes.
+#   heavy-build is gone is stopped only when it holds nothing but Wine
+#   leftovers (winedevice.exe, wineserver, services.exe and the like). Each
+#   sweep is logged as event=sweep with the unit and its processes. A scope
+#   with any other process is never stopped, however idle it looks (until
+#   2026-10-22 one under 0.05 cores for 2 min was stopped): it is logged once
+#   as event=sweep-skip. A scope whose heavy-build still runs is never swept.
 # - Lock keys: cargo:<workspace root> for cargo commands, tree:<git toplevel>
 #   for dotnet and Wine commands, and wine:<prefix> for Wine runs that would
 #   share one prefix and so one wineserver (the DESKTOP-14957 guard). The guard
@@ -237,7 +273,11 @@
 #   HEAVY_BUILD_FORCE=1 skips that check; it is for Oystein, not for agents.
 # - Runs the command in a transient scope in builds.slice, so an OOM kills only
 #   the build. MemoryHigh is 1.25 times the memory estimate, from 16G to 22G;
-#   MemoryMax is 2G above that. The command never inherits a slot lock.
+#   MemoryMax is twice MemoryHigh, but no more than builds.slice memory.max
+#   (and never under MemoryHigh); MemorySwapMax is 8G. Until 2026-10-22
+#   MemoryMax was MemoryHigh + 2G and MemorySwapMax 2G, so a build could be
+#   OOM-killed with the machine far from full. The command never inherits a
+#   slot lock.
 # - HEAVY_BUILD_TIMEOUT=<seconds> stops the build after that long (exit 124).
 # - Warns on stderr when the build used under 0.05 cores for 10 min (it may be
 #   hung), or when its Wine processes have lost their wineserver. Such a build
@@ -300,8 +340,8 @@
 #                           holds included. HEAVY_BUILD_WAIT still applies.
 #   --                      ends the options.
 # An app run differs from a build in these ways:
-# - MemoryHigh is HEAVY_BUILD_APP_MEM_HIGH_GIB (default 10), MemoryMax 2G
-#   above it. Its memory estimate comes from app-run history as for any class
+# - MemoryHigh is HEAVY_BUILD_APP_MEM_HIGH_GIB (default 10), MemoryMax twice
+#   that (capped by builds.slice as for a build). Its memory estimate comes from app-run history as for any class
 #   (default 8 GiB until 5 runs, floor 6 GiB), never above that MemoryHigh.
 # - At most HEAVY_BUILD_MAX_APP_RUNS (default 2; 0 turns the cap off) app runs
 #   run at once. Each one counts as a job against HEAVY_BUILD_MAX_JOBS, and is
@@ -389,6 +429,11 @@ POLL=${HEAVY_BUILD_POLL:-5}
 HOLD=$RUNDIR/heavy-build.hold
 hold_expired_logged=
 CRITF=$RUNDIR/heavy-build.critical-first
+PHOLD=$RUNDIR/heavy-build.hold.pressure
+PHOLD_MAX_SECS=600
+NCSTART=$RUNDIR/heavy-build.last-normal-start
+PLEVEL_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/pressure/level
+plevel=none preason=
 critf_expired_logged=
 QDIR=$RUNDIR/heavy-build.queue
 JDIR=$RUNDIR/heavy-build.jobs
@@ -484,12 +529,17 @@ read_conf() {
   setting HEAVY_BUILD_MAX_CPU_PSI 75
   setting HEAVY_BUILD_CPU_PSI_SECS 30
   setting HEAVY_BUILD_MAX_MEM_PSI 5
+  setting HEAVY_BUILD_PRESSURE 1
+  setting HEAVY_BUILD_PRESSURE_STALE_SECS 30
+  setting HEAVY_BUILD_PRESSURE_STALE_SLOW_SECS 600
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
+  setting HEAVY_BUILD_WINE_FALLBACK_PCT 90
+  (( WINE_FALLBACK_PCT >= 1 && WINE_FALLBACK_PCT <= 100 )) || WINE_FALLBACK_PCT=90
   setting HEAVY_BUILD_RERUN_FAILS 2
   setting HEAVY_BUILD_RERUN_SECS 1800
   setting HEAVY_BUILD_HISTORY_LINES 20000
@@ -639,7 +689,7 @@ classify() {
 # peak. jb-inspectcode (JetBrains inspectcode, also run as `jb inspectcode`)
 # peaked at 17.4 GB twice on 2026-10-17 on MotionCatalyst.sln, once oom-killed,
 # while it was estimated at 3.6 GB as "other". Its floor is 18 GiB; the scope
-# gets MemoryHigh 22G and MemoryMax 24G. Cores and wall time are guesses until
+# gets MemoryHigh 22G and MemoryMax 42G (twice 22G, capped by builds.slice). Cores and wall time are guesses until
 # it has history. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
 # 33 s); its wall time is a guess until it has history. dotnet-build-sln is a
 # dotnet build, test or msbuild of a whole .sln or .slnx (see dotnet_sln). On
@@ -683,7 +733,8 @@ SIG_DAYS=14
 # A Wine test run with a filter (SIG from wine_sig, FILTERED 1) is estimated
 # from its sig instead (history column 12, runs in the last SIG_DAYS days):
 # with 5 or more such runs, their p90 peak (mem=sig-p90); with fewer, the
-# class p75 (mem=class-p75), or the highest peak of those few runs when that
+# class WINE_FALLBACK_PCT percentile (default 90, logged as mem=class-p90),
+# or the highest peak of those few runs when that
 # is more (mem=sig-max). The key's own peak does not apply. The class floor
 # still applies, except that a sig with 10 or more runs may go down to 4 GiB.
 # On 2026-10-20 wine-run-tests was planned at 8.5 to 9.8 GB from the class
@@ -700,13 +751,13 @@ SIG_DAYS=14
 # (exit 128 and above) are left out. Wall time and cores come from the key's
 # last 5 runs, else from the class, and never from OOM-killed runs.
 # source: history, class-history, class or default (where wall and cores
-# came from), then ",mem=" and what set memory: key, class-p90, class-p75,
+# came from), then ",mem=" and what set memory: key, class-p90, class-pNN,
 # sig-p90, sig-max, class, default, floor or cap.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
-    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" '
+    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-90}" '
     function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
@@ -748,7 +799,7 @@ estimate() {
         if (m > 0) {
           srt(p, m)
           i = int(0.9 * m) + 1; if (i > m) i = m; mem = p[i] / 1073741824; msrc = "class-p90"
-          i = int(0.75 * m) + 1; if (i > m) i = m; cmem = p[i] / 1073741824
+          i = int(fpct / 100 * m) + 1; if (i > m) i = m; cmem = p[i] / 1073741824
         }
       }
       if (filt) {
@@ -757,7 +808,7 @@ estimate() {
           mem = smp[i] / 1073741824; msrc = "sig-p90"
           if (smn >= 10 && floor > 4) floor = 4
         } else {
-          mem = cmem; if (msrc == "class-p90") msrc = "class-p75"
+          mem = cmem; if (msrc == "class-p90") msrc = "class-p" fpct
           mx = -1
           for (i = 1; i <= smn; i++) if (smp[i] + 0 > mx) mx = smp[i] + 0
           if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = "sig-max" }
@@ -1087,7 +1138,7 @@ ancestor_holds_lock() {
 
 mem_avail_gib() { awk '/^MemAvailable:/ {print int($2 / 1048576); exit}' "$MEMINFO" 2>/dev/null; }
 
-# GiB of swap left before systemd-oomd's 90% limit. Empty when there is no swap.
+# GiB of swap left before 90% of swap is used. Empty when there is no swap.
 swap_room_gib() {
   awk '/^SwapTotal:/ {t = $2} /^SwapFree:/ {f = $2}
     END {if (t > 0) print int((0.9 * t - (t - f)) / 1048576)}' "$MEMINFO" 2>/dev/null
@@ -1232,11 +1283,12 @@ hb_alive() {
 }
 
 # Stops heavy-build scopes whose heavy-build is gone, for example killed with
-# SIGKILL so its own cleanup never ran. Only a scope that holds nothing but
-# Wine leftovers, or that used under 0.05 cores over the last HB_IDLE_SECS,
-# is stopped. A scope that still does work is left alone and logged once.
+# SIGKILL so its own cleanup never ran, and that hold nothing but Wine
+# leftovers. A scope whose heavy-build still runs is never touched. A scope
+# with any process that is not a Wine leftover is left alone, however idle,
+# and logged once as event=sweep-skip: killed work is never fine.
 sweep_stale() {
-  local d u pid procs list k v usec r why f n
+  local d u pid procs list f n
   for d in "$BSLICE"/heavy-build-*.scope; do
     [[ -d $d ]] || continue
     grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null || continue
@@ -1247,23 +1299,16 @@ sweep_stale() {
     procs=$(scope_procs "$d")
     [[ -n $procs ]] || continue
     list=$(paste -sd, - <<< "$procs")
-    usec=0
-    while read -r k v; do [[ $k == usage_usec ]] && { usec=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
-    [[ $usec =~ ^[0-9]+$ ]] || usec=0
-    r=$(cpu_rate "$u" "$usec")
-    if only_wine_leftovers "$procs"; then
-      why=wine-leftovers
-    elif [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )); then
-      why=idle
-    else
+    if ! only_wine_leftovers "$procs"; then
       if [[ ! -e $CPUDIR/$u.noted ]]; then
+        mkdir -p "$CPUDIR" 2>/dev/null
         : > "$CPUDIR/$u.noted" 2>/dev/null
-        log_line "event=stale-keep unit=$u heavy_build_pid=$pid cpu_milli=$r procs=$list reason=\"its heavy-build is gone but the scope still does work, so it stays\""
+        log_line "event=sweep-skip unit=$u heavy_build_pid=$pid procs=$list reason=\"its heavy-build is gone but it holds processes that are not Wine leftovers, so it stays\""
       fi
       continue
     fi
-    log_line "event=sweep unit=$u reason=$why heavy_build_pid=$pid cpu_milli=$r procs=$list"
-    [[ $why == wine-leftovers ]] && systemctl --user kill --signal=KILL "$u.scope" 2>/dev/null
+    log_line "event=sweep unit=$u reason=wine-leftovers heavy_build_pid=$pid procs=$list"
+    systemctl --user kill --signal=KILL "$u.scope" 2>/dev/null
     systemctl --user stop "$u.scope" 2>/dev/null
     rm -f -- "$JDIR/$u" "$CPUDIR/$u" "$CPUDIR/$u.noted"
   done
@@ -1398,6 +1443,24 @@ function psi10(f,   l, a, b, v) {
   while ((getline l < f) > 0) if (l ~ /^some /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
   close(f); return v
 }
+# full avg10 of pressure file f, or -1.
+function psifull10(f,   l, a, b, v) {
+  v = -1
+  while ((getline l < f) > 0) if (l ~ /^full /) { split(l, a, " "); split(a[2], b, "="); v = b[2] + 0 }
+  close(f); return v
+}
+# The pressure level (plevel from the coordinator) holds back waiter i: at
+# pause every normal or low build, at slow a normal or low build while the
+# last normal or low build started less than warm seconds ago (lastnc, from
+# the last-normal-start file, or a pick in this walk). "" when it may go on.
+function pressure_why(i) {
+  if (w_pr[i] == "high" || w_pr[i] == "critical") return ""
+  if (plevel == "pause") return "pressure: level pause, only high and critical builds start (" preason ")"
+  if (plevel != "slow") return ""
+  if (lastnc > 0 && lastnc <= now && now - lastnc < warm)
+    return sprintf("pressure: level slow, one new normal or low build per %d s; the last one started %d s ago (%s)", warm, now - lastnc, preason)
+  return ""
+}
 # Lock keys a build holds. A tree key tree:<top>#<suffix> also marks <top>
 # as held by a suffixed build, so a plain tree:<top> waits for it.
 function hold(keys, id,   n, k, i, b) {
@@ -1441,7 +1504,10 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   hold(keys, id)
 }
 function why_not(i, nrun, cpu, tc, held, av, nhigh) {
-  if (nrun <= 0) return (av >= solo) ? "" : sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+  # With no build running, MemAvailable >= solo is enough, except at pressure
+  # level slow or pause: then the first build also needs the full tests below.
+  if (nrun <= 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+  if (nrun <= 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
   if (cpu + w_cores[i] > cpubudget) return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
@@ -1459,7 +1525,10 @@ function cf_why(i, nnc, tc, av) {
   if (av + swx - tc - w_mem[i] < cfreserve) return sprintf("critical-first: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, normal and low builds must leave %d", w_mem[i], av, swxnote, tc, cfreserve)
   return ""
 }
-function pick(i) { addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct, w_cls[i]); picked[i] = 1 }
+function pick(i) {
+  addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct, w_cls[i]); picked[i] = 1
+  if (w_pr[i] != "high" && w_pr[i] != "critical") lastnc = now
+}
 # When enough running builds should have ended for waiter i to fit.
 function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
   for (j = 1; j <= nr; j++) idx[j] = j
@@ -1494,12 +1563,12 @@ BEGIN {
   # pressure is higher or cannot be read.
   swx = 0; swxnote = ""
   split(mempsifile == "" ? "-1 -1" : psi1060(mempsifile), mp, " ")
-  if (swpct > 0 && swcap > 0 && swf > 0 && mp[1] >= 0 && mp[1] < 1.0 && mp[2] >= 0 && mp[2] < 1.0) {
+  if (plevel != "slow" && plevel != "pause" && swpct > 0 && swcap > 0 && swf > 0 && mp[1] >= 0 && mp[1] < 1.0 && mp[2] >= 0 && mp[2] < 1.0) {
     swx = swf / 1048576 * swpct / 100; if (swx > swcap) swx = swcap
     swxnote = sprintf(" (+%.1f swap headroom)", swx)
   }
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
-  claudepsi = psi10(claudepsifile); apppsi = psi10(apppsifile)
+  claudepsi = psifull10(claudepsifile); sessionpsi = psifull10(sessionpsifile)
 }
 $1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct, $12) }
 # A scope without a live heavy-build: charged its current memory plus 2 GiB still to come.
@@ -1539,18 +1608,21 @@ END {
   }
   # Writer preference: the first waiter in order with a plain tree:<top> key
   # holds that tree. No waiter behind it with a tree:<top>#<suffix> key may
-  # start first. Suffixed waiters ahead of it keep their place.
+  # start first. Suffixed waiters ahead of it keep their place. A waiter the
+  # pressure level holds back takes no writer preference, so it cannot block
+  # a high or critical build behind it.
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (w_keys[i] == "" || w_keys[i] == "-") continue
+    if (pressure_why(i) != "") continue
     n = split(w_keys[i], k, ",")
     for (j = 1; j <= n; j++) if (k[j] ~ /^tree:/ && index(k[j], "#") == 0 && !(k[j] in wpref)) { wpref[k[j]] = i; wpos[k[j]] = o }
   }
   gate = ""
   if (swt > 0 && (0.9 * swt - (swt - swf)) / 1048576 < minswap)
-    gate = sprintf("swap: %.1f GiB left before the oomd limit, need %d", (0.9 * swt - (swt - swf)) / 1048576, minswap)
-  else if (claudepsi >= maxmempsi) gate = sprintf("interactive: claude.slice memory pressure %.1f%%, the limit is %d%%", claudepsi, maxmempsi)
-  else if (apppsi >= maxmempsi) gate = sprintf("interactive: app.slice memory pressure %.1f%%, the limit is %d%%", apppsi, maxmempsi)
+    gate = sprintf("swap: %.1f GiB left before 90%% of swap is used, need %d", (0.9 * swt - (swt - swf)) / 1048576, minswap)
+  else if (claudepsi >= maxmempsi) gate = sprintf("interactive: claude.slice memory pressure (full) %.1f%%, the limit is %d%%", claudepsi, maxmempsi)
+  else if (sessionpsi >= maxmempsi) gate = sprintf("interactive: session.slice memory pressure (full) %.1f%%, the limit is %d%%", sessionpsi, maxmempsi)
   # critw: the first critical waiter that waits for job slots, cores or CPU
   # pressure. Normal and low builds may not start ahead of it.
   headi = 0; starving = 0; shadow = 0; critw = 0
@@ -1563,6 +1635,10 @@ END {
     # hold job slots. One that waits for this keeps its place but is never the
     # head of the line, so it cannot starve builds behind it.
     if (w_cls[i] == "app-run" && maxapp > 0 && T_app >= maxapp) { why[i] = sprintf("app-cap: %d app runs hold job slots, the limit is %d", T_app, maxapp); continue }
+    # The pressure level: a held normal or low build keeps its place but is
+    # never the head of the line, so high and critical builds behind it go on.
+    pw = pressure_why(i)
+    if (pw != "") { why[i] = pw; continue }
     wk = writer(w_keys[i], o)
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
@@ -1596,7 +1672,10 @@ END {
     # for memory counts as held too: the critical builds it lets in take that
     # memory. On 2026-10-20 a 26.1 beta test gave up after 7201 s of such waits.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
-    if (!picked[i] && kind !~ /^(swap|interactive|key|writer|app-cap)$/ && (kind == "critical" || kind == "critical-first" || (cf && kind == "memory" && w_pr[i] != "high" && w_pr[i] != "critical") || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    if (!picked[i] && kind !~ /^(swap|interactive|key|writer|app-cap)$/ && (kind == "critical" || kind == "critical-first" || kind == "pressure" || (cf && kind == "memory" && w_pr[i] != "high" && w_pr[i] != "critical") || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    # The pressure level holds this build whatever reason is shown (a swap or
+    # interactive gate may come first), so the clock does not run.
+    if (!picked[i] && pressure_why(i) != "") ph = 1
     if (picked[i] && swx > 0) why[i] = why[i] swxnote
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
@@ -1608,18 +1687,23 @@ END {
 # capinfo (the builds.slice cap used) and
 # prioheld (1 when only higher-priority builds ahead hold it back).
 decide() {
-  local out
+  local out lastnc=0
   sweep_stale
+  plevel=-
   if hold_on; then
     dec=wait rank=0 why="hold: new builds are on hold: $(head -c 200 "$HOLD" 2>/dev/null)" untracked=- prioheld=0 capinfo=-
     return
   fi
   critical_first_on
+  pressure_level
+  { read -r lastnc || [[ -n $lastnc ]]; } 2>/dev/null < "$NCSTART"
+  [[ $lastnc =~ ^[0-9]{1,15}$ ]] || lastnc=0
   psi_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
-    -v claudepsifile="$USVC/claude.slice/memory.pressure" -v apppsifile="$USVC/app.slice/memory.pressure" \
+    -v claudepsifile="$USVC/claude.slice/memory.pressure" -v sessionpsifile="$USVC/session.slice/memory.pressure" \
+    -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
@@ -1666,6 +1750,49 @@ hold_on() {
   return 1
 }
 
+# The coordinator's pressure level (see "Pressure level" in the header). Sets
+# plevel to normal, slow, pause, stale or none, and preason to the reason.
+# - A pressure hold counts (pause) only with a valid expires= that has not
+#   come and is at most PHOLD_MAX_SECS (600) away. An empty or malformed hold,
+#   or one that vanishes while it is read, counts as no hold.
+# - A level file updated within PRESSURE_STALE_SECS (30) gives its level. One
+#   older than that but updated within PRESSURE_STALE_SLOW_SECS (600) is slow:
+#   the coordinator may be stuck. Older than that, or updated= in the future,
+#   it is stale and has no effect. No level file, or HEAVY_BUILD_PRESSURE=0,
+#   is none.
+# Neither file ever stops a running build.
+pressure_level() {
+  local line= exp= l= u= age
+  plevel=none preason=
+  (( PRESSURE )) || return 0
+  if [[ -e $PHOLD ]] && { IFS= read -r line || [[ -n $line ]]; } 2>/dev/null < "$PHOLD"; then
+    if [[ $line =~ ^expires=([0-9]{1,15})([^0-9]|$) ]]; then
+      exp=$(( 10#${BASH_REMATCH[1]} ))
+      line=${line:$(( 8 + ${#BASH_REMATCH[1]} ))}; line=${line# }
+      if (( EPOCHSECONDS < exp && exp - EPOCHSECONDS <= PHOLD_MAX_SECS )); then
+        plevel=pause preason=${line:0:160}
+        preason=${preason//\"/\'}
+        return 0
+      fi
+    fi
+  fi
+  line=
+  [[ -e $PLEVEL_FILE ]] || return 0
+  { IFS= read -r line || [[ -n $line ]]; } 2>/dev/null < "$PLEVEL_FILE" || return 0
+  [[ $line =~ (^|[[:space:]])level=(normal|slow|pause)([[:space:]]|$) ]] && l=${BASH_REMATCH[2]}
+  [[ $line =~ (^|[[:space:]])updated=([0-9]{1,15})([[:space:]]|$) ]] && u=$(( 10#${BASH_REMATCH[2]} ))
+  [[ -n $l && -n $u ]] || return 0
+  age=$(( EPOCHSECONDS - u ))
+  if (( age < -5 || age > PRESSURE_STALE_SLOW_SECS )); then plevel=stale; return 0; fi
+  if (( age > PRESSURE_STALE_SECS )); then
+    plevel=slow preason="the level file was not updated for ${age} s, so slow until ${PRESSURE_STALE_SLOW_SECS} s"
+    return 0
+  fi
+  plevel=$l
+  [[ $line =~ reason=\"([^\"]*)\" ]] && preason=${BASH_REMATCH[1]:0:160}
+  return 0
+}
+
 # The critical-first switch ($CRITF, see the header). Sets cf_on (1 while the
 # file exists and its expires= time, if any, has not come), cf_slots
 # (noncrit_slots=, default 1) and cf_reserve (reserve_gib=, default 12).
@@ -1694,7 +1821,7 @@ critical_first_on() {
 # Logs the budget decision when it, its reason kind or the actual outcome
 # changes. $1 is what actually happened: wait or start.
 log_decision() {
-  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}" since=
+  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}|$plevel" since=
   if [[ $dec == start ]]; then
     [[ -n $would_since ]] || would_since=$EPOCHSECONDS
   else
@@ -1704,13 +1831,13 @@ log_decision() {
   last_log=$k
   [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
   [[ $dec == start && $why == aged:* ]] && since+=" aged=1"
-  log_line "decision=$dec reason=\"$why\" cap=${capinfo:--} actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
+  log_line "decision=$dec reason=\"$why\" cap=${capinfo:--} pressure=$plevel actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
 }
 
 # Logs a refusal as decision=refuse, then exits. $1 is the reason, $2 the
 # exit code (default 75; 77 for the --wait-timeout).
 refuse() {
-  log_line "decision=refuse reason=\"$1\" waited_s=$(( EPOCHSECONDS - queued_ts )) stuck_s=${stuck:-0} rank=${pos:-0} prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
+  log_line "decision=refuse reason=\"$1\" pressure=$plevel waited_s=$(( EPOCHSECONDS - queued_ts )) stuck_s=${stuck:-0} rank=${pos:-0} prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
   exit "${2:-75}"
 }
 
@@ -2036,7 +2163,7 @@ append_history() {
   local capb=NA highb=NA
   (( peak > 0 )) && pk=$peak
   if [[ -n ${cap_high:-} ]]; then
-    capb=$(( (cap_high + 2) * 1073741824 )) highb=$(( cap_high * 1073741824 ))
+    capb=$(( ${cap_max:-$(( cap_high + 2 ))} * 1073741824 )) highb=$(( cap_high * 1073741824 ))
     if (( peak * 100 >= highb * 98 )); then
       if [[ $cls == app-run ]]; then
         say "warning: this app run's memory reached its ${cap_high}G MemoryHigh and was held there; HEAVY_BUILD_APP_MEM_HIGH_GIB sets that cap"
@@ -2195,6 +2322,11 @@ else
         start_ts=$EPOCHSECONDS
         [[ $why == aged:* ]] && state_prio=$PRIO:aged
         write_state 0 - 0   # our reservation, written while we hold the mutex
+        # The start of a normal or low build, for the one-per-120-s rule at
+        # pressure level slow. Written under the mutex.
+        if [[ $PRIO != high && $PRIO != critical ]]; then
+          printf '%s\n' "$EPOCHSECONDS" > "$NCSTART.$$" && mv -f -- "$NCSTART.$$" "$NCSTART"
+        fi
         rm -f -- "$ticket"
         started=1
       fi
@@ -2215,7 +2347,7 @@ else
         if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
           why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
         elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then
-          why="swap is near the systemd-oomd limit (${room} GiB left before 90%, need ${MIN_SWAP_ROOM_GIB})"
+          why="swap is nearly full (${room} GiB left before 90% of swap is used, need ${MIN_SWAP_ROOM_GIB})"
         elif try_slot; then
           orphans=$(orphan_scopes | wc -l)
           if (( orphans == 0 || orphans <= $(other_free_slots) )); then
@@ -2282,7 +2414,14 @@ cap_high=$(( (10#$mem10 * 125 + 999) / 1000 ))
 (( cap_high > 22 )) && cap_high=22
 # An app run gets a fixed MemoryHigh (HEAVY_BUILD_APP_MEM_HIGH_GIB, default 10).
 [[ $cls == app-run ]] && cap_high=$APP_MEM_HIGH_GIB
-props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="$(( cap_high + 2 ))G" -p MemorySwapMax=2G -p OOMPolicy=kill -p TimeoutStopSec=3s)
+# MemoryMax is twice MemoryHigh, at most what builds.slice allows (its
+# memory.max, whole GiB), and never under MemoryHigh. MemorySwapMax 8G.
+cap_max=$(( cap_high * 2 ))
+slice_max=
+read -r slice_max 2>/dev/null < "$BSLICE/memory.max"
+if [[ $slice_max =~ ^[0-9]+$ ]] && (( cap_max > slice_max / 1073741824 )); then cap_max=$(( slice_max / 1073741824 )); fi
+(( cap_max < cap_high )) && cap_max=$cap_high
+props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="${cap_max}G" -p MemorySwapMax=8G -p OOMPolicy=kill -p TimeoutStopSec=3s)
 [[ -n $TIMEOUT ]] && props+=(-p RuntimeMaxSec="$TIMEOUT")
 desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REASON}"
 

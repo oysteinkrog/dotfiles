@@ -531,10 +531,12 @@ classrows() { local i; for i in $(seq 1 20); do rows wine-run-tests "c$i" "$i" o
 out=$(est newkey wine-run-tests)
 check "sig: without a sig the class p90 still decides (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
 out=$(est newkey wine-run-tests sigA 1)
-check "sig: a filtered run with no sig history gets the class p75 (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
+check "sig: a filtered run with no sig history gets the class p90 (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
+out=$(WINE_FALLBACK_PCT=75 est newkey wine-run-tests sigA 1)
+check "sig: WINE_FALLBACK_PCT=75 gives the class p75 (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
 for i in 1 2 3 4; do rows wine-run-tests "a$i" 7 sigA; done
 out=$(est newkey wine-run-tests sigA 1)
-check "sig: under 5 sig runs falls back to the class p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
+check "sig: under 5 sig runs falls back to the class p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
 rows wine-run-tests a5 7 sigA
 out=$(est newkey wine-run-tests sigA 1)
 check "sig: 5 sig runs use their p90 (got '$out')" '[[ $out == "7.0 class-history,mem=sig-p90" ]]'
@@ -547,10 +549,10 @@ check "sig: a capped sig run counts as 1.25 x its MemoryHigh (got '$out')" '[[ $
 : > "$E/hist"; classrows
 rows wine-run-tests big 12 sigB
 out=$(est newkey wine-run-tests sigB 1)
-check "sig: under 5 sig runs, a sig peak under the class p75 keeps the p75 (got '$out')" '[[ $out == "15.0 class-history,mem=class-p75" ]]'
+check "sig: under 5 sig runs, a sig peak under the class p90 keeps the p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
 rows wine-run-tests big 21 sigB
 out=$(est newkey wine-run-tests sigB 1)
-check "sig: under 5 sig runs, the highest sig peak wins when over the p75 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
+check "sig: under 5 sig runs, the highest sig peak wins when over the p90 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
 out=$(est big wine-run-tests)
 check "sig: a full-suite run keeps the key peak over the class p90 (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
 out=$(est big wine-run-tests sigB 0)
@@ -699,8 +701,8 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
     eval "$(sed -n "/^ADMIT_AWK='/,/^}'\$/p" "$HB")"
     awk -v now=1000000 -v me="$me" -v cpuquiet=999 -v cpuhold=30 -v meminfo="${ADM_MEMINFO:-$A/meminfo}" \
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
-      -v slicemax="$A/none" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="$A/none" \
-      -v apppsifile="$A/none" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
+      -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
+      -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
@@ -770,6 +772,95 @@ check "cpu pressure: 80% is over the 75% limit, so it waits (got '$out')" '[[ $o
 out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CPUPSI=$A/cpupsi70 ADM_MAXCPUPSI=60 adm 0000000999000000000-1-n 0 1 12)
 check "cpu pressure: a limit of 60% holds a build at 70% (got '$out')" '[[ $out == wait\|cpu-pressure:* ]]'
 
+# Interactive gate: claude.slice and session.slice memory pressure, full
+# avg10. some avg10 and app.slice no longer count.
+ipsi() { printf 'some avg10=%s avg60=0.00 avg300=0.00 total=1\nfull avg10=%s avg60=0.00 avg300=0.00 total=1\n' "$2" "$3" > "$A/$1"; }
+ipsi psi-full6 6.00 6.00
+ipsi psi-some20 20.00 0.50
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CLAUDEPSI=$A/psi-full6 adm 0000000999000000000-1-n 0 1 12)
+check "interactive: claude.slice full 6% holds builds (got '$out')" '[[ $out == "wait|interactive: claude.slice memory pressure (full) 6.0%, the limit is 5%|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_SESSIONPSI=$A/psi-full6 adm 0000000999000000000-1-n 0 1 12)
+check "interactive: session.slice full 6% holds builds (got '$out')" '[[ $out == "wait|interactive: session.slice memory pressure (full) 6.0%, the limit is 5%|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CLAUDEPSI=$A/psi-some20 ADM_SESSIONPSI=$A/psi-some20 adm 0000000999000000000-1-n 0 1 12)
+check "interactive: some 20% with full 0.5% no longer holds builds (got '$out')" '[[ $out == start\|fits:* ]]'
+check "interactive: the admission rule does not read app.slice any more" '! grep -q "apppsi\|app\.slice/memory\.pressure" "$HB"'
+
+# Pressure level from pressure-coordinator (ADM_PLEVEL).
+RUN_NEW='R u3 999950 4 2 1000600 4294967296 - 0 normal -'
+RUN_NEWC='R u4 999950 4 2 1000600 4294967296 - 0 critical -'
+W_N2='W 0000000999000000000-4-m 999000 normal 4 2 600 -'
+for lv in none stale normal; do
+  out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_PLEVEL=$lv adm 0000000999000000000-1-n 0 1 12)
+  check "pressure $lv: a normal build starts as before (got '$out')" '[[ $out == start\|fits:* ]]'
+done
+out=$(printf '%s\n' "$W_N" | ADM_PLEVEL=pause ADM_PREASON="memory full avg10 6.1%" adm 0000000999000000000-1-n 0 1 12)
+check "pressure pause: a normal build waits, says why, clock held (got '$out')" '[[ $out == "wait|pressure: level pause, only high and critical builds start (memory full avg10 6.1%)|1" ]]'
+out=$(printf '%s\n' "$W_L" | ADM_PLEVEL=pause adm 0000000999000000000-1-n 0 1 12)
+check "pressure pause: a low build waits (got '$out')" '[[ $out == wait\|pressure:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_C" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "pressure pause: a critical build that passes the memory test starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_H" | ADM_PLEVEL=pause adm 0000000999000000000-3-h 0 1 12)
+check "pressure pause: a high build that passes the memory test starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_36C" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "pressure pause: a critical build that fails the memory test waits for memory (got '$out')" '[[ $out == wait\|memory:* ]]'
+out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -' "$W_C" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "pressure pause: an aged normal build ahead in line waits but does not head it, so the critical one starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -' "$W_C" | ADM_PLEVEL=pause adm 0000000990000000000-1-n 0 1 12)
+check "pressure pause: that aged normal build waits for pressure (got '$out')" '[[ $out == wait\|pressure:* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_PREASON="memory full avg10 2.4%" adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: a normal build waits while the last normal start was 50 s ago, clock held (got '$out')" '[[ $out == "wait|pressure: level slow, one new normal or low build per 120 s; the last one started 50 s ago (memory full avg10 2.4%)|1" ]]'
+out=$(printf '%s\n' "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999990 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: a build that started 10 s ago and already ended still spaces the next one (got '$out')" '[[ $out == wait\|pressure:\ level\ slow* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=999000 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: a normal build starts when the last normal start was 1000 s ago (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_PLEVEL=slow ADM_LASTNC=1000500 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: a last start in the future is ignored (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_NEWC" "$W_N" | ADM_PLEVEL=slow adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: a critical build started 50 s ago does not hold a normal one (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_NEW" "$W_C" | ADM_PLEVEL=slow ADM_LASTNC=999990 adm 0000000999000000000-2-c 0 1 12)
+check "pressure slow: a critical build is not held (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$W_N" "$W_N2" | ADM_PLEVEL=slow adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow: of two normal waiters the first starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$W_N" "$W_N2" | ADM_PLEVEL=slow adm 0000000999000000000-4-m 0 1 12)
+check "pressure slow: the second waits for the first (got '$out')" '[[ $out == wait\|pressure:\ level\ slow* ]]'
+
+# Pressure level and the first build: no solo shortcut at slow or pause.
+W_22C='W 0000000999000000000-2-c 999000 critical 22 2 600 -'
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 10 * 1048576 )) > "$A/meminfo10"
+out=$(printf '%s\n' "$W_22C" | ADM_MEMINFO=$A/meminfo10 adm 0000000999000000000-2-c 0 1 12)
+check "first build, level none: 10 GiB available is enough for a 22 GiB build (got '$out')" '[[ $out == start\|fits:* ]]'
+for lv in slow pause; do
+  out=$(printf '%s\n' "$W_22C" | ADM_MEMINFO=$A/meminfo10 ADM_PLEVEL=$lv adm 0000000999000000000-2-c 0 1 12)
+  check "first build, level $lv: a 22 GiB critical build with 10 GiB available waits for memory (got '$out')" '[[ $out == wait\|memory:\ needs\ 22.0* ]]'
+done
+printf '%s\n' $(( 16 * 1073741824 )) > "$A/slicemax16"
+out=$(printf '%s\n' "$W_22C" | ADM_SLICEMAX=$A/slicemax16 ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "first build, level pause: the builds.slice cap applies too (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 6 * 1048576 )) > "$A/meminfo6"
+out=$(printf '%s\n' "$W_C" | ADM_MEMINFO=$A/meminfo6 adm 0000000999000000000-2-c 0 1 12)
+check "first build, level none: under the solo 8 GiB it still waits (got '$out')" '[[ $out == "wait|memory: 6.0 GiB available, the first build needs 8|0" ]]'
+
+# A pressure-held waiter keeps no writer preference.
+W_AGED_T='W 0000000990000000000-1-n 990000 normal 36 2 600 tree:/repo'
+W_C_SUF='W 0000000999000000000-2-c 999000 critical 4 2 600 tree:/repo#s1'
+out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_C_SUF" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "pressure pause: a held normal waiter on tree:/repo does not block a critical tree:/repo#s1 by writer preference (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_C_SUF" | adm 0000000999000000000-2-c 0 1 12)
+check "pressure none: the writer preference still holds the suffixed build (got '$out')" '[[ $out == wait\|writer:* ]]'
+
+# The give-up clock does not run while the pressure level holds a build,
+# even when the interactive or swap gate is the reason shown.
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_PLEVEL=pause ADM_CLAUDEPSI=$A/psi-full6 adm 0000000999000000000-1-n 0 1 12)
+check "pressure pause + interactive gate: reason interactive, clock held (got '$out')" '[[ $out == wait\|interactive:*\|1 ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_CLAUDEPSI=$A/psi-full6 adm 0000000999000000000-1-n 0 1 12)
+check "pressure none + interactive gate: the clock runs (got '$out')" '[[ $out == wait\|interactive:*\|0 ]]'
+printf 'MemAvailable: %d kB\nSwapTotal: %d kB\nSwapFree: %d kB\n' $(( 40 * 1048576 )) $(( 100 * 1048576 )) $(( 12 * 1048576 )) > "$A/meminfo-lowswap"
+out=$(printf '%s\n' "$RUN_N" "$W_N" | ADM_MEMINFO=$A/meminfo-lowswap ADM_PLEVEL=slow ADM_LASTNC=999990 adm 0000000999000000000-1-n 0 1 12)
+check "pressure slow + swap gate: reason swap, says 90% of swap, clock held (got '$out')" '[[ $out == "wait|swap: 2.0 GiB left before 90% of swap is used, need 10|1" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_C" | ADM_MEMINFO=$A/meminfo-lowswap ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
+check "pressure pause + swap gate: a critical build is not pressure-held, so its clock runs (got '$out')" '[[ $out == wait\|swap:*\|0 ]]'
+check "gate text: no oomd limit left in heavy-build" '! grep -q "oomd limit" "$HB"'
+
 # 9. Swap headroom. 20 GiB available, a normal build of 16 GiB next to a
 # running one: 20 - 16 = 4 is under the 6 GiB reserve without headroom.
 printf 'MemAvailable: %d kB\nSwapTotal: %d kB\nSwapFree: %d kB\n' $(( 20 * 1048576 )) $(( 96 * 1048576 )) $(( 64 * 1048576 )) > "$A/meminfo-sw"
@@ -779,6 +870,10 @@ W_16='W 0000000999000000000-1-n 999000 normal 16 2 600 -'
 mpsi 0.00 0.12
 out=$(printf '%s\n' "$RUN_N" "$W_16" | ADM_MEMINFO=$A/meminfo-sw ADM_MEMPSI=$A/mempsi adm 0000000999000000000-1-n 0 1 12)
 check "swap headroom: low pressure adds min(25% of 64, 8) = 8 GiB, so it starts and says so (got '$out')" '[[ $out == "start|fits: next in order (+8.0 swap headroom)|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_16" | ADM_MEMINFO=$A/meminfo-sw ADM_MEMPSI=$A/mempsi ADM_PLEVEL=slow adm 0000000999000000000-1-n 0 1 12)
+check "swap headroom: none at pressure level slow (got '$out')" '[[ $out == wait\|memory:* && $out != *headroom* ]]'
+out=$(printf '%s\n' "$RUN_N" "${W_16/normal/critical}" | ADM_MEMINFO=$A/meminfo-sw ADM_MEMPSI=$A/mempsi ADM_PLEVEL=pause adm 0000000999000000000-1-n 0 1 12)
+check "swap headroom: none for a critical build at pause either (got '$out')" '[[ $out == wait\|memory:* && $out != *headroom* ]]'
 out=$(printf '%s\n' "$RUN_N" "$W_16" | ADM_MEMINFO=$A/meminfo-sw16 ADM_MEMPSI=$A/mempsi adm 0000000999000000000-1-n 0 1 12)
 check "swap headroom: 25% of 16 GiB SwapFree adds 4 GiB (got '$out')" '[[ $out == "start|fits: next in order (+4.0 swap headroom)|0" ]]'
 W_23='W 0000000999000000000-1-n 999000 normal 23 2 600 -'
@@ -815,6 +910,10 @@ rconf() {  # var... ; prints their values after read_conf
 rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_SWAP_HEADROOM_PCT HEAVY_BUILD_SWAP_HEADROOM_GIB; rconf SWAP_HEADROOM_PCT SWAP_HEADROOM_GIB)
 check "settings: swap headroom defaults are 25% and 8 GiB (got '$out')" '[[ $out == "25 8 " ]]'
+out=$(unset HEAVY_BUILD_WINE_FALLBACK_PCT; rconf WINE_FALLBACK_PCT)
+check "settings: the Wine fallback percentile defaults to 90 (got '$out')" '[[ $out == "90 " ]]'
+out=$(HEAVY_BUILD_WINE_FALLBACK_PCT=150 rconf WINE_FALLBACK_PCT)
+check "settings: a Wine fallback percentile over 100 goes back to 90 (got '$out')" '[[ $out == "90 " ]]'
 printf 'HEAVY_BUILD_SWAP_HEADROOM_PCT=10\nHEAVY_BUILD_SWAP_HEADROOM_GIB=4\n' > "$A/hb.conf"
 out=$(HEAVY_BUILD_SWAP_HEADROOM_GIB=0 rconf SWAP_HEADROOM_PCT SWAP_HEADROOM_GIB)
 check "settings: the file sets them and the environment wins (got '$out')" '[[ $out == "10 0 " ]]'
@@ -847,7 +946,123 @@ printf 'expires=%s kpp sprint\n' "$(( EPOCHSECONDS - 60 ))" > "$A/cf"
 out=$(cfo)
 check "critical-first: an expired switch is off and logged once (got '$out')" '[[ $out == "1 0 1 12 1" ]]'
 check "critical-first: the switch file is left in place" '[[ -e $A/cf ]]'
+
+# pressure_level: reads the coordinator's level file and pressure hold.
+plv() {  # prints "plevel|preason"
+  (
+    PHOLD=$A/phold PLEVEL_FILE=$A/plevel PRESSURE=${PRESSURE:-1} PRESSURE_STALE_SECS=30 PRESSURE_STALE_SLOW_SECS=600 PHOLD_MAX_SECS=600
+    eval "$(sed -n '/^pressure_level()/,/^}/p' "$HB")"
+    pressure_level
+    echo "$plevel|$preason"
+  )
+}
+rm -f "$A/phold" "$A/plevel"
+out=$(plv)
+check "pressure_level: no files is none (got '$out')" '[[ $out == "none|" ]]'
+echo "level=slow since=$(( EPOCHSECONDS - 100 )) updated=$(( EPOCHSECONDS - 3 )) reason=\"memory full avg10 2.4%\" top=claude-1.scope:3.0%" > "$A/plevel"
+out=$(plv)
+check "pressure_level: a fresh level file gives its level and reason (got '$out')" '[[ $out == "slow|memory full avg10 2.4%" ]]'
+out=$(PRESSURE=0 plv)
+check "pressure_level: HEAVY_BUILD_PRESSURE=0 turns it off (got '$out')" '[[ $out == "none|" ]]'
+echo "level=pause since=1 updated=$(( EPOCHSECONDS - 31 )) reason=\"x\" top=-" > "$A/plevel"
+out=$(plv)
+check "pressure_level: a level file 31 s old is slow, and says why (got '$out')" '[[ $out == "slow|the level file was not updated for 31 s, so slow until 600 s" ]]'
+echo "level=normal since=1 updated=$(( EPOCHSECONDS - 400 )) reason=\"x\" top=-" > "$A/plevel"
+out=$(plv)
+check "pressure_level: a normal level file 400 s old is slow too (got '$out')" '[[ $out == slow\|* ]]'
+echo "level=pause since=1 updated=$(( EPOCHSECONDS - 601 )) reason=\"x\" top=-" > "$A/plevel"
+out=$(plv)
+check "pressure_level: a level file 601 s old is stale (got '$out')" '[[ $out == "stale|" ]]'
+echo "level=pause since=1 updated=$(( EPOCHSECONDS + 60 )) reason=\"x\" top=-" > "$A/plevel"
+out=$(plv)
+check "pressure_level: updated= 60 s in the future is stale (got '$out')" '[[ $out == "stale|" ]]'
+echo "garbage" > "$A/plevel"
+out=$(plv)
+check "pressure_level: a file it cannot parse is none (got '$out')" '[[ $out == "none|" ]]'
+echo "level=normal since=1 updated=$EPOCHSECONDS reason=\"all signals low\" top=-" > "$A/plevel"
+echo "expires=$(( EPOCHSECONDS + 30 )) pressure-coordinator: level pause (memory full avg10 6.1%)" > "$A/phold"
+out=$(plv)
+check "pressure_level: a pressure hold in force is pause, with its text (got '$out')" '[[ $out == "pause|pressure-coordinator: level pause (memory full avg10 6.1%)" ]]'
+echo "expires=$(( EPOCHSECONDS - 1 )) pressure-coordinator: level pause (old)" > "$A/phold"
+out=$(plv)
+check "pressure_level: an expired pressure hold is ignored (got '$out')" '[[ $out == "normal|all signals low" ]]'
+: > "$A/phold"
+out=$(plv)
+check "pressure_level: an empty pressure hold is no hold (got '$out')" '[[ $out == "normal|all signals low" ]]'
+echo "pressure-coordinator: level pause (no expiry)" > "$A/phold"
+out=$(plv)
+check "pressure_level: a pressure hold without expires= is no hold (got '$out')" '[[ $out == "normal|all signals low" ]]'
+echo "expires=$(( EPOCHSECONDS + 3600 )) far away" > "$A/phold"
+out=$(plv)
+check "pressure_level: a pressure hold 3600 s ahead is not trusted (got '$out')" '[[ $out == "normal|all signals low" ]]'
+rm -f "$A/phold"; mkdir "$A/phold"
+out=$(plv 2>&1); rc=$?
+check "pressure_level: a hold that cannot be read (gone between -e and read) is no hold, no crash under set -u (rc $rc, got '$out')" '(( rc == 0 )) && [[ $out == "normal|all signals low" ]]'
+rmdir "$A/phold"
+out=$(
+  set -u
+  PHOLD=$A/phold PLEVEL_FILE=$A/plevel PRESSURE=1 PRESSURE_STALE_SECS=30 PRESSURE_STALE_SLOW_SECS=600 PHOLD_MAX_SECS=600
+  eval "$(sed -n '/^pressure_level()/,/^}/p' "$HB")"
+  # The hold file is there for -e and gone for read: the race from the review.
+  eval "$(declare -f pressure_level | sed 's|\[\[ -e \$PHOLD \]\]|{ [[ -e $PHOLD ]] \&\& rm -f -- "$PHOLD"; }|')"
+  echo "expires=$(( EPOCHSECONDS + 30 )) x" > "$PHOLD"
+  pressure_level; echo "$plevel|$preason"
+) 2>&1; rc=$?
+check "pressure_level: the hold removed between -e and read is no hold (rc $rc, got '$out')" '(( rc == 0 )) && [[ $out == "normal|all signals low" ]]'
+rm -f "$A/phold" "$A/plevel"
+out=$(unset HEAVY_BUILD_PRESSURE HEAVY_BUILD_PRESSURE_STALE_SECS; rconf PRESSURE PRESSURE_STALE_SECS)
+check "settings: the pressure level is on, stale after 30 s, by default (got '$out')" '[[ $out == "1 30 " ]]'
+out=$(unset HEAVY_BUILD_PRESSURE_STALE_SLOW_SECS; rconf PRESSURE_STALE_SLOW_SECS)
+check "settings: a stale level counts as slow for 600 s by default (got '$out')" '[[ $out == "600 " ]]'
 rm -rf -- "$A"
+
+# sweep_stale: a scope whose heavy-build is gone is stopped only when it
+# holds nothing but Wine leftovers. Anything else stays (event=sweep-skip),
+# however idle. A scope whose heavy-build runs is never touched.
+SW=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$SW; : > "$T/out"
+swscope() {  # unit "pid:comm ..." ; makes a populated scope with those processes
+  local d=$SW/bs/$1.scope pc
+  rm -rf -- "$d"; mkdir -p "$d"; echo "populated 1" > "$d/cgroup.events"; : > "$d/cgroup.procs"
+  for pc in $2; do
+    echo "${pc%%:*}" >> "$d/cgroup.procs"
+    mkdir -p "$SW/proc/${pc%%:*}"; echo "${pc#*:}" > "$SW/proc/${pc%%:*}/comm"
+  done
+}
+swp() {  # runs sweep_stale; prints its log lines and systemctl calls
+  (
+    BSLICE=$SW/bs JDIR=$SW/jobs CPUDIR=$SW/cpu PROC=$SW/proc
+    mkdir -p "$JDIR" "$CPUDIR"
+    eval "$(grep '^WINE_LEFTOVERS=' "$HB")"
+    eval "$(sed -n '/^scope_procs()/,/^}/p;/^only_wine_leftovers()/,/^}/p;/^hb_alive()/,/^}/p;/^proc_start()/,/^}/p;/^sweep_stale()/,/^}/p' "$HB")"
+    log_line() { echo "LOG $*"; }
+    systemctl() { echo "CALL $*"; }
+    sweep_stale
+  )
+}
+dead=heavy-build-999999991-1 alive=heavy-build-$$-1
+mkdir -p "$SW/jobs"
+echo "$dead 999999991 12345" > "$SW/jobs/$dead"
+swscope "$dead" "5001:wineserver 5002:winedevice.exe"
+out=$(swp)
+check "sweep: a dead heavy-build's scope with only Wine leftovers is stopped (got '$out')" '[[ $out == *"event=sweep unit=$dead reason=wine-leftovers"* && $out == *"CALL --user kill --signal=KILL $dead.scope"* && $out == *"CALL --user stop $dead.scope"* ]]'
+echo "$dead 999999991 12345" > "$SW/jobs/$dead"
+swscope "$dead" "5003:cargo"
+out=$(swp)
+check "sweep: a dead heavy-build's scope with an idle cargo is not stopped, logged sweep-skip (got '$out')" '[[ $out == *"event=sweep-skip unit=$dead"* && $out != *CALL* ]]'
+out=$(swp)
+check "sweep: the sweep-skip is logged once (got '$out')" '[[ -z $out ]]'
+rm -f -- "$SW/cpu/$dead.noted"
+swscope "$dead" "5001:wineserver 5004:dotnet"
+out=$(swp)
+check "sweep: Wine leftovers next to a real process are not stopped (got '$out')" '[[ $out == *"event=sweep-skip"* && $out != *CALL* ]]'
+rm -rf -- "$SW/bs/$dead.scope"
+echo "$alive $$ $(awk '{sub(/.*\) /, ""); split($0, a, " "); print a[20]}' /proc/$$/stat)" > "$SW/jobs/$alive"
+swscope "$alive" "5001:wineserver"
+out=$(swp)
+check "sweep: a scope whose heavy-build still runs is never touched (got '$out')" '[[ -z $out ]]'
+check "sweep: no idle-CPU stop rule left in sweep_stale" '! sed -n "/^sweep_stale()/,/^}/p" "$HB" | grep -q "why=idle\|cpu_rate"'
+rm -rf -- "$SW"
 
 # append_history trims to HISTORY_LINES (default 20000, kept at 10% over).
 H=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
@@ -993,7 +1208,7 @@ check "ready file: the stale file is replaced by one that names the scope" 'grep
 check "ready file: removed when heavy-build exits" '[[ ! -e $T/ready ]]'
 u=$(sed -n 's/^unit=//p' "$T/ready.seen")
 check "ready file: the command sees HEAVY_BUILD_UNIT=$u and no HEAVY_BUILD_READY_FILE or HEAVY_BUILD_CLASS" 'grep -qx "HEAVY_BUILD_UNIT=$u" "$T/ready.env" && ! grep -q "^HEAVY_BUILD_READY_FILE=\|^HEAVY_BUILD_CLASS=" "$T/ready.env"'
-check "app scope: MemoryHigh=10G, MemoryMax=12G, no RuntimeMaxSec" 'grep -q "MemoryHigh=10G -p MemoryMax=12G" "$T/calls" && ! grep -q RuntimeMaxSec "$T/calls"'
+check "app scope: MemoryHigh=10G, MemoryMax=20G, MemorySwapMax=8G, no RuntimeMaxSec" 'grep -q "MemoryHigh=10G -p MemoryMax=20G -p MemorySwapMax=8G" "$T/calls" && ! grep -q RuntimeMaxSec "$T/calls"'
 check "app scope: the whole scope is stopped when the command ends" 'grep -qx "systemctl --user stop $u" "$T/calls"'
 check "app history: class app-run, exit 143, reason stopped, MemoryHigh 10 GiB" 'awk -F"\t" -v g=$G '\''$2 == "app-run" && $7 == 143 && $8 == "stopped" && $10 == 10 * g'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
 teardown2
@@ -1017,7 +1232,32 @@ printf 'HEAVY_BUILD_APP_MEM_HIGH_GIB=14\n' > "$T/config/heavy-build.conf"
 mkdir -p "$T/w2/tools/wine"; printf '#!/bin/sh\nexit 0\n' > "$T/w2/tools/wine/run-mc.sh"; chmod +x "$T/w2/tools/wine/run-mc.sh"
 hbe -- "$T/w2/tools/wine/run-mc.sh" a
 wait "$hbpid"; rc=$?
-check "app scope: run-mc.sh is detected and HEAVY_BUILD_APP_MEM_HIGH_GIB=14 gives MemoryHigh=14G (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=14G -p MemoryMax=16G" "$T/calls" && awk -F"\t" '\''$2 == "app-run" && $7 == 0 && $8 == "ok"'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+check "app scope: run-mc.sh is detected and HEAVY_BUILD_APP_MEM_HIGH_GIB=14 gives MemoryHigh=14G (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=14G -p MemoryMax=28G" "$T/calls" && awk -F"\t" '\''$2 == "app-run" && $7 == 0 && $8 == "ok"'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+teardown2
+
+# MemoryMax is twice MemoryHigh but never over builds.slice memory.max.
+setup2
+printf 'HEAVY_BUILD_APP_MEM_HIGH_GIB=30\n' > "$T/config/heavy-build.conf"
+mkdir -p "$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice"
+echo $(( 42 * G )) > "$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice/memory.max"
+mkdir -p "$T/w2/tools/wine"; printf '#!/bin/sh\nexit 0\n' > "$T/w2/tools/wine/run-mc.sh"; chmod +x "$T/w2/tools/wine/run-mc.sh"
+hbe -- "$T/w2/tools/wine/run-mc.sh" a
+wait "$hbpid"; rc=$?
+check "scope caps: MemoryHigh 30G gives MemoryMax 42G, the builds.slice memory.max (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=30G -p MemoryMax=42G -p MemorySwapMax=8G" "$T/calls"'
+check "scope caps: history column 9 is the real MemoryMax, 42 GiB" 'awk -F"\t" -v g=$G '\''$9 == 42 * g'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+teardown2
+
+# Live mode: a normal start records its time for the slow rule; a high one does not.
+setup2
+printf 'HEAVY_BUILD_MODE=live\n' > "$T/config/heavy-build.conf"
+hbe -- true
+wait "$hbpid"; rc=$?
+v=$(cat "$T/run/heavy-build.last-normal-start" 2>/dev/null)
+check "live: a normal start writes heavy-build.last-normal-start (rc $rc, got '$v')" '(( rc == 0 )) && [[ $v =~ ^[0-9]+$ ]] && (( EPOCHSECONDS - v < 30 ))'
+rm -f "$T/run/heavy-build.last-normal-start"
+hbe HEAVY_BUILD_PRIORITY=high HEAVY_BUILD_REASON=test -- true
+wait "$hbpid"; rc=$?
+check "live: a high start does not write it (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/run/heavy-build.last-normal-start ]]'
 teardown2
 
 # A build's ready file works the same, and a build keeps its own caps.
@@ -1037,6 +1277,33 @@ check "wait timeout: exit 77 during a hold (got $rc)" '(( rc == 77 ))'
 check "wait timeout: within 10 s" '(( SECONDS - start <= 10 ))'
 check "wait timeout: logged as decision=refuse reason=wait-timeout" 'grep -q "decision=refuse reason=\"wait-timeout: not let in within 3s" "$T/state/heavy-build/shadow.log"'
 check "wait timeout: says exit 77, nothing ran, and the next step" 'grep -q "heavy-build: exit 77, not run: --wait-timeout 3s ran out.*Nothing ran. Try again later, or give a longer --wait-timeout." "$T/out"'
+teardown
+
+# End to end: the level goes into each decision line as pressure=<level>,
+# and the interactive gate reads claude.slice from the cgroup tree.
+setup
+mkdir -p "$T/state/pressure"
+echo "level=slow since=1 updated=$EPOCHSECONDS reason=\"test slow\" top=-" > "$T/state/pressure/level"
+run_hb
+wait "$hbpid"
+check "log: decision lines say pressure=slow" 'grep -q "decision=wait .*pressure=slow " "$T/state/heavy-build/shadow.log"'
+check "log: the refuse line says pressure=slow" 'grep -q "decision=refuse .*pressure=slow " "$T/state/heavy-build/shadow.log"'
+teardown
+setup
+u=$T/cg/user.slice/user-$UID.slice/user@$UID.service
+mkdir -p "$u/app.slice" "$u/claude.slice"
+printf 'some avg10=90.00 avg60=0 avg300=0 total=1\nfull avg10=90.00 avg60=0 avg300=0 total=1\n' > "$u/app.slice/memory.pressure"
+run_hb
+wait "$hbpid"
+check "interactive: app.slice at 90% does not gate (budget rule)" '! grep -q "interactive:" "$T/state/heavy-build/shadow.log"'
+teardown
+setup
+u=$T/cg/user.slice/user-$UID.slice/user@$UID.service
+mkdir -p "$u/claude.slice"
+printf 'some avg10=9.00 avg60=0 avg300=0 total=1\nfull avg10=9.00 avg60=0 avg300=0 total=1\n' > "$u/claude.slice/memory.pressure"
+run_hb
+wait "$hbpid"
+check "interactive: claude.slice full 9% gates (budget rule)" 'grep -q "interactive: claude.slice memory pressure (full) 9.0%" "$T/state/heavy-build/shadow.log"'
 teardown
 
 # --help: no chained build in an example, no background-shell advice.
