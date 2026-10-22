@@ -1,6 +1,7 @@
 {
   "cleanupPeriodDays": 36500,
   "env": {
+    "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1",
     "USE_BUILTIN_RIPGREP": "0",
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
