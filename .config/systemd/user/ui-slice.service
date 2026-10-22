@@ -1,0 +1,21 @@
+[Unit]
+Description=Give desktop UI threads a 0.4 ms EEVDF slice (ui-slice)
+Documentation=file://%h/bin/ui-slice
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Every 5 s: SCHED_OTHER threads of plasmashell, Xwayland, kwin_wayland,
+# frankenterm-gui and Chrome's browser and GPU processes get a 0.4 ms slice.
+# Policy and nice stay as they are. Turn off with
+#   systemctl --user disable --now ui-slice.service && ~/bin/ui-slice --reset
+ExecStart=%h/bin/ui-slice --interval 5
+Restart=on-failure
+RestartSec=30
+SyslogIdentifier=ui-slice
+Slice=session.slice
+MemoryMax=64M
+
+[Install]
+WantedBy=graphical-session.target
