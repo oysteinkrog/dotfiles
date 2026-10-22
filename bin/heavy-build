@@ -31,9 +31,14 @@
 #
 # live mode: the budget rule decides. A waiting build may start when:
 # - fewer than HEAVY_BUILD_MAX_JOBS builds run (default 6);
-# - the cores charged to running builds plus its own estimate are at most
-#   HEAVY_BUILD_CPU_BUDGET (default 28). A running build is charged its
-#   estimate for 2 min, then what it used over the last 60 s;
+# - the cores in use plus its own estimate are at most HEAVY_BUILD_CPU_BUDGET
+#   (default 28). With HEAVY_BUILD_REAL_USE=1 (the default since 2026-10-22),
+#   cores in use is what builds.slice used over the last 30 to 120 s
+#   (HEAVY_BUILD_SLICE_CPU_SECS, default 30, sampled by every waiter into
+#   $XDG_RUNTIME_DIR/heavy-build.cpu/builds.slice.samples) plus the full
+#   estimate of each build in its first 2 min. Until enough samples exist,
+#   and with HEAVY_BUILD_REAL_USE=0, it is the old charge: a running build is
+#   charged its estimate for 2 min, then what it used over the last 60 s;
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
 #   (default 75), and has stayed at or under it for HEAVY_BUILD_CPU_PSI_SECS
 #   seconds (default 30), as sampled by waiters and running builds. Only
@@ -59,6 +64,19 @@
 #   2026-10-20 builds waited 3004 times for memory with memory pressure near
 #   0 and about 64 GiB of zram swap free. Either setting at 0 turns it off;
 # - the memory builds hold plus its estimate fits under the builds.slice cap.
+#   With HEAVY_BUILD_REAL_USE=1, builds hold what builds.slice uses now
+#   (memory.current) plus, for each young build, its estimate minus what it
+#   holds now. A build is young until it has run HEAVY_BUILD_YOUNG_MIN_SECS
+#   (default 120) or HEAVY_BUILD_YOUNG_PCT percent (default 70) of its
+#   expected wall time, whichever is longer, so a build that peaks late (a
+#   link step) stays charged its estimate for most of its run. With
+#   HEAVY_BUILD_REAL_USE=0, or when memory.current cannot be read, builds hold
+#   the larger of their estimate and their current memory, as before
+#   2026-10-22, when this rule kept builds waiting with 28.2 GiB charged and
+#   19.3 GiB really in use. A replay of 2026-10-22 09:06 to 16:00, with the
+#   reserve cut from 6 to 5 GiB, gave 450 starts against 409 and a mean wait
+#   of 23 min against 29; the lowest projected MemAvailable was 6.4 GiB
+#   against 6.3 (late-peak memory model, /var/tmp/claude/hb-replay/replay.py).
 #   The cap is the lower of builds.slice memory.max (MemoryMax) and
 #   memory.high (MemoryHigh); "max" means no limit. Both files are read again
 #   on every decision, so a `systemctl --user set-property builds.slice
@@ -540,6 +558,11 @@ read_conf() {
   setting HEAVY_BUILD_SLOW_FAST_GAP_SECS 30
   setting HEAVY_BUILD_SLOW_FAST_MIN_GIB 16
   setting HEAVY_BUILD_TC_PCT 50
+  setting HEAVY_BUILD_REAL_USE 1
+  setting HEAVY_BUILD_YOUNG_PCT 70
+  setting HEAVY_BUILD_YOUNG_MIN_SECS 120
+  setting HEAVY_BUILD_SLICE_CPU_SECS 30
+  (( SLICE_CPU_SECS >= 5 )) || SLICE_CPU_SECS=30
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
@@ -1357,6 +1380,39 @@ psi_watch() {
 
 # ---------------------------------------------------------------- budget rule
 
+# slice_cpu: sets slice_cores (builds.slice CPU use in cores, two decimals,
+# or empty) and slice_win (the seconds it was measured over). Samples
+# ("epoch_us usage_usec", one per line, at least 5 s apart) live in
+# $CPUDIR/builds.slice.samples, shared by every heavy-build, and are kept for
+# 4x HEAVY_BUILD_SLICE_CPU_SECS. The rate is taken from the oldest kept sample
+# that is at least SLICE_CPU_SECS old, so the window runs from SLICE_CPU_SECS
+# to 4x that. Written with a temp file and mv, so a reader never sees half a file.
+slice_cpu() {
+  local f=$CPUDIR/builds.slice.samples k v u= now t0 u0 keep=() base= last=0
+  slice_cores= slice_win=0
+  while read -r k v; do [[ $k == usage_usec ]] && { u=$v; break; }; done 2>/dev/null < "$BSLICE/cpu.stat"
+  [[ $u =~ ^[0-9]+$ ]] || return 0
+  now=$(now_us)
+  while read -r t0 u0; do
+    [[ $t0 =~ ^[0-9]+$ && $u0 =~ ^[0-9]+$ ]] || continue
+    (( t0 <= now && now - t0 <= SLICE_CPU_SECS * 4000000 && u0 <= u )) || continue
+    keep+=("$t0 $u0"); last=$t0
+    if [[ -z $base ]] && (( now - t0 >= SLICE_CPU_SECS * 1000000 )); then base="$t0 $u0"; fi
+  done 2>/dev/null < "$f"
+  if [[ -n $base ]]; then
+    read -r t0 u0 <<< "$base"
+    slice_win=$(( (now - t0) / 1000000 ))
+    v=$(( (u - u0) * 100 / (now - t0) ))
+    printf -v slice_cores '%d.%02d' $(( v / 100 )) $(( v % 100 ))
+  fi
+  if (( now - last >= 5000000 )); then
+    keep+=("$now $u")
+    mkdir -p "$CPUDIR" 2>/dev/null
+    printf '%s\n' "${keep[@]}" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
+  fi
+  return 0
+}
+
 # One line per running build. Own builds come from their state files
 # ($JDIR/<unit>: "unit pid pidstart start mem cores wall cur_bytes
 # cores60_milli stalled prio keys class"); a state file whose heavy-build is gone is
@@ -1499,13 +1555,25 @@ function writer(keys, o,   n, k, i, b, t) {
   for (i = 1; i <= n; i++) if ((b = index(k[i], "#")) > 0 && ((t = substr(k[i], 1, b - 1)) in wpos) && wpos[t] < o) return t
   return ""
 }
-function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls,   n, k, i, held, tc, cc) {
+# The real-use rule (realuse=1) also sums, per build, the memory still to
+# come while it is young (grow: its estimate minus what it holds now, until it
+# has run youngmin seconds or youngpct percent of its expected wall time,
+# whichever is longer) and the cores of builds in their first warm seconds
+# (cy: the estimate). Y_held and Y_cpu go on top of what builds.slice really
+# uses. fgrow is memory still to come for a scope with no heavy-build.
+function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy) {
   nr++
+  grow = 0; cy = 0
   if (stalled == 1) { held = cur; tc = 0; cc = 0 }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
     cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
+    if (start > 0 && now - start < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur)
+    if (start > 0 && (c60 == "-" || now - start < warm)) cy = cores
   }
+  grow += fgrow
+  Y_held += grow; Y_cpu += cy
+  if (realuse && slicecur >= 0) held = cur + grow
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_cur[nr] = cur; r_high[nr] = (prio == "high")
   T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high"); T_aged += (prio ~ /:aged$/)
@@ -1520,11 +1588,17 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   if (nrun <= 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
-  if (cpu + w_cores[i] > cpubudget) return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
+  if (cpu + w_cores[i] > cpubudget) {
+    if (cpureal) return sprintf("cores: needs %.1f, %.1f of %d in use (builds.slice used %.1f over the last %d s, plus %.1f for builds that started recently)", w_cores[i], cpu, cpubudget, sliceavg, sliceavgwin, cpu - sliceavg)
+    return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
+  }
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
   if (av + swx - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, reserve %d", w_mem[i], av, swxnote, tc, reserve)
-  if (held + w_mem[i] > slicecap) return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
+  if (held + w_mem[i] > slicecap) {
+    if (memreal) return sprintf("slice-cap: needs %.1f GiB; builds.slice uses %.1f GiB and running builds may take %.1f more, of the %.1f GiB cap (%s)", w_mem[i], slicecur, held - slicecur, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
+    return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
+  }
   return ""
 }
 # The critical-first switch (cf=1): a normal or low waiter also needs a free
@@ -1536,7 +1610,7 @@ function cf_why(i, nnc, tc, av) {
   return ""
 }
 function pick(i) {
-  addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct, w_cls[i]); picked[i] = 1
+  addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct, w_cls[i], 0); picked[i] = 1
   if (w_pr[i] != "high" && w_pr[i] != "critical") lastnc = now
 }
 # When enough running builds should have ended for waiter i to fit.
@@ -1567,6 +1641,12 @@ BEGIN {
   if ((getline l < slicehigh) > 0 && l ~ /^[0-9]+$/ && l / 1073741824 < slicecap) { slicecap = l / 1073741824; capsrc = "high" }
   close(slicehigh)
   capinfo = (capsrc == "none") ? "none" : sprintf("%.1fG(%s)", slicecap, capsrc)
+  # What builds.slice really holds now (memory.current), or -1.
+  slicecur = -1
+  if (slicecurfile != "" && (getline l < slicecurfile) > 0 && l ~ /^[0-9]+$/) slicecur = l / 1073741824
+  if (slicecurfile != "") close(slicecurfile)
+  if (sliceavg == "") sliceavg = -1
+  sliceavg += 0
   # Swap headroom: while system memory pressure (some avg10 and avg60) is
   # under 1.0%, swpct percent of SwapFree, at most swcap GiB, counts as
   # available for the memory and critical-first checks. Never when the
@@ -1580,7 +1660,7 @@ BEGIN {
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
   claudepsi = psifull10(claudepsifile); sessionpsi = psifull10(sessionpsifile)
 }
-$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct, $12) }
+$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct, $12, 0) }
 # A scope without a live heavy-build: charged its current memory plus 2 GiB still to come.
 # An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
@@ -1591,7 +1671,7 @@ $1 == "F" && $6 == 1 {
 }
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
-  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-")
+  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", 2)
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 $1 == "W" {
@@ -1601,6 +1681,13 @@ $1 == "W" {
   w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8; w_cls[nw] = $9
 }
 END {
+  # The real-use rule: the slice-cap and cores checks start from what
+  # builds.slice uses now (memory.current, and its CPU use over the last
+  # sliceavgwin seconds) plus what young builds are still expected to take,
+  # instead of the sum of charged estimates. Without a reading, the old sums.
+  memreal = (realuse && slicecur >= 0); cpureal = (realuse && sliceavg >= 0)
+  if (memreal) T_held = slicecur + Y_held
+  if (cpureal) T_cpu = sliceavg + Y_cpu
   # The aging slot: the oldest normal or low waiter that has waited agesecs
   # goes ahead of critical ones (rank 0.5), while fewer than ageslots builds
   # let in this way run. A running one has prio <prio>:aged.
@@ -1709,6 +1796,8 @@ decide() {
   { read -r lastnc || [[ -n $lastnc ]]; } 2>/dev/null < "$NCSTART"
   [[ $lastnc =~ ^[0-9]{1,15}$ ]] || lastnc=0
   psi_watch
+  slice_cores= slice_win=0
+  (( REAL_USE )) && slice_cpu
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
@@ -1720,7 +1809,9 @@ decide() {
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v maxapp="$MAX_APP_RUNS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
-    -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" "$ADMIT_AWK")
+    -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
+    -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
+    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
