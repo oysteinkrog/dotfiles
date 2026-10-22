@@ -16,7 +16,7 @@ MemoryMax=42G
 MemorySwapMax=6G
 CPUWeight=20
 
-# Kill the build that causes pressure before the user slice's 80% rule hits; 2026-10-16.
-# Raised 60% -> 75% on 2026-10-17: MemoryHigh throttling alone pushed pressure to 83% and killed a kpp build.
-ManagedOOMMemoryPressure=kill
+# oomd pressure kill is off since 2026-10-21: Oystein chose slowdown over killed builds. MemoryMax still caps the slice.
+# History: kill at 60% (2026-10-16), raised to 75% (2026-10-17) after MemoryHigh throttling killed a kpp build.
+ManagedOOMMemoryPressure=auto
 ManagedOOMMemoryPressureLimit=75%
