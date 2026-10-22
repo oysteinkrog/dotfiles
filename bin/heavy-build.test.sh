@@ -704,7 +704,9 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
-      -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" "$ADMIT_AWK" \
+      -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
+      -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
+      -v youngpct=70 -v youngmin=120 "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -916,6 +918,81 @@ mpsi 3.00 3.00
 out=$(printf '%s\n' "$W_16" | ADM_MEMINFO=$A/meminfo-sw ADM_MEMPSI=$A/mempsi adm 0000000999000000000-1-n 1 1 12)
 check "swap headroom: not in the critical-first reserve under pressure (got '$out')" '[[ $out == "wait|critical-first: needs 16.0 GiB; 20.0 available, "* ]]'
 
+# The real-use rule (HEAVY_BUILD_REAL_USE=1): the slice-cap check starts
+# from builds.slice memory.current plus what young builds may still take,
+# and the cores check from builds.slice CPU use plus young builds' estimates.
+gib() { printf '%s\n' $(( $1 * 1073741824 )) > "$A/$2"; }
+gib 16 slicemax16
+gib 5 slicecur5
+gib 2 slicecur2
+# An old build: started 10000 s ago, 600 s expected, estimate 12 GiB, holds 4 GiB.
+RUN_OLD='R u5 990000 12 2 990600 4294967296 2000 0 normal -'
+# A young build: started 50 s ago, estimate 12 GiB, holds 1 GiB.
+RUN_YOUNG='R u6 999950 12 2 1000550 1073741824 - 0 normal -'
+# Started 1000 s ago with 2000 s expected: past 2 min but under 70% of its wall.
+RUN_LATE='R u7 999000 12 2 1001000 1073741824 1000 0 normal -'
+W_6='W 0000000999000000000-1-n 999000 normal 6 2 600 -'
+out=$(printf '%s\n' "$RUN_OLD" "$W_6" | ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use off: an old build is charged its 12 GiB estimate, so a 6 GiB build waits (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds hold 12.0 of the 16.0 GiB builds.slice cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur5 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: builds.slice uses 5 GiB and the old build is past its young window, so the 6 GiB build starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_YOUNG" "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: a build 50 s old still counts its estimate, so the 6 GiB build waits and says why (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 2.0 GiB and running builds may take 11.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_LATE" "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: a build at 50% of its expected wall time is still young, so its estimate counts (got '$out')" '[[ $out == wait\|slice-cap:\ needs\ 6.0\ GiB\;\ builds.slice\ uses\ 2.0\ GiB\ and\ running\ builds\ may\ take\ 11.0\ more* ]]'
+RUN_LATE_DONE='R u7 999000 12 2 1000400 1073741824 1000 0 normal -'
+out=$(printf '%s\n' "$RUN_LATE_DONE" "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: a build at 71% of its expected wall time is no longer young, so the 6 GiB build starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD" "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/none ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: without memory.current the old charged sum applies (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds hold 12.0 of the 16.0 GiB builds.slice cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur5 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: a scope with no heavy-build still adds 2 GiB still to come (5 + 2 + 6 fits 16) (got '$out')" '[[ $out == start\|fits:* ]]'
+gib 9 slicecur9
+out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur9 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "real use: 9 + 2 + 6 is over 16, so it waits (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 9.0 GiB and running builds may take 2.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD" "$W_6" "W 0000000999000000001-2-n 999000 normal 6 2 600 -" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur5 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000001-2-n 0 1 12)
+check "real use: a build let in ahead in the same walk counts its full estimate (5 + 6 + 6 is over 16) (got '$out')" '[[ $out == wait\|slice-cap:*may\ take\ 6.0\ more* ]]'
+
+# Cores under the real-use rule.
+RUN_C_OLD='R u8 990000 4 16 990600 1073741824 22000 0 normal -'
+RUN_C_YOUNG='R u9 999950 4 10 1000550 1073741824 - 0 normal -'
+W_8C='W 0000000999000000000-1-n 999000 normal 4 8 600 -'
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | adm 0000000999000000000-1-n 0 1 12)
+check "real use off: an old build that used 22 cores over 60 s is charged 22, so an 8-core build waits (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 are charged|0" ]]'
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=4.00 adm 0000000999000000000-1-n 0 1 12)
+check "real use: builds.slice used 4 cores over the window, so the 8-core build starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_C_OLD" "$RUN_C_YOUNG" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=12.00 adm 0000000999000000000-1-n 0 1 12)
+check "real use: 12 measured plus 10 for a build 50 s old leaves no room for 8 cores (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for builds that started recently)|0" ]]'
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=24.00 adm 0000000999000000000-1-n 0 1 12)
+check "real use: CPU use in builds.slice the charges do not see (24 cores) still holds the build (got '$out')" '[[ $out == wait\|cores:\ needs\ 8.0,\ 24.0\ of\ 28\ in\ use* ]]'
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG= adm 0000000999000000000-1-n 0 1 12)
+check "real use: with no CPU window yet the old charge applies (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 are charged|0" ]]'
+
+# slice_cpu: builds.slice CPU use from shared samples.
+scpu() {  # usage_usec samples-lines... ; prints "slice_cores slice_win lines-kept"
+  (
+    BSLICE=$A/bs; CPUDIR=$A/cpud; SLICE_CPU_SECS=30
+    mkdir -p "$BSLICE" "$CPUDIR"
+    printf 'usage_usec %s\nuser_usec 0\n' "$1" > "$BSLICE/cpu.stat"; shift
+    if (( $# )); then printf '%s\n' "$@" > "$CPUDIR/builds.slice.samples"; else rm -f "$CPUDIR/builds.slice.samples"; fi
+    eval "$(sed -n '/^now_us()/p;/^slice_cpu()/,/^}/p' "$HB")"
+    now_us() { echo 1000000000000000; }
+    slice_cpu
+    printf '%s %s %s' "${slice_cores:--}" "$slice_win" "$(wc -l < "$CPUDIR/builds.slice.samples")"
+  )
+}
+out=$(scpu 5000000000)
+check "slice cpu: the first sample gives no reading yet and is kept (got '$out')" '[[ $out == "- 0 1" ]]'
+out=$(scpu 5000000000 "$(( 1000000000000000 - 10000000 )) 4900000000")
+check "slice cpu: a sample only 10 s old gives no reading; a new sample is added after 5 s (got '$out')" '[[ $out == "- 0 2" ]]'
+out=$(scpu 5000000000 "$(( 1000000000000000 - 60000000 )) 4400000000" "$(( 1000000000000000 - 2000000 )) 4990000000")
+check "slice cpu: 600 s of CPU over 60 s is 10 cores; no new sample 2 s after the last (got '$out')" '[[ $out == "10.00 60 2" ]]'
+out=$(scpu 5000000000 "$(( 1000000000000000 - 200000000 )) 1000000000" "$(( 1000000000000000 - 40000000 )) 4800000000")
+check "slice cpu: a sample over 120 s old is dropped; 200 s over 40 s is 5 cores (got '$out')" '[[ $out == "5.00 40 2" ]]'
+out=$(scpu 5000000000 "$(( 1000000000000000 - 60000000 )) 6000000000")
+check "slice cpu: a sample with more usage than now (counter reset) is dropped (got '$out')" '[[ $out == "- 0 1" ]]'
+check "slice cpu: the samples file is written with a temp file and mv" 'sed -n "/^slice_cpu()/,/^}/p" "$HB" | grep -q "mv -f \"\$f.\$\$\" \"\$f\""'
+
 # Settings: defaults, the config file, and the environment over the file.
 rconf() {  # var... ; prints their values after read_conf
   (
@@ -941,6 +1018,16 @@ check "settings: the CPU pressure limit defaults to 75% (got '$out')" '[[ $out =
 echo HEAVY_BUILD_MAX_CPU_PSI=60 > "$A/hb.conf"
 out=$(unset HEAVY_BUILD_MAX_CPU_PSI; rconf MAX_CPU_PSI)
 check "settings: HEAVY_BUILD_MAX_CPU_PSI in the file still wins over the default (got '$out')" '[[ $out == "60 " ]]'
+rm -f "$A/hb.conf"
+out=$(unset HEAVY_BUILD_REAL_USE HEAVY_BUILD_YOUNG_PCT HEAVY_BUILD_YOUNG_MIN_SECS HEAVY_BUILD_SLICE_CPU_SECS; rconf REAL_USE YOUNG_PCT YOUNG_MIN_SECS SLICE_CPU_SECS)
+check "settings: the real-use rule is on by default, young is 70% or 120 s, CPU window 30 s (got '$out')" '[[ $out == "1 70 120 30 " ]]'
+printf 'HEAVY_BUILD_REAL_USE=0
+HEAVY_BUILD_MEM_RESERVE_GIB=4
+' > "$A/hb.conf"
+out=$(unset HEAVY_BUILD_REAL_USE HEAVY_BUILD_MEM_RESERVE_GIB; rconf REAL_USE MEM_RESERVE_GIB)
+check "settings: HEAVY_BUILD_REAL_USE=0 in the file turns it off, and the reserve comes from the file (got '$out')" '[[ $out == "0 4 " ]]'
+out=$(unset HEAVY_BUILD_SLICE_CPU_SECS; HEAVY_BUILD_SLICE_CPU_SECS=2 rconf SLICE_CPU_SECS)
+check "settings: a CPU window under 5 s goes back to 30 (got '$out')" '[[ $out == "30 " ]]'
 
 cfo() {  # prints "rc cf_on cf_slots cf_reserve expiry-log-lines"
   (
