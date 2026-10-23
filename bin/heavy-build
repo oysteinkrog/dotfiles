@@ -370,6 +370,10 @@
 # - MemoryHigh is HEAVY_BUILD_APP_MEM_HIGH_GIB (default 10), MemoryMax twice
 #   that (capped by builds.slice as for a build). Its memory estimate comes from app-run history as for any class
 #   (default 8 GiB until 5 runs, floor 6 GiB), never above that MemoryHigh.
+# - CPUQuota is HEAVY_BUILD_APP_CPU_QUOTA percent (default 800, so 8 threads;
+#   0 or an empty value means no quota). A headless MC doing CPU MoCap used 18
+#   of 32 threads for 40 min on 2026-10-23. The live.log decision lines of an
+#   app run say cpu_quota=<n>% or cpu_quota=none.
 # - At most HEAVY_BUILD_MAX_APP_RUNS (default 2; 0 turns the cap off) app runs
 #   run at once. Each one counts as a job against HEAVY_BUILD_MAX_JOBS, and is
 #   charged memory and cores like a build (after 2 min, the cores it used over
@@ -582,6 +586,14 @@ read_conf() {
   setting HEAVY_BUILD_APP_MEM_HIGH_GIB 10
   setting HEAVY_BUILD_MAX_APP_RUNS 2
   (( APP_MEM_HIGH_GIB >= 1 )) || APP_MEM_HIGH_GIB=10
+  setting HEAVY_BUILD_APP_CPU_QUOTA 800
+  # An empty value, in the environment or the conf file, means no quota, as 0 does.
+  if [[ ${HEAVY_BUILD_APP_CPU_QUOTA+x} ]]; then
+    [[ -z $HEAVY_BUILD_APP_CPU_QUOTA ]] && APP_CPU_QUOTA=0
+  elif [[ ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]+x} && -z ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]} ]]; then
+    APP_CPU_QUOTA=0
+  fi
+  APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
 }
 
 setting() {
@@ -1942,7 +1954,10 @@ critical_first_on() {
 # Logs the budget decision when it, its reason kind or the actual outcome
 # changes. $1 is what actually happened: wait or start.
 log_decision() {
-  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}|$plevel" since=
+  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}|$plevel" since= appcpu=
+  if [[ ${cls:-} == app-run ]]; then
+    if (( APP_CPU_QUOTA > 0 )); then appcpu=" cpu_quota=${APP_CPU_QUOTA}%"; else appcpu=" cpu_quota=none"; fi
+  fi
   if [[ $dec == start ]]; then
     [[ -n $would_since ]] || would_since=$EPOCHSECONDS
   else
@@ -1952,7 +1967,7 @@ log_decision() {
   last_log=$k
   [[ -n $would_since ]] && since=" would_start_for=$(( EPOCHSECONDS - would_since ))s"
   [[ $dec == start && $why == aged:* ]] && since+=" aged=1"
-  log_line "decision=$dec reason=\"$why\" cap=${capinfo:--} pressure=$plevel actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
+  log_line "decision=$dec reason=\"$why\" cap=${capinfo:--} pressure=$plevel actual=$1${since} rank=$rank est=${est_mem}G/${est_cores}c/${est_wall}s($est_src) prio=$PRIO${appcpu} keys=$keys_csv untracked=${untracked:--} cmd=\"$cmdline\""
 }
 
 # Logs a refusal as decision=refuse, then exits. $1 is the reason, $2 the
@@ -2546,6 +2561,9 @@ if [[ $slice_max =~ ^[0-9]+$ ]] && (( cap_max > slice_max / 1073741824 )); then 
 (( cap_max < cap_high )) && cap_max=$cap_high
 props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="${cap_max}G" -p MemorySwapMax=8G -p OOMPolicy=kill -p TimeoutStopSec=3s)
 [[ -n $TIMEOUT ]] && props+=(-p RuntimeMaxSec="$TIMEOUT")
+# An app run gets a CPU cap (HEAVY_BUILD_APP_CPU_QUOTA percent, default 800);
+# 0 or empty means none. Builds get no CPUQuota.
+[[ $cls == app-run ]] && (( APP_CPU_QUOTA > 0 )) && props+=(-p CPUQuota="${APP_CPU_QUOTA}%")
 desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REASON}"
 
 # The signal traps go in before the scope exists, so no signal can end
