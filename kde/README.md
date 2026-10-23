@@ -56,6 +56,8 @@ kde-config apply                 # write it (the desktop step of the bootstrap r
 
 Settings that need logic or another tool: the global theme and colour scheme (through the
 `plasma-apply-*` tools, which also write the derived colours), panel and system tray layout
-(plasmashell scripting, because panel IDs differ per machine), taskbar pins, wallpapers,
+(plasmashell scripting, because panel IDs differ per machine), wallpapers,
 default apps in `mimeapps.list`, and the pin-to-monitor window layout from `HOST_WINDOW_LAYOUT`
 in `host.sh`.
+
+Taskbar pins are not synced. Each machine keeps the pins you set by hand.

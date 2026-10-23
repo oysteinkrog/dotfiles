@@ -90,20 +90,6 @@ kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/cl
 kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/slack slack.desktop
 ok "browser Chrome (work profile); claude://, claude-cli://, slack:// handlers"
 
-step "desktop: taskbar pins"
-launchers="applications:foobar2000.desktop,applications:systemsettings.desktop,preferred://filemanager,applications:chrome-personal.desktop,applications:chrome-work.desktop,applications:org.remmina.Remmina.desktop,applications:com.anthropic.Claude.desktop"
-if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
-  qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
-    panels().forEach(function (p) {
-      p.widgets('org.kde.plasma.icontasks').forEach(function (w) {
-        w.currentConfigGroup = ['General'];
-        w.writeConfig('launchers', '$launchers'.split(','));
-      });
-    });" >/dev/null && ok "taskbar: foobar2000, settings, files, Chrome personal and work, Remmina, Claude"
-else
-  warn "plasmashell not running; taskbar pins skipped"
-fi
-
 step "desktop: Star Nest shader wallpaper"
 # Desktops and lock screen use the themed Star Nest shader written by
 # ~/bin/shader-wallpaper-theme-sync (tools step). Needs plasma-wallpaper-shader-local.
