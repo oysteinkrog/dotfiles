@@ -35,8 +35,12 @@
 #   (default 28). With HEAVY_BUILD_REAL_USE=1 (the default since 2026-10-22),
 #   cores in use is what builds.slice used over the last 30 to 120 s
 #   (HEAVY_BUILD_SLICE_CPU_SECS, default 30, sampled by every waiter into
-#   $XDG_RUNTIME_DIR/heavy-build.cpu/builds.slice.samples) plus the full
-#   estimate of each build in its first 2 min. Until enough samples exist,
+#   $XDG_RUNTIME_DIR/heavy-build.cpu/builds.slice.samples) plus, for each
+#   build in its first 2 min, its estimate minus the cores it already used
+#   inside that window (its 60 s average times the share of the window it
+#   has run, floored at 0), so its CPU is not counted twice. A build with no
+#   60 s figure yet adds its full estimate. Until 2026-10-23 every young
+#   build added its full estimate. Until enough samples exist,
 #   and with HEAVY_BUILD_REAL_USE=0, it is the old charge: a running build is
 #   charged its estimate for 2 min, then what it used over the last 60 s;
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
@@ -65,8 +69,12 @@
 #   0 and about 64 GiB of zram swap free. Either setting at 0 turns it off;
 # - the memory builds hold plus its estimate fits under the builds.slice cap.
 #   With HEAVY_BUILD_REAL_USE=1, builds hold what builds.slice uses now
-#   (memory.current) plus, for each young build, its estimate minus what it
-#   holds now. A build is young until it has run HEAVY_BUILD_YOUNG_MIN_SECS
+#   (memory.current) plus, for each young build, HEAVY_BUILD_YOUNG_GROW_PCT
+#   percent (default 50; 100 before 2026-10-23) of its estimate minus what it
+#   holds now. A replay of 2026-10-23 10:16 to 14:28 with that, the
+#   young-CPU rule above, HEAVY_BUILD_TC_PCT=25 and a 40G builds.slice
+#   MemoryHigh gave a mean wait of 6.4 min against 13.7 for the same starts
+#   (/var/tmp/claude/hb-tune/sim.py). A build is young until it has run HEAVY_BUILD_YOUNG_MIN_SECS
 #   (default 120) or HEAVY_BUILD_YOUNG_PCT percent (default 70) of its
 #   expected wall time, whichever is longer, so a build that peaks late (a
 #   link step) stays charged its estimate for most of its run. With
@@ -593,6 +601,8 @@ read_conf() {
   setting HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE 1
   setting HEAVY_BUILD_YOUNG_PCT 70
   setting HEAVY_BUILD_YOUNG_MIN_SECS 120
+  setting HEAVY_BUILD_YOUNG_GROW_PCT 50
+  (( YOUNG_GROW_PCT >= 0 && YOUNG_GROW_PCT <= 100 )) || YOUNG_GROW_PCT=50
   setting HEAVY_BUILD_SLICE_CPU_SECS 30
   (( SLICE_CPU_SECS >= 5 )) || SLICE_CPU_SECS=30
   setting HEAVY_BUILD_STARVE 1800
@@ -760,7 +770,7 @@ classify() {
 # peak. jb-inspectcode (JetBrains inspectcode, also run as `jb inspectcode`)
 # peaked at 17.4 GB twice on 2026-10-17 on MotionCatalyst.sln, once oom-killed,
 # while it was estimated at 3.6 GB as "other". Its floor is 18 GiB; the scope
-# gets MemoryHigh 22G and MemoryMax 42G (twice 22G, capped by builds.slice). Cores and wall time are guesses until
+# gets MemoryHigh 22G and MemoryMax 44G (twice 22G, capped by builds.slice MemoryMax, 50G since 2026-10-23). Cores and wall time are guesses until
 # it has history. wine-run-tests-prebuilt is a run of already built .dll files (2.2 GB,
 # 33 s); its wall time is a guess until it has history. dotnet-build-sln is a
 # dotnet build, test or msbuild of a whole .sln or .slnx (see dotnet_sln). On
@@ -1536,6 +1546,7 @@ waiter_lines() {
 # shellcheck disable=SC2016
 ADMIT_AWK='
 function max(a, b) { return a > b ? a : b }
+function min(a, b) { return a < b ? a : b }
 # "avg10 avg60" of the some line of pressure file f, or "-1 -1".
 function psi1060(f,   l, a, b, c, v) {
   v = "-1 -1"
@@ -1600,8 +1611,10 @@ function writer(keys, o,   n, k, i, b, t) {
 # come while it is young (grow: its estimate minus what it holds now, until it
 # has run youngmin seconds or youngpct percent of its expected wall time,
 # whichever is longer) and the cores of builds in their first warm seconds
-# (cy: the estimate). Y_held and Y_cpu go on top of what builds.slice really
-# uses. fgrow is memory still to come for a scope with no heavy-build.
+# (cy: the estimate minus what the build already used inside the CPU window,
+# which sliceavg counts). Only growpct percent of grow is charged. Y_held and
+# Y_cpu go on top of what builds.slice really uses. fgrow is memory still to
+# come for a scope with no heavy-build.
 function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy) {
   nr++
   grow = 0; cy = 0
@@ -1611,8 +1624,13 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
     cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
-    if (start > 0 && now - start < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur)
-    if (start > 0 && (c60 == "-" || now - start < warm)) cy = cores
+    if (start > 0 && now - start < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur) * growpct / 100
+    # sliceavg already holds the CPU this build used inside its window, so a
+    # young build adds only its estimate minus that share (floored at 0).
+    if (start > 0 && (c60 == "-" || now - start < warm)) {
+      cy = cores
+      if (c60 != "-" && sliceavgwin > 0) cy = max(0, cores - c60 / 1000 * min(1, (now - start) / sliceavgwin))
+    }
   }
   grow += fgrow
   Y_held += grow; Y_cpu += cy
@@ -1703,6 +1721,7 @@ BEGIN {
     slicecur -= slicecache
   }
   if (sliceavg == "") sliceavg = -1
+  if (growpct == "") growpct = 100
   sliceavg += 0
   # Swap headroom: while system memory pressure (some avg10 and avg60) is
   # under 1.0%, swpct percent of SwapFree, at most swcap GiB, counts as
@@ -1883,7 +1902,7 @@ decide() {
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
     -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
-    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" "$ADMIT_AWK")
+    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
