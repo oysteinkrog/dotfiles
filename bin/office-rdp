@@ -1,0 +1,41 @@
+#!/bin/sh
+# RDP to the office desktop (KRDP), fixed 2560x1440 fullscreen with no scaling.
+# xfreerdp3 runs under XWayland, which gets real pixels from KDE. The SDL client sent
+# its 125%-scaled size (2048x1152) on fullscreen, and KRDP then shrank the office monitor.
+# -dynamic-resolution stops any resize request, so the office monitor stays at 1440p.
+# AVC444 video; sound and microphone go through PipeWire (pulse API).
+# Ctrl+Alt+Enter leaves fullscreen.
+# RDP has no key login, so the KRDP password lives in KDE Wallet (Secret Service).
+# The first run asks for it in a dialog and saves it. Arguments go to xfreerdp3 on stdin
+# (/args-from:stdin), so the password never shows in the process list.
+# Output goes to ~/.cache/office-rdp.log. Run with --forget to drop the saved password.
+set -u
+log="${XDG_CACHE_HOME:-$HOME/.cache}/office-rdp.log"
+
+if [ "${1:-}" = "--forget" ]; then
+  exec secret-tool clear service office-rdp user oystein
+fi
+
+pw=$(secret-tool lookup service office-rdp user oystein 2>/dev/null)
+if [ -z "$pw" ]; then
+  pw=$(kdialog --title "Office desktop (RDP)" --password "KRDP password for oystein on the office desktop:") || exit 1
+  [ -n "$pw" ] || exit 1
+  printf '%s' "$pw" | secret-tool store --label="Office desktop RDP (KRDP)" service office-rdp user oystein
+fi
+
+{
+  printf '%s\n' /v:100.78.187.79 /u:oystein "/p:$pw" /cert:tofu \
+    /size:2560x1440 /f -dynamic-resolution /floatbar:sticky:off,default:hidden,show:fullscreen \
+    /gfx:AVC444:on /sound:sys:pulse /microphone:sys:pulse /network:lan +clipboard
+  for a in "$@"; do printf '%s\n' "$a"; done
+} | xfreerdp3 /args-from:stdin >"$log" 2>&1
+rc=$?
+
+# Wrong password: forget it so the next launch asks again.
+if grep -q -E "LOGON_FAILURE|AUTHENTICATION_FAILED" "$log"; then
+  secret-tool clear service office-rdp user oystein
+  kdialog --title "Office desktop (RDP)" --error "Login failed. The saved password was removed; launch again to enter it."
+elif [ "$rc" -ge 128 ]; then  # codes below 128 are normal disconnects and logoffs
+  kdialog --title "Office desktop (RDP)" --sorry "xfreerdp3 exited with code $rc. Log: $log"
+fi
+exit "$rc"
