@@ -139,17 +139,18 @@ def fetch(cfg):
         "error": "",
         "events": events,
         "tasks": tasks,
-        "away": away(account, cfg.get("away", [])),
+        "away": away(account, cfg.get("away", []), cfg.get("slack", False)),
     }
 
 
-def away(account, sources):
+def away(account, sources, slack=False):
     """Who is out, at home or on part-time hours today, from shared calendars.
 
     sources: [{"id": calendar id, "kind": "absence" | "hours"}]. In an absence calendar
     an entry is "home" when its title says WFH, otherwise "out". An hours calendar holds
     the working hours of part-time staff. The name is the first part of the poster's
     email, because titles use initials ("CC-OOO"). Your own entries are left out.
+    With slack set, Slack statuses add anyone the calendars do not already list.
     """
     people, seen = [], set()
     for src in sources:
@@ -182,12 +183,133 @@ def away(account, sources):
                     "end": end,
                     "allDay": all_day,
                     "title": title,
+                    "email": email,
+                    "source": "calendar",
                     "link": e.get("htmlLink", ""),
                 }
             )
+    if slack:
+        # The calendar wins for out and home. Slack's "out" wins over part-time hours,
+        # because a sick day is the news there.
+        listed = {p["email"] for p in people if p["kind"] != "hours"} | {account}
+        extra = [p for p in slack_away() if p["email"] not in listed]
+        out = {p["email"] for p in extra if p["kind"] == "out"}
+        people = [p for p in people if p["email"] not in out] + extra
     order = {"out": 0, "home": 1, "hours": 2}
     people.sort(key=lambda p: (order[p["kind"]], p["name"]))
     return people
+
+
+# Slack statuses that mean someone is out or at home, by text (English and Norwegian)
+# or emoji.
+OUT_WORDS = (
+    "sick",
+    "syk",
+    "out of office",
+    "ooo",
+    "vacation",
+    "ferie",
+    "holiday",
+    "leave",
+    "permisjon",
+    "day off",
+    "fridag",
+)
+OUT_EMOJI = (
+    ":face_with_thermometer:",
+    ":palm_tree:",
+    ":no_entry:",
+    ":airplane:",
+    ":beach_with_umbrella:",
+    ":mask:",
+    ":sneezing_face:",
+)
+HOME_WORDS = ("working remotely", "remote", "wfh", "home", "hjemme", "hjemmekontor")
+HOME_EMOJI = (":house_with_garden:", ":house:")
+
+
+def slack_away():
+    """Who is out or at home today by Slack status.
+
+    The token must not reach any command line, so this runs a copy of this script
+    under with-secrets, which reads it from the environment (--slack below).
+    """
+    r = subprocess.run(
+        [
+            str(HOME / "bin/with-secrets"),
+            "SLACK_BOT_TOKEN",
+            "--",
+            sys.executable,
+            __file__,
+            "--slack",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"slack: {(r.stderr or r.stdout).strip()[:200]}")
+    return json.loads(r.stdout)
+
+
+def slack_statuses():
+    """Print the Slack part of away() as JSON. Needs SLACK_BOT_TOKEN in the environment.
+
+    Skipped: expired statuses (Slack does not always clear them), statuses copied from
+    Google Calendar (the calendar is read already), and "working remotely" without an
+    end time, which is someone's normal week rather than news.
+    """
+    import os
+    import urllib.request
+
+    req = urllib.request.Request(
+        "https://slack.com/api/users.list?limit=500",
+        headers={"Authorization": "Bearer " + os.environ["SLACK_BOT_TOKEN"]},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+    if not data.get("ok"):
+        raise RuntimeError(data.get("error", "users.list failed"))
+
+    now = dt.datetime.now().timestamp()
+    people = []
+    for u in data.get("members", []):
+        if u.get("deleted") or u.get("is_bot") or u.get("id") == "USLACKBOT":
+            continue
+        p = u.get("profile", {})
+        text, emoji = p.get("status_text", ""), p.get("status_emoji", "")
+        expires = p.get("status_expiration", 0)
+        if not (text or emoji) or (expires and expires < now):
+            continue
+        if "google calendar" in text.lower():
+            continue
+        low = text.lower()
+        if any(w in low for w in OUT_WORDS) or emoji in OUT_EMOJI:
+            kind = "out"
+        elif (any(w in low for w in HOME_WORDS) or emoji in HOME_EMOJI) and expires:
+            kind = "home"
+        else:
+            continue
+        email = p.get("email", "")
+        name = (
+            email.split("@")[0].split(".")[0].capitalize()
+            or p.get("first_name")
+            or u.get("name", "")
+        )
+        people.append(
+            {
+                "name": name,
+                "email": email,
+                "kind": kind,
+                "start": int(now * 1000),
+                "end": int(expires * 1000) if expires else 0,
+                "allDay": False,
+                "title": text or emoji,
+                "source": "slack",
+                "link": "",
+            }
+        )
+    json.dump(people, sys.stdout)
 
 
 def theme():
@@ -242,4 +364,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--slack"]:
+        slack_statuses()
+    else:
+        main()
