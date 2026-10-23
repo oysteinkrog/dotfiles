@@ -13,6 +13,9 @@ done
 # filter-chain.service starts fine with dangling config links and then makes
 # no nodes, so check the links whatever they point at, and that each node exists.
 step "verify: pipewire filters"
+# pw-cli info exits 0 even for a name that does not exist, so match node.name in a dump.
+pw_nodes=$(pw-dump 2>/dev/null | jq -r '.[].info.props["node.name"] // empty')
+pw_has() { grep -qxF "$1" <<<"$pw_nodes"; }
 for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
   l="$HOME/.config/pipewire/filter-chain.conf.d/$conf"
   if [ ! -e "$l" ]; then
@@ -20,22 +23,35 @@ for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
     continue
   fi
   for node in $(sed -n 's/^[[:space:]]*node.name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
-    if pw-cli info "$node" >/dev/null 2>&1; then ok "$node"
+    if pw_has "$node"; then ok "$node"
     else fail "$node not in PipeWire (systemctl --user restart filter-chain; journalctl --user -u filter-chain)"; fi
   done
   # The filter exists even when the device it feeds or reads from is missing.
   for node in $(sed -n 's/^[[:space:]]*target.object[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
-    if pw-cli info "$node" >/dev/null 2>&1; then ok "device $node"
+    if pw_has "$node"; then ok "device $node"
     else fail "device $node not in PipeWire (unplugged, or its card profile is off: pactl list cards)"; fi
   done
 done
-[ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ] && ok "~/.claude -> dotfiles" || fail "~/.claude is not the dotfiles .claude"
+# install.sh supports two layouts: ~/.claude linked whole, or a real dir with items linked.
+if [ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ]; then
+  ok "~/.claude -> dotfiles"
+elif [ "$(realpath "$HOME/.claude/CLAUDE.md")" = "$(realpath "$DOTFILES/.claude/CLAUDE.md")" ] &&
+     [ "$(realpath "$HOME/.claude/settings.json")" = "$(realpath "$DOTFILES/.claude/settings.json")" ]; then
+  ok "~/.claude items linked from dotfiles"
+else
+  fail "~/.claude is not the dotfiles .claude"
+fi
+if jq -e '.mcpServers["mcp-agent-mail"].url == "http://127.0.0.1:4809/mcp/"' "$HOME/.claude.json" >/dev/null 2>&1; then
+  ok "agent mail registered with Claude at user scope"
+else
+  fail "agent mail not registered with Claude (services step)"
+fi
 
 step "verify: commands"
 for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex pm2 claude cass am br docker tailscale frankenterm-gui localbuild; do
   if have "$c"; then ok "$c"; else fail "$c not on PATH"; fi
 done
-case "$(command -v frankenterm-gui)" in
+case "$(realpath "$(command -v frankenterm-gui)")" in
   /usr/bin/frankenterm-gui) ok "frankenterm-gui is the frankenterm-local package" ;;
   *) warn "frankenterm-gui resolves to $(command -v frankenterm-gui), not the package in /usr/bin" ;;
 esac
