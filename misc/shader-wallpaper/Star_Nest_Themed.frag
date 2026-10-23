@@ -26,6 +26,7 @@ const float mouseAmount = 0.1;  // @range(0.0, 1.0, 0.01) @label("Mouse rotation
 
 // Original colouring
 const float brightness = 0.0015; // @range(0.0002, 0.005, 0.0001) @label("Brightness")
+const float starLimit  = 6.0;    // @range(0.5, 50.0, 0.1) @label("Star limit (lower = fewer bright stars)")
 const float saturation = 0.85;   // @range(0.0, 1.0, 0.01) @label("Saturation (original colours)")
 
 // Colour grade
@@ -91,7 +92,11 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 		a*=a*a; // add contrast
 		if (r>6) fade*=1.-dm; // dark matter, don't render near
 		v+=fade;
-		v+=vec3(s,s*s,s*s*s*s)*a*brightness*fade; // coloring based on distance
+		//single steps with a huge fractal sum make the sparkling stars; soft-cap them at
+		//starLimit (a typical nebula step is 0.2 to 2, a star step 20 to 2000)
+		float x=a*brightness*fade;
+		x*=inversesqrt(1.+x*x/(starLimit*starLimit));
+		v+=vec3(s,s*s,s*s*s*s)*x; // coloring based on distance
 		fade*=distfading; // distance fading
 		s+=stepsize;
 	}
