@@ -1,0 +1,11 @@
+[Unit]
+Description=meetrec: transcribe finished call recordings
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/meetrec process-queue
+Nice=10
+IOSchedulingClass=idle
+# claude (for the summary) and uv live in ~/.local/bin.
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin
+TimeoutStartSec=4h

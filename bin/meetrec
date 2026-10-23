@@ -1,0 +1,4 @@
+#!/bin/sh
+# Record and transcribe Slack huddles and Google Meet calls. Source: ~/.dotfiles/meetrec
+export UV_PROJECT_ENVIRONMENT="$HOME/.local/share/meetrec/venv"
+exec uv run --quiet --frozen --project "$HOME/.dotfiles/meetrec" meetrec "$@"
