@@ -24,7 +24,11 @@ find_logo() {
     done
   done
 }
-theme=$(kreadconfig6 --group Icons --key Theme 2>/dev/null || echo breeze)
+# Plasma keeps the theme in kdedefaults, which only Plasma's own environment
+# puts on XDG_CONFIG_DIRS, so add it here for ssh and other shells.
+theme=$(XDG_CONFIG_DIRS="$HOME/.config/kdedefaults:${XDG_CONFIG_DIRS:-/etc/xdg}" \
+  kreadconfig6 --group Icons --key Theme 2>/dev/null || true)
+: "${theme:=breeze}"
 inherits=$(sed -n 's/^Inherits=//p' "$HOME/.local/share/icons/$theme/index.theme" \
   "/usr/share/icons/$theme/index.theme" 2>/dev/null | head -n1 | tr ',' ' ')
 logo=$(find_logo "$theme" $inherits)
