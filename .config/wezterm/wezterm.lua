@@ -486,21 +486,39 @@ end)
 
 -- Theme browser. Alt+Shift+K picks a built-in color scheme by fuzzy search;
 -- Alt+PageDown / Alt+PageUp step to the next or previous one. The choice is
--- saved in ~/.local/state/frankenterm-theme so it survives restarts; an empty
--- or missing file means the Nord colors above. The tab bar takes its colors
--- from the scheme: FrankenTerm fills in tab bar colors a scheme leaves unset.
-local theme_file = wezterm.home_dir .. '/.local/state/frankenterm-theme'
+-- saved in ~/.config/wezterm/theme, which is in dotfiles, so every machine
+-- gets the same theme; an empty or missing file means the Nord colors above.
+-- The tab bar takes its colors from the scheme: FrankenTerm fills in tab bar
+-- colors a scheme leaves unset.
+local theme_file = wezterm.home_dir .. '/.config/wezterm/theme'
+-- Older configs kept the choice per machine here; it is moved over once
+local legacy_theme_file = wezterm.home_dir .. '/.local/state/frankenterm-theme'
 local scheme_lists = dofile(wezterm.home_dir .. '/.config/wezterm/color_schemes.lua')
 local all_schemes = {}
 for _, name in ipairs(scheme_lists.dark) do table.insert(all_schemes, name) end
 for _, name in ipairs(scheme_lists.light) do table.insert(all_schemes, name) end
 
-local function read_theme()
-  local f = io.open(theme_file, 'r')
+local function read_first_line(path)
+  local f = io.open(path, 'r')
   if not f then return nil end
-  local name = f:read('*l')
+  local line = f:read('*l')
   f:close()
-  if name and #name > 0 then return name end
+  return line or ''
+end
+
+local function read_theme()
+  local name = read_first_line(theme_file)
+  if name == nil then
+    name = read_first_line(legacy_theme_file)
+    if name == nil then return nil end
+    local f = io.open(theme_file, 'w')
+    if f then
+      f:write(name)
+      f:close()
+      os.remove(legacy_theme_file)
+    end
+  end
+  if #name > 0 then return name end
 end
 
 -- Tab bar colors built from a scheme's background and foreground, in the same
