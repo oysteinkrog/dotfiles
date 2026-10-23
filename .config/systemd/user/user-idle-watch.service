@@ -1,0 +1,17 @@
+[Unit]
+Description=Idle flag for user-away: no keyboard or mouse input for 20 minutes
+PartOf=graphical-session.target
+After=graphical-session.target
+
+# swayidle uses the Wayland idle-notify protocol, which KWin supports. It opens no
+# window. The flag is read by ~/bin/user-away.
+[Service]
+ExecStartPre=/usr/bin/mkdir -p %t/user-idle
+ExecStartPre=/usr/bin/rm -f %t/user-idle/idle
+ExecStart=/usr/bin/swayidle -w timeout 1200 'touch %t/user-idle/idle' resume 'rm -f %t/user-idle/idle'
+ExecStopPost=/usr/bin/rm -f %t/user-idle/idle
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target
