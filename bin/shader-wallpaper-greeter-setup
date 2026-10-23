@@ -21,6 +21,6 @@ sudo kwriteconfig6 --file "$CONF" --group Greeter --key WallpaperPluginId "$PLUG
 w selectedShaderPath "file://$DIR/Star_Nest_Themed.frag"
 w shaderSpeed 0.025
 w targetFps 30
-w resolutionScale 0.8
+w resolutionScale 1.0
 
 echo "login screen: themed Star Nest from $DIR (shows at the next logout or reboot)"
