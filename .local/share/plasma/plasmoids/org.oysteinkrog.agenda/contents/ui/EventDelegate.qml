@@ -38,24 +38,36 @@ PlasmaComponents.ItemDelegate {
             color: item.model.color || Kirigami.Theme.highlightColor
         }
 
+        // Time on the left in a fixed-width column, so titles line up beside it.
         ColumnLayout {
-            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: timeWidth.width + Kirigami.Units.smallSpacing
             spacing: 0
 
-            RowLayout {
-                Layout.fillWidth: true
-                PlasmaComponents.Label {
-                    text: item.timeText
-                    font.features: { "tnum": 1 }
-                    opacity: 0.8
-                }
-                PlasmaComponents.Label {
-                    visible: item.isNext || item.current
-                    text: item.current ? i18n("now") : item.untilText
-                    color: item.accentText
-                    font.bold: true
-                }
+            TextMetrics {
+                id: timeWidth
+                font.family: Kirigami.Theme.defaultFont.family
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                text: "00:00–00:00"
             }
+            PlasmaComponents.Label {
+                text: item.timeText
+                font.features: { "tnum": 1 }
+                opacity: 0.8
+            }
+            PlasmaComponents.Label {
+                visible: item.isNext || item.current
+                text: item.current ? i18n("now") : item.untilText
+                color: item.accentText
+                font.bold: true
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignTop
+            spacing: 0
 
             PlasmaComponents.Label {
                 Layout.fillWidth: true
