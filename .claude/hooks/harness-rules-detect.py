@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Detect four commands that ~/.claude/CLAUDE.md says agents must never run:
+"""Detect three commands that ~/.claude/CLAUDE.md says agents must never run:
 
   bv                      without a --robot-* flag: opens the TUI and hangs.
   am doctor fix           rewrites every MCP config back to port 8765.
-  cass index --semantic   mixes vector provenance in the index.
-  cass-gpu index          hits a memory regression in the custom GPU build.
+  cass index --semantic   holds whole conversations in memory while embedding.
+                          Embedding runs only from cass-embed.service through
+                          `cass models backfill`. `cass-gpu` is the same binary.
 
 Reads the shell command from HARNESS_GUARD_COMMAND. When a segment should be
 denied, prints one line `KIND<TAB>SEGMENT` and exits 0, where KIND is
-`bv_tui`, `am_doctor_fix`, `cass_semantic` or `cass_gpu_index`. Prints
+`bv_tui`, `am_doctor_fix` or `cass_semantic`. Prints
 nothing when the command is fine.
 
 Shell segmentation (quote and heredoc blanking, separator splitting, wrapper
@@ -59,7 +60,7 @@ def classify(tokens):
             return "am_doctor_fix"
         return None
 
-    if head == "cass":
+    if head in ("cass", "cass-gpu"):
         i = first_positional(tokens)
         if i is not None and tokens[i] == "index":
             if any(
@@ -67,12 +68,6 @@ def classify(tokens):
                 for t in tokens[i + 1 :]
             ):
                 return "cass_semantic"
-        return None
-
-    if head == "cass-gpu":
-        i = first_positional(tokens)
-        if i is not None and tokens[i] == "index":
-            return "cass_gpu_index"
         return None
 
     return None

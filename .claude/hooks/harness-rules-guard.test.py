@@ -51,11 +51,12 @@ cases = [
     ("cass search --semantic foo", False),
     ("cass index --semantic --help", False),
     ("cass --help", False),
-    # --- cass-gpu index: blocked ---
-    ("cass-gpu index", True),
-    ("cass-gpu index --full", True),
-    ("nohup cass-gpu index", True),
-    # --- cass-gpu: allowed ---
+    # --- cass-gpu is the same binary: --semantic blocked, plain index allowed ---
+    ("cass-gpu index --semantic", True),
+    ("nohup cass-gpu index --semantic", True),
+    ("cass-gpu index", False),
+    ("cass-gpu index --full", False),
+    ("cass models backfill --tier quality --json", False),
     ("cass-gpu search foo", False),
     ("cass-gpu --version", False),
     ("cass-gpu index --help", False),
