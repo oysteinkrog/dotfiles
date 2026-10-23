@@ -54,9 +54,10 @@ def event_times(e):
     """Start and end in epoch ms, and whether the event is all-day."""
     start, end = e["start"], e["end"]
     if "date" in start:
-        tz = dt.datetime.now().astimezone().tzinfo
-        s = dt.datetime.combine(dt.date.fromisoformat(start["date"]), dt.time(), tz)
-        en = dt.datetime.combine(dt.date.fromisoformat(end["date"]), dt.time(), tz)
+        # Naive datetimes are local time, so each date gets its own UTC offset
+        # (summer or winter time), not today's.
+        s = dt.datetime.combine(dt.date.fromisoformat(start["date"]), dt.time())
+        en = dt.datetime.combine(dt.date.fromisoformat(end["date"]), dt.time())
         return int(s.timestamp() * 1000), int(en.timestamp() * 1000), True
     return ms(start["dateTime"]), ms(end["dateTime"]), False
 
@@ -138,7 +139,55 @@ def fetch(cfg):
         "error": "",
         "events": events,
         "tasks": tasks,
+        "away": away(account, cfg.get("away", [])),
     }
+
+
+def away(account, sources):
+    """Who is out, at home or on part-time hours today, from shared calendars.
+
+    sources: [{"id": calendar id, "kind": "absence" | "hours"}]. In an absence calendar
+    an entry is "home" when its title says WFH, otherwise "out". An hours calendar holds
+    the working hours of part-time staff. The name is the first part of the poster's
+    email, because titles use initials ("CC-OOO"). Your own entries are left out.
+    """
+    people, seen = [], set()
+    for src in sources:
+        data = gog(account, "calendar", "events", src["id"], "--today", "--max", "100")
+        for e in data.get("events", []):
+            if e.get("status") == "cancelled":
+                continue
+            email = e.get("creator", {}).get("email", "")
+            if email == account:
+                continue
+            name = email.split("@")[0].split(".")[0].capitalize() or e.get(
+                "summary", ""
+            )
+            title = e.get("summary", "")
+            if src["kind"] == "hours":
+                kind = "hours"
+            elif "wfh" in title.lower() or "home" in title.lower():
+                kind = "home"
+            else:
+                kind = "out"
+            start, end, all_day = event_times(e)
+            if (name, kind, start) in seen:
+                continue
+            seen.add((name, kind, start))
+            people.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "start": start,
+                    "end": end,
+                    "allDay": all_day,
+                    "title": title,
+                    "link": e.get("htmlLink", ""),
+                }
+            )
+    order = {"out": 0, "home": 1, "hours": 2}
+    people.sort(key=lambda p: (order[p["kind"]], p["name"]))
+    return people
 
 
 def theme():
