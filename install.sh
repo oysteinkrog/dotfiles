@@ -184,6 +184,7 @@ if [ -n "$native_linux" ]; then
     .config/autostart/wezterm.desktop
     .config/systemd/user/plasma-kwin_wayland.service.d
     .config/systemd/user/session.slice.d
+    .config/systemd/user/plasma-powerdevil.service.d
     .config/systemd/user/app.slice.d
     '.config/systemd/user/app-chrome\x2dpersonal@.service.d'
     .local/share/applications/org.wezfurlong.wezterm.desktop
@@ -192,7 +193,8 @@ if [ -n "$native_linux" ]; then
     .local/share/applications/foobar2000-next.desktop
     .local/share/applications/foobar2000-playpause.desktop
     .local/share/applications/foobar2000-random.desktop
-    .local/share/applications/fooyin-experimental.desktop
+    .local/share/applications/org.fooyin.fooyin.desktop
+    .local/share/applications/fooyin-old.desktop
     .local/share/icons/hicolor/256x256/apps/foobar2000.png
     .local/bin/foobar2000
     .local/bin/music-control
