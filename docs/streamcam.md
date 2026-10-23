@@ -1,8 +1,8 @@
-# StreamCam Mic Recovery on Linux
+# StreamCam Mic Setup and Recovery on Linux
 
-How the dotfiles keep the Logitech StreamCam (USB ID `046d:0893`, firmware 0.17) mic
-working on Linux, what the camera's control selectors do, and how to set it up on a new
-machine. Last updated 2026-10-23.
+How the dotfiles run the Logitech StreamCam (USB ID `046d:0893`, firmware 0.17) mic in
+stereo on Linux, how they recover it when it breaks, what the camera's control
+selectors do, and how to set it up on a new machine. Last updated 2026-10-23.
 
 ## Setup on a new machine
 
@@ -39,25 +39,36 @@ reads as -91 dB. The camera still shows up as a normal USB audio device. First s
   open. Pinning the PipeWire source to 16 kHz changed nothing.
 - Writing 1 to selector 17 fixed it at once.
 
-We do not know what puts the camera in this state. It has been seen after a boot and after
-a wake from sleep. Since it survives a power cut, the bad state is probably stored in the
-camera.
+We do not know for sure what puts the camera in this state. It has been seen after a
+boot and after a wake from sleep. It survives a power cut, so the bad state is stored in
+the camera. The best lead: while the mic was silent, selector 15 read
+`000001001200000000000000000000000000`, with the DSP parameter bytes (4 to 17) almost all
+zero. On 2026-10-23, writing zeroed DSP parameters broke a working mic (it then sent loud
+white noise instead of sound), and writing the factory parameters back fixed it at once.
+So bad DSP parameters in selector 15 are a likely cause. This is inferred, not proven: we
+have not reproduced the all-zero state itself. Logitech Capture on Windows writes
+selector 15, so it may be what set them.
 
 ## What the script does
 
 `streamcam-mic-enable` runs when the camera connects, at login and after each wake:
 
-1. It records 1.5 s from the camera's PipeWire source. If any sample is not zero, the mic
-   works and the script stops there.
-2. If every sample is zero, it writes 1 to selector 17 (below). The camera restores its
-   default settings and reboots, and reconnects about 2 s later.
-3. It checks that PipeWire has the camera's mic source. If not, it rebinds
+1. It writes the factory audio block with stereo mode to selector 15:
+   `00000100faff01000a00f7fff7fff0fff0ff`. This sets stereo and repairs any bad DSP
+   parameters. It does not reboot the camera, so it runs every time.
+2. It records 1.5 s from the camera's PipeWire source. If any sample is not zero, the mic
+   works and the script goes to step 4.
+3. If every sample is zero, it writes 1 to selector 17 (below). The camera restores its
+   default settings and reboots, and reconnects about 2 s later. The reset puts the
+   camera back in mono, so the script waits for the camera and repeats step 1.
+4. It checks that PipeWire has the camera's mic source. If not, it rebinds
    `snd-usb-audio` on the camera's audio interfaces so WirePlumber probes the card
    again. This handles the case where WirePlumber probed the card while the camera was
    rebooting and was left with only the `off` and `pro-audio` profiles.
 
-Options: `--force` sends the reset even when the mic works. `--reprobe` only rebinds the
-sound card. `--no-relink` skips step 3.
+Options: `--mono` skips step 1 and leaves the camera's mode alone. `--force` sends the
+reset even when the mic works. `--reprobe` only rebinds the sound card. `--no-relink`
+skips step 4.
 
 After a write that times out, the script skips automatic runs for 2 minutes (stamp file
 `$XDG_RUNTIME_DIR/streamcam-mic-timeout`). Without this, the reboot caused a reconnect,
@@ -75,15 +86,24 @@ Only two selectors answer on this unit:
 
 | Selector | Size | What it does | Evidence |
 |---|---|---|---|
-| 15 | 18 bytes | Audio settings block. Bytes 0 and 1 are ByPass and bytes 2 and 3 are Stereo, both little-endian: 0 is mono (left and right identical), 1 is stereo. Bytes 4 to 17 look like DSP parameters. | Logi Options+ reads and writes it as "audio mode" (below). Measured: byte 2 switches mono and stereo. |
+| 15 | 18 bytes | Audio settings block. Bytes 0 and 1 are ByPass and bytes 2 and 3 are Stereo, both little-endian: 0 is mono (left and right identical), 1 is stereo. Bytes 4 to 17 are DSP parameters. | Logi Options+ reads and writes it as "audio mode" (below). Measured: byte 2 switches mono and stereo, and zeroed bytes 4 to 17 turn the mic into a noise source. |
 | 17 | 1 byte, range 0 to 1 | Writing 1 restores the defaults and reboots the camera. Writing 0 does nothing. Always reads 0. | Tested 2026-10-23, below. |
 
-Selector 15's default, from `GET_DEF`, is
-`00000000faff01000a00f7fff7fff0fff0ff` (mono). In that mode every sample's low byte is
-`0x00` or `0xFF`, so the mic delivers about 8 bits of real resolution. With the block
-`000001001200000000000000000000000000` (stereo, other parameters zero) the samples use
-all 16 bits and are about 10 dB louder. We have not compared the two by ear, so the
-script leaves selector 15 alone.
+Selector 15 right after a factory reset reads `00000000faff01000a00f7fff7fff0fff0ff`
+(mono). The script writes the same block with byte 2 set to 1 (stereo). In both modes
+every sample's low byte is `0x00` or `0xFF`, so the camera's DSP output has about 8 bits
+of real resolution. That is how the firmware works, not a fault.
+
+Selector 15 cannot be read back reliably. `GET_CUR`, `GET_DEF`, `GET_MIN` and `GET_MAX`
+all return the same buffer, and after some writes that buffer does not match what the
+camera does. So the script writes the block every time instead of comparing first.
+
+Blocks with zeroed DSP parameters, such as `000001001200000000000000000000000000` or
+`000001000000000000000000000000000000`, make the mic send near full-scale white noise:
+RMS about 18,900 whatever the room sound, spectral flatness 0.3 to 0.5, energy spread
+evenly up to 24 kHz. Real sound measures flatness under 0.01 with most energy below
+1 kHz. The noise uses all 16 bits of each sample, so it looks like better audio until you
+look at the spectrum.
 
 **Never write to the unit with GUID `1f5d4ca9-de11-4487-840d-50933c8ec8d1`** (unit 9
 here). It is Logitech's test and debug unit, and Logitech Capture uses it for EEPROM
@@ -98,7 +118,8 @@ All on 2026-10-23, with the mic working:
 | Write 1 while the mic works | The request times out, the camera drops off USB and reconnects. |
 | Write 0 | Accepted at once. No reconnect. Mic unchanged. |
 | Write a non-default block to selector 15, then write 1 to selector 17 | Camera reboots, and selector 15 reads the default block again. |
-| Write a non-default block to selector 15, then `usbreset` | Selector 15 keeps the stereo flag but other bytes change. So a USB reset is not the same as selector 17. |
+| Write a non-default block to selector 15, then `usbreset` | The read-back keeps the stereo flag but other bytes change. A USB reset is not the same as selector 17. |
+| Write zeroed DSP parameters to selector 15, then the factory stereo block | Noise while zeroed, real sound at once after the factory block. No reboot. |
 
 Older kernels or controllers report the failed write as `EPROTO` (-71) and return at
 once. On 2026-10-23 it returned `ETIMEDOUT` (-110) after the 5 s USB timeout. Both mean
@@ -145,7 +166,9 @@ streamcam-mic-enable --force
 
 ## Open questions
 
-- What puts the mic into the all-zero state, and whether a gentler fix than a full reset
-  exists. Next time it happens, before resetting: read selector 15, try
-  `streamcam-mic-enable --reprobe`, and record whether the mic recovers.
-- Whether stereo mode (selector 15 byte 2 = 1) sounds better than the mono default.
+- Whether bad selector 15 parameters fully explain the all-zero state. If the mic goes
+  silent again, the script's step 1 may fix it without a reset. In
+  `journalctl --user -u streamcam-mic.service`, "no reset needed" after a silent mic
+  means step 1 was enough. A "sent reset" line means it was not.
+- The checks in the script only catch the all-zero state. A noise state (zeroed DSP
+  parameters) passes the "any non-zero sample" check, but step 1 repairs it first.

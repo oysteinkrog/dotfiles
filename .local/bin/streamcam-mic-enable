@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""Recover a Logitech StreamCam mic that records only zeros, then relink the mic filter.
+"""Set the Logitech StreamCam mic to stereo, recover it if it records only zeros,
+then relink the mic filter.
 
-Sometimes the StreamCam's mic sends only zero samples on Linux. It survives a
+Audio settings: selector 15 on the camera's peripheral extension unit is an
+18-byte block. Bytes 2 and 3 are the mode (0 mono, 1 stereo, little-endian) and
+bytes 4 to 17 are DSP parameters. Each run writes the factory block with the
+mode set to stereo. Logi Options+ also runs this camera in stereo on Windows.
+Writing the whole block also repairs bad DSP parameters: with those bytes zeroed
+the mic sends loud white noise (tested 2026-10-23). This write does not reboot
+the camera. The control cannot be read back: GET_CUR, GET_DEF, GET_MIN and
+GET_MAX all return the same buffer, and it does not match what the camera does,
+so the block is written every time.
+
+Recovery: sometimes the StreamCam's mic sends only zero samples on Linux. It survives a
 replug, a USB reset and a reboot. What fixes it is selector 17 on the camera's
 peripheral extension unit (GUID ffe52d21-...): SET_CUR 1 restores the camera's
 default settings and reboots it, so it drops off USB and reconnects about 2 s
@@ -15,6 +26,7 @@ reprobe_audio).
 
 Run by streamcam-mic.service, which a udev rule starts when the camera connects,
 and by streamcam-mic-resume-watch after login and wake. Safe to run by hand.
+  --mono        leave the camera in its default mono mode
   --force       send the reset even if the mic works, and ignore the backoff
   --reprobe     only rebind the sound card
   --no-relink   skip the PipeWire checks after the reset
@@ -31,6 +43,9 @@ import uuid
 
 VID, PID = "046d", "0893"
 PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
+AUDIO_SELECTOR = 15  # 18-byte audio settings block, bytes 2-3 = mode
+# Read right after a factory reset (selector 17) on firmware 0.17, mode set to stereo.
+STEREO_BLOCK = bytes.fromhex("00000100faff01000a00f7fff7fff0fff0ff")
 RESET_SELECTOR = 17  # SET_CUR 1 = restore defaults and reboot
 UVC_SET_CUR = 0x01
 AUDIO_NODE = "alsa_input.usb-046d_Logitech_StreamCam"
@@ -104,6 +119,37 @@ def reset_camera(dev, unit):
                 raise
     finally:
         os.close(fd)
+
+
+def xu_query(dev, unit, selector, request, data):
+    """Run one UVC extension unit request and return the buffer afterwards."""
+    buf = (ctypes.c_uint8 * len(data))(*data)
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, UVCIOC_CTRL_QUERY, XuQuery(unit, selector, request, len(data), ctypes.cast(buf, ctypes.c_void_p).value))
+    finally:
+        os.close(fd)
+    return bytes(buf)
+
+
+def wait_for_camera(seconds):
+    for _ in range(seconds * 2):
+        dev, unit = find_camera()
+        if dev:
+            return dev, unit
+        time.sleep(0.5)
+    return None, None
+
+
+def apply_audio_mode(dev, unit):
+    """Write the factory audio block in stereo mode."""
+    if "--mono" in sys.argv:
+        return
+    try:
+        xu_query(dev, unit, AUDIO_SELECTOR, UVC_SET_CUR, STEREO_BLOCK)
+        print(f"set audio block to stereo ({STEREO_BLOCK.hex()})")
+    except OSError as e:
+        print(f"could not set the audio mode on {dev}: {e}")
 
 
 def audio_node_present():
@@ -201,26 +247,23 @@ def main():
     if "--reprobe" in sys.argv:
         reprobe_audio()
         sys.exit(0 if wait_for_audio_node(30) else "StreamCam mic source still missing after reprobe")
+    dev, unit = wait_for_camera(10)
+    if not dev:
+        sys.exit("StreamCam not found")
+    apply_audio_mode(dev, unit)
     if "--force" not in sys.argv:
         try:
             age = time.time() - os.path.getmtime(TIMEOUT_STAMP)
         except OSError:
             age = None
         if age is not None and age < BACKOFF_SECONDS:
-            print(f"last reset timed out {age:.0f} s ago, skipping (use --force)")
+            print(f"last reset timed out {age:.0f} s ago, not resetting (use --force)")
             return
         if wait_for_audio_node(10) and mic_has_signal():
             print("StreamCam mic records sound, no reset needed")
             check_audio()
             return
-    dev = unit = None
-    for _ in range(20):
-        dev, unit = find_camera()
-        if dev:
-            break
-        time.sleep(0.5)
-    if not dev:
-        sys.exit("StreamCam not found")
+    timed_out = False
     for attempt in range(5):
         try:
             reset_camera(dev, unit)
@@ -228,11 +271,21 @@ def main():
         except OSError as e:
             if e.errno == errno.ETIMEDOUT:
                 open(TIMEOUT_STAMP, "w").close()
-                sys.exit(f"reset timed out on {dev}; the camera reboots anyway. Backing off {BACKOFF_SECONDS} s")
+                timed_out = True
+                break
             if attempt == 4:
                 sys.exit(f"reset failed on {dev}: {e}")
             time.sleep(1)
     print(f"sent reset to {dev} (unit {unit}, selector {RESET_SELECTOR}); the camera reboots")
+    # The reset restores the mono default. Set the mode again once the camera is back.
+    # The udev rerun on reconnect may not happen (merged into this job) or may be held
+    # back by the timeout backoff, so do not rely on it.
+    time.sleep(3)
+    dev, unit = wait_for_camera(15)
+    if dev:
+        apply_audio_mode(dev, unit)
+    if timed_out:
+        print(f"the reset timed out; automatic resets pause for {BACKOFF_SECONDS} s")
     if "--no-relink" not in sys.argv:
         check_audio()
 
