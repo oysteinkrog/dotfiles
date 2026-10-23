@@ -1,0 +1,21 @@
+# Music keys for the launchers in .local/share/applications/foobar2000-*.desktop. They run
+# ~/.local/bin/music-control, which drives fooyin if it is open and foobar2000 otherwise.
+# New keys work after the next login.
+[services][foobar2000-back.desktop]
+_launch=Alt+S
+
+[services][foobar2000-next.desktop]
+_launch=Alt+A\tAlt+V
+
+[services][foobar2000-playpause.desktop]
+_launch=Alt+C
+
+[services][foobar2000-random.desktop]
+_launch=Alt+X
+
+[plasmashell]
+next activity=Meta+A,none,Walk through activities
+previous activity=Meta+Shift+A,none,Walk through activities (Reverse)
+
+[slack]
+DDF5957471A155313A3A598E9EF96715-Ctrl+Shift+Space=none,Ctrl+Shift+Space,Slack shortcut: Ctrl+Shift+Space

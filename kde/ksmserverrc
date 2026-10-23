@@ -1,0 +1,4 @@
+# The autostart entry opens FrankenTerm (and starts its mux), so session restore must
+# not reopen it as well, or the login shows two FrankenTerm windows.
+[General]
+excludeApps=com.dicklesworthstone.frankenterm.desktop

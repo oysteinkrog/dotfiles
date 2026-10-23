@@ -1,0 +1,10 @@
+# Built-in RDP server: start with the session, log in with the system account
+[General]
+Autostart=true
+SystemUserEnabled=true
+AudioBitrate=192
+AudioCodec=Auto
+EncoderSpeed=Fastest
+RemoteFXQuality=100
+VideoCodec=AVC444
+VideoEncoder=Auto
