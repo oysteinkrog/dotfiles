@@ -244,7 +244,11 @@
 #   plain and live.log gets locksplit=off reason=no-blocks.
 # - HEAVY_BUILD_PRIORITY=high|normal|low (default normal). Agents may set high
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
-#   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A low
+#   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A
+#   high build that waits only for this cap keeps its place but is never the
+#   head of the line, so it cannot hold up other builds through the starve or
+#   backfill rule (on 2026-10-23 it did: one high waiter blocked 37 builds for
+#   40 min while the machine sat idle). A low
 #   build counts as normal after 30 min of waiting. Only live mode uses it.
 #   When HEAVY_BUILD_PRIORITY is unset, the default comes from the sessions in
 #   ~/.config/machine/sessions.toml:
@@ -428,6 +432,7 @@ while (( $# )); do
     --wait-timeout) (( $# >= 2 )) || { echo "heavy-build: --wait-timeout needs seconds" >&2; exit 2; }; WAIT_TIMEOUT=$2; shift 2 ;;
     --wait-timeout=*) WAIT_TIMEOUT=${1#--wait-timeout=}; shift ;;
     --) shift; break ;;
+    -*) echo "heavy-build: unknown option '$1'. Put -- before a command that starts with '-'. To see the queue, read ~/.local/state/heavy-build/live.log" >&2; exit 2 ;;
     *) break ;;
   esac
 done
@@ -1766,6 +1771,9 @@ END {
     # never the head of the line, so high and critical builds behind it go on.
     pw = pressure_why(i)
     if (pw != "") { why[i] = pw; continue }
+    # The high-cap is a share rule, not a resource limit. A high build that
+    # waits for it keeps its place but is never the head of the line.
+    if (w_pr[i] == "high" && T_high >= 2) { why[i] = "high-cap: 2 high-priority builds already run"; continue }
     wk = writer(w_keys[i], o)
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
