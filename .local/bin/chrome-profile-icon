@@ -1,0 +1,20 @@
+#!/bin/sh
+# Make a taskbar icon: the Chrome logo with a profile's avatar as a round
+# badge in the bottom-right corner.
+# Usage: chrome-profile-icon <user-data-dir> <profile-directory> <out.png>
+set -eu
+udd=$1; prof=$2; out=$3
+logo=/usr/share/icons/hicolor/256x256/apps/google-chrome.png
+avatar="$udd/$prof/Google Profile Picture.png"
+tmp=$(mktemp -d)
+trap 'rm -r "$tmp"' EXIT
+
+# 150 px avatar cropped to a circle, on a 162 px white ring.
+magick "$avatar" -resize 150x150^ -gravity center -extent 150x150 -alpha set \
+  \( -size 150x150 xc:none -fill white -draw 'circle 75,75 75,0' \) \
+  -compose DstIn -composite "$tmp/avatar.png"
+magick -size 162x162 xc:none -fill white -draw 'circle 81,81 81,0' \
+  "$tmp/avatar.png" -gravity center -compose Over -composite "$tmp/badge.png"
+
+magick "$logo" -resize 256x256 "$tmp/badge.png" -gravity SouthEast \
+  -geometry +0+0 -compose Over -composite "$out"
