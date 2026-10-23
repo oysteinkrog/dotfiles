@@ -78,6 +78,29 @@ for alias in agent-mail agentmail mcp_agent_mail mcpagentmail; do
   ln -sfn mcp-agent-mail "$HOME/.local/bin/$alias"
 done
 
+step "tools: krdp-local (localbuilds recipes freerdp, kpipewire, krdp)"
+# RDP sound, microphone and a streamed monitor that takes the client's size. Only on
+# machines that stream a monitor (HOST_KRDP_MONITOR). freerdp and kpipewire are private
+# copies in /opt/krdp-local, so they go first. krdp-local conflicts with the repo krdp,
+# which `localbuild install` cannot replace, so its package goes in with pacman --ask=4.
+if [ -n "$HOST_KRDP_MONITOR" ]; then
+  for r in freerdp kpipewire; do
+    if pacman -Q "$r-krdp-local" >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+      ok "$(pacman -Q "$r-krdp-local")"
+    else
+      heavy-build "$HOME/.local/bin/localbuild" build "$r" && "$HOME/.local/bin/localbuild" install "$r"
+    fi
+  done
+  if pacman -Q krdp-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+    ok "$(pacman -Q krdp-local)"
+  else
+    heavy-build "$HOME/.local/bin/localbuild" build krdp
+    pkg=$(find "$HOME/.cache/build/krdp" -path '*/out/*' -name 'krdp-local-*.pkg.tar.*' ! -name '*-debug-*' ! -name '*.sig' \
+      -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2)
+    sudo pacman -U --noconfirm --ask=4 "$pkg" && ok "krdp-local installed; restart app-org.kde.krdpserver.service"
+  fi
+fi
+
 step "tools: qmd"
 # Markdown search for the Life vault and the knowledge bases. Installed under ~/.local
 # (not the nvm prefix), because qmd-ifkb.service runs ~/.local/lib/node_modules/@tobilu/qmd.
