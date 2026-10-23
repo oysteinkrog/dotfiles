@@ -1,0 +1,4 @@
+# Logitech StreamCam (046d:0893): start the user service streamcam-mic.service each
+# time the camera connects. It resets the camera only when its mic records only
+# zeros. See docs/streamcam.md. Installed by setup/steps/20-system.sh.
+ACTION=="add", SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893", ATTR{index}=="0", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="streamcam-mic.service"

@@ -12,6 +12,7 @@ units=(
   cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
   claude-tab-watch.service                 # dotfiles: Claude session status in FrankenTerm tabs
   shader-wallpaper-theme-sync.path         # dotfiles: Plasma colours into the Star Nest wallpaper
+  streamcam-mic-resume.service             # dotfiles: StreamCam mic check at login and wake
 )
 # The FrankenTerm mux needs the frankenterm-local package from the tools step.
 if [ -x /usr/bin/frankenterm-mux-server ]; then

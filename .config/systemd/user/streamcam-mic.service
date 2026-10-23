@@ -1,5 +1,5 @@
 [Unit]
-Description=Turn on the Logitech StreamCam mic and relink the mic filter
+Description=Recover the Logitech StreamCam mic if it records only zeros, and relink the mic filter
 # Started by the udev rule 99-streamcam-mic.rules each time the camera connects.
 After=pipewire.service wireplumber.service
 

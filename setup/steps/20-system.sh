@@ -188,4 +188,31 @@ WantedBy=multi-user.target'
   ok "greeter-output-sync for $me"
 fi
 
+# Logitech StreamCam mic recovery (docs/streamcam.md). Installed on every machine: the
+# rule only matches the StreamCam's USB ID. The udev rule starts streamcam-mic.service
+# when the camera connects. The sudoers rule lets streamcam-mic-enable rebind
+# snd-usb-audio when WirePlumber missed the camera's sound card during a reconnect.
+rule=/etc/udev/rules.d/99-streamcam-mic.rules
+if sudo cmp -s "$SETUP/system/99-streamcam-mic.rules" "$rule"; then
+  ok "udev: StreamCam mic rule"
+else
+  sudo install -m 0644 "$SETUP/system/99-streamcam-mic.rules" "$rule"
+  sudo udevadm control --reload
+  ok "udev: wrote $rule"
+fi
+drv=/sys/bus/usb/drivers/snd-usb-audio
+rule="$me ALL=(root) NOPASSWD: /usr/bin/tee $drv/unbind, /usr/bin/tee $drv/bind"
+dropin=/etc/sudoers.d/92-streamcam-audio
+if sudo test -f "$dropin" && sudo grep -qxF "$rule" "$dropin"; then
+  ok "sudoers: StreamCam audio rebind"
+else
+  tmp="$(mktemp)"; echo "$rule" > "$tmp"
+  if sudo visudo -cf "$tmp" >/dev/null; then
+    sudo install -m 0440 -o root -g root "$tmp" "$dropin"; ok "sudoers: wrote $dropin"
+  else
+    fail "StreamCam sudoers rule did not validate, skipped"
+  fi
+  rm -f "$tmp"
+fi
+
 host_system
