@@ -5,6 +5,8 @@
 # -dynamic-resolution stops any resize request, so the office monitor stays at 1440p.
 # AVC444 video; sound and microphone go through PipeWire (pulse API).
 # Ctrl+Alt+Enter leaves fullscreen.
+# /timeout:60000 raises TCP_USER_TIMEOUT from 9 s: when the office machine is under heavy
+# build load, KRDP and tailscaled stall for 10 to 35 s and the 9 s default dropped the session.
 # RDP has no key login, so the KRDP password lives in KDE Wallet (Secret Service).
 # The first run asks for it in a dialog and saves it. Arguments go to xfreerdp3 on stdin
 # (/args-from:stdin), so the password never shows in the process list.
@@ -33,7 +35,7 @@ done
 {
   printf '%s\n' /v:100.78.187.79 /u:oystein "/p:$pw" /cert:tofu \
     /size:2560x1440 /f -dynamic-resolution /floatbar:sticky:off,default:hidden,show:fullscreen \
-    /gfx:AVC444:on /sound:sys:pulse /microphone:sys:pulse /network:lan +clipboard
+    /gfx:AVC444:on /sound:sys:pulse /microphone:sys:pulse /network:lan +clipboard /timeout:60000
   for a in "$@"; do printf '%s\n' "$a"; done
 } | xfreerdp3 /args-from:stdin >"$log" 2>&1
 rc=$?
