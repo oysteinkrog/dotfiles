@@ -41,6 +41,9 @@ Environment=KRDP_OUTPUT_RESIZE_HOOK=$HOME/bin/krdp-remote-mode"
   units+=(krdp-remote-mode.service)
 fi
 
+# KRDP exits at start without a TLS certificate; this makes a 10-year one for this host.
+have openssl && "$DOTFILES/bin/krdp-certificate" >/dev/null && ok "KRDP certificate for $(hostnamectl hostname)"
+
 for u in "${units[@]}"; do
   if ! systemctl --user cat "$u" >/dev/null 2>&1; then
     warn "$u: unit not found"

@@ -305,6 +305,7 @@ def remember_local():
     text = json.dumps(outputs)
     if LOCAL.exists() and LOCAL.read_text() == text:
         return
+    STATE.mkdir(parents=True, exist_ok=True)  # missing on a fresh machine
     tmp = LOCAL.with_suffix(".tmp")
     tmp.write_text(text)
     tmp.replace(LOCAL)
