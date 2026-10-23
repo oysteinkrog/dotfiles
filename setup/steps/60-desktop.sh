@@ -87,9 +87,16 @@ if [ -f /usr/share/applications/google-chrome.desktop ]; then
     >"$HOME/.local/share/applications/google-chrome.desktop"
 fi
 # The icons carry the account avatars, so they live in the private Life repo.
+# chrome-profile-icon then redraws each one on the icon theme's Chrome logo, with the
+# local avatar if that profile is signed in, else with the badge from the repo copy.
 for ic in chrome-personal chrome-work; do
-  [ -f "$HOME/work/life/setup/chrome/$ic.png" ] && cp -n "$HOME/work/life/setup/chrome/$ic.png" "$HOME/.local/share/icons/$ic.png"
+  [ -f "$HOME/work/life/setup/chrome/$ic.png" ] && cp "$HOME/work/life/setup/chrome/$ic.png" "$HOME/.local/share/icons/$ic.png"
 done
+if have magick && [ -f "$HOME/.local/share/icons/chrome-work.png" ]; then
+  "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome-personal" "Profile 1" "$HOME/.local/share/icons/chrome-personal.png"
+  "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome" Default "$HOME/.local/share/icons/chrome-work.png"
+  ok "Chrome icons drawn on the $(kreadconfig6 --group Icons --key Theme 2>/dev/null) Chrome logo"
+fi
 # Empty profile folders. Never copy the office ones: their logins are tied to its keyring.
 mkdir -p "$HOME/.config/google-chrome-personal/Profile 1" "$HOME/.config/google-chrome/Default"
 kw --file kdeglobals --group General --key BrowserApplication chrome-work.desktop
@@ -112,7 +119,7 @@ kw --file kglobalshortcutsrc --group services --group foobar2000-back.desktop --
 ok "Alt+C play/pause, Alt+A or Alt+V next, Alt+X random, Alt+S back"
 
 step "desktop: taskbar pins"
-launchers="applications:foobar2000.desktop,applications:systemsettings.desktop,preferred://filemanager,preferred://browser,applications:org.remmina.Remmina.desktop,applications:com.anthropic.Claude.desktop"
+launchers="applications:foobar2000.desktop,applications:systemsettings.desktop,preferred://filemanager,applications:chrome-personal.desktop,applications:chrome-work.desktop,applications:org.remmina.Remmina.desktop,applications:com.anthropic.Claude.desktop"
 if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
   qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
     panels().forEach(function (p) {
@@ -120,7 +127,7 @@ if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
         w.currentConfigGroup = ['General'];
         w.writeConfig('launchers', '$launchers'.split(','));
       });
-    });" >/dev/null && ok "taskbar: foobar2000, settings, files, browser, Remmina, Claude"
+    });" >/dev/null && ok "taskbar: foobar2000, settings, files, Chrome personal and work, Remmina, Claude"
 else
   warn "plasmashell not running; taskbar pins skipped"
 fi
