@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "Øystein Krog" }],
+        "Category": "Date and Time",
+        "Description": "Today and the coming days from Google Calendar, and open Google Tasks.",
+        "Icon": "view-calendar-agenda",
+        "Id": "org.oysteinkrog.agenda",
+        "License": "MIT",
+        "Name": "Agenda",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

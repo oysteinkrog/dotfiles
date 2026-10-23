@@ -70,6 +70,18 @@ function placeAll() {
 }
 
 function placeNew(w) {
+    // Some apps set their title after the window opens (plasmawindowed does), so a
+    // rule that matches on caption is checked again on each title change until it
+    // matches once.
+    if (!ruleFor(w) && LAYOUT.some(r => r.captionRe && r.class === w.resourceClass)) {
+        const onCaption = () => {
+            if (!ruleFor(w)) return;
+            w.captionChanged.disconnect(onCaption);
+            placeNew(w);
+        };
+        w.captionChanged.connect(onCaption);
+        return;
+    }
     place(w);
     const again = new QTimer();
     again.singleShot = true;
