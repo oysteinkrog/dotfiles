@@ -1338,6 +1338,24 @@ out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" "$W_NEW" | adm 000000099900000
 check "high-cap: a normal build behind an old capped high waiter starts as next in order (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
 out=$(printf '%s\n' "$RUN_H1" "$W_HOLD" "$W_NEW" | adm 0000000990000000000-3-h 0 1 12)
 check "high-cap: with one high build running, the high waiter starts first (got '$out')" '[[ $out == start\|fits:* ]]'
+# Idle builds (stalled=1: under 0.05 cores for 10 min) count neither for the
+# high-cap nor for the job limit, and the reason names them. On 2026-10-23 a
+# hung Wine suite held a high slot and a job slot for about 50 min.
+RUN_H1I='R h1 990000 4 2 1000600 4294967296 - 1 high -'
+RUN_H2I='R h2 990000 4 2 1000600 4294967296 - 1 high -'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2I" "$W_HOLD" | adm 0000000990000000000-3-h 0 1 12)
+check "idle: one active and one idle high build do not block a second high build (got '$out')" '[[ $out == "start|fits: next in order (idle, not counted as a job or a high build: h2)|0" ]]'
+out=$(printf '%s\n' "$RUN_H1I" "$RUN_H2I" "$W_HOLD" | adm 0000000990000000000-3-h 0 1 12)
+check "idle: two idle high builds do not block a third high build (got '$out')" '[[ $out == "start|fits: next in order (idle, not counted as a job or a high build: h1,h2)|0" ]]'
+RUN_J='R b%d 999000 4 2 1000600 4294967296 - %d normal -'
+out=$(printf "$RUN_J\n" 1 0 2 0 3 0 4 0 5 0 6 1 | cat - <(echo "$W_BLD") | adm 0000000999000000001-2-b 0 1 12)
+check "idle: 5 active builds and 1 idle one leave a job slot (got '$out')" '[[ $out == "start|fits: next in order (idle, not counted as a job or a high build: b6)|0" ]]'
+out=$(printf "$RUN_J\n" 1 0 2 0 3 0 4 0 5 0 6 0 | cat - <(echo "$W_BLD") | adm 0000000999000000001-2-b 0 1 12)
+check "idle: 6 active builds still fill the 6 job slots (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$(printf "$RUN_J\n" 1 0 2 0 3 0 4 0 5 0 6 0 7 1 | cat - <(echo "$W_BLD") | adm 0000000999000000001-2-b 0 1 12)
+check "idle: an idle build is named even when the waiter still waits (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6 (idle, not counted as a job or a high build: b7)|0" ]]'
+out=$(printf '%s\n' 'R b1 999000 4 2 1000600 4294967296 - 1 normal -' "$W_BLD" | ADM_MEMINFO=<(printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 9 * 1048576 ))) adm 0000000999000000001-2-b 0 1 12)
+check "idle: with only an idle build running, the full memory test still applies (got '$out')" '[[ $out == wait\|memory:* ]]'
 rm -rf -- "$A"
 
 # Estimates: runs that ended by a signal (stopped or cancelled) still count
