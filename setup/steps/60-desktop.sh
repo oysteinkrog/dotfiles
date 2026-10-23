@@ -84,7 +84,7 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
   lock selectedShaderPath "$shader_url"
   lock shaderSpeed 0.025
   lock targetFps 30
-  lock resolutionScale 0.8
+  lock resolutionScale 1.0
   if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
     qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
       desktops().forEach(function (d) {
@@ -94,7 +94,7 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
         d.writeConfig('selectedShaderPath', '$shader_url');
         d.writeConfig('shaderSpeed', 0.025);
         d.writeConfig('targetFps', 30);
-        d.writeConfig('resolutionScale', 0.8);
+        d.writeConfig('resolutionScale', 1.0);
         d.writeConfig('pauseMode', 1);
         d.writeConfig('watchSourceFile', true);
         d.writeConfig('enableShaderTweaks', true);
