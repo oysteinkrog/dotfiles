@@ -149,4 +149,43 @@ WantedBy=multi-user.target'
   ok "local-input-watch"
 fi
 
+# The Plasma Login greeter keeps its own monitor layout. Copy the user's layout to it on
+# every change, and once at boot before the greeter starts (bin/greeter-output-sync).
+if getent passwd plasmalogin >/dev/null; then
+  sudo install -m 0755 -o root -g root "$DOTFILES/bin/greeter-output-sync" /usr/local/sbin/greeter-output-sync
+  changed=
+  unit=/etc/systemd/system/greeter-output-sync@.service
+  want='[Unit]
+Description=Copy the KWin monitor layout of %i to the login screen
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/greeter-output-sync %i
+
+[Install]
+WantedBy=graphical.target'
+  if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
+    printf '%s\n' "$want" | sudo tee "$unit" >/dev/null; changed=1
+  fi
+  unit=/etc/systemd/system/greeter-output-sync@.path
+  want='[Unit]
+Description=Watch the KWin monitor layout of %i and of the login screen
+
+[Path]
+PathChanged=/home/%i/.config/kwinoutputconfig.json
+PathChanged=/var/lib/plasmalogin/.config/kwinoutputconfig.json
+Unit=greeter-output-sync@%i.service
+
+[Install]
+WantedBy=multi-user.target'
+  if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
+    printf '%s\n' "$want" | sudo tee "$unit" >/dev/null; changed=1
+  fi
+  [ -n "$changed" ] && sudo systemctl daemon-reload
+  sudo systemctl enable "greeter-output-sync@$me.service" >/dev/null 2>&1
+  sudo systemctl enable --now "greeter-output-sync@$me.path" >/dev/null 2>&1
+  ok "greeter-output-sync for $me"
+fi
+
 host_system

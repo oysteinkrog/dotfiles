@@ -34,6 +34,15 @@ if [ -n "$HOST_KDE_SCALE" ]; then
   kw --file kwinrc --group Xwayland --key Scale "$HOST_KDE_SCALE"
 fi
 
+# Window layout per host: which app goes on which monitor (the pin-to-monitor KWin script).
+# Empty turns the script off.
+if [ -n "$HOST_WINDOW_LAYOUT" ]; then
+  kw --file kwinrc --group Script-pin-to-monitor --key Layout "$HOST_WINDOW_LAYOUT"
+  kw --file kwinrc --group Plugins --key pin-to-monitorEnabled true
+else
+  kw --file kwinrc --group Plugins --key pin-to-monitorEnabled false
+fi
+
 # Built-in RDP server: start with the session, log in with the system account
 kw --file krdpserverrc --group General --key Autostart true
 kw --file krdpserverrc --group General --key SystemUserEnabled true

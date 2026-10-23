@@ -1,0 +1,26 @@
+#!/bin/sh
+# Copy a user's KWin monitor layout to the Plasma Login greeter.
+#
+#     greeter-output-sync USER
+#
+# The login screen runs its own KWin as the plasmalogin user, with its own
+# kwinoutputconfig.json. Nothing copies the user's layout there, so after a monitor
+# change the login screen shows the old order and scale. This runs as root from
+# greeter-output-sync@USER.path on every change to either file, and once at boot before
+# the display manager starts. It copies only valid JSON, and only when the files differ.
+set -eu
+
+user=${1:?usage: greeter-output-sync USER}
+src=$(getent passwd "$user" | cut -d: -f6)/.config/kwinoutputconfig.json
+greeter_home=$(getent passwd plasmalogin | cut -d: -f6) || { echo "no plasmalogin user"; exit 0; }
+dst=$greeter_home/.config/kwinoutputconfig.json
+
+[ -f "$src" ] || { echo "no $src yet"; exit 0; }
+cmp -s "$src" "$dst" && exit 0
+python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$src" ||
+  { echo "$src is not valid JSON, not copied"; exit 0; }
+
+install -d -o plasmalogin -g plasmalogin -m 0755 "$greeter_home/.config"
+install -o plasmalogin -g plasmalogin -m 0644 "$src" "$dst.new"
+mv -f "$dst.new" "$dst"
+echo "copied $src to $dst"

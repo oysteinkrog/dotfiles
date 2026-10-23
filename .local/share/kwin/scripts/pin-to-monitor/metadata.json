@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "pin-to-monitor",
+        "Name": "Pin to monitor",
+        "Description": "Put chosen apps on named monitors while every monitor in the layout is on.",
+        "Version": "2.0",
+        "License": "MIT",
+        "EnabledByDefault": false
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "KWin/Script"
+}
