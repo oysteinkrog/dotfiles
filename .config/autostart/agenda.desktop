@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Agenda
+Comment=Today and the coming days from Google Calendar (org.oysteinkrog.agenda widget)
+Icon=view-calendar-agenda
+Exec=plasmawindowed org.oysteinkrog.agenda
+X-KDE-autostart-phase=2

@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Print the coming days of Google Calendar events and open Google Tasks as JSON.
+
+    agenda-fetch
+
+Feeds the agenda Plasma widget (~/.local/share/plasma/plasmoids/org.oysteinkrog.agenda),
+which runs this every two minutes. Reads through gog, so it needs no login of its own.
+Settings are in ~/.config/agenda/config.json:
+
+    {"account": "you@example.com", "calendars": ["calendar id", ...], "days": 7}
+
+Calendars are fetched one at a time, because gog's merged list does not say which
+calendar an event came from, and the colour comes from that. On any error the last good
+result is printed again with an "error" field, so the widget keeps showing something.
+"""
+
+import configparser
+import datetime as dt
+import json
+import pathlib
+import subprocess
+import sys
+
+HOME = pathlib.Path.home()
+CONFIG = HOME / ".config/agenda/config.json"
+CACHE = HOME / ".cache/agenda/last.json"
+GOG = [
+    str(HOME / "bin/with-secrets"),
+    "GOG_KEYRING_PASSWORD",
+    "--",
+    str(HOME / "bin/gog"),
+]
+
+
+def gog(account, *args):
+    r = subprocess.run(
+        [*GOG, "-a", account, *args, "-j", "--no-input"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"gog {args[0]} {args[1]}: {(r.stderr or r.stdout).strip()[:200]}"
+        )
+    return json.loads(r.stdout)
+
+
+def ms(value):
+    return int(dt.datetime.fromisoformat(value).timestamp() * 1000)
+
+
+def event_times(e):
+    """Start and end in epoch ms, and whether the event is all-day."""
+    start, end = e["start"], e["end"]
+    if "date" in start:
+        tz = dt.datetime.now().astimezone().tzinfo
+        s = dt.datetime.combine(dt.date.fromisoformat(start["date"]), dt.time(), tz)
+        en = dt.datetime.combine(dt.date.fromisoformat(end["date"]), dt.time(), tz)
+        return int(s.timestamp() * 1000), int(en.timestamp() * 1000), True
+    return ms(start["dateTime"]), ms(end["dateTime"]), False
+
+
+def declined(e):
+    return any(
+        a.get("self") and a.get("responseStatus") == "declined"
+        for a in e.get("attendees", [])
+    )
+
+
+def fetch(cfg):
+    account = cfg["account"]
+    days = int(cfg.get("days", 7))
+    calendars = {
+        c["id"]: c for c in gog(account, "calendar", "calendars").get("calendars", [])
+    }
+
+    events, seen = [], set()
+    for cal_id in cfg["calendars"]:
+        cal = calendars.get(cal_id, {})
+        data = gog(
+            account,
+            "calendar",
+            "events",
+            cal_id,
+            "--from",
+            "today",
+            "--days",
+            str(days),
+            "--max",
+            "250",
+            "--all-pages",
+        )
+        for e in data.get("events", []):
+            if e.get("status") == "cancelled" or declined(e):
+                continue
+            key = e.get("iCalUID", e["id"]) + e["start"].get(
+                "dateTime", e["start"].get("date", "")
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            start, end, all_day = event_times(e)
+            events.append(
+                {
+                    "title": e.get("summary") or "(no title)",
+                    "start": start,
+                    "end": end,
+                    "allDay": all_day,
+                    "location": e.get("location", ""),
+                    "meet": e.get("hangoutLink", ""),
+                    "link": e.get("htmlLink", ""),
+                    "calendar": cal.get("summaryOverride")
+                    or cal.get("summary", cal_id),
+                    "color": cal.get("backgroundColor", ""),
+                }
+            )
+    events.sort(key=lambda x: (x["start"], not x["allDay"], x["title"]))
+
+    tasks = []
+    for lst in gog(account, "tasks", "lists").get("tasklists", []):
+        for t in gog(account, "tasks", "list", lst["id"], "--max", "100").get(
+            "tasks", []
+        ):
+            if t.get("status") != "needsAction" or not t.get("title", "").strip():
+                continue
+            tasks.append(
+                {
+                    "title": t["title"].strip(),
+                    "due": t.get("due", "")[:10],
+                    "link": t.get("webViewLink", ""),
+                }
+            )
+    tasks.sort(key=lambda t: (t["due"] == "", t["due"], t["title"]))
+
+    return {
+        "updated": int(dt.datetime.now().timestamp() * 1000),
+        "error": "",
+        "events": events,
+        "tasks": tasks,
+    }
+
+
+def theme():
+    """Colours of the current Plasma style (the panels), from plasma-style-colours.
+
+    In a plasmawindowed window the widget gets the app colour scheme instead, so it
+    would not match the panels without this. Empty when the colours cannot be read.
+    """
+    try:
+        path = subprocess.run(
+            [str(HOME / "bin/plasma-style-colours")],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+        cp = configparser.ConfigParser(interpolation=None, strict=False)
+        cp.optionxform = str
+        cp.read(path)
+
+        def hex_of(group, key):
+            r, g, b = (int(x) for x in cp[group][key].split(",")[:3])
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        return {
+            "background": hex_of("Colors:Window", "BackgroundNormal"),
+            "alternate": hex_of("Colors:View", "BackgroundNormal"),
+            "text": hex_of("Colors:Window", "ForegroundNormal"),
+            "inactive": hex_of("Colors:Window", "ForegroundInactive"),
+            "negative": hex_of("Colors:Window", "ForegroundNegative"),
+            "accent": hex_of("Colors:Selection", "BackgroundNormal"),
+            "accentText": hex_of("Colors:Selection", "ForegroundNormal"),
+        }
+    except (OSError, subprocess.SubprocessError, KeyError, ValueError):
+        return {}
+
+
+def main():
+    try:
+        cfg = json.loads(CONFIG.read_text())
+        result = fetch(cfg)
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        CACHE.write_text(json.dumps(result))
+    except Exception as exc:  # the widget shows the error and the last good data
+        try:
+            result = json.loads(CACHE.read_text())
+        except (OSError, ValueError):
+            result = {"updated": 0, "events": [], "tasks": []}
+        result["error"] = str(exc)
+    result["theme"] = theme()
+    json.dump(result, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()
