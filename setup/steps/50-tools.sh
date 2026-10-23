@@ -63,6 +63,44 @@ else
 fi
 "$HOME/bin/shader-wallpaper-theme-sync" && ok "themed Star Nest shader in ~/.local/share/shader-wallpaper"
 
+step "tools: agent mail (localbuilds recipe mcp-agent-mail)"
+# The pacman package mcp-agent-mail-local. agent-mail.service and older scripts use the
+# ~/.local/bin paths, so those are symlinks. See the recipe README before moving the pin.
+if pacman -Q mcp-agent-mail-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q mcp-agent-mail-local)"
+else
+  "$HOME/.local/bin/localbuild" build mcp-agent-mail
+  "$HOME/.local/bin/localbuild" install mcp-agent-mail
+fi
+ln -sfn /usr/bin/am "$HOME/.local/bin/am"
+ln -sfn /usr/bin/mcp-agent-mail "$HOME/.local/bin/mcp-agent-mail"
+for alias in agent-mail agentmail mcp_agent_mail mcpagentmail; do
+  ln -sfn mcp-agent-mail "$HOME/.local/bin/$alias"
+done
+
+step "tools: qmd"
+# Markdown search for the Life vault and the knowledge bases. Installed under ~/.local
+# (not the nvm prefix), because qmd-ifkb.service runs ~/.local/lib/node_modules/@tobilu/qmd.
+# Its native modules must be built by the nvm Node in packages/node-version.
+qmd_ver=2.8.3
+qmd_pkg="$HOME/.local/lib/node_modules/@tobilu/qmd"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use -s "$(cat "$SETUP/packages/node-version")" >/dev/null
+if [ "$(jq -r .version "$qmd_pkg/package.json" 2>/dev/null)" = "$qmd_ver" ]; then
+  ok "qmd $qmd_ver"
+else
+  npm install -g --prefix "$HOME/.local" "@tobilu/qmd@$qmd_ver" && ok "qmd $qmd_ver installed"
+fi
+# Collections. The monorepo knowledge bases are added by kb-index-refresh.timer once
+# ~/work/desktop exists. ifkb keeps its own index in the clone (.qmd/index.yml).
+if [ -d "$HOME/work/life/vault" ]; then
+  qmd collection show life >/dev/null 2>&1 || qmd collection add "$HOME/work/life/vault" --name life >/dev/null
+  qmd update >/dev/null && qmd embed >/dev/null && ok "qmd: life collection indexed"
+fi
+if [ -f "$HOME/work/ifkb/.qmd/index.yml" ]; then
+  (cd "$HOME/work/ifkb" && qmd update >/dev/null && qmd embed >/dev/null) && ok "qmd: ifkb index built"
+fi
+
 step "tools: aiolos-rc"
 if [ -f "$DOTFILES/.config/aiolos-rc/preload.so" ]; then
   ok "preload.so built"
@@ -85,8 +123,6 @@ fi
 step "tools: prebuilt binaries"
 # name|where it lives|where it comes from
 prebuilt=(
-  "am|.local/bin|mcp-agent-mail (rust); also links agent-mail agentmail mcp_agent_mail mcpagentmail -> mcp-agent-mail"
-  "mcp-agent-mail|.local/bin|mcp-agent-mail (rust)"
   "br|.local/bin|beads_rust"
   "cm|.local/bin|cass-memory"
   "jsm|.local/bin|jeffreys-skills CLI (needs a login)"
