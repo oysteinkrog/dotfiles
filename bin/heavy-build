@@ -217,7 +217,12 @@
 #   HEAVY_BUILD_WINE_FALLBACK_PCT (default 75 since 2026-10-22; it was 90
 #   from 2026-10-21, and 75 before). The class
 #   floor holds, except that 10 or more runs may go down to 4 GiB. A run
-#   without a filter keeps the rule above. See estimate(). Cores and wall
+#   without a filter keeps the rule above. Own history (since 2026-10-23,
+#   HEAVY_BUILD_OWN_EST=1): when the command has 2 or more runs with a peak
+#   and the class p90, class percentile or class floor decided, its estimate
+#   is 1.2 times its own highest peak of the last 10 runs (at least 1 GiB),
+#   if that is lower; live.log shows mem=key-own. Set it to 0 to turn this
+#   off. See estimate(). Cores and wall
 #   time come from the
 #   last 5 runs of the same command, then from the class, then 8 cores and
 #   600 s. History: ~/.local/state/heavy-build/history.tsv,
@@ -612,6 +617,7 @@ read_conf() {
   setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
   setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
+  setting HEAVY_BUILD_OWN_EST 1
   (( WINE_FALLBACK_PCT >= 1 && WINE_FALLBACK_PCT <= 100 )) || WINE_FALLBACK_PCT=75
   setting HEAVY_BUILD_RERUN_FAILS 2
   setting HEAVY_BUILD_RERUN_SECS 1800
@@ -811,6 +817,13 @@ SIG_DAYS=14
 # Memory is the largest of: the key's highest peak in its last 10 runs, the
 # class p90 peak over its last 50 runs (the class_table value when the class
 # has under 5 runs), and the class floor. It is capped at EST_MEM_MAX_GIB.
+# Own history (HEAVY_BUILD_OWN_EST=1, the default since 2026-10-23): when the
+# key has 2 or more runs with a peak and the class estimate or floor decided,
+# the estimate is 1.2 x the key's highest peak of its last 10 runs (at least
+# 1 GiB, mem=key-own) if that is lower. This also applies below the class
+# floor and to filtered Wine runs that fell back to the class percentile. On
+# 2026-10-23 it would have lowered the estimate of 37 of 504 builds below their
+# class p90 or floor. HEAVY_BUILD_OWN_EST=0 turns it off.
 # A Wine test run with a filter (SIG from wine_sig, FILTERED 1) is estimated
 # from its sig instead (history column 12, runs in the last SIG_DAYS days):
 # with 5 or more such runs, their p90 peak (mem=sig-p90); with fewer, the
@@ -833,12 +846,13 @@ SIG_DAYS=14
 # last 5 runs, else from the class, and never from OOM-killed runs.
 # source: history, class-history, class or default (where wall and cores
 # came from), then ",mem=" and what set memory: key, class-p90, class-pNN,
-# sig-p90, sig-max, class, default, floor or cap.
+# sig-p90, sig-max, class, default, floor, key-own or cap.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
-    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" '
+    -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" \
+    -v ownest="${OWN_EST:-1}" '
     function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
@@ -911,6 +925,17 @@ estimate() {
         if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = "key" }
       }
       if (floor > mem) { mem = floor; msrc = "floor" }
+      # Own history: a key with 2 or more runs with a peak is estimated at
+      # 1.2 x its highest peak of its last 10 runs (at least 1 GiB) when that
+      # is below the class estimate or floor.
+      if (ownest == 1 && kmn >= 2 && msrc ~ /^(class|class-p[0-9]+|floor)$/) {
+        no = 0; mx = -1
+        for (i = (kmn > 10 ? kmn - 9 : 1); i <= kmn; i++) if (kmp[i] != "NA") { no++; if (kmp[i] + 0 > mx) mx = kmp[i] + 0 }
+        if (no >= 2) {
+          own = 1.2 * mx / 1073741824; if (own < 1) own = 1
+          if (own < mem) { mem = own; msrc = "key-own" }
+        }
+      }
       if (maxm > 0 && mem > maxm) { mem = maxm; msrc = "cap" }
       if (mem < 0.1) mem = 0.1
       if (cores < 0.1) cores = 0.1

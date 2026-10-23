@@ -451,8 +451,23 @@ out=$(est newkey cargo-check)
 check "estimate: a new key uses the class p90 (got '$out')" '[[ $out == "19.0 class-history,mem=class-p90" ]]'
 row cargo-check lowkey 2 0 ok
 row cargo-check lowkey 3 1 fail
+out=$(OWN_EST=0 est lowkey cargo-check)
+check "estimate: with HEAVY_BUILD_OWN_EST=0, key history (max 3) below the class p90 (18) gets the p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+# Own history (2026-10-23): a key with 2 or more runs gets 1.2 x its own max
+# when that is below the class estimate.
 out=$(est lowkey cargo-check)
-check "estimate: key history (max 3) below the class p90 (18) gets the p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+check "own history: 2 runs, max 3 GiB, gives 1.2 x 3 = 3.6 instead of the class p90 (got '$out')" '[[ $out == "3.6 history,mem=key-own" ]]'
+row cargo-check onekey 2 0 ok
+out=$(est onekey cargo-check)
+check "own history: a key with 1 run keeps the class p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+row cargo-check bigown 15 0 ok
+row cargo-check bigown 16 0 ok
+out=$(est bigown cargo-check)
+check "own history: 1.2 x 16 = 19.2 is above the class p90, so the class p90 (18) stays (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+row cargo-check tinykey 0 0 ok
+row cargo-check tinykey 0 0 ok
+out=$(est tinykey cargo-check)
+check "own history: never under 1 GiB (got '$out')" '[[ $out == "1.0 history,mem=key-own" ]]'
 : > "$E/hist"
 row cargo-check oomkey 3 0 ok
 row cargo-check oomkey 8 137 fail
@@ -495,6 +510,9 @@ check "estimate: a capped run never goes past the 22 GiB estimate cap (got '$out
 for i in $(seq 1 6); do row wine-run-tests "w$i" 2 0 ok; done
 out=$(est newkey wine-run-tests)
 check "estimate: the class floor (6) wins over a lower p90 (got '$out')" '[[ $out == "6.0 class-history,mem=floor" ]]'
+row wine-run-tests w1 2 0 ok
+out=$(est w1 wine-run-tests)
+check "own history: 2 runs at 2 GiB give 2.4 under the 6 GiB class floor (got '$out')" '[[ $out == "2.4 history,mem=key-own" ]]'
 for i in $(seq 7 20); do row wine-run-tests "w$i" 2 0 ok; done
 row wine-run-tests leakkey 17 0 ok
 out=$(est leakkey wine-run-tests)
@@ -1112,6 +1130,8 @@ check "settings: HEAVY_BUILD_MAX_CPU_PSI in the file still wins over the default
 rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_REAL_USE HEAVY_BUILD_YOUNG_PCT HEAVY_BUILD_YOUNG_MIN_SECS HEAVY_BUILD_SLICE_CPU_SECS; rconf REAL_USE YOUNG_PCT YOUNG_MIN_SECS SLICE_CPU_SECS)
 check "settings: the real-use rule is on by default, young is 70% or 120 s, CPU window 30 s (got '$out')" '[[ $out == "1 70 120 30 " ]]'
+out=$(unset HEAVY_BUILD_OWN_EST; rconf OWN_EST)
+check "settings: own-history estimates are on by default (got '$out')" '[[ $out == "1 " ]]'
 out=$(unset HEAVY_BUILD_YOUNG_GROW_PCT; rconf YOUNG_GROW_PCT)
 check "settings: young-build growth is charged at 50% by default (got '$out')" '[[ $out == "50 " ]]'
 out=$(HEAVY_BUILD_YOUNG_GROW_PCT=150 rconf YOUNG_GROW_PCT)
