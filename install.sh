@@ -191,6 +191,9 @@ if [ -n "$native_linux" ]; then
     .local/share/kwin/scripts/pin-to-monitor
     .local/share/plasma/plasmoids/org.oysteinkrog.agenda
     .local/share/applications/org.wezfurlong.wezterm.desktop
+    .local/share/applications/com.dicklesworthstone.frankenterm.desktop
+    .local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg
+    .local/bin/frankenterm
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
     .local/share/applications/foobar2000-next.desktop
