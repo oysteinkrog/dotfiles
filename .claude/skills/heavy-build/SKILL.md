@@ -166,17 +166,22 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
 - `~/.local/state/heavy-build/history.tsv`: one line per finished build (column 4 is
   wall seconds, not the exit code).
 - Limits: up to 6 builds and 28 cores at once. All builds share `builds.slice`, with
-  `MemoryHigh=32G` and `MemoryMax=42G`. Each build gets its own scope with MemoryHigh
-  16G to 22G from its estimate (it slows down there), MemoryMax twice that but no more
-  than 42G, and MemorySwapMax 8G. An OOM kills only that build.
+  `MemoryHigh=40G` and `MemoryMax=50G` (32G and 42G before 2026-10-23). Each build
+  gets its own scope with MemoryHigh 16G to 22G from its estimate (it slows down
+  there), MemoryMax twice that but no more than the slice's MemoryMax, and
+  MemorySwapMax 8G. An OOM kills only that build.
 - Admission uses real use (since 2026-10-22, `HEAVY_BUILD_REAL_USE=1`). The slice-cap
-  check takes what builds.slice holds now (memory.current) plus the memory young
-  builds may still take. A build is young for its first 2 min or 70% of its expected
-  wall time, whichever is longer. The cores check takes what builds.slice used over
-  the last 30 to 120 s plus the full estimate of each build in its first 2 min. The
-  memory reserve is 5 GiB (`HEAVY_BUILD_MEM_RESERVE_GIB` in `~/.config/heavy-build.conf`,
+  check takes what builds.slice holds now (memory.current) plus half the memory young
+  builds may still take (`HEAVY_BUILD_YOUNG_GROW_PCT`, 50; it was 100 before
+  2026-10-23). A build is young for its first 2 min or 70% of its expected wall time,
+  whichever is longer. The cores check takes what builds.slice used over the last 30
+  to 120 s plus, for each build in its first 2 min, its estimate minus the cores it
+  already used in that window, so its CPU is not counted twice (until 2026-10-23 it
+  was the full estimate). The memory check expects a running build to take 25% of its
+  estimate minus what it holds (`HEAVY_BUILD_TC_PCT=25` in the conf file, 50 before
+  2026-10-23). The memory reserve is 5 GiB (`HEAVY_BUILD_MEM_RESERVE_GIB` in `~/.config/heavy-build.conf`,
   6 before). Waits now read like "slice-cap: needs 6.0 GiB; builds.slice uses 19.3
-  GiB and running builds may take 4.1 more, of the 32.0 GiB cap" or "cores: needs
+  GiB and running builds may take 4.1 more, of the 40.0 GiB cap" or "cores: needs
   8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for
   builds that started recently)". `HEAVY_BUILD_REAL_USE=0` in the conf file brings back
   the old rule, which charged every build its full estimate.
