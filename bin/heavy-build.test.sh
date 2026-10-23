@@ -734,7 +734,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
-      -v youngpct=70 -v youngmin=120 "$ADMIT_AWK" \
+      -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -983,6 +983,34 @@ out=$(printf '%s\n' "$RUN_OLD" 'F orphan1 3221225472 1000000 600 0 -' "$W_6" | A
 check "real use: 9 + 2 + 6 is over 16, so it waits (got '$out')" '[[ $out == "wait|slice-cap: needs 6.0 GiB; builds.slice uses 9.0 GiB and running builds may take 2.0 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
 out=$(printf '%s\n' "$RUN_OLD" "$W_6" "W 0000000999000000001-2-n 999000 normal 6 2 600 -" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur5 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000001-2-n 0 1 12)
 check "real use: a build let in ahead in the same walk counts its full estimate (5 + 6 + 6 is over 16) (got '$out')" '[[ $out == wait\|slice-cap:*may\ take\ 6.0\ more* ]]'
+# Young-build growth (2026-10-23, HEAVY_BUILD_YOUNG_GROW_PCT, default 50):
+# only that share of a young build's estimate minus what it holds is charged.
+out=$(printf '%s\n' "$RUN_YOUNG" "$W_6" | ADM_GROWPCT=50 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "young grow 50%: 2 + 11 x 50% + 6 = 13.5 fits 16, so the 6 GiB build starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_YOUNG" "W 0000000999000000000-1-n 999000 normal 10 2 600 -" | ADM_GROWPCT=50 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "young grow 50%: the reason says 5.5 GiB still to come (got '$out')" '[[ $out == "wait|slice-cap: needs 10.0 GiB; builds.slice uses 2.0 GiB and running builds may take 5.5 more, of the 16.0 GiB cap (MemoryMax)|0" ]]'
+out=$(printf '%s\n' "$RUN_YOUNG" "$W_6" | ADM_GROWPCT=0 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur2 ADM_SLICEMAX=$A/slicemax16 adm 0000000999000000000-1-n 0 1 12)
+check "young grow 0%: only what builds.slice holds counts (got '$out')" '[[ $out == start\|fits:* ]]'
+# Young-build CPU counted once (2026-10-23): builds.slice's CPU average already
+# holds what a young build used inside the window, so the build adds only its
+# estimate minus that (floored at 0). 28 cores; builds.slice used 12.
+W_8C='W 0000000999000000000-1-n 999000 normal 2 8 600 -'
+# Estimate 10 cores, started 60 s ago, used 8 cores: 10 - 8 = 2 more.
+RUN_YC60='R y1 999940 2 10 1000540 1073741824 8000 0 normal -'
+out=$(printf '%s\n' "$RUN_YC60" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "young cpu: a 60 s old build using 8 of its 10 estimated cores adds 2, so 12 + 2 + 8 fits 28 (got '$out')" '[[ $out == start\|fits:* ]]'
+# Started 15 s ago: half of its use falls in the 30 s window, 10 - 4 = 6 more.
+RUN_YC15='R y1 999985 2 10 1000585 1073741824 8000 0 normal -'
+out=$(printf '%s\n' "$RUN_YC15" "W 0000000999000000000-1-n 999000 normal 2 12 600 -" | ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "young cpu: a 15 s old build counts half its use as already in the window (12 + 6 + 12 > 28) (got '$out')" '[[ $out == "wait|cores: needs 12.0, 18.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 6.0 for builds that started recently)|0" ]]'
+# Using more than its estimate: floored at 0.
+RUN_YCHI='R y1 999940 2 10 1000540 1073741824 14000 0 normal -'
+out=$(printf '%s\n' "$RUN_YCHI" "W 0000000999000000000-1-n 999000 normal 2 20 600 -" | ADM_REALUSE=1 ADM_SLICEAVG=20 adm 0000000999000000000-1-n 0 1 12)
+check "young cpu: a build over its estimate adds 0, not less (20 + 0 + 20 > 28) (got '$out')" '[[ $out == "wait|cores: needs 20.0, 20.0 of 28 in use (builds.slice used 20.0 over the last 30 s, plus 0.0 for builds that started recently)|0" ]]'
+# No measurement yet: the full estimate.
+RUN_YCNA='R y1 999995 2 10 1000595 1073741824 - 0 normal -'
+out=$(printf '%s\n' "$RUN_YCNA" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "young cpu: without a 60 s figure the full 10-core estimate counts (12 + 10 + 8 > 28) (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for builds that started recently)|0" ]]'
 
 # Inactive page cache (memory.stat inactive_file) is taken off memory.current
 # when slicestatfile is set (HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=1).
@@ -1084,6 +1112,10 @@ check "settings: HEAVY_BUILD_MAX_CPU_PSI in the file still wins over the default
 rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_REAL_USE HEAVY_BUILD_YOUNG_PCT HEAVY_BUILD_YOUNG_MIN_SECS HEAVY_BUILD_SLICE_CPU_SECS; rconf REAL_USE YOUNG_PCT YOUNG_MIN_SECS SLICE_CPU_SECS)
 check "settings: the real-use rule is on by default, young is 70% or 120 s, CPU window 30 s (got '$out')" '[[ $out == "1 70 120 30 " ]]'
+out=$(unset HEAVY_BUILD_YOUNG_GROW_PCT; rconf YOUNG_GROW_PCT)
+check "settings: young-build growth is charged at 50% by default (got '$out')" '[[ $out == "50 " ]]'
+out=$(HEAVY_BUILD_YOUNG_GROW_PCT=150 rconf YOUNG_GROW_PCT)
+check "settings: a young-build growth share over 100 falls back to 50 (got '$out')" '[[ $out == "50 " ]]'
 printf 'HEAVY_BUILD_REAL_USE=0
 HEAVY_BUILD_MEM_RESERVE_GIB=4
 ' > "$A/hb.conf"

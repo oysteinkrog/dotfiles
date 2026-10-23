@@ -2,7 +2,7 @@
 Description=Heavy builds started by heavy-build
 
 # heavy-build puts each build in its own scope here, capped at 16G to 22G high
-# by its memory estimate, with a hard max of twice that (at most this slice's 42G)
+# by its memory estimate, with a hard max of twice that (at most this slice's MemoryMax)
 # and 8G of swap each. This slice caps all builds
 # together, so they cannot take the memory that the terminal and the agent
 # sessions need. CPUWeight 20 (default 100) keeps interactive work responsive
@@ -11,9 +11,13 @@ Description=Heavy builds started by heavy-build
 # MemoryHigh 32G protects the desktop from build memory pressure: the kernel
 # reclaims build memory before the 42G hard cap. Added after the 2026-10-13
 # freezes.
+# 2026-10-23: MemoryHigh 32G -> 40G and MemoryMax 42G -> 50G (approved by
+# Oystein), with the heavy-build admission changes of the same day. A replay
+# of that day (/var/tmp/claude/hb-tune/sim.py) halved the mean wait, and the
+# slice peaked at 39.5 GiB in it.
 [Slice]
-MemoryHigh=32G
-MemoryMax=42G
+MemoryHigh=40G
+MemoryMax=50G
 # MemorySwapMax 32G since 2026-10-22 (Oystein approved; it was 6G). At 6G builds hit
 # the swap cap while the disk swap was mostly free, and a build held at its cap can be
 # OOM-killed. pressure-coordinator pauses new builds when this slice reaches 90% of it.
