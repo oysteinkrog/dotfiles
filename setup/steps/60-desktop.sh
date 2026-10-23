@@ -38,6 +38,26 @@ fi
 # must not reopen it as well, or the login shows two FrankenTerm windows.
 kw --file ksmserverrc --group General --key excludeApps com.dicklesworthstone.frankenterm.desktop
 
+# System tray: pin a few icons, hide the ones that never have news (Cachy-Update and
+# Remmina report Active all the time). The rest sit in the popup and show on the panel
+# only while they have something to report. The panel and tray ids differ per machine,
+# so this goes through plasmashell's scripting interface; it needs a running session.
+if qdbus6 org.kde.plasmashell /PlasmaShell >/dev/null 2>&1; then
+  qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript '
+    panels().forEach(function (p) {
+      p.widgets("org.kde.plasma.systemtray").forEach(function (w) {
+        w.currentConfigGroup = ["General"];
+        w.writeConfig("shownItems", ["org.kde.plasma.volume", "org.kde.plasma.networkmanagement",
+          "org.kde.plasma.notifications", "Slack_status_icon_1", "Claude_status_icon_1"]);
+        w.writeConfig("hiddenItems", ["remmina-icon", "Cachy-Update",
+          "org.kde.plasma.clipboard", "org.kde.plasma.brightness"]);
+        w.writeConfig("showAllItems", false);
+      });
+    });' >/dev/null
+else
+  warn "plasmashell not running, system tray entries not set"
+fi
+
 # Window layout per host: which app goes on which monitor (the pin-to-monitor KWin script).
 # Empty turns the script off.
 if [ -n "$HOST_WINDOW_LAYOUT" ]; then
