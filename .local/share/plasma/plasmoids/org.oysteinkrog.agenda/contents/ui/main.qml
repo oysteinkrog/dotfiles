@@ -72,7 +72,8 @@ PlasmoidItem {
         const lastDay = dayStart(p.end - 1);
         if (lastDay <= dayStart(now))
             return what;
-        return i18n("%1 until %2", what, Qt.formatDate(new Date(lastDay), "ddd d MMM"));
+        const sameYear = new Date(lastDay).getFullYear() === new Date(now).getFullYear();
+        return i18n("%1 until %2", what, Qt.formatDate(new Date(lastDay), sameYear ? "ddd d MMM" : "d MMM yyyy"));
     }
 
     function untilText(ms) {

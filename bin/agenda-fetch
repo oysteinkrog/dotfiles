@@ -143,6 +143,12 @@ def fetch(cfg):
     }
 
 
+def is_home(title):
+    """True when an absence entry is working from home rather than being away."""
+    low = title.lower()
+    return "wfh" in low or "home" in low or "hjemme" in low
+
+
 def away(account, sources, slack=False):
     """Who is out, at home or on part-time hours today, from shared calendars.
 
@@ -167,7 +173,7 @@ def away(account, sources, slack=False):
             title = e.get("summary", "")
             if src["kind"] == "hours":
                 kind = "hours"
-            elif "wfh" in title.lower() or "home" in title.lower():
+            elif is_home(title):
                 kind = "home"
             else:
                 kind = "out"
@@ -188,15 +194,82 @@ def away(account, sources, slack=False):
                     "link": e.get("htmlLink", ""),
                 }
             )
-    if slack:
-        # The calendar wins for out and home. Slack's "out" wins over part-time hours,
-        # because a sick day is the news there.
+    # Then each colleague's own out-of-office events, then Slack statuses. An earlier
+    # source wins for the same person, except that being out beats part-time hours,
+    # because a sick day is the news there.
+    slack_people, emails = slack_away() if slack else ([], [])
+    for extra in (native_ooo(account, emails), slack_people):
         listed = {p["email"] for p in people if p["kind"] != "hours"} | {account}
-        extra = [p for p in slack_away() if p["email"] not in listed]
+        extra = [p for p in extra if p["email"] not in listed]
         out = {p["email"] for p in extra if p["kind"] == "out"}
         people = [p for p in people if p["email"] not in out] + extra
     order = {"out": 0, "home": 1, "hours": 2}
     people.sort(key=lambda p: (order[p["kind"]], p["name"]))
+    return people
+
+
+OOO_CACHE = HOME / ".cache/agenda/ooo.json"
+OOO_MAX_AGE = 600  # seconds; out-of-office events change rarely
+
+
+def native_ooo(account, emails):
+    """Out-of-office events (Google Calendar's own type) in each colleague's calendar.
+
+    One read per person, 8 at a time, cached for OOO_MAX_AGE so the two-minute refresh
+    does not read every calendar each time. Calendars that cannot be read are skipped.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    today = dt.date.today().isoformat()
+    try:
+        cached = json.loads(OOO_CACHE.read_text())
+        age = dt.datetime.now().timestamp() - cached["time"]
+        if cached["date"] == today and age < OOO_MAX_AGE:
+            return cached["people"]
+    except (OSError, ValueError, KeyError):
+        pass
+
+    def one(email):
+        try:
+            data = gog(account, "calendar", "events", email, "--today", "--max", "50")
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
+            return []
+        found = []
+        for e in data.get("events", []):
+            if e.get("eventType") != "outOfOffice" or e.get("status") == "cancelled":
+                continue
+            start, end, all_day = event_times(e)
+            # A multi-day absence, or one from midnight to midnight, is shown by its
+            # last day rather than by clock times.
+            s_dt = dt.datetime.fromtimestamp(start / 1000)
+            e_dt = dt.datetime.fromtimestamp(end / 1000)
+            midnights = s_dt.time() == dt.time() and e_dt.time() == dt.time()
+            if midnights or s_dt.date() != (e_dt - dt.timedelta(milliseconds=1)).date():
+                all_day = True
+            title = e.get("summary") or "Out of office"
+            found.append(
+                {
+                    "name": email.split("@")[0].split(".")[0].capitalize(),
+                    "email": email,
+                    "kind": "home" if is_home(title) else "out",
+                    "start": start,
+                    "end": end,
+                    "allDay": all_day,
+                    "title": title,
+                    "source": "ooo",
+                    "link": e.get("htmlLink", ""),
+                }
+            )
+        return found[:1]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        people = [p for found in pool.map(one, emails) for p in found]
+    OOO_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    OOO_CACHE.write_text(
+        json.dumps(
+            {"date": today, "time": dt.datetime.now().timestamp(), "people": people}
+        )
+    )
     return people
 
 
@@ -229,7 +302,7 @@ HOME_EMOJI = (":house_with_garden:", ":house:")
 
 
 def slack_away():
-    """Who is out or at home today by Slack status.
+    """Who is out or at home today by Slack status, and the email of every member.
 
     The token must not reach any command line, so this runs a copy of this script
     under with-secrets, which reads it from the environment (--slack below).
@@ -249,15 +322,17 @@ def slack_away():
     )
     if r.returncode != 0:
         raise RuntimeError(f"slack: {(r.stderr or r.stdout).strip()[:200]}")
-    return json.loads(r.stdout)
+    data = json.loads(r.stdout)
+    return data["away"], data["emails"]
 
 
 def slack_statuses():
     """Print the Slack part of away() as JSON. Needs SLACK_BOT_TOKEN in the environment.
 
-    Skipped: expired statuses (Slack does not always clear them), statuses copied from
-    Google Calendar (the calendar is read already), and "working remotely" without an
-    end time, which is someone's normal week rather than news.
+    Skipped: expired statuses, and "working remotely" without an end time, which is
+    someone's normal week rather than news. Statuses that Slack's Google Calendar app
+    copied from an out-of-office event are kept, as a backup for native_ooo().
+    Also prints every member's email, the list of calendars native_ooo() reads.
     """
     import os
     import urllib.request
@@ -272,17 +347,18 @@ def slack_statuses():
         raise RuntimeError(data.get("error", "users.list failed"))
 
     now = dt.datetime.now().timestamp()
-    people = []
+    people, emails = [], []
     for u in data.get("members", []):
         if u.get("deleted") or u.get("is_bot") or u.get("id") == "USLACKBOT":
             continue
         p = u.get("profile", {})
+        if p.get("email") and not u.get("is_restricted"):
+            emails.append(p["email"])
         text, emoji = p.get("status_text", ""), p.get("status_emoji", "")
         expires = p.get("status_expiration", 0)
         if not (text or emoji) or (expires and expires < now):
             continue
-        if "google calendar" in text.lower():
-            continue
+        text = text.replace(" • Google Calendar", "")
         low = text.lower()
         if any(w in low for w in OUT_WORDS) or emoji in OUT_EMOJI:
             kind = "out"
@@ -309,7 +385,7 @@ def slack_statuses():
                 "link": "",
             }
         )
-    json.dump(people, sys.stdout)
+    json.dump({"away": people, "emails": emails}, sys.stdout)
 
 
 def theme():
