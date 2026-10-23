@@ -19,17 +19,26 @@ Environment=CASS_TANTIVY_MAX_WRITER_THREADS=2
 # Two Codex session files are over the default 100 MiB read budget; without this
 # the Codex scan never completes and every run exits 9.
 Environment=CASS_CODEX_MAX_SOURCE_BYTES=268435456
-# cass plans its memory against memory.max of its own cgroup. An OOM kill at
-# this cap kills only this unit, never the terminal mux. A killed run that
-# ingested anything forces a full lexical rebuild on the next run, so the cap is
-# sized from measured peaks (preflight alone reached 15 GB on 2026-10-03).
-# Swap stays low so the kernel drops page cache instead of parking idle heap.
-# MemoryHigh was 4G as a runtime override and hit that every night at about 04:06,
-# so it was 6G from 2026-10-20. The 2026-10-21 run peaked at 9G and swapped for
-# almost 2 h at 6G, so it is 10G since then (MemoryMax stays the hard cap).
-MemoryHigh=10G
-MemoryMax=30G
-MemorySwapMax=8G
+# Memory reduction, 2026-10-23.
+# The 2026-10-23 run peaked at 16.1G plus a full 8G of swap. Most of it is giant
+# Claude transcripts (up to 667 MB) parsed whole and mapped on every rayon
+# thread, each thread with its own redact memo cache. cass never sizes the
+# rayon pool, so it was 32 threads. 4 threads means fewer parallel copies and
+# fewer memo caches. The redact memo override (65536 entries, up to 4 GiB per
+# thread) is gone from cass-maintenance.sh, so the default 4096 applies.
+# The ingest WAL is reset every 128 MiB instead of 512 MiB: the pager keeps
+# about 3.5 to 4 times the WAL size in memory.
+Environment=RAYON_NUM_THREADS=4
+Environment=CASS_INDEX_INGEST_WAL_CHECKPOINT_BYTES=134217728
+# cass reads only memory.max of its own cgroup, never memory.high. An OOM kill
+# at MemoryMax kills only this unit, never the terminal mux, but a killed run
+# that ingested anything forces a full lexical rebuild on the next run.
+# History: 4G override, then 6G (2026-10-20), 10G with MemoryMax=30G and
+# MemorySwapMax=8G (2026-10-21). With the changes above it is 6G again, 14G as
+# the hard cap and 2G of swap, so the job cannot push other work into swap.
+MemoryHigh=6G
+MemoryMax=14G
+MemorySwapMax=2G
 OOMPolicy=kill
 CPUWeight=20
 IOWeight=20
