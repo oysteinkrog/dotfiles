@@ -22,7 +22,7 @@ while [ -z "$pw" ]; do
   [ -n "$pw" ] || exit 1
   # Check it on the office machine first. unix_chkpwd skips pam_faillock, so a typo
   # here does not count toward the 3-strikes lockout that a failed RDP login does.
-  printf '%s' "$pw" | ssh -o BatchMode=yes -o ConnectTimeout=10 office /usr/bin/unix_chkpwd oystein nullok
+  printf '%s\0' "$pw" | ssh -o BatchMode=yes -o ConnectTimeout=10 office /usr/bin/unix_chkpwd oystein nullok
   case $? in
     0) printf '%s' "$pw" | secret-tool store --label="Office desktop RDP (KRDP)" service office-rdp user oystein ;;
     7) kdialog --title "Office desktop (RDP)" --sorry "The office machine says that password is wrong. Try again."; pw= ;;
