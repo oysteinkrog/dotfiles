@@ -14,6 +14,7 @@ WirePlumber probe the sound card again if not (see reprobe_audio).
 
 Run by streamcam-mic.service, which a udev rule starts when the camera
 connects. Safe to run by hand at any time. --reprobe only does the reprobe.
+--force ignores the backoff after a timed-out write.
 """
 import ctypes
 import errno
@@ -30,6 +31,11 @@ PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
 MIC_ENABLE_SELECTOR = 17
 UVC_SET_CUR = 0x01
 AUDIO_NODE = "alsa_input.usb-046d_Logitech_StreamCam"
+# A timed-out write (ETIMEDOUT) knocks the camera off USB, and the udev rule then
+# runs this again on reconnect. Seen 2026-10-23: 365 reconnects in 40 minutes.
+# After a timeout, skip automatic runs for BACKOFF_SECONDS to break that loop.
+TIMEOUT_STAMP = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid()), "streamcam-mic-timeout")
+BACKOFF_SECONDS = 120
 
 
 class XuQuery(ctypes.Structure):
@@ -168,6 +174,14 @@ def main():
     if "--reprobe" in sys.argv:
         reprobe_audio()
         sys.exit(0 if wait_for_audio_node(30) else "StreamCam mic source still missing after reprobe")
+    if "--force" not in sys.argv:
+        try:
+            age = time.time() - os.path.getmtime(TIMEOUT_STAMP)
+        except OSError:
+            age = None
+        if age is not None and age < BACKOFF_SECONDS:
+            print(f"last mic enable timed out {age:.0f} s ago, skipping (use --force)")
+            return
     dev = unit = None
     for _ in range(20):
         dev, unit = find_camera()
@@ -181,6 +195,9 @@ def main():
             enable_mic(dev, unit)
             break
         except OSError as e:
+            if e.errno == errno.ETIMEDOUT:
+                open(TIMEOUT_STAMP, "w").close()
+                sys.exit(f"mic enable timed out on {dev}, camera likely reset; backing off {BACKOFF_SECONDS} s")
             if attempt == 4:
                 sys.exit(f"mic enable failed on {dev}: {e}")
             time.sleep(1)
