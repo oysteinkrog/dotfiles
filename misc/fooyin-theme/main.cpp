@@ -3,10 +3,13 @@
 //
 // Usage: fyhelper <fooyin.conf> darkone
 //        fyhelper <fooyin.conf> plasma <accent #rrggbb>
+//        fyhelper <fooyin.conf> style <KDE colours file>
 //
 // darkone: the foobar2000 DarkOne look of the main instance (fixed greys, orange accent).
 // plasma:  no saved theme, so fooyin follows the Plasma palette live. Only the accent inside text scripts is
 //          fixed, so fooyin-theme-sync runs this again when the Plasma colour scheme changes.
+// style:   the plasma layout, plus a saved theme (palette, waveform, spectrum) built from a KDE colours file,
+//          such as a Plasma style's own colors file. Used when the Plasma style and the app colour scheme differ.
 #include "spectrumcolours.h"
 #include "wavebarcolours.h"
 
@@ -15,6 +18,7 @@
 #include <QApplication>
 #include <QDataStream>
 #include <QDir>
+#include <QFile>
 #include <QSettings>
 
 #include <cstdio>
@@ -118,28 +122,28 @@ static const Preset DarkOne{
     .trackHeight  = 20,
 };
 
-// Plasma preset: bold album artist, muted year, album in the accent colour, track count and length on the right.
-// Muted text uses <alpha>, so it follows the palette's text colour; only the accent is a fixed colour.
-static Preset plasmaPreset(const QString& accent)
+// Plasma preset: album group header with the cover, the album in bold, "artist · year" and "tracks · length" under
+// it. Muted text uses <alpha>, so it follows the palette's text colour. The accent parameter is kept for the
+// column scripts; the header itself uses no fixed colour.
+static Preset plasmaPreset(const QString& /*accent*/)
 {
     return {
         .id           = 12,
         .index        = 5,
         .name         = u"Plasma"_s,
-        .title        = u"<sized=2><b>"_s + AlbumArtist + u"</b><alpha=140>[  ·  %date%]  ·  </alpha><color="_s + accent
-                 + u">$if2(%album%,Unknown Album)</color></sized>"_s,
-        .subtitle     = {},
-        .sideText     = u"<alpha=140>%trackcount% tracks  ·  %playtime%</alpha>"_s,
-        .info         = {},
-        .headerHeight = 44,
-        .showCover    = false,
-        .simple       = true,
+        .title        = u"<b><sized=3>$if2(%album%,Unknown Album)</sized></b>"_s,
+        .subtitle     = u"<sized=1><alpha=170>"_s + AlbumArtist + u"[  ·  %date%]</alpha></sized>"_s,
+        .sideText     = {},
+        .info         = u"<alpha=130>%trackcount% tracks  ·  %playtime%</alpha>"_s,
+        .headerHeight = 84,
+        .showCover    = true,
+        .simple       = false,
         .grouping     = AlbumArtist + u"|%date%|%album%"_s,
         .subLeft      = u"$ifgreater($max(%disctotal%,%disc%),1,<alpha=140>Disc %disc%</alpha>)"_s,
         .subRight     = {},
         .subHeight    = 24,
         .left         = u"$num(%track%,2)   %title%[<alpha=140>  ·  %trackartist%</alpha>]"_s,
-        .right        = u"<alpha=140>$ifgreater(%playcount%,0,%playcount%x   )%duration%   $upper(%codec%)</alpha>"_s,
+        .right        = u"<alpha=140>%duration%</alpha>"_s,
         .trackHeight  = 28,
     };
 }
@@ -232,12 +236,96 @@ static void writePlasma(QSettings& settings, const QString& accent)
     }));
     settings.setValue(u"PlaylistWidget/CurrentPreset"_s, plasma.id);
     settings.setValue(u"PlaylistWidget/AlternatingColours"_s, true);
+    settings.setValue(u"PlaylistWidget/Header"_s, false); // no column header row; the group headers carry it
 
     // Everything below falls back to the application palette, which Plasma updates live.
     for(const auto* key : {"Theme/CustomTheme", "Interface/Style", "PlaylistWidget/PlayingRowColour",
                            "PlaylistWidget/PlayingRowFont", "WaveBar/Colours", "Spectrum/Colours"}) {
         settings.remove(QString::fromLatin1(key));
     }
+}
+
+// [Colors:<group>] <key> from a KDE colours file ("r,g,b").
+static QColor kdeColour(QSettings& colours, const QString& group, const QString& key)
+{
+    const QStringList rgb = colours.value(u"Colors:"_s + group + u"/"_s + key).toStringList();
+    if(rgb.size() < 3) {
+        return {};
+    }
+    return {rgb.at(0).toInt(), rgb.at(1).toInt(), rgb.at(2).toInt()};
+}
+
+static void writeStyle(QSettings& settings, const QString& coloursFile)
+{
+    QSettings colours(coloursFile, QSettings::IniFormat);
+    const auto get = [&colours](const char* group, const char* key) {
+        return kdeColour(colours, QString::fromLatin1(group), QString::fromLatin1(key));
+    };
+
+    const QColor window = get("Window", "BackgroundNormal");
+    const QColor base   = get("View", "BackgroundNormal");
+    const QColor text   = get("View", "ForegroundNormal");
+    const QColor accent = get("Selection", "BackgroundNormal");
+    const QColor muted  = get("View", "ForegroundInactive");
+
+    writePlasma(settings, accent.name());
+
+    FyTheme theme;
+    theme.name     = u"Plasma style"_s;
+    const auto set = [&theme](QPalette::ColorRole role, const QColor& colour) {
+        if(colour.isValid()) {
+            theme.colours.insert(PaletteKey{.role = role}, colour);
+        }
+    };
+    set(QPalette::Window, window);
+    set(QPalette::WindowText, get("Window", "ForegroundNormal"));
+    set(QPalette::Base, base);
+    set(QPalette::AlternateBase, base.lighter(112));
+    set(QPalette::Text, text);
+    set(QPalette::Button, get("Button", "BackgroundNormal"));
+    set(QPalette::ButtonText, get("Button", "ForegroundNormal"));
+    set(QPalette::Highlight, accent);
+    set(QPalette::HighlightedText, get("Selection", "ForegroundNormal"));
+    set(QPalette::ToolTipBase, get("Tooltip", "BackgroundNormal"));
+    set(QPalette::ToolTipText, get("Tooltip", "ForegroundNormal"));
+    set(QPalette::PlaceholderText, muted);
+    set(QPalette::Link, get("View", "ForegroundLink"));
+    set(QPalette::BrightText, accent);
+    set(QPalette::Light, window.lighter(160));
+    set(QPalette::Midlight, window.lighter(130));
+    set(QPalette::Mid, window.darker(130));
+    set(QPalette::Dark, window.darker(170));
+    set(QPalette::Shadow, QColor{0, 0, 0});
+    settings.setValue(u"Theme/CustomTheme"_s, QVariant::fromValue(theme));
+
+    // Waveform seekbar: accent wave, lighter where already played.
+    using WT = WaveBar::Colours::Type;
+    WaveBar::Colours wave;
+    const QColor played = accent.lighter(140), rms = accent.darker(150), rmsPlayed = accent.lighter(115);
+    wave.waveColours = {
+        {WT::BgUnplayed, window},           {WT::BgPlayed, window},
+        {WT::MaxUnplayed, accent},          {WT::MinUnplayed, accent},
+        {WT::MaxPlayed, played},            {WT::MinPlayed, played},
+        {WT::RmsMaxUnplayed, rms},          {WT::RmsMinUnplayed, rms},
+        {WT::RmsMaxPlayed, rmsPlayed},      {WT::RmsMinPlayed, rmsPlayed},
+        {WT::MaxBorder, Qt::transparent},   {WT::MinBorder, Qt::transparent},
+        {WT::RmsMaxBorder, Qt::transparent}, {WT::RmsMinBorder, Qt::transparent},
+        {WT::Cursor, text},                 {WT::SeekingCursor, text},
+        {WT::PlayedThreshold, muted},
+    };
+    settings.setValue(u"WaveBar/Colours"_s, QVariant::fromValue(wave));
+
+    // Spectrum: accent bars on the window colour.
+    using ST = Spectrum::Colours::Type;
+    Spectrum::Colours spectrum;
+    spectrum.setColour(ST::Background, window);
+    spectrum.setColour(ST::BarGradient, accent.lighter(120));
+    spectrum.setColour(ST::Peaks, text);
+    spectrum.setColour(ST::Text, muted);
+    spectrum.setColour(ST::HorizontalGrid, window.lighter(150));
+    spectrum.setColour(ST::VerticalGrid, window.lighter(130));
+    spectrum.setColour(ST::OctaveGrid, window.lighter(150));
+    settings.setValue(u"Spectrum/Colours"_s, QVariant::fromValue(spectrum));
 }
 
 int main(int argc, char** argv)
@@ -249,8 +337,10 @@ int main(int argc, char** argv)
 
     const QStringList args = app.arguments();
     const bool plasma      = args.size() == 4 && args.at(2) == u"plasma"_s && QColor::fromString(args.at(3)).isValid();
-    if(!plasma && !(args.size() == 3 && args.at(2) == u"darkone"_s)) {
-        std::fputs("usage: fyhelper <fooyin.conf> darkone | plasma <accent #rrggbb>\n", stderr);
+    const bool style       = args.size() == 4 && args.at(2) == u"style"_s && QFile::exists(args.at(3));
+    if(!plasma && !style && !(args.size() == 3 && args.at(2) == u"darkone"_s)) {
+        std::fputs("usage: fyhelper <fooyin.conf> darkone | plasma <accent #rrggbb> | style <KDE colours file>\n",
+                   stderr);
         return 2;
     }
 
@@ -267,6 +357,9 @@ int main(int argc, char** argv)
 
     if(plasma) {
         writePlasma(settings, args.at(3));
+    }
+    else if(style) {
+        writeStyle(settings, args.at(3));
     }
     else {
         writeDarkOne(settings);
