@@ -1,0 +1,18 @@
+[Unit]
+Description=Refresh the knowledge-base qmd collections from the kb-index lane
+Documentation=file:%h/.dotfiles/bin/kb-index-refresh
+
+[Service]
+Type=oneshot
+Slice=background.slice
+ExecStart=%h/.dotfiles/bin/kb-index-refresh
+Environment=PATH=%h/.local/bin:%h/.bun/bin:%h/.nvm/versions/node/v22.14.0/bin:/usr/local/bin:/usr/bin:/bin:/opt/cuda/bin
+MemoryHigh=6G
+MemoryMax=10G
+MemorySwapMax=1G
+OOMPolicy=kill
+CPUWeight=20
+IOWeight=20
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h
