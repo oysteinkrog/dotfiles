@@ -17,11 +17,18 @@ if [ "${1:-}" = "--forget" ]; then
 fi
 
 pw=$(secret-tool lookup service office-rdp user oystein 2>/dev/null)
-if [ -z "$pw" ]; then
+while [ -z "$pw" ]; do
   pw=$(kdialog --title "Office desktop (RDP)" --password "Linux login password for oystein on the office desktop (not the wallet password):") || exit 1
   [ -n "$pw" ] || exit 1
-  printf '%s' "$pw" | secret-tool store --label="Office desktop RDP (KRDP)" service office-rdp user oystein
-fi
+  # Check it on the office machine first. unix_chkpwd skips pam_faillock, so a typo
+  # here does not count toward the 3-strikes lockout that a failed RDP login does.
+  printf '%s' "$pw" | ssh -o BatchMode=yes -o ConnectTimeout=10 office /usr/bin/unix_chkpwd oystein nullok
+  case $? in
+    0) printf '%s' "$pw" | secret-tool store --label="Office desktop RDP (KRDP)" service office-rdp user oystein ;;
+    7) kdialog --title "Office desktop (RDP)" --sorry "The office machine says that password is wrong. Try again."; pw= ;;
+    *) ;;  # ssh failed: cannot check, so try RDP without saving
+  esac
+done
 
 {
   printf '%s\n' /v:100.78.187.79 /u:oystein "/p:$pw" /cert:tofu \
