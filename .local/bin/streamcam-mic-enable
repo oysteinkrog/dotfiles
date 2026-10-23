@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Turn on the Logitech StreamCam's built-in mic, then relink the mic filter.
+"""Recover a Logitech StreamCam mic that records only zeros, then relink the mic filter.
 
-The StreamCam can switch its mic off in firmware. It then still shows up as a
-USB audio device but sends only zero samples. Logi Options+ on Windows turns it
-back on through the UVC peripheral extension unit (GUID ffe52d21-...), and
-nothing on Linux does. This sends the same write: selector 17 = 1.
+Sometimes the StreamCam's mic sends only zero samples on Linux. It survives a
+replug, a USB reset and a reboot. What fixes it is selector 17 on the camera's
+peripheral extension unit (GUID ffe52d21-...): SET_CUR 1 restores the camera's
+default settings and reboots it, so it drops off USB and reconnects about 2 s
+later. Writing 0 does nothing, and GET_CUR always reads 0. Logi Options+ never
+sends this control. See docs/streamcam.md in the dotfiles for the evidence.
 
-The camera stalls that SET_CUR (EPROTO) but applies it, and GET_CUR reads 0
-afterwards, so success is judged by the audio, not by the read-back.
+Because the write reboots the camera every time, this only sends it when the mic
+really records only zeros. Afterwards it checks that PipeWire has the camera's mic
+source, and makes WirePlumber probe the sound card again if not (see
+reprobe_audio).
 
-Afterwards it checks that PipeWire has the camera's mic source, and makes
-WirePlumber probe the sound card again if not (see reprobe_audio).
-
-Run by streamcam-mic.service, which a udev rule starts when the camera
-connects. Safe to run by hand at any time. --reprobe only does the reprobe.
---force ignores the backoff after a timed-out write.
+Run by streamcam-mic.service, which a udev rule starts when the camera connects,
+and by streamcam-mic-resume-watch after login and wake. Safe to run by hand.
+  --force       send the reset even if the mic works, and ignore the backoff
+  --reprobe     only rebind the sound card
+  --no-relink   skip the PipeWire checks after the reset
 """
 import ctypes
 import errno
@@ -28,12 +31,13 @@ import uuid
 
 VID, PID = "046d", "0893"
 PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
-MIC_ENABLE_SELECTOR = 17
+RESET_SELECTOR = 17  # SET_CUR 1 = restore defaults and reboot
 UVC_SET_CUR = 0x01
 AUDIO_NODE = "alsa_input.usb-046d_Logitech_StreamCam"
-# A timed-out write (ETIMEDOUT) knocks the camera off USB, and the udev rule then
-# runs this again on reconnect. Seen 2026-10-23: 365 reconnects in 40 minutes.
-# After a timeout, skip automatic runs for BACKOFF_SECONDS to break that loop.
+# The reset reboots the camera, and the udev rule then runs this again on reconnect.
+# When the write times out (ETIMEDOUT) instead of failing fast, that rerun lands
+# after the reconnect and resets the camera again: 365 reconnects in 40 minutes on
+# 2026-10-23. After a timeout, skip automatic runs for BACKOFF_SECONDS.
 TIMEOUT_STAMP = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid()), "streamcam-mic-timeout")
 BACKOFF_SECONDS = 120
 
@@ -86,11 +90,13 @@ def peripheral_unit_id(desc):
     return None
 
 
-def enable_mic(dev, unit):
+def reset_camera(dev, unit):
+    """Send SET_CUR 1 to the reset selector. The camera reboots, so the request fails
+    with EPROTO (or ETIMEDOUT) even though it worked."""
     fd = os.open(dev, os.O_RDWR)
     try:
         buf = (ctypes.c_uint8 * 1)(1)
-        query = XuQuery(unit, MIC_ENABLE_SELECTOR, UVC_SET_CUR, 1, ctypes.cast(buf, ctypes.c_void_p).value)
+        query = XuQuery(unit, RESET_SELECTOR, UVC_SET_CUR, 1, ctypes.cast(buf, ctypes.c_void_p).value)
         try:
             fcntl.ioctl(fd, UVCIOC_CTRL_QUERY, query)
         except OSError as e:
@@ -116,12 +122,12 @@ def wait_for_audio_node(seconds):
 def mic_has_signal():
     """True if the camera's mic records sound, False if only zeros, None if unknown.
 
-    The mic-on write makes the camera reset and reconnect every time, even when
-    the mic is already on (tested 2026-10-23). So only send it when the mic is
-    really off, which shows as samples that are all exactly zero.
+    The reset reboots the camera every time, so only send it when the mic is
+    stuck, which shows as samples that are all exactly zero. A working mic always
+    has some room noise.
     """
     names = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True).stdout.split("\n")
-    source = next((l.split("\t")[1] for l in names if AUDIO_NODE in l), None)
+    source = next((line.split("\t")[1] for line in names if AUDIO_NODE in line), None)
     if not source:
         return None
     try:
@@ -137,7 +143,7 @@ def mic_has_signal():
 def reprobe_audio():
     """Make WirePlumber probe the camera's sound card again.
 
-    The mic-on write can make the camera drop off USB and reconnect. If WirePlumber
+    The reset makes the camera drop off USB and reconnect. If WirePlumber
     probes the sound card during that reconnect (seen at login on 2026-10-22), it
     keeps a card with only the "off" and "pro-audio" profiles and no mic source.
     Rebinding snd-usb-audio makes the kernel remove and re-add the card, so
@@ -201,10 +207,10 @@ def main():
         except OSError:
             age = None
         if age is not None and age < BACKOFF_SECONDS:
-            print(f"last mic enable timed out {age:.0f} s ago, skipping (use --force)")
+            print(f"last reset timed out {age:.0f} s ago, skipping (use --force)")
             return
         if wait_for_audio_node(10) and mic_has_signal():
-            print("StreamCam mic already records sound, not sending the mic-on write")
+            print("StreamCam mic records sound, no reset needed")
             check_audio()
             return
     dev = unit = None
@@ -217,16 +223,16 @@ def main():
         sys.exit("StreamCam not found")
     for attempt in range(5):
         try:
-            enable_mic(dev, unit)
+            reset_camera(dev, unit)
             break
         except OSError as e:
             if e.errno == errno.ETIMEDOUT:
                 open(TIMEOUT_STAMP, "w").close()
-                sys.exit(f"mic enable timed out on {dev}, camera likely reset; backing off {BACKOFF_SECONDS} s")
+                sys.exit(f"reset timed out on {dev}; the camera reboots anyway. Backing off {BACKOFF_SECONDS} s")
             if attempt == 4:
-                sys.exit(f"mic enable failed on {dev}: {e}")
+                sys.exit(f"reset failed on {dev}: {e}")
             time.sleep(1)
-    print(f"sent mic enable to {dev} (unit {unit}, selector {MIC_ENABLE_SELECTOR})")
+    print(f"sent reset to {dev} (unit {unit}, selector {RESET_SELECTOR}); the camera reboots")
     if "--no-relink" not in sys.argv:
         check_audio()
 

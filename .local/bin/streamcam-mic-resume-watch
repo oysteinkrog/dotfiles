@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Turn the StreamCam mic back on after login and after every wake from sleep.
+# Check the StreamCam mic after login and after every wake from sleep.
 #
-# The camera can come back from suspend with its firmware mic switch off. It
+# The camera's mic can come back from suspend recording only zeros. The camera
 # does not reconnect on wake, so the udev rule that starts streamcam-mic.service
 # never fires. logind sends PrepareForSleep(false) on every wake; start the
-# service then. Run by streamcam-mic-resume.service.
+# service then. See docs/streamcam.md. Run by streamcam-mic-resume.service.
 systemctl --user start streamcam-mic.service
 
 gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 |
