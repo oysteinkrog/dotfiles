@@ -1,0 +1,102 @@
+#!/usr/bin/python3 -I
+"""Tell ddcutil which DRM connector each monitor's I2C bus belongs to.
+
+ddcutil (and so KDE's brightness control, which uses libddcutil) finds a
+monitor's connector by comparing the EDID it reads over I2C with the EDID in
+/sys/class/drm. On NVIDIA that is the only way. When a connector's EDID is
+overridden (edid-add-mode adds modes to DP-2 for RDP), the bytes differ, the
+bus gets no connector, and powerdevil leaves that monitor out.
+
+This script runs `ddcutil detect`, and for each bus without a connector finds
+the connector whose EDID has the same maker, product code and serial number.
+It writes the result as --bus-drm-connector options into a marked block of
+~/.config/ddcutil/ddcutilrc, which both ddcutil and libddcutil read. The
+mapping is rebuilt each run, so a change in bus numbering is picked up.
+
+Run before powerdevil starts (plasma-powerdevil.service.d/ddc-connector-map.conf).
+"""
+
+import glob
+import os
+import re
+import subprocess
+import sys
+
+RC = os.path.expanduser("~/.config/ddcutil/ddcutilrc")
+BEGIN = "# BEGIN ddc-connector-map (generated, do not edit)"
+END = "# END ddc-connector-map"
+
+
+def edid_id(edid):
+    """Maker, product code and serial number from bytes 8 to 15 of an EDID."""
+    if len(edid) < 128 or edid[:8] != b"\x00\xff\xff\xff\xff\xff\xff\x00":
+        return None
+    m = int.from_bytes(edid[8:10], "big")
+    mfg = "".join(chr(((m >> s) & 0x1F) + 64) for s in (10, 5, 0))
+    return mfg, int.from_bytes(edid[10:12], "little"), int.from_bytes(edid[12:16], "little")
+
+
+def sysfs_connectors():
+    out = {}
+    for d in glob.glob("/sys/class/drm/card*-*"):
+        try:
+            if open(f"{d}/status").read().strip() != "connected":
+                continue
+            ident = edid_id(open(f"{d}/edid", "rb").read())
+        except OSError:
+            continue
+        if ident:
+            out.setdefault(ident, []).append(os.path.basename(d))
+    return out
+
+
+def unmapped_buses():
+    """(busno, ident) for each display ddcutil found without a DRM connector."""
+    # --noconfig: an old mapping must not hide a bus whose number has changed.
+    text = subprocess.run(["ddcutil", "--noconfig", "detect"], capture_output=True,
+                          text=True, timeout=60).stdout
+    result = []
+    for block in re.split(r"\n(?=\S)", text):
+        bus = re.search(r"I2C bus:\s+/dev/i2c-(\d+)", block)
+        mfg = re.search(r"Mfg id:\s+(\w{3})", block)
+        prod = re.search(r"Product code:\s+(\d+)", block)
+        serial = re.search(r"Binary serial number:\s+(\d+)", block)
+        if bus and mfg and prod and serial and "DRM_connector:" not in block:
+            result.append((int(bus.group(1)), (mfg.group(1), int(prod.group(1)), int(serial.group(1)))))
+    return result
+
+
+def write_rc(pairs):
+    try:
+        lines = open(RC).read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    if BEGIN in lines and END in lines:
+        lines = lines[:lines.index(BEGIN)] + lines[lines.index(END) + 1:]
+    if pairs:
+        opts = " ".join(f'--bus-drm-connector "{b} {c}"' for b, c in pairs)
+        lines = [BEGIN, "[global]", f"options: {opts}", END] + lines
+    new = "\n".join(lines) + "\n" if lines else ""
+    os.makedirs(os.path.dirname(RC), exist_ok=True)
+    tmp = RC + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(new)
+    os.replace(tmp, RC)
+
+
+def main():
+    conns = sysfs_connectors()
+    pairs = []
+    for busno, ident in unmapped_buses():
+        match = conns.get(ident, [])
+        if len(match) == 1:
+            pairs.append((busno, match[0]))
+            print(f"/dev/i2c-{busno} -> {match[0]}")
+        else:
+            print(f"/dev/i2c-{busno}: {len(match)} connectors match {ident}, left unmapped",
+                  file=sys.stderr)
+    write_rc(pairs)
+
+
+if __name__ == "__main__":
+    main()
