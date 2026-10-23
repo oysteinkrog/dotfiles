@@ -69,7 +69,7 @@ redesign, section 4:
         or when claude.slice or builds.slice uses 90% of its memory.swap.max
         (slice_swap_pct).
 
-  One level down only after leave_secs (120 s) in which every signal of the
+  One level down only after leave_secs (60 s) in which every signal of the
   current level stayed under half its enter threshold (MemAvailable over twice
   its threshold) and swap room stayed over 32 GiB (recover_swap_room_gib), and
   no trigger of a higher level held.
@@ -111,7 +111,7 @@ from pathlib import Path
 DEFAULTS: dict[str, float] = {
     "interval": 5,
     "enter_secs": 15,
-    "leave_secs": 120,
+    "leave_secs": 60,
     "rate_window_secs": 60,
     "own_limit_secs": 60,
     "slow_mem_full": 2,
@@ -863,21 +863,21 @@ def self_test() -> int:
             not (run / "heavy-build.hold").exists(),
         )
 
-        # 4. Leave one level at a time, each after 120 s of calm.
+        # 4. Leave one level at a time, each after 60 s of calm.
         t = run_for(co, t, 60, mem_full=3, avail_gib=8)
         check(
             "mem full 3% (over half of 5): still pause", lvl(co) == "pause", co.reason
         )
-        t = run_for(co, t, 100, mem_full=1.5)
-        check("calm 100 s: still pause", lvl(co) == "pause", co.reason)
-        t = run_for(co, t, 25, mem_full=1.5)
-        check("calm 120 s: down to slow", lvl(co) == "slow", co.reason)
+        t = run_for(co, t, 50, mem_full=1.5)
+        check("calm 50 s: still pause", lvl(co) == "pause", co.reason)
+        t = run_for(co, t, 15, mem_full=1.5)
+        check("calm 60 s: down to slow", lvl(co) == "slow", co.reason)
         check(
             "down to slow: pressure hold removed",
             not (run / "heavy-build.hold.pressure").exists(),
         )
         t = run_for(co, t, 125, mem_full=0.5)
-        check("slow, calm 120 s: back to normal", lvl(co) == "normal", co.reason)
+        check("slow, calm 60 s: back to normal", lvl(co) == "normal", co.reason)
 
         # 5. A unit at its own MemoryHigh is not machine pressure.
         co = fresh()
@@ -1144,7 +1144,7 @@ def self_test() -> int:
         )
         t = run_for(co, t, 125, mem_full=4, avail_gib=25)
         check(
-            "pause, mem full 4% with 25 GiB: down to slow after 120 s",
+            "pause, mem full 4% with 25 GiB: down to slow after 60 s",
             lvl(co) == "slow",
             co.reason,
         )
