@@ -1,20 +1,49 @@
 #!/bin/sh
-# Make a taskbar icon: the Chrome logo with a profile's avatar as a round
-# badge in the bottom-right corner.
+# Make a taskbar icon: the Chrome logo from the current Plasma icon theme with
+# a profile's avatar as a round badge in the bottom-right corner.
 # Usage: chrome-profile-icon <user-data-dir> <profile-directory> <out.png>
+# If the profile has no avatar yet, the badge is reused from the old <out.png>
+# (set old_badge=162 when that file has the older, larger badge).
 set -eu
 udd=$1; prof=$2; out=$3
-logo=/usr/share/icons/hicolor/256x256/apps/google-chrome.png
 avatar="$udd/$prof/Google Profile Picture.png"
 tmp=$(mktemp -d)
 trap 'rm -r "$tmp"' EXIT
 
-# 150 px avatar cropped to a circle, on a 162 px white ring.
-magick "$avatar" -resize 150x150^ -gravity center -extent 150x150 -alpha set \
-  \( -size 150x150 xc:none -fill white -draw 'circle 75,75 75,0' \) \
-  -compose DstIn -composite "$tmp/avatar.png"
-magick -size 162x162 xc:none -fill white -draw 'circle 81,81 81,0' \
-  "$tmp/avatar.png" -gravity center -compose Over -composite "$tmp/badge.png"
+# Find google-chrome in the icon theme, then in the themes it inherits from.
+find_logo() {
+  for theme in "$@"; do
+    for base in "$HOME/.local/share/icons" /usr/share/icons; do
+      [ -f "$base/$theme/index.theme" ] || continue
+      for f in "$base/$theme"/apps/scalable/google-chrome.svg \
+               "$base/$theme"/scalable/apps/google-chrome.svg \
+               "$base/$theme"/apps/*/google-chrome.svg \
+               "$base/$theme"/*/apps/google-chrome.svg; do
+        [ -f "$f" ] && { echo "$f"; return; }
+      done
+    done
+  done
+}
+theme=$(kreadconfig6 --group Icons --key Theme 2>/dev/null || echo breeze)
+inherits=$(sed -n 's/^Inherits=//p' "$HOME/.local/share/icons/$theme/index.theme" \
+  "/usr/share/icons/$theme/index.theme" 2>/dev/null | head -n1 | tr ',' ' ')
+logo=$(find_logo "$theme" $inherits)
+: "${logo:=/usr/share/icons/hicolor/256x256/apps/google-chrome.png}"
+magick -background none -density 384 "$logo" -resize 256x256 "$tmp/logo.png"
 
-magick "$logo" -resize 256x256 "$tmp/badge.png" -gravity SouthEast \
+if [ -f "$avatar" ]; then
+  # 112 px avatar cropped to a circle, on a 120 px white ring.
+  magick "$avatar" -resize 112x112^ -gravity center -extent 112x112 -alpha set \
+    \( -size 112x112 xc:none -fill white -draw 'circle 56,56 56,0' \) \
+    -compose DstIn -composite "$tmp/avatar.png"
+  magick -size 120x120 xc:none -fill white -draw 'circle 60,60 60,0' \
+    "$tmp/avatar.png" -gravity center -compose Over -composite "$tmp/badge.png"
+else
+  magick "$out" -gravity SouthEast -crop "${old_badge:-120}x${old_badge:-120}+0+0" +repage \
+    -resize 120x120 -alpha set \
+    \( -size 120x120 xc:none -fill white -draw 'circle 60,60 60,0' \) \
+    -compose DstIn -composite "$tmp/badge.png"
+fi
+
+magick "$tmp/logo.png" "$tmp/badge.png" -gravity SouthEast \
   -geometry +0+0 -compose Over -composite "$out"
