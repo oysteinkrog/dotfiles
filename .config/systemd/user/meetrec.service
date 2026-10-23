@@ -1,0 +1,12 @@
+[Unit]
+Description=meetrec: record Slack huddles and Google Meet calls
+After=pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/bin/meetrec watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
