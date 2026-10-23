@@ -732,7 +732,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
-      -v agesecs=3600 -v ageslots=1 -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
+      -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
@@ -834,7 +834,7 @@ check "pressure pause: a high build that passes the memory test starts (got '$ou
 out=$(printf '%s\n' "$RUN_N" "$W_36C" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
 check "pressure pause: a critical build that fails the memory test waits for memory (got '$out')" '[[ $out == wait\|memory:* ]]'
 out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -' "$W_C" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
-check "pressure pause: an aged normal build ahead in line waits but does not head it, so the critical one starts (got '$out')" '[[ $out == start\|fits:* ]]'
+check "pressure pause: an aged normal build waits for pressure and does not head the line, so the critical one starts (got '$out')" '[[ $out == start\|fits:* ]]'
 out=$(printf '%s\n' "$RUN_N" 'W 0000000990000000000-1-n 990000 normal 4 2 600 -' "$W_C" | ADM_PLEVEL=pause adm 0000000990000000000-1-n 0 1 12)
 check "pressure pause: that aged normal build waits for pressure (got '$out')" '[[ $out == wait\|pressure:* ]]'
 # The slow gap: 30 s while MemAvailable is above 16 GiB, 120 s at or below.
@@ -894,7 +894,10 @@ W_C_SUF='W 0000000999000000000-2-c 999000 critical 4 2 600 tree:/repo#s1'
 out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_C_SUF" | ADM_PLEVEL=pause adm 0000000999000000000-2-c 0 1 12)
 check "pressure pause: a held normal waiter on tree:/repo does not block a critical tree:/repo#s1 by writer preference (got '$out')" '[[ $out == start\|fits:* ]]'
 out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_C_SUF" | adm 0000000999000000000-2-c 0 1 12)
-check "pressure none: the writer preference still holds the suffixed build (got '$out')" '[[ $out == wait\|writer:* ]]'
+check "pressure none: an aged normal waiter ranks behind critical, so it takes no writer preference over a critical build (got '$out')" '[[ $out == start\|fits:* ]]'
+W_N_SUF='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo#s1'
+out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_N_SUF" | adm 0000000999000000000-2-m 0 1 12)
+check "pressure none: the writer preference still holds a suffixed normal build behind it (got '$out')" '[[ $out == wait\|writer:* ]]'
 
 # The give-up clock does not run while the pressure level holds a build,
 # even when the interactive or swap gate is the reason shown.
@@ -1356,6 +1359,48 @@ out=$(printf "$RUN_J\n" 1 0 2 0 3 0 4 0 5 0 6 0 7 1 | cat - <(echo "$W_BLD") | a
 check "idle: an idle build is named even when the waiter still waits (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6 (idle, not counted as a job or a high build: b7)|0" ]]'
 out=$(printf '%s\n' 'R b1 999000 4 2 1000600 4294967296 - 1 normal -' "$W_BLD" | ADM_MEMINFO=<(printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 9 * 1048576 ))) adm 0000000999000000001-2-b 0 1 12)
 check "idle: with only an idle build running, the full memory test still applies (got '$out')" '[[ $out == wait\|memory:* ]]'
+# Aged critical builds (2026-10-23, approved by Oystein): a critical build
+# that has waited 1800 s goes ahead of high builds, and with the starve rule
+# holds the cores it needs. While it waits for memory, other critical builds
+# that fit may pass it. An aged normal build ranks behind critical ones.
+# 28 cores, 20 charged by two running builds: 8 free.
+RUN_X1='R x1 990000 4 10 999000 4294967296 - 0 normal -'
+RUN_X2='R x2 990000 4 10 999000 4294967296 - 0 normal -'
+W_CAGED='W 0000000990000000000-1-c 990000 critical 4 10 300 -'
+W_CAGED5='W 0000000990000000000-1-c 990000 critical 4 5 300 -'
+W_CYOUNG='W 0000000999000000000-1-c 999000 critical 4 5 300 -'
+W_HNEW='W 0000000999500000000-3-h 999500 high 4 5 60 -'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED5" "$W_HNEW" | adm 0000000990000000000-1-c 0 1 12)
+check "aged critical: one that waited 10000 s starts ahead of a newer high build when only one fits (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED5" "$W_HNEW" | adm 0000000999500000000-3-h 0 1 12)
+check "aged critical: the high build then waits for cores (got '$out')" '[[ $out == wait\|cores:* ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED" "$W_HNEW" | adm 0000000999500000000-3-h 0 1 12)
+check "aged critical: a high build that fits may not pass an aged critical head that waits for cores (got '$out')" '[[ $out == "wait|starve: 0000000990000000000-1-c has waited 166 min, so nothing may pass it|1" ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CYOUNG" "$W_HNEW" | adm 0000000999500000000-3-h 0 1 12)
+check "aged critical: a critical build that waited 1000 s still ranks behind high (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED" "$W_HNEW" | ADM_CRITAGE=0 adm 0000000999500000000-3-h 0 1 12)
+check "aged critical: HEAVY_BUILD_CRIT_AGE_SECS=0 turns it off (got '$out')" '[[ $out == start\|fits:* ]]'
+# The memory exception: the aged critical head needs 36 GiB of the 40 (reserve 6).
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo40"
+W_CBIG='W 0000000990000000000-1-c 990000 critical 36 2 300 -'
+W_CSMALL='W 0000000995000000000-2-c 995000 critical 4 2 300 -'
+W_HSMALL='W 0000000999500000000-3-h 999500 high 4 2 60 -'
+RUN_M='R m1 990000 8 2 999000 8589934592 - 0 normal -'
+out=$(printf '%s\n' "$RUN_M" "$W_CBIG" "$W_CSMALL" "$W_HSMALL" | ADM_MEMINFO=$A/meminfo40 adm 0000000990000000000-1-c 0 1 12)
+check "aged critical, memory: the big head waits for memory (got '$out')" '[[ $out == wait\|memory:* ]]'
+out=$(printf '%s\n' "$RUN_M" "$W_CBIG" "$W_CSMALL" "$W_HSMALL" | ADM_MEMINFO=$A/meminfo40 adm 0000000995000000000-2-c 0 1 12)
+check "aged critical, memory: another critical build that fits passes it (got '$out')" '[[ $out == "start|fits: the aged critical build 0000000990000000000-1-c waits for memory, and critical builds that fit may pass it|0" ]]'
+out=$(printf '%s\n' "$RUN_M" "$W_CBIG" "$W_CSMALL" "$W_HSMALL" | ADM_MEMINFO=$A/meminfo40 adm 0000000999500000000-3-h 0 1 12)
+check "aged critical, memory: a high build still may not pass it (got '$out')" '[[ $out == wait\|starve:* ]]'
+# An aged normal build (waited 3600 s) ranks behind a critical one.
+W_NAGED='W 0000000990000000000-1-n 990000 normal 4 5 300 -'
+W_CNEW='W 0000000999000000000-2-c 999000 critical 4 5 300 -'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_NAGED" "$W_CNEW" | adm 0000000999000000000-2-c 0 1 12)
+check "aging slot: a critical build starts ahead of an aged normal one when only one fits (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_NAGED" "$W_CNEW" | adm 0000000990000000000-1-n 0 1 12)
+check "aging slot: the aged normal build then waits for cores (got '$out')" '[[ $out == wait\|cores:* ]]'
+out=$(printf '%s\n' "$RUN_X1" "$W_NAGED" 'W 0000000999000000000-2-n 999000 normal 4 5 300 -' | adm 0000000990000000000-1-n 0 1 12)
+check "aging slot: an aged normal build still goes ahead of other normal builds (got '$out')" '[[ $out == start\|aged:* ]]'
 rm -rf -- "$A"
 
 # Estimates: runs that ended by a signal (stopped or cancelled) still count
