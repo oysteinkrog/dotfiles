@@ -118,6 +118,21 @@ is the re-read above.
 A draft `cass-embed.service`, timer and script are in
 `/var/tmp/claude/cass-mem/cass-embed-draft/`. They are not installed.
 
+### Home desktop run, 2026-10-23
+
+oystein-home-primary (RTX 3060 Ti) has a small corpus, 1,643 conversations, so the
+re-read cost is small and the full quality tier finished. Two `models backfill` calls,
+each in a capped transient unit on the real data dir; logs in `/var/tmp/claude/cass-embed/`.
+
+| Measure | Result |
+|---|---|
+| First call | stopped after 162 conversations |
+| Second call, `--max-batches 40` | 23:13 to 01:06 (1 h 53 min), all 1,643 done |
+| Quality tier | 426,948 chunks, 380 MB vector index, published |
+| Status after | `can_search=true`; `status` stays `building` because the fast tier is absent |
+
+The fast tier and the HNSW graph are not built. Semantic and hybrid search work without them.
+
 ## Windows history (does not apply on Linux)
 
 The Windows + WSL1 setup ran until 2026-09-28. The split-binary rule, the DirectML
