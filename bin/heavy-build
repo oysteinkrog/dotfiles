@@ -342,7 +342,12 @@
 #   it uses CPU again (no build is stopped for it). The admission reason then
 #   ends with "(idle, not counted as a job or a high build: <unit>,...)". On
 #   2026-10-23 a hung Wine suite held a high slot and a job for 50 min while
-#   33 builds waited. A Wine process's prefix is the
+#   33 builds waited. A high build that has used under 0.05 cores for 15 min
+#   (HB_HUNG_HIGH_SECS, default 900) also gets one live.log line,
+#   event=hung-high unit=<unit> cwd=<dir> idle_s=<s> notice=<where>, and one
+#   note on stderr, once per build. When stderr is a file (the build's own
+#   log), notice= names it; otherwise it says live.log. Nothing is stopped
+#   (since 2026-10-23). A Wine process's prefix is the
 #   WINEPREFIX in its own environment, else heavy-build's own WINEPREFIX. When
 #   neither has one (WINEPREFIX set only inside the wrapped command, for a
 #   child Wine started without it), that process is skipped, never guessed to
@@ -517,6 +522,7 @@ WINE_TMP=${HB_WINE_TMP:-/tmp/.wine-$UID}
 SAMPLE=${HB_SAMPLE_SECS:-15}
 STALL_SECS=${HB_STALL_SECS:-600}
 WINE_IDLE_SECS=${HB_WINE_IDLE_SECS:-900}
+HUNG_HIGH_SECS=${HB_HUNG_HIGH_SECS:-900}
 WARMUP=${HB_WARMUP_SECS:-120}
 ORPHAN_STOP_SECS=${HB_ORPHAN_STOP_SECS:-120}
 IDLE_SECS=${HB_IDLE_SECS:-120}
@@ -2166,6 +2172,19 @@ sample_scope() {
         log_line "event=stall unit=$unit cmd=\"$cmdline\""
       fi
     fi
+    # A high build idle for HUNG_HIGH_SECS (default 900): one live.log line and
+    # one notice, once per build. Nothing is stopped. The notice goes to
+    # stderr; when stderr is a file, that is the build's own log and the line
+    # names it, else the owner finds it in live.log (notice=live.log).
+    if [[ ${PRIO:-} == high && -z ${hung_high_logged:-} && ${cls:-} != app-run ]] && (( rate < 50 )) \
+      && (( now - last_active >= ${HUNG_HIGH_SECS:-900} * 1000000 )); then
+      hung_high_logged=1
+      idle_s=$(( (now - last_active) / 1000000 ))
+      wp=live.log
+      [[ -f /dev/stderr ]] && wp=$(readlink -f /dev/stderr) && [[ -n $wp ]] || wp=live.log
+      say "note: this high-priority build has used under 0.05 cores for $(( idle_s / 60 )) min ($idle_s s); it may be hung. Nothing was stopped.$( (( stalled_cpu )) && echo " It no longer counts as a job or a high build.") Unit $unit, directory $PWD."
+      log_line "event=hung-high unit=$unit cwd=${PWD// /%20} idle_s=$idle_s notice=${wp// /%20} cmd=\"$cmdline\""
+    fi
     # Idle Wine test runs, logged only for now, to learn how often tests hang.
     # On 2026-10-19 one run sat idle for 57 min after vstest's blame-hang
     # collector fired. One line per idle spell.
@@ -2675,6 +2694,7 @@ child=$!
 write_ready "$unit.scope" "$child"
 
 S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
+hung_high_logged=
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped= orph_unknown_logged=
 orph_other_logged= wine_idle_logged=
 rc= gone_since=

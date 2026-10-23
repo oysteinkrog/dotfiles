@@ -185,6 +185,11 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
   8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for
   builds that started recently)". `HEAVY_BUILD_REAL_USE=0` in the conf file brings back
   the old rule, which charged every build its full estimate.
+- An idle build (under 0.05 cores for 10 min, or Wine without its wineserver) stops
+  counting toward the job limit, the cores and the 2-high cap until it uses CPU again.
+  A high build idle for 15 min also gets one `event=hung-high` line in live.log with
+  its unit and directory, and one note on its stderr (its log, when that is a file).
+  Nothing is stopped: check the build, and stop it yourself if it is hung.
 - The slice-cap check leaves out page cache the kernel can drop at once (`inactive_file`
   in builds.slice `memory.stat`), and the wait reason then says "(4.0 GiB inactive cache
   not counted)". `HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0` in the conf file counts all
