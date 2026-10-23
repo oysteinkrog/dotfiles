@@ -26,11 +26,11 @@ end
 # Windows binary and fail with "Exec format error" under WSL1.
 fish_add_path -p ~/.local/bin
 
-# Claude Code model traffic is routed through aiolos via the ANTHROPIC_BASE_URL
-# env block in ~/.claude/settings.local.json (machine-local, untracked), which
-# Claude applies to every invocation. It is intentionally NOT exported here: a
-# global shell export forced aiolos onto non-Claude tools too, and duplicated the
-# setting. For an ad-hoc tool that should hit aiolos: with-secrets ANTHROPIC_BASE_URL -- ...
+# Claude Code model traffic is routed through aiolos by ANTHROPIC_BASE_URL in
+# ~/.config/environment.d/50-aiolos.conf (machine-local, untracked), so the CLI
+# and the desktop app both get it in every folder. ~/.claude/settings.local.json
+# sets it too, but Claude reads that file only for sessions whose folder is ~.
+# It is intentionally NOT set here as well. aiolos-rc overrides it with --settings.
 
 # bun
 set --export BUN_INSTALL "$HOME/.bun"
