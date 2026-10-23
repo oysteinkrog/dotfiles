@@ -113,6 +113,27 @@ def wait_for_audio_node(seconds):
     return False
 
 
+def mic_has_signal():
+    """True if the camera's mic records sound, False if only zeros, None if unknown.
+
+    The mic-on write makes the camera reset and reconnect every time, even when
+    the mic is already on (tested 2026-10-23). So only send it when the mic is
+    really off, which shows as samples that are all exactly zero.
+    """
+    names = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True).stdout.split("\n")
+    source = next((l.split("\t")[1] for l in names if AUDIO_NODE in l), None)
+    if not source:
+        return None
+    try:
+        raw = subprocess.run(["pw-record", "--target", source, "--rate", "16000", "--channels", "1",
+                              "--format", "s16", "-"], capture_output=True, timeout=1.5).stdout
+    except subprocess.TimeoutExpired as e:
+        raw = e.stdout or b""
+    if len(raw) < 3200:
+        return None
+    return any(raw[3200:])  # skip the first 0.1 s while the stream starts
+
+
 def reprobe_audio():
     """Make WirePlumber probe the camera's sound card again.
 
@@ -181,6 +202,10 @@ def main():
             age = None
         if age is not None and age < BACKOFF_SECONDS:
             print(f"last mic enable timed out {age:.0f} s ago, skipping (use --force)")
+            return
+        if wait_for_audio_node(10) and mic_has_signal():
+            print("StreamCam mic already records sound, not sending the mic-on write")
+            check_audio()
             return
     dev = unit = None
     for _ in range(20):
