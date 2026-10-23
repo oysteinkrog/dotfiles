@@ -56,6 +56,17 @@ PlasmoidItem {
         return Qt.formatTime(new Date(e.start), "HH:mm") + "–" + Qt.formatTime(new Date(e.end), "HH:mm");
     }
 
+    // "out until Tue 3 Nov", "home", "out 08:00–12:00", "works 08:00–14:00".
+    function awayText(p) {
+        const what = p.kind === "hours" ? i18n("works") : p.kind === "home" ? i18n("home") : i18n("out");
+        if (!p.allDay)
+            return what + " " + Qt.formatTime(new Date(p.start), "HH:mm") + "–" + Qt.formatTime(new Date(p.end), "HH:mm");
+        const lastDay = dayStart(p.end - 1);
+        if (lastDay <= dayStart(now))
+            return what;
+        return i18n("%1 until %2", what, Qt.formatDate(new Date(lastDay), "ddd d MMM"));
+    }
+
     function untilText(ms) {
         const min = Math.round((ms - now) / 60000);
         if (min < 60)
@@ -200,6 +211,59 @@ PlasmoidItem {
                     onClicked: root.fetch()
                     PlasmaComponents.ToolTip {
                         text: root.agenda.updated ? i18n("Updated %1", Qt.formatTime(new Date(root.agenda.updated), "HH:mm")) : i18n("Not updated yet")
+                    }
+                }
+            }
+
+            // Who is out, working from home or on part-time hours today. Entries that
+            // have ended are left out.
+            ColumnLayout {
+                id: awayList
+                readonly property var people: (root.agenda.away || []).filter(p => p.end > root.now)
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
+                visible: people.length > 0
+                spacing: 0
+
+                PlasmaExtras.Heading {
+                    level: 4
+                    text: i18n("Away today")
+                    color: root.accentText
+                    bottomPadding: Kirigami.Units.smallSpacing
+                }
+
+                Repeater {
+                    model: awayList.people
+                    delegate: PlasmaComponents.ItemDelegate {
+                        id: person
+                        required property var modelData
+                        Layout.fillWidth: true
+                        topPadding: 0
+                        bottomPadding: 0
+                        onClicked: Qt.openUrlExternally(modelData.link)
+                        contentItem: RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
+                            Rectangle {
+                                implicitWidth: Kirigami.Units.smallSpacing * 2
+                                implicitHeight: implicitWidth
+                                radius: width / 2
+                                color: person.modelData.kind === "out" ? Kirigami.Theme.negativeTextColor
+                                     : person.modelData.kind === "home" ? root.accentText
+                                     : Kirigami.Theme.disabledTextColor
+                            }
+                            PlasmaComponents.Label {
+                                text: person.modelData.name
+                                font.bold: true
+                            }
+                            PlasmaComponents.Label {
+                                Layout.fillWidth: true
+                                text: root.awayText(person.modelData)
+                                opacity: 0.7
+                                elide: Text.ElideRight
+                            }
+                        }
+                        PlasmaComponents.ToolTip { text: person.modelData.title }
                     }
                 }
             }
