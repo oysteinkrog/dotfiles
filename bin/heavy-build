@@ -312,7 +312,11 @@
 # - HEAVY_BUILD_TIMEOUT=<seconds> stops the build after that long (exit 124).
 # - Warns on stderr when the build used under 0.05 cores for 10 min (it may be
 #   hung), or when its Wine processes have lost their wineserver. Such a build
-#   stops counting against the budget. A Wine process's prefix is the
+#   stops counting against the budget, the job limit and the 2-high cap until
+#   it uses CPU again (no build is stopped for it). The admission reason then
+#   ends with "(idle, not counted as a job or a high build: <unit>,...)". On
+#   2026-10-23 a hung Wine suite held a high slot and a job for 50 min while
+#   33 builds waited. A Wine process's prefix is the
 #   WINEPREFIX in its own environment, else heavy-build's own WINEPREFIX. When
 #   neither has one (WINEPREFIX set only inside the wrapped command, for a
 #   child Wine started without it), that process is skipped, never guessed to
@@ -1587,7 +1591,9 @@ function writer(keys, o,   n, k, i, b, t) {
 function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy) {
   nr++
   grow = 0; cy = 0
-  if (stalled == 1) { held = cur; tc = 0; cc = 0 }
+  # An idle build (no CPU for HB_STALL_SECS) is charged only the memory it
+  # holds. It is not counted as a job or a high build until it runs again.
+  if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
     cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
@@ -1598,8 +1604,8 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   Y_held += grow; Y_cpu += cy
   if (realuse && slicecur >= 0) held = cur + grow
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
-  r_cur[nr] = cur; r_high[nr] = (prio == "high")
-  T_n++; T_cpu += cc; T_tc += tc; T_held += held; T_high += (prio == "high"); T_aged += (prio ~ /:aged$/)
+  r_cur[nr] = cur; r_high[nr] = (prio == "high" && stalled != 1); r_job[nr] = (stalled != 1)
+  T_n += r_job[nr]; T_cpu += cc; T_tc += tc; T_held += held; T_high += r_high[nr]; T_aged += (prio ~ /:aged$/)
   T_nc += (prio !~ /^(high|critical)(:aged)?$/)
   T_app += (cls == "app-run")
   hold(keys, id)
@@ -1607,8 +1613,10 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
 function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   # With no build running, MemAvailable >= solo is enough, except at pressure
   # level slow or pause: then the first build also needs the full tests below.
-  if (nrun <= 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
-  if (nrun <= 0 && plevel != "slow" && plevel != "pause") return ""
+  # Idle builds are not counted in nrun, but while one runs the full tests
+  # still apply, since it may use CPU again.
+  if (nrun <= 0 && T_idle == 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+  if (nrun <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
   if (cpu + w_cores[i] > cpubudget) {
@@ -1643,7 +1651,7 @@ function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
   nrun = T_n; cpu = T_cpu; tc = T_tc; held = T_held; av = avail; nh = T_high
   for (j = 1; j <= nr; j++) {
     k = idx[j]
-    nrun--; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k]
+    nrun -= r_job[k]; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k]
     if (why_not(i, nrun, cpu, tc, held, av, nh) == "") return r_end[k]
   }
   return nr > 0 ? r_end[idx[nr]] : now
@@ -1812,6 +1820,7 @@ END {
     # interactive gate may come first), so the clock does not run.
     if (!picked[i] && pressure_why(i) != "") ph = 1
     if (picked[i] && swx > 0) why[i] = why[i] swxnote
+    if (idlerun != "") why[i] = why[i] " (idle, not counted as a job or a high build: " idlerun ")"
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
   }
