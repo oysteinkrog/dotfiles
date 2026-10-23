@@ -189,6 +189,10 @@ skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
   in builds.slice `memory.stat`), and the wait reason then says "(4.0 GiB inactive cache
   not counted)". `HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=0` in the conf file counts all
   of memory.current again.
+- A command with 2 or more recorded runs is estimated at 1.2 times its own highest peak
+  (last 10 runs, at least 1 GiB) when that is below the class p90 or class floor
+  (since 2026-10-23, logged as `mem=key-own`). `HEAVY_BUILD_OWN_EST=0` in the conf
+  file turns it off.
 - A filtered Wine test run whose tests have fewer than 5 runs is estimated from the
   class p75 (logged as `mem=class-p75`, p90 before 2026-10-22). Set
   `HEAVY_BUILD_WINE_FALLBACK_PCT` in the conf file to change it.
