@@ -36,9 +36,9 @@ Environment=CASS_INDEX_INGEST_WAL_CHECKPOINT_BYTES=134217728
 # History: 4G override, then 6G (2026-10-20), 10G with MemoryMax=30G and
 # MemorySwapMax=8G (2026-10-21). With the changes above it is 6G again, 14G as
 # the hard cap and 2G of swap, so the job cannot push other work into swap.
-MemoryHigh=6G
-MemoryMax=14G
-MemorySwapMax=2G
+MemoryHigh=10G
+MemoryMax=16G
+MemorySwapMax=4G
 OOMPolicy=kill
 CPUWeight=20
 IOWeight=20
