@@ -71,14 +71,15 @@ else
 fi
 
 step "tools: tasklens"
-# The task manager, the pacman package tasklens from ~/work/tasklens (setup/work-repos.sh in
-# Life clones it). With TOOLS_FROM, repack the build installed there instead of compiling.
+# The task manager, the pacman package tasklens built from ~/work/tasklens (setup/work-repos.sh
+# in Life clones it). It cannot be copied from the other desktop: CachyOS makepkg builds Rust
+# with -C target-cpu=native (/etc/makepkg.conf.d/rust.conf), and the office build (AMD Zen 3)
+# dies with SIGILL on the home Intel CPU.
 if pacman -Q tasklens >/dev/null 2>&1; then
   ok "$(pacman -Q tasklens)"
-elif [ -n "${TOOLS_FROM:-}" ]; then
-  "$SETUP/tasklens-from-host.sh" "$TOOLS_FROM" && ok "$(pacman -Q tasklens) from $TOOLS_FROM"
 else
-  warn "tasklens not installed: TOOLS_FROM=<host>, or cd ~/work/tasklens/packaging && makepkg -si"
+  warn "tasklens not installed: check out the newest release tag in ~/work/tasklens, then"
+  info "cd ~/work/tasklens/packaging && heavy-build makepkg -f --nocheck && sudo pacman -U tasklens-*.pkg.tar.zst"
 fi
 
 step "tools: prebuilt binaries"
