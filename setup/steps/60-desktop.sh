@@ -7,7 +7,9 @@ if ! have kwriteconfig6; then
   warn "kwriteconfig6 missing, not a KDE session; skipped"
   return 0
 fi
-kw() { kwriteconfig6 "$@"; }
+# --notify tells a running session about the change. Without it, plasmashell keeps the
+# values it read at login (notification popups stayed next to the panel).
+kw() { kwriteconfig6 --notify "$@"; }
 
 # Look and feel: Breeze Dark, faster animations
 current_laf="$(kreadconfig6 --file kdeglobals --group KDE --key LookAndFeelPackage)"
