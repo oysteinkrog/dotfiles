@@ -18,7 +18,7 @@ fi
 
 pw=$(secret-tool lookup service office-rdp user oystein 2>/dev/null)
 if [ -z "$pw" ]; then
-  pw=$(kdialog --title "Office desktop (RDP)" --password "KRDP password for oystein on the office desktop:") || exit 1
+  pw=$(kdialog --title "Office desktop (RDP)" --password "Linux login password for oystein on the office desktop (not the wallet password):") || exit 1
   [ -n "$pw" ] || exit 1
   printf '%s' "$pw" | secret-tool store --label="Office desktop RDP (KRDP)" service office-rdp user oystein
 fi
@@ -31,8 +31,10 @@ fi
 } | xfreerdp3 /args-from:stdin >"$log" 2>&1
 rc=$?
 
-# Wrong password: forget it so the next launch asks again.
-if grep -q -E "LOGON_FAILURE|AUTHENTICATION_FAILED" "$log"; then
+# Wrong password: forget it so the next launch asks again. KRDP checks the password
+# with PAM after the connection is up and then ends it as a logoff during the
+# capabilities exchange, so FreeRDP never reports a logon failure itself.
+if grep -q -E "LOGON_FAILURE|AUTHENTICATION_FAILED|CAPABILITIES_EXCHANGE.*QUIT_SESSION" "$log"; then
   secret-tool clear service office-rdp user oystein
   kdialog --title "Office desktop (RDP)" --error "Login failed. The saved password was removed; launch again to enter it."
 elif [ "$rc" -ge 128 ]; then  # codes below 128 are normal disconnects and logoffs
