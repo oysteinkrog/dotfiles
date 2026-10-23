@@ -23,10 +23,6 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 # index runs once the canonical DB grows past a few GB.
 export FSQLITE_PAGE_BUFFER_MAX="${FSQLITE_PAGE_BUFFER_MAX:-1048576}"
 
-# Widen the redact memo cache for catch-up runs (upstream #291; default 4096
-# entries thrashes with CapacityLru evictions during bulk ingest).
-export CASS_REDACT_MEMO_CAPACITY="${CASS_REDACT_MEMO_CAPACITY:-65536}"
-
 LOG_DIR="$HOME/.local/share"
 LOG_FILE="$LOG_DIR/cass-maintenance.log"
 LOG_MAX_BYTES=$((10 * 1024 * 1024))  # 10 MiB before rotation
