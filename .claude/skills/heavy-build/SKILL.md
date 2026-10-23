@@ -133,6 +133,9 @@ fine.
 Headless MotionCatalyst has its own rules for display, prefix and memory: load the
 `headless-app-ui` skill. Start a headless MC through
 `heavy-build --class app-run [--ready-file PATH] [--wait-timeout S] -- <cmd>`.
+An app run is capped at 8 CPU threads (CPUQuota 800%); to raise it, set
+`HEAVY_BUILD_APP_CPU_QUOTA` (in percent, 0 for no cap) in the environment or in
+`~/.config/heavy-build.conf`.
 
 ## 9. Priority
 

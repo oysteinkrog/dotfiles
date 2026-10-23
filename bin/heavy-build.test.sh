@@ -1406,6 +1406,35 @@ wait "$hbpid"; rc=$?
 check "app scope: run-mc.sh is detected and HEAVY_BUILD_APP_MEM_HIGH_GIB=14 gives MemoryHigh=14G (rc $rc)" '(( rc == 0 )) && grep -q "MemoryHigh=14G -p MemoryMax=28G" "$T/calls" && awk -F"\t" '\''$2 == "app-run" && $7 == 0 && $8 == "ok"'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
 teardown2
 
+# App runs get CPUQuota from HEAVY_BUILD_APP_CPU_QUOTA (default 800%); 0 or
+# empty means none; builds never get one.
+# Each case: label|env setting or -|conf line or -|class (app or build)|expected quota or none
+for c in "default|-|-|app|800" "env override|HEAVY_BUILD_APP_CPU_QUOTA=400|-|app|400" \
+  "conf override|-|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|1200" "env beats conf|HEAVY_BUILD_APP_CPU_QUOTA=300|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|300" \
+  "env 0 disables|HEAVY_BUILD_APP_CPU_QUOTA=0|-|app|none" "env empty disables|HEAVY_BUILD_APP_CPU_QUOTA=|-|app|none" \
+  "conf 0 disables|-|HEAVY_BUILD_APP_CPU_QUOTA=0|app|none" "conf empty disables|-|HEAVY_BUILD_APP_CPU_QUOTA=|app|none" \
+  "build unaffected|-|-|build|none" "build unaffected by env|HEAVY_BUILD_APP_CPU_QUOTA=400|-|build|none"; do
+  IFS='|' read -r lbl ev cf kind want <<< "$c"
+  setup2
+  [[ $cf != - ]] && printf '%s\n' "$cf" > "$T/config/heavy-build.conf"
+  printf '#!/bin/sh\nexit 0\n' > "$T/ok.sh"; chmod +x "$T/ok.sh"
+  args=("$T/ok.sh"); [[ $kind == app ]] && args=(--class app-run "$T/ok.sh")
+  if [[ $ev != - ]]; then hbe "$ev" -- "${args[@]}"; else hbe -- "${args[@]}"; fi
+  wait "$hbpid"; rc=$?
+  if [[ $want == none ]]; then
+    check "cpu quota: $lbl gives no CPUQuota (rc $rc)" '(( rc == 0 )) && grep -q "^systemd-run .*MemoryHigh=" "$T/calls" && ! grep -q CPUQuota "$T/calls"'
+  else
+    check "cpu quota: $lbl gives CPUQuota=$want% (rc $rc)" '(( rc == 0 )) && grep -q "^systemd-run .* -p CPUQuota=$want% " "$T/calls"'
+  fi
+  if [[ $kind == app ]]; then
+    lw=$want; [[ $want != none ]] && lw="$want%"
+    check "cpu quota: $lbl logs cpu_quota=$lw on the start line" 'grep -q "decision=start .* cpu_quota=$lw " "$T/state/heavy-build/shadow.log"'
+  else
+    check "cpu quota: $lbl logs no cpu_quota" '! grep -q cpu_quota "$T/state/heavy-build/shadow.log"'
+  fi
+  teardown2
+done
+
 # MemoryMax is twice MemoryHigh but never over builds.slice memory.max.
 setup2
 printf 'HEAVY_BUILD_APP_MEM_HIGH_GIB=30\n' > "$T/config/heavy-build.conf"
