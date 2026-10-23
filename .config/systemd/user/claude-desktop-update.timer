@@ -1,9 +1,10 @@
 [Unit]
-Description=Run claude-desktop-update once a day
+Description=Check for Claude Desktop updates every hour and after login
 
 [Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
+OnStartupSec=2min
+OnCalendar=hourly
+RandomizedDelaySec=5min
 Persistent=true
 
 [Install]
