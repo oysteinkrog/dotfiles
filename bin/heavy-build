@@ -105,12 +105,21 @@
 # plain one has started (reason writer:). Suffixed builds ahead of it in
 # order, and suffixed builds already running, go on as usual; the plain build
 # waits only for the running ones. Builds in other trees are not affected.
+# Aged critical builds: a critical build that has waited
+# HEAVY_BUILD_CRIT_AGE_SECS (default 1800, 0 turns it off) ranks ahead of high
+# builds, the oldest first. Once it has also waited HEAVY_BUILD_STARVE seconds
+# and is first in order without fitting, the starve rule holds every build
+# behind it, high builds too, so the cores and job slots it needs come free.
+# One exception: while that aged critical head waits for memory (memory or
+# slice-cap), other critical builds that fit may pass it. On 2026-10-23 a
+# steady stream of high builds (95 starts in 2.5 h) kept 11 critical builds
+# waiting for over 2.5 h.
 # Aging slot: a normal or low build that has waited HEAVY_BUILD_AGE_SECS
-# (default 3600) goes ahead of critical builds, the oldest first, while fewer
-# than HEAVY_BUILD_AGE_SLOTS (default 1) builds let in this way still run. It
-# then ranks after high builds and before critical ones. When it is first in
-# order and does not fit, the starve rule does not apply to it and high or
-# critical builds that fit may pass it, so it takes only the first slot it
+# (default 3600) goes ahead of other normal and low builds, the oldest first,
+# while fewer than HEAVY_BUILD_AGE_SLOTS (default 1) builds let in this way
+# still run. It ranks after high and critical builds and before normal ones.
+# When it is first in order and does not fit, the starve rule does not apply
+# to it and builds that fit may pass it, so it takes only the first slot it
 # fits into. Normal and low builds still follow the backfill rule. Every
 # memory, swap, CPU pressure, disk and lock key check still applies. Its start
 # is logged with aged=1. HEAVY_BUILD_AGE_SLOTS=0 turns it off.
@@ -257,7 +266,11 @@
 #     key's directory is in a grove lane that belongs to a critical session:
 #     the lane is critical in [lanes], its grove registry owner is a critical
 #     session, or a live critical session works in it. Order is high, then
-#     critical, then normal, then low. A critical build passes no safety gate:
+#     critical, then normal, then low, with two age rules: a critical build
+#     that has waited HEAVY_BUILD_CRIT_AGE_SECS (default 1800) goes ahead of
+#     high builds, and an aged normal or low build (the aging slot) goes ahead
+#     of other normal builds but stays behind critical ones. A critical build
+#     passes no safety gate:
 #     memory, swap, interactive pressure, disk and lock keys all still apply.
 #     While a critical build waits for job slots, cores or CPU pressure, no
 #     normal or low build may start ahead of it (no backfill past it);
@@ -585,6 +598,7 @@ read_conf() {
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
+  setting HEAVY_BUILD_CRIT_AGE_SECS 1800
   setting HEAVY_BUILD_SWAP_HEADROOM_PCT 25
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
   setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
@@ -1721,6 +1735,9 @@ $1 == "W" {
   nw++; w_id[nw] = $2; w_arr[nw] = $3; p = $4
   if (p == "low" && now - $3 >= lowage) p = "normal"
   w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "critical") ? 1 : (p == "low") ? 3 : 2
+  # An aged critical build (waited critage seconds) goes ahead of high ones.
+  w_caged[nw] = (p == "critical" && critage > 0 && now - $3 >= critage)
+  if (w_caged[nw]) w_rank[nw] = -1
   w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8; w_cls[nw] = $9
 }
 END {
@@ -1732,13 +1749,14 @@ END {
   if (memreal) T_held = slicecur + Y_held
   if (cpureal) T_cpu = sliceavg + Y_cpu
   # The aging slot: the oldest normal or low waiter that has waited agesecs
-  # goes ahead of critical ones (rank 0.5), while fewer than ageslots builds
-  # let in this way run. A running one has prio <prio>:aged.
+  # goes ahead of other normal and low ones but behind critical ones (rank
+  # 1.5), while fewer than ageslots builds let in this way run. A running one
+  # has prio <prio>:aged.
   for (n = ageslots - T_aged; n > 0; n--) {
     a = 0
     for (i = 1; i <= nw; i++) if (w_rank[i] >= 2 && now - w_arr[i] >= agesecs && (!a || w_id[i] < w_id[a])) a = i
     if (!a) break
-    w_rank[a] = 0.5; w_aged[a] = 1
+    w_rank[a] = 1.5; w_aged[a] = 1
   }
   for (i = 1; i <= nw; i++) ord[i] = i
   for (i = 2; i <= nw; i++) {
@@ -1765,7 +1783,7 @@ END {
   else if (sessionpsi >= maxmempsi) gate = sprintf("interactive: session.slice memory pressure (full) %.1f%%, the limit is %d%%", sessionpsi, maxmempsi)
   # critw: the first critical waiter that waits for job slots, cores or CPU
   # pressure. Normal and low builds may not start ahead of it.
-  headi = 0; starving = 0; shadow = 0; critw = 0
+  headi = 0; starving = 0; shadow = 0; critw = 0; critmempass = 0
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
@@ -1792,8 +1810,14 @@ END {
       # An aged head never starves the queue: high and critical builds that
       # fit pass it, so it holds only the slot it gets next.
       headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve && !w_aged[i])
+      # An aged critical head that waits for memory lets critical builds that fit pass it.
+      critmempass = (starving && w_caged[i] && r ~ /^(memory|slice-cap):/)
       if (w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
       continue
+    }
+    if (critmempass && w_pr[i] == "critical") {
+      r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
+      if (r == "") { pick(i); why[i] = "fits: the aged critical build " w_id[headi] " waits for memory, and critical builds that fit may pass it"; continue }
     }
     if (starving) { why[i] = sprintf("starve: %s has waited %d min, so nothing may pass it", w_id[headi], (now - w_arr[headi]) / 60); continue }
     r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
@@ -1808,7 +1832,7 @@ END {
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (w_id[i] != me) continue
-    if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of critical builds (%s)", (now - w_arr[i]) / 60, why[i])
+    if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of other normal builds (%s)", (now - w_arr[i]) / 60, why[i])
     # prioheld: this build waits only because a higher-priority build is
     # ahead of it, or for the critical-first switch, so its give-up clock
     # does not run. While the switch is on, a normal or low build that waits
@@ -1854,7 +1878,7 @@ decide() {
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
-    -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v maxapp="$MAX_APP_RUNS" \
+    -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
