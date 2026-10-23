@@ -1,0 +1,18 @@
+#!/bin/bash
+# Print the colours file of the current Plasma style (panels and widgets), for scripts that theme
+# apps after the Plasma style rather than the app colour scheme.
+#
+# Plasma styles such as Sweet ship a KDE colours file ([Colors:View], [Colors:Selection], ...).
+# Styles without one (Breeze, "default") follow the app colour scheme, so this prints
+# ~/.config/kdeglobals for them.
+
+set -euo pipefail
+
+name=$(kreadconfig6 --file plasmarc --group Theme --key name --default default)
+for dir in "$HOME/.local/share/plasma/desktoptheme" /usr/share/plasma/desktoptheme; do
+    if [ -f "$dir/$name/colors" ]; then
+        echo "$dir/$name/colors"
+        exit 0
+    fi
+done
+echo "$HOME/.config/kdeglobals"

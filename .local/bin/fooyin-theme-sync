@@ -1,9 +1,14 @@
 #!/bin/bash
-# Keep the experimental fooyin's accent colour in step with the Plasma colour scheme.
+# Keep the experimental fooyin's colours in step with Plasma.
+#
+# When the Plasma style has its own colours (plasma-style-colours, for example Sweet), fooyin gets a saved
+# theme built from them ("fyhelper style"), so it matches the panels even with another app colour scheme.
+# Otherwise it follows the app palette live, as described below.
 #
 # The experimental instance has no saved theme, so fooyin follows the Plasma palette live. Only the
-# accent inside playlist text scripts is a fixed colour. This writes the Plasma selection colour there,
-# using fyhelper (source in ~/.dotfiles/misc/fooyin-theme, built on first use).
+# accent, a muted text colour and the window background are fixed values in text scripts and the lyrics.
+# This writes the Plasma selection colour into the playlist scripts with fyhelper (source in
+# ~/.dotfiles/misc/fooyin-theme, built on first use), and swaps all three colours in the layouts.
 #
 # Run by fooyin-theme-sync.path whenever kdeglobals changes, and by fooyin-experimental before it starts.
 # fooyin keeps these settings in memory and saves them on exit, so nothing is written while it runs:
@@ -23,24 +28,53 @@ if pgrep -f "^$ROOT/bin/fooyin( |$)" >/dev/null; then
     exit 0
 fi
 
-rgb=$(kreadconfig6 --file kdeglobals --group Colors:Selection --key BackgroundNormal)
-if ! [[ $rgb =~ ^([0-9]+),([0-9]+),([0-9]+) ]]; then
-    echo "fooyin-theme-sync: no selection colour in kdeglobals" >&2
-    exit 1
-fi
-accent=$(printf '#%02x%02x%02x' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+COLOURS=$("$HOME/bin/plasma-style-colours")
 
+# Colour from $COLOURS as #rrggbb.
+plasma_colour() {
+    local rgb
+    rgb=$(kreadconfig6 --file "$COLOURS" --group "Colors:$1" --key "$2")
+    if ! [[ $rgb =~ ^([0-9]+),([0-9]+),([0-9]+) ]]; then
+        echo "fooyin-theme-sync: no $1 $2 colour in $COLOURS" >&2
+        exit 1
+    fi
+    printf '#%02x%02x%02x' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+accent=$(plasma_colour Selection BackgroundNormal)
+muted=$(plasma_colour View ForegroundInactive)
+window=$(plasma_colour Window BackgroundNormal)
+colours="$accent $muted $window"
+
+rebuilt=no
 if [ ! -x "$HELPER" ] || [ "$SRC/main.cpp" -nt "$HELPER" ]; then
     mkdir -p "$BUILD"
     # shellcheck disable=SC2046
     g++ -std=c++23 -fPIC -O1 "$SRC/main.cpp" -o "$HELPER.new" -I/usr/include/fooyin -I"$SRC" \
         $(pkg-config --cflags --libs Qt6Widgets)
     mv -f "$HELPER.new" "$HELPER"
-    rm -f "$STAMP"
+    rebuilt=yes
 fi
 
-if [ "$(cat "$STAMP" 2>/dev/null)" = "$accent" ]; then
+# The stamp holds the colours written last time, in the same order as $colours, and the colours file.
+previous=$(cat "$STAMP" 2>/dev/null || true)
+if [ "$previous" = "$colours"$'\n'"$COLOURS" ] && [ "$rebuilt" = no ]; then
     exit 0
 fi
-QT_QPA_PLATFORM=offscreen "$HELPER" "$CONF" plasma "$accent"
-echo "$accent" >"$STAMP"
+if [ "$COLOURS" = "$HOME/.config/kdeglobals" ]; then
+    QT_QPA_PLATFORM=offscreen "$HELPER" "$CONF" plasma "$accent"
+else
+    QT_QPA_PLATFORM=offscreen "$HELPER" "$CONF" style "$COLOURS"
+fi
+
+# The layouts hold the colours too (now-playing text, lyrics). Swap each old value for its new one.
+read -r -a old <<<"$previous"
+read -r -a new <<<"$colours"
+for layout in "$ROOT"/bin/config/layouts/*.fyl; do
+    [ -f "$layout" ] || continue
+    for i in "${!new[@]}"; do
+        if [ -n "${old[i]:-}" ] && [ "${old[i]}" != "${new[i]}" ]; then
+            sed -i "s/${old[i]}/${new[i]}/gI" "$layout"
+        fi
+    done
+done
+printf '%s\n%s\n' "$colours" "$COLOURS" >"$STAMP"
