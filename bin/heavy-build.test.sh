@@ -1295,6 +1295,8 @@ hbx --class app-run; rc=$?
 check "options: no command after the options is exit 2 (got $rc)" '(( rc == 2 ))'
 hbx --ready-file; rc=$?
 check "options: --ready-file needs a path (exit 2, got $rc)" '(( rc == 2 ))'
+hbx --status; rc=$?
+check "options: an unknown option like --status is exit 2, not a queued command (got $rc)" '(( rc == 2 )) && grep -q "unknown option" "$T/out"'
 rm -rf -- "$T"
 
 # The app-run cap in the admission walk. Running R lines carry the class in
@@ -1324,6 +1326,18 @@ out=$(printf '%s\n' 'W 0000000999000000000-1-a 999000 normal 8 1.5 14400 - app-r
 check "app-cap: of three app runs let in at once, the third waits (got '$out')" '[[ $out == wait\|app-cap:* ]]'
 out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" 'R b1 999000 4 2 1000600 4294967296 - 0 normal -' 'R b2 999000 4 2 1000600 4294967296 - 0 normal -' 'R b3 999000 4 2 1000600 4294967296 - 0 normal -' 'R b4 999000 4 2 1000600 4294967296 - 0 normal -' "$W_BLD" | adm 0000000999000000001-2-b 0 1 12)
 check "app runs count as jobs: 2 app runs and 4 old-format builds fill the 6 slots (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+# The high-cap: a high waiter held by it is never the head of the line, so an
+# old one (past the 1800 s starve time) does not stop normal builds behind it.
+RUN_H1='R h1 990000 4 2 1000600 4294967296 - 0 high -'
+RUN_H2='R h2 990000 4 2 1000600 4294967296 - 0 high -'
+W_HOLD='W 0000000990000000000-3-h 990000 high 4 2 600 -'
+W_NEW='W 0000000999000000001-2-b 999001 normal 4 2 600 -'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" | adm 0000000990000000000-3-h 0 1 12)
+check "high-cap: a third high build waits (got '$out')" '[[ $out == wait\|high-cap:* ]]'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" "$W_NEW" | adm 0000000999000000001-2-b 0 1 12)
+check "high-cap: a normal build behind an old capped high waiter starts as next in order (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$RUN_H1" "$W_HOLD" "$W_NEW" | adm 0000000990000000000-3-h 0 1 12)
+check "high-cap: with one high build running, the high waiter starts first (got '$out')" '[[ $out == start\|fits:* ]]'
 rm -rf -- "$A"
 
 # Estimates: runs that ended by a signal (stopped or cancelled) still count
