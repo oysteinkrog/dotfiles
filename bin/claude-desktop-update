@@ -1,71 +1,73 @@
 #!/usr/bin/env bash
-# claude-desktop-update: install a newer claude-desktop from the CachyOS repo,
-# and nothing else. Run by claude-desktop-update.timer once a day.
+# claude-desktop-update: keep Claude Desktop current from Anthropic's apt repo.
 #
-# It reads a fresh copy of the package lists (checkupdates keeps its own
-# database), so the system database is never synced and the rest of the system
-# is never upgraded. A full -Syu would also pull in qt6-base and friends, which
-# breaks the locally built kwin until `localbuild build kwin` runs.
+# Electron's autoUpdater has no Linux support, so the app cannot update itself.
+# This reads Anthropic's apt index, and when it lists a newer version than the
+# installed one, builds a pacman package from the AUR recipe (aur/claude-desktop)
+# with the new version and the index's sha256, then installs it.
 #
-# Skips the update and says why when the new package would need any other
-# package installed or upgraded. That case needs a normal full upgrade.
+# It never installs while the app is running: it builds the package, sends a
+# notification and installs on the next run after the app is closed.
 #
-# Output: a journal line every run, ~/.local/state/claude-desktop-update/status,
-# and a desktop notification after an install or a failure.
+# Run by claude-desktop-update.timer. Flags: --check (report only).
 set -euo pipefail
-export LC_ALL=C
 
-PKG=claude-desktop
-STATE=${XDG_STATE_HOME:-$HOME/.local/state}/claude-desktop-update
-DB=$STATE/db
-mkdir -p -- "$STATE"
+INDEX=https://downloads.claude.ai/claude-desktop/apt/stable/dists/stable/main/binary-amd64/Packages
+AUR=https://aur.archlinux.org/claude-desktop.git
+STATE=${XDG_CACHE_HOME:-$HOME/.cache}/claude-desktop-update
+APP=/usr/lib/claude-desktop/claude-desktop
 
-status() {
-  printf '%s %s\n' "$(date -Is)" "$1" > "$STATE/status"
-  echo "claude-desktop-update: $1"
-}
+log() { echo "claude-desktop-update: $*"; }
+notify() { notify-send -a "Claude Desktop" -i claude-desktop "Claude Desktop update" "$1" 2>/dev/null || true; }
 
-notify() {
-  notify-send --app-name="Claude Desktop" --icon=com.anthropic.Claude "$1" "$2" 2>/dev/null || true
-}
+mkdir -p "$STATE"
 
-fail() {
-  status "failed: $1"
-  notify "Claude Desktop update failed" "$1"
-  exit 1
-}
+# Newest amd64 entry in the index: "version sha256".
+read -r latest sha < <(curl -fsS --max-time 60 "$INDEX" | awk '
+  /^Version: /{v=$2} /^SHA256: /{s=$2}
+  /^$/{if (v) print v, s; v=s=""} END{if (v) print v, s}' | sort -V | tail -1)
+[[ -n ${latest:-} && ${sha:-} =~ ^[0-9a-f]{64}$ ]] || { log "could not read the apt index"; exit 1; }
 
-# checkupdates exits 2 when nothing is out of date.
-rc=0
-updates=$(CHECKUPDATES_DB=$DB checkupdates 2>&1) || rc=$?
-if (( rc == 2 )); then
-  status "up to date ($(pacman -Q $PKG))"
-  exit 0
-elif (( rc != 0 )); then
-  fail "checkupdates exited $rc: ${updates//$'\n'/ }"
-fi
-
-line=$(grep -m1 "^$PKG " <<<"$updates" || true)
-if [[ -z $line ]]; then
-  status "up to date ($(pacman -Q $PKG))"
+installed=$(pacman -Q claude-desktop 2>/dev/null | awk '{print $2}' | sed 's/-[0-9]*$//')
+if [[ -n $installed ]] && (( $(vercmp "$latest" "$installed") <= 0 )); then
+  log "up to date ($installed)"
   exit 0
 fi
+log "installed ${installed:-none}, available $latest"
+[[ ${1:-} == --check ]] && exit 0
 
-# Everything pacman would install with it. Only the package itself is allowed.
-targets=$(pacman -S --dbpath "$DB" --print --print-format '%n' "$PKG" 2>&1) \
-  || fail "cannot resolve $PKG: ${targets//$'\n'/ }"
-if [[ $targets != "$PKG" ]]; then
-  extra=$(grep -vx "$PKG" <<<"$targets" | tr '\n' ' ')
-  status "skipped $line: also needs $extra"
-  notify "Claude Desktop update waiting" "The new version also needs: $extra. Run a full system upgrade."
+pkg=$(ls "$STATE"/pkg/claude-desktop-"$latest"-*-x86_64.pkg.tar.* 2>/dev/null | head -1 || true)
+if [[ -z $pkg ]]; then
+  if [[ -d $STATE/aur/.git ]]; then
+    git -C "$STATE/aur" fetch -q origin && git -C "$STATE/aur" reset -q --hard origin/HEAD
+  else
+    git clone -q "$AUR" "$STATE/aur"
+  fi
+  cd "$STATE/aur"
+  # Point the recipe at the new .deb unless the AUR already did.
+  if [[ $(sed -n 's/^pkgver=//p' PKGBUILD) != "$latest" ]]; then
+    sed -i -e "s/^pkgver=.*/pkgver=$latest/" -e "s/^pkgrel=.*/pkgrel=1/" \
+      -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$sha')/" PKGBUILD
+  fi
+  mkdir -p "$STATE/pkg" "$STATE/src"
+  PKGDEST=$STATE/pkg SRCDEST=$STATE/src makepkg -f --noconfirm --nodeps >"$STATE/makepkg.log" 2>&1 \
+    || { log "makepkg failed, see $STATE/makepkg.log"; notify "Building $latest failed. See $STATE/makepkg.log"; exit 1; }
+  git -C "$STATE/aur" checkout -q -- PKGBUILD
+  pkg=$(ls "$STATE"/pkg/claude-desktop-"$latest"-*-x86_64.pkg.tar.* | head -1)
+fi
+
+if pgrep -f "^$APP" >/dev/null; then
+  log "app is running, $latest will install after it is closed"
+  if [[ ! -e $STATE/notified-$latest ]]; then
+    notify "Version $latest is ready. It installs within the hour after you quit Claude Desktop."
+    touch "$STATE/notified-$latest"
+  fi
   exit 0
 fi
 
-file=$(basename "$(pacman -S --dbpath "$DB" --print "$PKG")")
-out=$(sudo -n pacman -Sw --noconfirm --dbpath "$DB" "$PKG" 2>&1) \
-  || fail "download: ${out//$'\n'/ }"
-out=$(sudo -n pacman -U --noconfirm "/var/cache/pacman/pkg/$file" 2>&1) \
-  || fail "install: ${out//$'\n'/ }"
-
-status "installed $line"
-notify "Claude Desktop updated" "${line#$PKG }. Quit and reopen Claude to use it."
+sudo -n pacman -U --noconfirm --needed "$pkg"
+log "installed $latest"
+notify "Updated to $latest."
+# Keep only the package just installed, and drop old .debs and markers.
+find "$STATE/pkg" "$STATE/src" -type f ! -name "*$latest*" -delete
+rm -f "$STATE"/notified-*

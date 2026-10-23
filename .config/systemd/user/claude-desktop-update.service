@@ -1,7 +1,9 @@
 [Unit]
-Description=Install a newer claude-desktop package, nothing else (claude-desktop-update)
+Description=Update Claude Desktop from Anthropic's apt repo
 After=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=%h/bin/claude-desktop-update
+Nice=10
+TimeoutStartSec=30min
