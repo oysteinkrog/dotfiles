@@ -238,9 +238,14 @@ static void writePlasma(QSettings& settings, const QString& accent)
     settings.setValue(u"PlaylistWidget/AlternatingColours"_s, true);
     settings.setValue(u"PlaylistWidget/Header"_s, false); // no column header row; the group headers carry it
 
+    // fooyin's default playing row is the accent at alpha 110, which stands out too much. Same colour, fainter.
+    QColor playingRow = QColor::fromString(accent).lighter(150);
+    playingRow.setAlpha(45);
+    settings.setValue(u"PlaylistWidget/PlayingRowColour"_s, playingRow);
+
     // Everything below falls back to the application palette, which Plasma updates live.
-    for(const auto* key : {"Theme/CustomTheme", "Interface/Style", "PlaylistWidget/PlayingRowColour",
-                           "PlaylistWidget/PlayingRowFont", "WaveBar/Colours", "Spectrum/Colours"}) {
+    for(const auto* key : {"Theme/CustomTheme", "Interface/Style", "PlaylistWidget/PlayingRowFont",
+                           "WaveBar/Colours", "Spectrum/Colours"}) {
         settings.remove(QString::fromLatin1(key));
     }
 }
