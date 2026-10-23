@@ -184,7 +184,8 @@ PM = {
     "thm_act": 17,
     "socket_w": 29,
     "f_ppt": 30,
-    "vddcr_cpu": 40,
+    "cpu_vid": 40,  # requested VID, not the measured voltage
+    "cpu_v": 41,  # measured VDDCR_CPU; times cpu_a matches reported power within 0.3 W
     "cpu_a": 42,
     "vddcr_soc": 45,
     "fclk": 48,
@@ -449,16 +450,17 @@ def cmd_show(a) -> int:
     print(f"TDC  limit {g('tdc_lim'):6.1f} A   value {g('tdc_val'):6.1f} A")
     print(f"EDC  limit {g('edc_lim'):6.1f} A   value {g('edc_val'):6.1f} A")
     print(
-        f"THM  limit {g('thm_lim'):6.1f} C   value {g('thm_val'):6.1f} C   (BIOS platform limit 80 C)"
+        f"THM  limit {g('thm_lim'):6.1f} C   value {g('thm_val'):6.1f} C   (BIOS platform limit {read_bios_thermal_limit()})"
     )
     tctl = read_hwmon_tctl()
     print(
         f"Temp PM {g('thm_act'):5.1f} C, peak {g('peak_temp'):5.1f} C, k10temp {tctl}"
     )
     print(
-        f"VDDCR_CPU {g('vddcr_cpu'):.3f} V ({g('cpu_a'):.1f} A), VDDCR_SOC {g('vddcr_soc'):.3f} V, "
-        f"peak core V {g('peak_v'):.3f}"
+        f"VDDCR_CPU measured {g('cpu_v'):.3f} V (PM 41), VID {g('cpu_vid'):.3f} V (PM 40), "
+        f"{g('cpu_a'):.1f} A, {g('cpu_v') * g('cpu_a'):.1f} W"
     )
+    print(f"VDDCR_SOC {g('vddcr_soc'):.3f} V, peak core V {g('peak_v'):.3f}")
     print(
         f"Clock limit {g('cclk_lim') * 1000:.0f} MHz (slot 30 {g('f_ppt') * 1000:.0f}), "
         f"peak clock {g('peak_cclk') * 1000:.0f} MHz, FCLK/UCLK/MCLK "
@@ -497,6 +499,24 @@ def cmd_show(a) -> int:
                 f"  core {c:>2}: status 0x{st_:02X} raw 0x{raw:08X} -> {val:+d}{echo}"
             )
     return 0
+
+
+AOD_SETUP = Path(
+    "/sys/firmware/efi/efivars/AOD_SETUP-5ed15dc0-edef-4161-9151-6014c4cc630c"
+)
+
+
+def read_bios_thermal_limit() -> str:
+    """Platform Thermal Throttle Limit from EFI AOD_SETUP: mode byte at +0xB5 (1 = Manual),
+    limit u32 in degrees C at +0xB1. Offsets count from the variable data, after the
+    4-byte efivarfs attribute header."""
+    try:
+        data = AOD_SETUP.read_bytes()[4:]
+        if data[0xB5] != 1:
+            return "Auto"
+        return f"{struct.unpack_from('<I', data, 0xB1)[0]} C"
+    except (OSError, IndexError, struct.error) as e:
+        return f"? ({e.__class__.__name__})"
 
 
 def read_hwmon_tctl() -> str:
