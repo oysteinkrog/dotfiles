@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Bash. Blocks four commands that ~/.claude/CLAUDE.md
+# PreToolUse hook for Bash. Blocks three commands that ~/.claude/CLAUDE.md
 # lists as hard "never" rules for agents:
 #
 #   bv (no --robot-* flag)   opens the TUI and hangs the agent.
 #   am doctor fix            rewrites every MCP config back to port 8765 with
 #                            a bearer token, which breaks the agent-mail setup.
-#   cass index --semantic    mixes vector provenance in the index.
-#   cass-gpu index           hits a memory regression in the custom GPU build.
+#   cass index --semantic    holds whole conversations in memory while
+#                            embedding. `cass-gpu` is the same binary, so
+#                            `cass-gpu index --semantic` is blocked too.
 #
 # Allowed near-misses: `bv --robot-*`, `bv --help`, `am doctor` without fix,
-# plain `cass index`, other cass-gpu subcommands, and --help on any of them.
+# plain `cass index` (also as `cass-gpu index`), and --help on any of them.
 #
 # Detection lives in harness-rules-detect.py, which reuses the shell
 # segmentation in grove-worktree-detect.py, so a quoted mention inside another
@@ -75,22 +76,12 @@ BLOCKED: \`cass index --semantic\`.
 
 Command: $detail
 
-It mixes vector provenance in the index.
+It holds the whole text of each conversation in memory while it embeds, and
+some transcripts are over 600 MB.
 
-Use instead: plain \`cass index\`. For setup and recovery, see
-~/.dotfiles/docs/cass-setup.md or load the \`cass\` skill.
-EOF
-    ;;
-  cass_gpu_index)
-    cat >&2 <<EOF
-BLOCKED: \`cass-gpu index\`.
-
-Command: $detail
-
-The custom GPU build hits a memory regression when indexing.
-
-Use instead: plain \`cass index\` (the stock build). For setup and recovery,
-see ~/.dotfiles/docs/cass-setup.md or load the \`cass\` skill.
+Use instead: plain \`cass index\` for the lexical index. Embedding runs only
+from cass-embed.service, through \`cass models backfill\`. For setup and
+recovery, see ~/.dotfiles/docs/cass-setup.md or load the \`cass\` skill.
 EOF
     ;;
   *)
