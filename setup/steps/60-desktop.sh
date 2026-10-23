@@ -29,6 +29,10 @@ kw --file baloofilerc --group "Basic Settings" --key Indexing-Enabled false
 kw --file kded5rc --group Module-device_automounter --key autoload false
 kw --file kded5rc --group Module-browserintegrationreminder --key autoload false
 
+# Notification popups top right, gone after 3 s
+kw --file plasmanotifyrc --group Notifications --key PopupPosition TopRight
+kw --file plasmanotifyrc --group Notifications --key PopupTimeout 3000
+
 # Monitor scale for X11 apps, per host
 if [ -n "$HOST_KDE_SCALE" ]; then
   kw --file kwinrc --group Xwayland --key Scale "$HOST_KDE_SCALE"
@@ -45,6 +49,7 @@ kw --file ksmserverrc --group General --key excludeApps com.dicklesworthstone.fr
 if qdbus6 org.kde.plasmashell /PlasmaShell >/dev/null 2>&1; then
   qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript '
     panels().forEach(function (p) {
+      p.floating = false;  // flush with the screen edge, no gap
       p.widgets("org.kde.plasma.systemtray").forEach(function (w) {
         w.currentConfigGroup = ["General"];
         w.writeConfig("shownItems", ["org.kde.plasma.volume", "org.kde.plasma.networkmanagement",
