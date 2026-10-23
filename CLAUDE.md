@@ -68,6 +68,8 @@ in the private Life repo (`~/work/life`): `docs/computers/linux-setup.md` and
 machines, IP addresses, disk UUIDs, account names or internal repo names here.
 
 When you install a package, change a KDE setting or add a config file that both desktops should
-share, record it: the package lists in `setup/packages/`, the KDE keys in
-`setup/steps/60-desktop.sh`, new links in `install.sh`. Machine-only settings go in the Life
-machine profile, and new procedures in the Life docs.
+share, record it: the package lists in `setup/packages/`, the KDE keys in `kde/` (run
+`kde-config diff`, then `kde-config capture <rcfile>`; see `kde/README.md`), new links in
+`install.sh`. Machine-only settings go in the Life machine profile (KDE keys in its `kde/`
+folder, with `kde-config capture --host`), and new procedures in the Life docs. Never symlink a
+KDE rc file: KDE replaces it on save and the link silently becomes a copy.

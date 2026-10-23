@@ -1,0 +1,4 @@
+# Notification popups top right, gone after 3 s
+[Notifications]
+PopupPosition=TopRight
+PopupTimeout=3000
