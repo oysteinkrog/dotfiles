@@ -142,8 +142,11 @@ WantedBy=multi-user.target'
   fi
   sudo systemctl enable --now slab-guard.service >/dev/null 2>&1
   ok "slab-guard"
+fi
 
-  # A key press or click at this machine ends an RDP session left open (bin/local-input-watch).
+# A key press or click at this machine ends an RDP session left open (bin/local-input-watch).
+# Every machine that streams a monitor over KRDP runs krdp-remote-mode, which reads it.
+if [ -n "$HOST_KRDP_MONITOR" ]; then
   sudo install -m 0755 -o root -g root "$DOTFILES/bin/local-input-watch" /usr/local/sbin/local-input-watch
   unit=/etc/systemd/system/local-input-watch.service
   want='[Unit]
