@@ -1,0 +1,31 @@
+[General]
+Days Meta Infos=30
+PinnedDocuments=
+Save Meta Infos=true
+Show Full Path in Title=false
+Show Menu Bar=true
+Show Status Bar=true
+Show Tab Bar=true
+Show Url Nav Bar=true
+
+[KTextEditor Renderer]
+Animate Bracket Matching=false
+Auto Color Theme Selection=true
+Color Theme=Breeze Dark
+Line Height Multiplier=1
+Show Indentation Lines=false
+Show Whole Bracket Expression=false
+Text Font=Consolas,11,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0
+Text Font Features=
+Word Wrap Marker=false
+
+[filetree]
+editShade=30,78,103
+listMode=false
+middleClickToClose=false
+shadingEnabled=true
+showCloseButton=false
+showFullPathOnRoots=false
+showToolbar=true
+sortRole=0
+viewShade=77,46,91

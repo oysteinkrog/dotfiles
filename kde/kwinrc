@@ -1,0 +1,27 @@
+# Window manager. The pin-to-monitor layout is per host: HOST_WINDOW_LAYOUT in host.sh.
+[Effect-overview]
+BorderActivate=9
+
+[Effect-wobblywindows]
+AdvancedMode=true
+Drag=52
+Stiffness=48
+
+[Plugins]
+mousemarkEnabled=true
+sheetEnabled=true
+
+[Windows]
+ElectricBorderDelay=25
+
+[Xwayland]
+# X11 apps at 100 % (office: 1.1 made FrankenTerm blurry). Home overrides it.
+Scale=1
+XwaylandEisNoPromptApps=python3
+
+[org.kde.kdecoration2]
+library=org.kde.kwin.aurorae.v2
+
+[Desktops]
+Number=1
+Rows=1
