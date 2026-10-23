@@ -199,6 +199,11 @@ if [ -n "$native_linux" ]; then
     .local/share/applications/com.dicklesworthstone.frankenterm.desktop
     .local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg
     .local/bin/frankenterm
+    .local/bin/chrome-personal
+    .local/bin/chrome-work
+    .local/bin/chrome-profile-icon
+    .local/share/applications/chrome-personal.desktop
+    .local/share/applications/chrome-work.desktop
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
     .local/share/applications/foobar2000-next.desktop

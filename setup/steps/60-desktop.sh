@@ -79,13 +79,27 @@ kw --file krdpserverrc --group General --key SystemUserEnabled true
 ok "Breeze Dark, us altgr-intl, no indexing, KRDP on"
 
 step "desktop: default apps"
-kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/http google-chrome.desktop
-kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/https google-chrome.desktop
-kw --file mimeapps.list --group "Default Applications" --key text/html google-chrome.desktop
+# Two Chromes, personal and work (work/life docs/computers/linux-setup.md, "Chrome"). Work is the default browser.
+# The stock entry is hidden with a user copy, so menus show only the two launchers.
+mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons"
+if [ -f /usr/share/applications/google-chrome.desktop ]; then
+  sed '0,/^\[Desktop Entry\]/s//[Desktop Entry]\nNoDisplay=true/' /usr/share/applications/google-chrome.desktop \
+    >"$HOME/.local/share/applications/google-chrome.desktop"
+fi
+# The icons carry the account avatars, so they live in the private Life repo.
+for ic in chrome-personal chrome-work; do
+  [ -f "$HOME/work/life/setup/chrome/$ic.png" ] && cp -n "$HOME/work/life/setup/chrome/$ic.png" "$HOME/.local/share/icons/$ic.png"
+done
+# Empty profile folders. Never copy the office ones: their logins are tied to its keyring.
+mkdir -p "$HOME/.config/google-chrome-personal/Profile 1" "$HOME/.config/google-chrome/Default"
+kw --file kdeglobals --group General --key BrowserApplication chrome-work.desktop
+kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/http chrome-work.desktop
+kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/https chrome-work.desktop
+kw --file mimeapps.list --group "Default Applications" --key text/html chrome-work.desktop
 kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/claude com.anthropic.Claude.desktop
 kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/claude-cli claude-code-url-handler.desktop
 kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/slack slack.desktop
-ok "browser Chrome; claude://, claude-cli://, slack:// handlers"
+ok "browser Chrome (work profile); claude://, claude-cli://, slack:// handlers"
 
 step "desktop: music shortcuts"
 # Global keys for the launchers in .local/share/applications/foobar2000-*.desktop.

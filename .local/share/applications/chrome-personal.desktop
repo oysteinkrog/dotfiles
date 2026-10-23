@@ -1,0 +1,21 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Google Chrome (Personal)
+GenericName=Web Browser
+Exec=/home/oystein/.local/bin/chrome-personal %U
+Icon=/home/oystein/.local/share/icons/chrome-personal.png
+StartupWMClass=chrome-personal
+StartupNotify=true
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=/home/oystein/.local/bin/chrome-personal
+
+[Desktop Action new-private-window]
+Name=New Incognito Window
+Exec=/home/oystein/.local/bin/chrome-personal --incognito

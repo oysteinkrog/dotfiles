@@ -1,0 +1,8 @@
+#!/bin/sh
+# Personal Chrome profile in its own data folder, so it runs as a separate
+# process with its own Wayland app_id (chrome-personal) and taskbar icon.
+exec /usr/bin/google-chrome-stable \
+  --user-data-dir="$HOME/.config/google-chrome-personal" \
+  --profile-directory="Profile 1" \
+  --class=chrome-personal \
+  "$@"
