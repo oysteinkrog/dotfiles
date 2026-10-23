@@ -34,10 +34,14 @@ if [ -n "$HOST_KDE_SCALE" ]; then
   kw --file kwinrc --group Xwayland --key Scale "$HOST_KDE_SCALE"
 fi
 
+# Session restore: the autostart entry opens FrankenTerm (and starts its mux), so Plasma
+# must not reopen it as well, or the login shows two FrankenTerm windows.
+kw --file ksmserverrc --group General --key excludeApps com.dicklesworthstone.frankenterm.desktop
+
 # Window layout per host: which app goes on which monitor (the pin-to-monitor KWin script).
 # Empty turns the script off.
 if [ -n "$HOST_WINDOW_LAYOUT" ]; then
-  kw --file kwinrc --group Script-pin-to-monitor --key Layout "$HOST_WINDOW_LAYOUT"
+  kw --file kwinrc --group Script-pin-to-monitor --key Layout "$(printf '%s' "$HOST_WINDOW_LAYOUT" | tr -d '\n')"
   kw --file kwinrc --group Plugins --key pin-to-monitorEnabled true
 else
   kw --file kwinrc --group Plugins --key pin-to-monitorEnabled false
