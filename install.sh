@@ -67,6 +67,11 @@ claude_items=(
   hooks
   output
   skills
+  commands
+  keybindings.json
+  scripts
+  skills-sources.json
+  skills-sources.lock.json
 )
 
 mkdir -p "$olddir"
