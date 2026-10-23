@@ -1,8 +1,10 @@
 [Unit]
-Description=Watch kdeglobals for Plasma colour scheme changes (experimental fooyin)
+Description=Watch the Plasma colour scheme and style for changes (experimental fooyin)
 
 [Path]
 PathChanged=%h/.config/kdeglobals
+# Plasma style changes (fooyin follows the style's colours when it has its own).
+PathChanged=%h/.config/plasmarc
 
 [Install]
 WantedBy=default.target

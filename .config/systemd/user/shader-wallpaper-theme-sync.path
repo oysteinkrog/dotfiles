@@ -3,6 +3,8 @@ Description=Watch kdeglobals and the themed shader wallpaper for changes
 
 [Path]
 PathChanged=%h/.config/kdeglobals
+# Plasma style changes (the shader follows the style's colours when it has its own).
+PathChanged=%h/.config/plasmarc
 # Tweaks saved from the plugin's panel; the service copies them for the login screen.
 PathChanged=%h/.local/share/shader-wallpaper/Star_Nest_Themed.frag
 
