@@ -363,6 +363,23 @@ CLS=wine-run-tests-prebuilt AGO=5 IDLE=1 ss "i i" > "$X/out1"; cp "$X/out1" "$T/
 check "wine idle: logged for wine-run-tests-prebuilt, prefix - when unknown" 'grep -q "event=wine-idle prefix=- idle_s=" "$X/out1"'
 OWN=$X/own AGO=5 ss "i i i" > "$X/out1"; cp "$X/out1" "$T/out"
 check "wine idle: not before HB_WINE_IDLE_SECS (900 s)" '! grep -q "event=wine-idle" "$X/out1"'
+# Hung high builds (2026-10-23): a high build under 0.05 cores for 15 min gets
+# one event=hung-high line with its unit and directory, and one notice, once
+# per build. Nothing is stopped.
+PRIO=high CLS=other AGO=1000 ss "i i i i" > "$X/out1" 2>/dev/null; cp "$X/out1" "$T/out"
+check "hung high: logged once with unit and cwd" '(( $(grep -c "log: event=hung-high unit=u cwd=${PWD// /%20} idle_s=[0-9]* " "$X/out1") == 1 ))'
+check "hung high: stderr is not a file, so the notice is live.log" 'grep -q "event=hung-high .* notice=live.log " "$X/out1"'
+check "hung high: one notice naming the unit and directory" '(( $(grep -c "say: note: this high-priority build has used under 0.05 cores .* Unit u, directory $PWD\." "$X/out1") == 1 ))'
+check "hung high: the notice says it no longer counts as a job" 'grep -q "say: note: this high-priority build.*It no longer counts as a job or a high build" "$X/out1"'
+check "hung high: nothing is stopped" '! grep -q "^systemctl" "$X/out1"'
+PRIO=high CLS=other AGO=1000 ss "i i i" > "$X/out2" 2>"$X/err2"; cp "$X/out2" "$T/out"
+check "hung high: with stderr in a file, the line names that file as the build's log" 'grep -q "event=hung-high .* notice=$X/err2 " "$X/out2"'
+PRIO=high CLS=other AGO=700 ss "i i i" > "$X/out1" 2>/dev/null; cp "$X/out1" "$T/out"
+check "hung high: not before 15 min (idle 700 s is only a stall)" '! grep -q "event=hung-high" "$X/out1" && grep -q "event=stall" "$X/out1"'
+PRIO=normal CLS=other AGO=1000 ss "i i i" > "$X/out1" 2>/dev/null; cp "$X/out1" "$T/out"
+check "hung high: not for a normal build" '! grep -q "event=hung-high" "$X/out1"'
+PRIO=high CLS=app-run AGO=1000 ss "i i i" > "$X/out1" 2>/dev/null; cp "$X/out1" "$T/out"
+check "hung high: not for an app run, which is idle between tests" '! grep -q "event=hung-high" "$X/out1"'
 rm -r -f -- "$X"
 
 # 3d. The wine: lock key of a run-tests.sh command follows the prefix that
