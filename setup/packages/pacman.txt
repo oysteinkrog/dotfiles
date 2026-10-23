@@ -31,6 +31,9 @@ paru                # AUR helper, in the cachyos repo
 # Build and language toolchains
 base-devel
 cmake
+ninja
+extra-cmake-modules  # with ninja and wayland-protocols: localbuild recipes such as shader-wallpaper
+wayland-protocols
 lld
 mold
 sccache
