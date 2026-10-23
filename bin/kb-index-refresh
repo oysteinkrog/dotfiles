@@ -31,11 +31,14 @@ fi
 
 if (( PULL )); then
   git -C "$LANE" fetch -q if master
-  if [[ -n "$(git -C "$LANE" status --porcelain)" ]]; then
+  # Some monorepo files are committed with CRLF but marked `text`, so a fresh lane
+  # lists them as changed. Only real edits or untracked files count as dirty.
+  if ! git -C "$LANE" diff --ignore-cr-at-eol --quiet HEAD 2>/dev/null ||
+     [[ -n "$(git -C "$LANE" ls-files --others --exclude-standard)" ]]; then
     log "lane is dirty; not moving it. Nobody should edit $LANE."
     exit 1
   fi
-  git -C "$LANE" checkout -q --detach if/master
+  git -C "$LANE" checkout -q -f --detach if/master
   log "lane at $(git -C "$LANE" log -1 --format='%h %cs')"
 fi
 
