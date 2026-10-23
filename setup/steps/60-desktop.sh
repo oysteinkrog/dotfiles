@@ -115,6 +115,8 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
         d.writeConfig('pauseMode', 1);
         d.writeConfig('watchSourceFile', true);
         d.writeConfig('enableShaderTweaks', true);
+        // Frozen: one rendered frame, no animation. Animated, it kept the GPU at 37-91%.
+        d.writeConfig('running', false);
         d.reloadConfig();
       });" >/dev/null && ok "desktops and lock screen: themed Star Nest"
   else
