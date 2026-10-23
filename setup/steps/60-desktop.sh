@@ -82,7 +82,7 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
   lock() { kw --file kscreenlockerrc --group Greeter --group Wallpaper --group $shader_plugin --group General --key "$1" -- "$2"; }
   kw --file kscreenlockerrc --group Greeter --key WallpaperPlugin $shader_plugin
   lock selectedShaderPath "$shader_url"
-  lock shaderSpeed 0.025
+  lock shaderSpeed 0.035
   lock targetFps 30
   lock resolutionScale 1.0
   if have qdbus6 && qdbus6 org.kde.plasmashell >/dev/null 2>&1; then
@@ -92,7 +92,7 @@ if [ -d /usr/share/plasma/wallpapers/$shader_plugin ]; then
         d.currentConfigGroup = ['Wallpaper', '$shader_plugin', 'General'];
         d.writeConfig('selectedShaderCode', '');
         d.writeConfig('selectedShaderPath', '$shader_url');
-        d.writeConfig('shaderSpeed', 0.025);
+        d.writeConfig('shaderSpeed', 0.035);
         d.writeConfig('targetFps', 30);
         d.writeConfig('resolutionScale', 1.0);
         d.writeConfig('pauseMode', 1);
