@@ -55,23 +55,24 @@ same gate on anything about to reach a person and hands back findings on failure
 - **Verify state before assuming it.** Check `git log` and the file tree to see what is
   actually implemented rather than only planned.
 - **Clarifying questions go to Oystein**, never to colleagues over Slack or email.
-- **Ask before installing system packages.** Use `pacman` (or `paru` for AUR) on
-  Arch/CachyOS and `apt` on Ubuntu/WSL. Passwordless sudo is configured for the package
-  manager (`pacman`, or `apt` and `apt-get`), so you can run `sudo pacman -S <pkg>` or
-  `sudo apt install <pkg>` yourself, but name the packages and get approval first.
+- **Install the system packages a task needs without asking.** Oystein, 2026-10-23. Use
+  `pacman` (or `paru` for AUR) on Arch/CachyOS and `apt` on Ubuntu/WSL. Passwordless sudo
+  is configured for the package manager (`pacman`, or `apt` and `apt-get`), so run
+  `sudo pacman -S <pkg>` or `sudo apt install <pkg>` yourself and name the packages you
+  installed in your reply.
 - **You may run root commands yourself.** Oystein, 2026-10-23: passwordless sudo covers
   every command on this desktop (`oystein-home-primary`), and you can use it for system
   config such as `/etc`, kernel module options and services. Say what you changed as root.
-  Package installs still need approval (above), and a reboot or anything that ends his
+  Package installs need no approval (above). A reboot or anything that ends his
   session needs a yes first. On a machine where `sudo -n true` fails, hand the command to
   Oystein instead.
 - **Portable single-use tools need no approval, on any machine.** Oystein, 2026-10-20: a
   self-contained tool you copy into place and can delete again (for example a signed
   Sysinternals exe such as RAMMap, or a static binary) is fine on this desktop, Hawk, the
   pool hosts or a VM. Put it in a task folder (on Hawk `C:\LabQa\perf\tools`), take it from
-  the vendor's own site, check its signature or hash, and say where it went. This does not
-  cover package managers, installers, services, drivers or registry changes: those still
-  need approval.
+  the vendor's own site, check its signature or hash, and say where it went. Packages from
+  the package manager are covered by the rule above. Other installers, services, drivers or
+  registry changes on Windows machines still need approval.
 - **Always use `AskUserQuestion` when you need input.** A question in plain text does not
   reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
   multiple-choice or clarifying question, and for open questions too, so there is a clear
