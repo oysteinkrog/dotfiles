@@ -289,8 +289,15 @@ static void writeStyle(QSettings& settings, const QString& coloursFile)
     set(QPalette::Text, text);
     set(QPalette::Button, get("Button", "BackgroundNormal"));
     set(QPalette::ButtonText, get("Button", "ForegroundNormal"));
-    set(QPalette::Highlight, accent);
-    set(QPalette::HighlightedText, get("Selection", "ForegroundNormal"));
+    // Selected rows: the full accent (Sweet's #8500f7) glares in the playlist, so blend 40% of it into the
+    // list background. Text on it keeps the normal text colour, which reads better on the darker mix.
+    const auto blend = [](const QColor& a, const QColor& b, double amountA) {
+        return QColor::fromRgbF(static_cast<float>(a.redF() * amountA + b.redF() * (1 - amountA)),
+                                static_cast<float>(a.greenF() * amountA + b.greenF() * (1 - amountA)),
+                                static_cast<float>(a.blueF() * amountA + b.blueF() * (1 - amountA)));
+    };
+    set(QPalette::Highlight, accent.isValid() && base.isValid() ? blend(accent, base, 0.4) : accent);
+    set(QPalette::HighlightedText, text);
     set(QPalette::ToolTipBase, get("Tooltip", "BackgroundNormal"));
     set(QPalette::ToolTipText, get("Tooltip", "ForegroundNormal"));
     set(QPalette::PlaceholderText, muted);
