@@ -26,6 +26,7 @@ const float mouseAmount = 0.1;  // @range(0.0, 1.0, 0.01) @label("Mouse rotation
 
 // Quality
 const int   samples    = 2;     // @range(1, 3, 1) @label("Anti-aliasing (samples per side, less twinkling)")
+const float aaSpread   = 0.5;   // @range(0.0, 1.0, 0.05) @label("Anti-aliasing spread (pixels, lower = more twinkling)")
 
 // Original colouring
 const float brightness = 0.0015; // @range(0.0002, 0.005, 0.0001) @label("Brightness")
@@ -112,11 +113,11 @@ vec3 render(vec2 fragCoord)
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
 	//the far stars are smaller than a pixel and twinkle as the view drifts;
-	//average samples x samples points spread over the pixel
+	//average samples x samples points spread over aaSpread of a pixel
 	vec3 col=vec3(0.);
 	for (int j=0; j<samples; j++) {
 		for (int i=0; i<samples; i++) {
-			col+=render(fragCoord+(vec2(i,j)+.5)/float(samples)-.5);
+			col+=render(fragCoord+((vec2(i,j)+.5)/float(samples)-.5)*aaSpread);
 		}
 	}
 	fragColor = vec4(col/float(samples*samples),1.);
