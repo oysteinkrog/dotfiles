@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Keep the monorepo's knowledge-base qmd collections registered and current.
+#
+# The collections point at the grove lane "kb-index", a checkout nobody works
+# in. Each run moves that lane to if/master (detached), registers every
+# knowledge-base/<topic>/ as "<topic>-kb" plus the three foundry collections,
+# then runs qmd update and qmd embed. Run by kb-index-refresh.timer.
+#
+#   kb-index-refresh            refresh lane, register, index, embed
+#   kb-index-refresh --no-pull  skip the git step
+#   kb-index-refresh --no-embed register and index only (fast, lexical)
+set -euo pipefail
+
+LANE="${KB_INDEX_LANE:-$HOME/work/desktop/kb-index}"
+PULL=1
+EMBED=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-pull) PULL=0 ;;
+    --no-embed) EMBED=0 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+log() { printf '%s kb-index-refresh: %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+if [[ ! -d "$LANE/knowledge-base" ]]; then
+  log "lane $LANE missing; create it with: grove new kb-index --branch kb-index"
+  exit 1
+fi
+
+if (( PULL )); then
+  git -C "$LANE" fetch -q if master
+  if [[ -n "$(git -C "$LANE" status --porcelain)" ]]; then
+    log "lane is dirty; not moving it. Nobody should edit $LANE."
+    exit 1
+  fi
+  git -C "$LANE" checkout -q --detach if/master
+  log "lane at $(git -C "$LANE" log -1 --format='%h %cs')"
+fi
+
+# `qmd collection show <name>` exits non-zero for an unknown name and prints
+# "  Path: <abs>" for a known one.
+registered_path() {
+  qmd collection show "$1" 2>/dev/null \
+    | awk '/^[[:space:]]*Path:/ {sub(/^[[:space:]]*Path:[[:space:]]*/, ""); print; exit}'  || true
+}
+
+register() {
+  local name="$1" path="$2"; shift 2
+  local current
+  current="$(registered_path "$name")"
+  if [[ "$current" == "$path" ]]; then
+    return
+  fi
+  if [[ -n "$current" ]]; then
+    qmd collection remove "$name" >/dev/null
+  fi
+  qmd collection add "$path" --name "$name" "$@" >/dev/null
+  log "registered $name"
+}
+
+n=0
+for dir in "$LANE"/knowledge-base/*/; do
+  topic="$(basename "$dir")"
+  [[ "$topic" == _* || "$topic" == scripts ]] && continue
+  script="$dir/scripts/install-collection.sh"
+  [[ -f "$script" ]] || continue
+  name="$(sed -n 's/^COLLECTION_NAME="\(.*\)"/\1/p' "$script" | head -1)"
+  [[ -n "$name" ]] || name="$topic-kb"
+  register "$name" "${dir%/}"
+  n=$((n + 1))
+done
+register foundry-product "$LANE/foundation"
+register foundry-glossary "$LANE/domain-knowledge" --mask '**/*.yaml'
+register foundry-docs "$LANE/docs/articles/en"
+log "$n knowledge-base collections plus 3 foundry collections registered"
+
+qmd update
+if (( EMBED )); then
+  qmd embed
+fi
+log "done"
