@@ -26,7 +26,7 @@ const float mouseAmount = 0.1;  // @range(0.0, 1.0, 0.01) @label("Mouse rotation
 
 // Original colouring
 const float brightness = 0.0015; // @range(0.0002, 0.005, 0.0001) @label("Brightness")
-const float starLimit  = 6.0;    // @range(0.5, 50.0, 0.1) @label("Star limit (lower = fewer bright stars)")
+const float starLimit  = 15.0;   // @range(0.5, 50.0, 0.1) @label("Star limit (lower = fewer bright stars)")
 const float saturation = 0.85;   // @range(0.0, 1.0, 0.01) @label("Saturation (original colours)")
 
 // Colour grade
