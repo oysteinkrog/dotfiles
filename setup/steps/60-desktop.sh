@@ -95,7 +95,7 @@ done
 if have magick && [ -f "$HOME/.local/share/icons/chrome-work.png" ]; then
   "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome-personal" "Profile 1" "$HOME/.local/share/icons/chrome-personal.png"
   "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome" Default "$HOME/.local/share/icons/chrome-work.png"
-  ok "Chrome icons drawn on the $(kreadconfig6 --group Icons --key Theme 2>/dev/null) Chrome logo"
+  ok "Chrome icons drawn on the icon theme's Chrome logo"
 fi
 # Empty profile folders. Never copy the office ones: their logins are tied to its keyring.
 mkdir -p "$HOME/.config/google-chrome-personal/Profile 1" "$HOME/.config/google-chrome/Default"
