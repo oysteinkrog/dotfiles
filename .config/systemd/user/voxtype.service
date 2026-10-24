@@ -1,0 +1,17 @@
+[Unit]
+Description=Voxtype push-to-talk dictation (patched build with live preview)
+Documentation=https://voxtype.io
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service
+
+[Service]
+Type=simple
+# localbuild recipe voxtype (package voxtype-cuda-local). Run directly, not through
+# /usr/bin/voxtype, which `voxtype setup` rewrites to the stock build.
+ExecStart=/usr/lib/voxtype-local/voxtype daemon
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target

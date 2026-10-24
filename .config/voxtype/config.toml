@@ -1,0 +1,62 @@
+# Voxtype: push-to-talk dictation. Hold Right Ctrl, speak, release.
+# Full option list: https://github.com/peteonrails/voxtype/blob/main/docs/CONFIGURATION.md
+# Setup notes: ~/work/life/docs/computers/voice-typing.md
+
+engine = "cohere"
+state_file = "auto"
+
+# Patched build (localbuild recipe voxtype): the model runs in a worker process
+# that exits after each recording, so the daemon stays at about 25 MB.
+engine_isolation = true
+# Live text in the overlay while you speak (Parakeet streaming on the CPU).
+# The text that gets typed comes from Cohere, loaded in the background meanwhile.
+live_preview_model = "parakeet-unified-en-0.6b-int8"
+
+[hotkey]
+key = "RIGHTCTRL"
+modifiers = []
+mode = "push_to_talk"
+cancel_key = "ESC"
+
+[audio]
+device = "default"
+sample_rate = 16000
+max_duration_secs = 300
+
+[audio.feedback]
+enabled = true
+volume = 0.5
+
+# Cohere Transcribe 2B, 4-bit weights: about 2.2 GiB VRAM while a recording runs.
+# on_demand_loading must stay false for the live preview: the daemon then holds
+# only the small worker launcher, and the worker loads the model per recording.
+[cohere]
+model = "cohere-transcribe-q4f16"
+language = "en"
+on_demand_loading = false
+
+# Fast alternative: about 0.4 GiB VRAM, roughly 3x faster.
+# Switch with: voxtype record start --model parakeet-tdt-0.6b-v3-int8
+[parakeet]
+model = "parakeet-tdt-0.6b-v3-int8"
+on_demand_loading = true
+
+[whisper]
+model = "base.en"
+language = "en"
+on_demand_loading = true
+
+[output]
+mode = "type"
+fallback_to_clipboard = true
+type_delay_ms = 0
+
+[output.notification]
+on_recording_start = false
+on_recording_stop = false
+on_transcription = false
+
+[osd]
+frontend = "gtk4"
+style = "default"
+layout = "compact"
