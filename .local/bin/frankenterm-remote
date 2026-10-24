@@ -12,6 +12,10 @@ remote="${1:-$default}"
 shift || true
 export FRANKENTERM_LUA_CONFIG=1
 mkdir -p "$HOME/.local/state"
+# Its own data dir. The GUI reattaches every domain in the reconnect manifest
+# kept there, so with the shared one it also opened a window on the local mux.
+export XDG_DATA_HOME="$HOME/.local/share/frankenterm-remote/$remote"
+mkdir -p "$XDG_DATA_HOME"
 # its own class, so it is a separate GUI process with its own taskbar entry
 exec /usr/bin/frankenterm-gui connect --class "com.dicklesworthstone.frankenterm.$remote" "$remote" "$@" \
   >>"$HOME/.local/state/frankenterm-remote.log" 2>&1

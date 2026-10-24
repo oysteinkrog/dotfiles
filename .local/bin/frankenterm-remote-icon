@@ -1,0 +1,39 @@
+#!/bin/sh
+# Make a taskbar icon for a remote Frankenterm mux: the Frankenterm logo with a
+# round badge in the bottom-right corner, a house for home and an office
+# building for office (same badge size as chrome-profile-icon).
+# Usage: frankenterm-remote-icon <office|home> <out.png>
+set -eu
+remote=$1; out=$2
+logo="$HOME/.dotfiles/.local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg"
+tmp=$(mktemp -d)
+trap 'rm -r "$tmp"' EXIT
+
+case "$remote" in
+  home)
+    color='#27AE60'
+    glyph='<path d="M60 26 L94 56 H84 V92 H68 V72 H52 V92 H36 V56 H26 Z" fill="white"/>' ;;
+  office)
+    color='#2980B9'
+    glyph='<path d="M38 28 H82 V94 H66 V80 H54 V94 H38 Z" fill="white"/>
+      <g fill="'"$color"'">
+        <rect x="45" y="36" width="10" height="9"/><rect x="65" y="36" width="10" height="9"/>
+        <rect x="45" y="51" width="10" height="9"/><rect x="65" y="51" width="10" height="9"/>
+        <rect x="45" y="66" width="10" height="9"/><rect x="65" y="66" width="10" height="9"/>
+      </g>' ;;
+  *) echo "usage: frankenterm-remote-icon office|home <out.png>" >&2; exit 2 ;;
+esac
+
+# 112 px coloured disc with a white glyph, on a 120 px white ring
+cat >"$tmp/badge.svg" <<EOF
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
+  <circle cx="60" cy="60" r="60" fill="white"/>
+  <circle cx="60" cy="60" r="56" fill="$color"/>
+  $glyph
+</svg>
+EOF
+
+magick -background none -density 384 "$logo" -resize 256x256 "$tmp/logo.png"
+magick -background none "$tmp/badge.svg" "$tmp/badge.png"
+magick "$tmp/logo.png" "$tmp/badge.png" -gravity SouthEast \
+  -geometry +0+0 -compose Over -composite "$out"

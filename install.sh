@@ -200,6 +200,9 @@ if [ -n "$native_linux" ]; then
     .local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg
     .local/bin/frankenterm
     .local/bin/frankenterm-remote
+    .local/bin/frankenterm-remote-icon
+    .local/share/icons/hicolor/256x256/apps/com.dicklesworthstone.frankenterm.office.png
+    .local/share/icons/hicolor/256x256/apps/com.dicklesworthstone.frankenterm.home.png
     .local/share/applications/com.dicklesworthstone.frankenterm.office.desktop
     .local/share/applications/com.dicklesworthstone.frankenterm.home.desktop
     .local/bin/chrome-personal
