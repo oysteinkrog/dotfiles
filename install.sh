@@ -185,6 +185,7 @@ if [ -n "$native_linux" ]; then
     .config/micro/settings.json
     .config/micro/colorschemes
     .config/dcg/config.toml
+    .config/voxtype/config.toml
     .config/pipewire/iem-eq
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
