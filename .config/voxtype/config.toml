@@ -1,4 +1,4 @@
-# Voxtype: push-to-talk dictation. Hold Right Ctrl, speak, release.
+# Voxtype dictation. Tap Right Ctrl to start, speak, tap Right Ctrl again to stop.
 # Full option list: https://github.com/peteonrails/voxtype/blob/main/docs/CONFIGURATION.md
 # Setup notes: ~/work/life/docs/computers/voice-typing.md
 
@@ -8,14 +8,18 @@ state_file = "auto"
 # Patched build (localbuild recipe voxtype): the model runs in a worker process
 # that exits after each recording, so the daemon stays at about 25 MB.
 engine_isolation = true
-# Live text in the overlay while you speak (Parakeet streaming on the CPU).
-# The text that gets typed comes from Cohere, loaded in the background meanwhile.
+# Live text while you speak (Parakeet streaming on the CPU), shown in the overlay.
+# The final text comes from Cohere, loaded in the background meanwhile.
 live_preview_model = "parakeet-unified-en-0.6b-int8"
+# Type the live words into the focused app too, like Claude Code's /voice. On stop,
+# Cohere's text replaces them. Needs toggle mode: letters typed while Ctrl is held
+# would become shortcuts.
+live_typing = true
 
 [hotkey]
 key = "RIGHTCTRL"
 modifiers = []
-mode = "push_to_talk"
+mode = "toggle"
 cancel_key = "ESC"
 
 [audio]
