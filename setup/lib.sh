@@ -18,6 +18,8 @@ HOST_UFW_LAN=""           # LAN subnet allowed to reach Sunshine and RDP, e.g. 1
 HOST_KRDP_MONITOR=""      # monitor index KRDP streams, for multi-monitor hosts, e.g. 1
 HOST_EDID_ADD_MODE=""     # connector_sizes added to that monitor's EDID at boot, e.g. DP-2_2560x1440_1440x900
 HOST_WINDOW_LAYOUT=""     # pin-to-monitor KWin script layout (JSON), see the office profile
+HOST_FRANKENTERM_BADGE=none  # badge on the main Frankenterm icon: house, building, a letter or none
+HOST_FRANKENTERM_REMOTES=()  # other muxes to open over ssh, as <ssh-host>:<badge>, e.g. work:building
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)
 
 if [ -f "$HOST_DIR/host.sh" ]; then

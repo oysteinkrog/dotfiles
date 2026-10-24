@@ -1,19 +1,7 @@
 #!/bin/bash
 # Open a Frankenterm window attached to the Frankenterm session server,
 # starting the server first if it is not running.
-# --link-icon only points the icon name ...frankenterm.local at this machine's
-# badged icon (house at home, building at the office), which the menu entry uses.
 # Log: ~/.local/state/frankenterm-gui.log
-apps="$HOME/.local/share/icons/hicolor/256x256/apps"
-case "$(hostname)" in
-  oystein-home-primary) here=home ;;
-  oystein-office-primary) here=office ;;
-esac
-if [ -n "$here" ]; then
-  mkdir -p "$apps"
-  ln -sfn "com.dicklesworthstone.frankenterm.$here.png" "$apps/com.dicklesworthstone.frankenterm.local.png"
-fi
-[ "$1" = --link-icon ] && exit 0
 systemctl --user start frankenterm-mux.service
 export FRANKENTERM_LUA_CONFIG=1
 mkdir -p "$HOME/.local/state"

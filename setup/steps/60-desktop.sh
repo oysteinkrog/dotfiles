@@ -80,9 +80,11 @@ if have magick && [ -f "$HOME/.local/share/icons/chrome-work.png" ]; then
   "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome" Default "$HOME/.local/share/icons/chrome-work.png"
   ok "Chrome icons drawn on the icon theme's Chrome logo"
 fi
-# The local Frankenterm entry uses the icon name ...frankenterm.local. Point it at the
-# badged icon for this machine: the house at home, the building at the office.
-"$HOME/.local/bin/frankenterm" --link-icon && ok "Frankenterm icon badged for $(hostname)"
+# Frankenterm icons and one menu entry per remote mux (frankenterm-launchers).
+if have magick; then
+  "$HOME/.local/bin/frankenterm-launchers" --local "$HOST_FRANKENTERM_BADGE" "${HOST_FRANKENTERM_REMOTES[@]}"
+  ok "Frankenterm launchers: badge $HOST_FRANKENTERM_BADGE${HOST_FRANKENTERM_REMOTES:+, remotes ${HOST_FRANKENTERM_REMOTES[*]}}"
+fi
 # Empty profile folders. Never copy the office ones: their logins are tied to its keyring.
 mkdir -p "$HOME/.config/google-chrome-personal/Profile 1" "$HOME/.config/google-chrome/Default"
 kw --file mimeapps.list --group "Default Applications" --key x-scheme-handler/http chrome-work.desktop
