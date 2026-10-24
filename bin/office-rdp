@@ -4,6 +4,11 @@
 # its 125%-scaled size (2048x1152) on fullscreen, and KRDP then shrank the office monitor.
 # -dynamic-resolution stops any resize request, so the office monitor stays at 1440p.
 # AVC444 video; sound and microphone go through PipeWire (pulse API).
+# Uses the localbuilds freerdp-client build in /opt/freerdp-client: the distro FreeRDP has
+# no GPU H.264 decode (WITH_FFMPEG_HWACCEL) and no Opus, and this one has both. /gdi:hw
+# is what turns the GPU decode on (FreeRDP uses VA-API only when SoftwareGdi is off).
+# latency:80 asks PipeWire for an 80 ms buffer: KRDP then measured about 165 ms client
+# latency, against about 220 ms with the default buffer (2026-10-24, Opus 48 kHz).
 # Ctrl+Alt+Enter leaves fullscreen.
 # /timeout:60000 raises TCP_USER_TIMEOUT from 9 s: when the office machine is under heavy
 # build load, KRDP and tailscaled stall for 10 to 35 s and the 9 s default dropped the session.
@@ -35,9 +40,9 @@ done
 {
   printf '%s\n' /v:100.78.187.79 /u:oystein "/p:$pw" /cert:tofu \
     /size:2560x1440 /f -dynamic-resolution /floatbar:sticky:off,default:hidden,show:fullscreen \
-    /gfx:AVC444:on /sound:sys:pulse /microphone:sys:pulse /network:lan +clipboard /timeout:60000
+    /gfx:AVC444:on /sound:sys:pulse,latency:80 /microphone:sys:pulse /network:lan +clipboard /timeout:60000 /gdi:hw
   for a in "$@"; do printf '%s\n' "$a"; done
-} | xfreerdp3 /args-from:stdin >"$log" 2>&1
+} | /opt/freerdp-client/bin/xfreerdp3 /args-from:stdin >"$log" 2>&1
 rc=$?
 
 # Wrong password: forget it so the next launch asks again. KRDP checks the password
