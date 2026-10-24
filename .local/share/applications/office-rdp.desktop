@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Office desktop (RDP)
+Exec=/home/oystein/bin/office-rdp
+Terminal=false
+Icon=preferences-desktop-remote-desktop
+Categories=Network;RemoteAccess;
+StartupWMClass=office-rdp
