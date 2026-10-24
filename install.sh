@@ -199,6 +199,8 @@ if [ -n "$native_linux" ]; then
     .local/share/applications/com.dicklesworthstone.frankenterm.desktop
     .local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg
     .local/bin/frankenterm
+    .local/bin/frankenterm-remote
+    .local/share/applications/frankenterm-remote.desktop
     .local/bin/chrome-personal
     .local/bin/chrome-work
     .local/bin/chrome-profile-icon

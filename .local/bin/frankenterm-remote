@@ -1,0 +1,17 @@
+#!/bin/bash
+# Open a Frankenterm window attached to the other desktop's session server,
+# over ssh. Usage: frankenterm-remote [office|home]. The default is the other
+# machine. The domain is defined in ~/.config/wezterm/wezterm.lua.
+# Log: ~/.local/state/frankenterm-remote.log
+case "$(hostname)" in
+  oystein-home-primary) default=office ;;
+  oystein-office-primary) default=home ;;
+esac
+remote="${1:-$default}"
+[ -n "$remote" ] || { echo "usage: frankenterm-remote office|home" >&2; exit 2; }
+shift || true
+export FRANKENTERM_LUA_CONFIG=1
+mkdir -p "$HOME/.local/state"
+# its own class, so it is a separate GUI process with its own taskbar entry
+exec /usr/bin/frankenterm-gui connect --class "com.dicklesworthstone.frankenterm.$remote" "$remote" "$@" \
+  >>"$HOME/.local/state/frankenterm-remote.log" 2>&1
