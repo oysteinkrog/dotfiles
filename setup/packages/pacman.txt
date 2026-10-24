@@ -85,3 +85,6 @@ noise-suppression-for-voice   # RNNoise LADSPA plugin for the mic filter-chain
 
 # Files and disks
 ntfs-3g
+
+# Voice typing
+gtk4-layer-shell   # voxtype's on-screen recording indicator
