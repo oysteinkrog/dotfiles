@@ -9,7 +9,9 @@
 # is what turns the GPU decode on (FreeRDP uses VA-API only when SoftwareGdi is off).
 # latency:80 asks PipeWire for an 80 ms buffer: KRDP then measured about 165 ms client
 # latency, against about 220 ms with the default buffer (2026-10-24, Opus 48 kHz).
-# Ctrl+Alt+Enter leaves fullscreen.
+# Ctrl+Alt+Enter leaves fullscreen. +smart-sizing scales the picture to the window, so the
+# window can be resized freely while the office stays at 2560x1440. (Dynamic resolution
+# would resize the office monitor, which only has its EDID modes.)
 # /timeout:60000 raises TCP_USER_TIMEOUT from 9 s: when the office machine is under heavy
 # build load, KRDP and tailscaled stall for 10 to 35 s and the 9 s default dropped the session.
 # RDP has no key login, so the KRDP password lives in KDE Wallet (Secret Service).
@@ -40,7 +42,7 @@ done
 {
   printf '%s\n' /v:100.78.187.79 /u:oystein "/p:$pw" /cert:tofu \
     /size:2560x1440 /f -dynamic-resolution /floatbar:sticky:off,default:hidden,show:fullscreen \
-    /gfx:AVC444:on /sound:sys:pulse,latency:80 /microphone:sys:pulse /network:lan +clipboard /timeout:60000 /gdi:hw
+    /gfx:AVC444:on /sound:sys:pulse,latency:80 /microphone:sys:pulse /network:lan +clipboard /timeout:60000 /gdi:hw +smart-sizing
   for a in "$@"; do printf '%s\n' "$a"; done
 } | /opt/freerdp-client/bin/xfreerdp3 /args-from:stdin >"$log" 2>&1
 rc=$?
