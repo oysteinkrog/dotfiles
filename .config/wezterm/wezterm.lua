@@ -128,9 +128,12 @@ else
   -- The other desktop's mux server, reached over ssh (Tailscale) with socat on
   -- its socket. Open it with frankenterm-remote. The client reconnects on its
   -- own when the ssh pipe drops, and the remote tabs keep running meanwhile.
+  -- Only frankenterm-remote's GUI gets the domain (it sets FRANKENTERM_REMOTE).
+  -- The main GUI reattaches every domain it has ever attached, so it must not
+  -- know this one, or it opens the remote windows too.
   local remote_hosts = { ['oystein-home-primary'] = 'office', ['oystein-office-primary'] = 'home' }
   local remote = remote_hosts[wezterm.hostname()]
-  if remote then
+  if remote and os.getenv('FRANKENTERM_REMOTE') == remote then
     table.insert(config.unix_domains, {
       name = remote,
       proxy_command = {
