@@ -22,7 +22,7 @@ STATE = Path.home() / ".local" / "state" / "ft-review" / "reviewed.txt"
 
 def load_bookmarks() -> list[dict]:
     rows = [
-        json.loads(line) for line in ARCHIVE.read_text().splitlines() if line.strip()
+        json.loads(line) for line in ARCHIVE.read_text().split("\n") if line.strip()
     ]
     # sortIndex is X's bookmark order: higher means bookmarked later.
     return sorted(rows, key=lambda b: int(b.get("sortIndex") or 0), reverse=True)
