@@ -15,6 +15,12 @@ live_preview_model = "parakeet-unified-en-0.6b-int8"
 # Cohere's text replaces them. Needs toggle mode: letters typed while Ctrl is held
 # would become shortcuts.
 live_typing = true
+# Keep a worker with the preview model loaded for 5 minutes after each recording,
+# so the next one starts typing about 1.6 s sooner. Costs about 1 GB RAM (no VRAM)
+# during those 5 minutes only. 0 = load fresh every time.
+live_preview_warm_secs = 300
+# Give that 1 GB back early when the machine is under memory pressure (checked every 10 s).
+live_preview_warm_release_command = "grep -qE 'level=(slow|pause)' ~/.local/state/pressure/level"
 
 [hotkey]
 key = "RIGHTCTRL"
