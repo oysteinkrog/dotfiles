@@ -326,22 +326,45 @@ slab_fallback() {
 check_oom() {
   local t last lines line ts key seen out=""
   t=$(now); last=$(state_get oom_since "$t")
-  lines=$( { mm_journal -k --since "@$last" | grep -E '(O|o)ut of memory: Killed process'
+  lines=$( { mm_journal -k --since "@$last" | grep -E '(O|o)ut of memory: Killed process|oom-kill:constraint='
              mm_journal -u systemd-oomd.service --since "@$last" | grep -E 'Killed|Marked'; } \
            | awk -v l="$last" '$1 > l' | grep -v 'machine-monitor')
   state_set oom_since "$t"
   seen=" $(state_get oom_seen) "
+  # A cgroup-confined kill (CONSTRAINT_MEMCG plus the text "Memory cgroup out of
+  # memory") goes to the events log only, with the oom_memcg path. Anything
+  # else, or any disagreement between the two kernel lines, keeps the toast.
+  local cons="" memcg="" kind quiet=""
   while read -r line; do
     [[ -n $line ]] || continue
+    if [[ $line == *oom-kill:constraint=* ]]; then
+      cons=; memcg=
+      [[ $line =~ constraint=([A-Z_]+) ]] && cons=${BASH_REMATCH[1]}
+      [[ $line =~ oom_memcg=([^,\ ]+) ]] && memcg=${BASH_REMATCH[1]}
+      continue
+    fi
     ts=${line%% *}
     if [[ $line =~ Killed\ process\ ([0-9]+) ]]; then key="${BASH_REMATCH[1]}@${ts%.*}"
     elif [[ $line =~ Killed\ ([^ ]+) ]]; then key="${BASH_REMATCH[1]##*/}@${ts%.*}"
     else key="${ts%.*}"; fi
+    kind=$cons; cons=
+    if [[ $line == *"Memory cgroup out of memory: Killed process"* && $kind == CONSTRAINT_MEMCG ]]; then
+      kind=memcg
+    else
+      kind=other
+    fi
     [[ $seen == *" $key "* ]] && continue
-    seen+="$key "; out+="$(cut -d' ' -f3- <<< "$line") "
+    seen+="$key "
+    if [[ $kind == memcg ]]; then
+      quiet+="$(cut -d' ' -f3- <<< "$line") (oom_memcg=${memcg:-unknown}) "
+    else
+      out+="$(cut -d' ' -f3- <<< "$line") "
+    fi
+    memcg=
   done <<< "$lines"
   # Keep the last 50 keys.
   state_set oom_seen "$(tr ' ' '\n' <<< "$seen" | grep . | tail -50 | tr '\n' ' ')"
+  [[ -n $quiet ]] && MM_NOTIFY=0 emit info OOM "cgroup-confined kill, no toast: ${quiet% }"
   [[ -n $out ]] && emit crit OOM "${out% }"
   return 0
 }
