@@ -56,7 +56,7 @@ worktree. Only the `run` verb is still on branch `kpp` alone (worktree
 ```bash
 K=<your worktree>/tools
 $K/qa/hive/setup-hive.sh /var/tmp/claude/<hive> --profile minimal
-$K/wine/headless-mc.sh start one --hive /var/tmp/claude/<hive> --licence profiler \
+$K/wine/headless-mc.sh start one --hive /var/tmp/claude/<hive> --licence all-features \
     --build-dir <your src/motioncatalyst/BUILD/x64_Debug>
 eval "$($K/wine/headless-mc.sh env one)"    # broker, prefix, display and D-Bus for this shell
 $K/wine/mcpc.py call mc_navigate_to '{"screenName":"UserSelection"}'
@@ -69,7 +69,7 @@ starts MC through the broker and maximizes its window. `--licence <profile>` fir
 starts a licence mock for this instance on a free port, installs a test key into the
 hive and passes `--license-server` to MC. That needs a Debug build with
 `MotionCatalyst-cli.exe` in it (see "A licence from the mock" in the README).
-Profiles are in `tools/qa/hive/license-profiles/` (`profiler`, `all-features`).
+Profiles are in `tools/qa/hive/license-profiles/` (for example `all-features` and `minimal`; there is no `profiler` profile).
 Without `--hive`, start MC yourself with `mc_connect`, then maximize it (see Limits).
 `stop` closes MC through the broker, then ends the mock, the broker, the prefix's
 wineserver, the D-Bus bus and Xvfb, each by the PID that `start` recorded.
