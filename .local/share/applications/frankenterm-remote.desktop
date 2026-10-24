@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Frankenterm Remote
+GenericName=Terminal
+Comment=Terminal attached to the other desktop's Frankenterm session server, over ssh
+Exec=/home/oystein/.local/bin/frankenterm-remote
+Icon=com.dicklesworthstone.frankenterm
+Categories=System;TerminalEmulator;
+Terminal=false
+Actions=office;home;
+
+[Desktop Action office]
+Name=Office sessions
+Exec=/home/oystein/.local/bin/frankenterm-remote office
+
+[Desktop Action home]
+Name=Home sessions
+Exec=/home/oystein/.local/bin/frankenterm-remote home
