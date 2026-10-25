@@ -134,6 +134,20 @@
 # When the first build in order does not fit, a later one may start if it fits
 # now and should end before the first one could start. That stops once the
 # first one has waited HEAVY_BUILD_STARVE seconds (default 1800).
+# Starve fix (HEAVY_BUILD_STARVE_FIX, default 1; 0 restores the old rule):
+# - An aged head keeps the starve rule. Before, a normal build that reached
+#   HEAVY_BUILD_AGE_SECS lost it, and builds behind it backfilled again. On
+#   2026-10-25 a 22 GiB cargo test lost it at 60 min, one minute before the
+#   last running build ended, and backfills kept it out for 35 more minutes.
+# - A starving head counts no untracked scope (a builds.slice scope without a
+#   heavy-build) when it asks whether any build runs, so the
+#   HEAVY_BUILD_SOLO_MEM_GIB shortcut still lets it in. Untracked scopes
+#   still count for every other check.
+# - The queue never holds an empty machine: when no tracked build runs and
+#   the head still does not fit (pressure level slow or pause, or less than
+#   HEAVY_BUILD_SOLO_MEM_GIB free), builds behind it that fit may start.
+# - A head that fits only when no other build runs says so in its waiting
+#   line, with a hint to lower its memory use.
 # Pressure level: pressure-coordinator.service writes
 # ~/.local/state/pressure/level ("level=normal|slow|pause ... updated=<epoch>
 # reason=...") every 5 s, and at pause also
@@ -234,7 +248,9 @@
 #   oom_kill) or stopped (an app run whose command died from a signal, or
 #   that heavy-build stopped on TERM, INT or HUP), 9 the scope's MemoryMax in bytes, 10 the scope's MemoryHigh in
 #   bytes, 11 the tree state when the build started (see the rerun guard),
-#   12 the Wine test sig (see wine_sig; - for other classes).
+#   12 the Wine test sig (see wine_sig; - for other classes), 13 the
+#   non-file peak in bytes (see sample_scope; NA when memory.stat could not
+#   be read). Lines before the non-file change (2026-10-25) have no column 13.
 #   Lines written before 2026-10-09 have no column 8, lines before
 #   2026-10-16 no column 9, lines before 2026-10-20 no column 10 or 11, and
 #   lines before the sig change (2026-10-20 afternoon) no column 12.
@@ -617,6 +633,7 @@ read_conf() {
   setting HEAVY_BUILD_SLICE_CPU_SECS 30
   (( SLICE_CPU_SECS >= 5 )) || SLICE_CPU_SECS=30
   setting HEAVY_BUILD_STARVE 1800
+  setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_CRIT_AGE_SECS 1800
@@ -624,6 +641,9 @@ read_conf() {
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
   setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
   setting HEAVY_BUILD_OWN_EST 1
+  setting HEAVY_BUILD_EST_NONFILE 1
+  setting HEAVY_BUILD_NONFILE_PAD_PCT 125
+  (( NONFILE_PAD_PCT >= 100 && NONFILE_PAD_PCT <= 400 )) || NONFILE_PAD_PCT=125
   (( WINE_FALLBACK_PCT >= 1 && WINE_FALLBACK_PCT <= 100 )) || WINE_FALLBACK_PCT=75
   setting HEAVY_BUILD_RERUN_FAILS 2
   setting HEAVY_BUILD_RERUN_SECS 1800
@@ -850,6 +870,19 @@ SIG_DAYS=14
 # its peak is a lower bound, not a measurement. Exit 75, 124 and other signals
 # (exit 128 and above) are left out. Wall time and cores come from the key's
 # last 5 runs, else from the class, and never from OOM-killed runs.
+# Non-file peak (HEAVY_BUILD_EST_NONFILE, default 1; 0 restores the old
+# rule): a run with history column 13 counts with HEAVY_BUILD_NONFILE_PAD_PCT
+# (default 125) percent of that non-file peak, never more than its
+# memory.peak. memory.peak also counts the page cache of files the build
+# writes, which the kernel can drop: on 2026-10-25 the tl-ui cargo test had a
+# 4.8 GiB anon peak and up to 9.0 GiB of file cache, and was estimated at
+# 22 GiB. The pad covers spikes between samples (15 s apart; a 2 s trace of
+# that build lost up to 16% at 15 s). Such a run counts as held at its
+# MemoryHigh only when its non-file peak reached 90% of it, since cache alone
+# fills a scope to its MemoryHigh. When a key has a run with column 13, its
+# runs without one are left out; the same for a class with 5 such runs.
+# OOM-killed runs always count. A build needs 3 good samples (30 s or
+# more) for column 13.
 # source: history, class-history, class or default (where wall and cores
 # came from), then ",mem=" and what set memory: key, class-p90, class-pNN,
 # sig-p90, sig-max, class, default, floor, key-own or cap.
@@ -858,27 +891,41 @@ estimate() {
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
     -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" \
-    -v ownest="${OWN_EST:-1}" '
+    -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" '
+    function max2(a, b) { return a > b ? a : b }
     function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
       if ($7 >= 128 && !oom && $2 != "app-run") next
       pk = $6
+      nf = (nfon == 1 && $13 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/)
       if (oom && pk != "NA") {
         if ($9 ~ /^[0-9]+$/) { if ($9 + 0 > pk + 0) pk = $9 + 0 }
         else pk = pk * 1.25
+      } else if (nf) {
+        # Never above memory.peak, unless swap made the non-file peak larger.
+        pk = $13 * nfpad / 100; if (pk > max2($6 + 0, $13 + 0)) pk = max2($6 + 0, $13 + 0)
+        hi = ($10 ~ /^[0-9]+$/) ? $10 + 0 : ($9 ~ /^[0-9]+$/) ? $9 - 2147483648 : 0
+        if (hi > 0 && $13 + 0 >= 0.9 * hi && hi * 1.25 > pk + 0) pk = hi * 1.25
       } else if (pk != "NA") {
         hi = ($10 ~ /^[0-9]+$/) ? $10 + 0 : ($9 ~ /^[0-9]+$/) ? $9 - 2147483648 : 0
         if (hi > 0 && pk + 0 >= 0.98 * hi && hi * 1.25 > pk + 0) pk = hi * 1.25
       }
-      if ($3 == k) { kmn++; kmp[kmn] = pk }
-      if ($2 == c) { cmn++; cmp[cmn] = pk }
+      # kmf/cmf: kept when non-file rows replace the others. OOM-killed runs
+      # are always kept.
+      if ($3 == k) { kmn++; kmp[kmn] = pk; kmf[kmn] = (nf || oom); knf += nf }
+      if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cnf += nf }
       if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk }
       if (oom) next
       if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5 }
       if ($2 == c) { cn++; cw[cn] = $4; cc[cn] = $5 }
     }
     END {
+      # Runs with a non-file peak replace runs without one (OOM-killed runs
+      # stay): for the key from its first such run, for the class from its
+      # fifth.
+      if (knf >= 1) { n = 0; for (i = 1; i <= kmn; i++) if (kmf[i]) kmp[++n] = kmp[i]; kmn = n }
+      if (cnf >= 5) { n = 0; for (i = 1; i <= cmn; i++) if (cmf[i]) cmp[++n] = cmp[i]; cmn = n }
       split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]; floor = d[4] + 0
       src = (c == "other" || c == "cargo-build") ? "default" : "class"
       msrc = src
@@ -1677,9 +1724,10 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   # With no build running, MemAvailable >= solo is enough, except at pressure
   # level slow or pause: then the first build also needs the full tests below.
   # Idle builds are not counted in nrun, but while one runs the full tests
-  # still apply, since it may use CPU again.
-  if (nrun <= 0 && T_idle == 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
-  if (nrun <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
+  # still apply, since it may use CPU again. For a starving head (untsolo set
+  # by the walk) running untracked scopes do not count here.
+  if (nrun - untsolo <= 0 && T_idle == 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+  if (nrun - untsolo <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
   if (cpu + w_cores[i] > cpubudget) {
@@ -1708,15 +1756,20 @@ function pick(i) {
   if (w_pr[i] != "high" && w_pr[i] != "critical") lastnc = now
 }
 # When enough running builds should have ended for waiter i to fit.
-function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh) {
+function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh, u0) {
   for (j = 1; j <= nr; j++) idx[j] = j
   for (j = 2; j <= nr; j++) { x = idx[j]; for (k = j - 1; k >= 1 && r_end[idx[k]] > r_end[x]; k--) idx[k + 1] = idx[k]; idx[k + 1] = x }
   nrun = T_n; cpu = T_cpu; tc = T_tc; held = T_held; av = avail; nh = T_high
+  # shadowlast: the head fits only once every build has ended. untsolo drops
+  # as untracked scopes end, so none is taken off twice.
+  shadowlast = 0; u0 = untsolo
   for (j = 1; j <= nr; j++) {
     k = idx[j]
     nrun -= r_job[k]; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k]
-    if (why_not(i, nrun, cpu, tc, held, av, nh) == "") return r_end[k]
+    if (r_unt[k] && untsolo > 0) untsolo--
+    if (why_not(i, nrun, cpu, tc, held, av, nh) == "") { shadowlast = (j == nr); untsolo = u0; return r_end[k] }
   }
+  untsolo = u0
   return nr > 0 ? r_end[idx[nr]] : now
 }
 BEGIN {
@@ -1779,6 +1832,7 @@ $1 == "F" && $6 == 1 {
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
   addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", 2)
+  r_unt[nr] = 1; T_unt++
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 $1 == "W" {
@@ -1854,12 +1908,21 @@ END {
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (!headi) {
+      # An aged head never starves the queue: high and critical builds that
+      # fit pass it, so it holds only the slot it gets next. With the starve
+      # fix (starvefix=1) it does, as any other head that waited that long.
+      st = (now - w_arr[i] >= starve && (starvefix || !w_aged[i]))
+      untsolo = (starvefix && st) ? T_unt : 0
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
       if (r == "") r = cf_why(i, T_nc, T_tc, avail)
-      if (r == "") { pick(i); why[i] = "fits: next in order"; continue }
-      # An aged head never starves the queue: high and critical builds that
-      # fit pass it, so it holds only the slot it gets next.
-      headi = i; why[i] = r; shadow = shadow_time(i); starving = (now - w_arr[i] >= starve && !w_aged[i])
+      if (r == "") { pick(i); why[i] = (untsolo > 0 && T_n - T_unt <= 0) ? "fits: no tracked build runs, and untracked scopes do not hold back a build that has waited this long" : "fits: next in order"; untsolo = 0; continue }
+      headi = i; why[i] = r; shadow = shadow_time(i); starving = st; untsolo = 0
+      # The queue never holds an empty machine: when no tracked build runs
+      # and the head still does not fit (pressure level slow or pause, or
+      # less than solo GiB free), builds behind it that fit may start. No
+      # build is due to end, so the shadow time gives no bound.
+      if (starvefix && T_n - T_unt <= 0 && T_idle == 0) { starving = 0; shadow = now + 86400 }
+      if (starvefix && shadowlast && T_n - T_unt > 0 && r ~ /^(memory|slice-cap):/) why[i] = r "; it fits only when no other build runs, so it may wait long (lower its memory use, for example CARGO_BUILD_JOBS or --test-threads)"
       # An aged critical head that waits for memory lets critical builds that fit pass it.
       critmempass = (starving && w_caged[i] && r ~ /^(memory|slice-cap):/)
       if (w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
@@ -1926,7 +1989,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v solo="$SOLO_MEM_GIB" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
@@ -2142,12 +2205,25 @@ wine_orphans() {
 # Reads our scope's cgroup: memory, CPU time, the 60 s core average, the stall
 # test and the Wine orphan test. Rewrites the state file.
 sample_scope() {
-  local d=$BSLICE/$unit.scope cur=0 pk u= now k v c60=- n rate orph unknown others p idle_s wp
+  local d=$BSLICE/$unit.scope cur=0 pk u= now k v c60=- n rate orph unknown others p idle_s wp fl= sh= dt= wb= sw=
   [[ -d $d ]] || return 0
-  read -r cur 2>/dev/null < "$d/memory.current" || cur=0
-  [[ $cur =~ ^[0-9]+$ ]] || cur=0
+  read -r cur 2>/dev/null < "$d/memory.current" || cur=
+  [[ $cur =~ ^[0-9]+$ ]] || { cur=0; fl=bad; }
   if read -r pk 2>/dev/null < "$d/memory.peak" && [[ $pk =~ ^[0-9]+$ ]] && (( pk > peak )); then peak=$pk; fi
   (( cur > peak )) && peak=$cur
+  # Non-file memory: memory.current minus file pages, plus shmem, dirty and
+  # writeback pages (counted in file, but not quick to drop) and swap. The
+  # page cache of files the build writes is left out (history column 13).
+  [[ $fl == bad ]] || while read -r k v; do
+    case $k in file) fl=$v ;; shmem) sh=$v ;; file_dirty) dt=$v ;; file_writeback) wb=$v ;; esac
+  done 2>/dev/null < "$d/memory.stat"
+  read -r sw 2>/dev/null < "$d/memory.swap.current" || sw=0
+  [[ $sw =~ ^[0-9]+$ ]] || sw=0
+  if [[ $fl =~ ^[0-9]+$ && $sh =~ ^[0-9]+$ && $dt =~ ^[0-9]+$ && $wb =~ ^[0-9]+$ ]]; then
+    v=$(( cur - fl + sh + dt + wb + sw )); (( v < 0 )) && v=0
+    (( v > ${peak_nf:-0} )) && peak_nf=$v
+    nf_n=$(( ${nf_n:-0} + 1 ))
+  fi
   while read -r k v; do [[ $k == usage_usec ]] && { u=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
   [[ $u =~ ^[0-9]+$ ]] || return 0
   now=$(now_us)
@@ -2400,23 +2476,29 @@ append_history() {
   local cpu=NA pk=NA wall=$(( EPOCHSECONDS - start_ts ))
   (( wall < 1 )) && wall=1
   [[ -n $usec_last ]] && cpu=$(printf '%d.%03d' $(( usec_last / 1000000 )) $(( usec_last % 1000000 / 1000 )))
-  local capb=NA highb=NA
+  local capb=NA highb=NA nfb=NA
   (( peak > 0 )) && pk=$peak
+  # Column 13 needs 3 good samples (30 s or more), so a short build, whose
+  # peak may fall between samples, keeps NA.
+  local nf_ok=
+  (( ${nf_n:-0} >= 3 )) && nf_ok=1 nfb=${peak_nf:-0}
   if [[ -n ${cap_high:-} ]]; then
     capb=$(( ${cap_max:-$(( cap_high + 2 ))} * 1073741824 )) highb=$(( cap_high * 1073741824 ))
-    if (( peak * 100 >= highb * 98 )); then
+    # A scope full of page cache also reaches its MemoryHigh. That only
+    # counts when the non-file peak reached 90% of it (or is unknown).
+    if (( peak * 100 >= highb * 98 )) && { [[ -z $nf_ok ]] || (( ! ${EST_NONFILE:-1} )) || (( ${peak_nf:-0} * 100 >= highb * 90 )); }; then
       if [[ $cls == app-run ]]; then
         say "warning: this app run's memory reached its ${cap_high}G MemoryHigh and was held there; HEAVY_BUILD_APP_MEM_HIGH_GIB sets that cap"
       else
         say "warning: this build's memory reached its ${cap_high}G MemoryHigh and was held there; its next estimate is at least $(( cap_high * 5 / 4 )) GiB"
       fi
-      log_line "event=capped unit=$unit peak=$peak high=$highb est=${est_mem}G cmd=\"$cmdline\""
+      log_line "event=capped unit=$unit peak=$peak nonfile=$nfb high=$highb est=${est_mem}G cmd=\"$cmdline\""
     fi
   fi
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" "$nfb" >&6
     local hl=${HISTORY_LINES:-20000}; (( hl >= 100 )) || hl=20000
     # Keep HISTORY_LINES lines (about 2 weeks at 1,300 builds a day); trim at 10% over.
     if (( $(wc -l < "$HIST") > hl + hl / 10 )); then tail -n "$hl" -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
@@ -2693,7 +2775,7 @@ child=$!
 [[ -n $cancel_sig ]] && stop_build "$cancel_sig"
 write_ready "$unit.scope" "$child"
 
-S_t=() S_u=() s_lo=0 peak=0 usec_last= last_active=$(now_us)
+S_t=() S_u=() s_lo=0 peak=0 peak_nf=0 nf_n=0 usec_last= last_active=$(now_us)
 hung_high_logged=
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped= orph_unknown_logged=
 orph_other_logged= wine_idle_logged=
