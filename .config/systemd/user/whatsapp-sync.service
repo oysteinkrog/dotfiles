@@ -1,0 +1,8 @@
+[Unit]
+Description=Export WhatsApp bridge messages into the life vault and re-index qmd
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/work/life/scripts/whatsapp_sync.sh
+Nice=10
