@@ -4,5 +4,5 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/work/life/scripts/whatsapp_sync.sh
+ExecStart=%h/projects/life/scripts/whatsapp_sync.sh
 Nice=10

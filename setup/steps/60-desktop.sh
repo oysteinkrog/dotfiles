@@ -73,7 +73,7 @@ fi
 # chrome-profile-icon then redraws each one on the icon theme's Chrome logo, with the
 # local avatar if that profile is signed in, else with the badge from the repo copy.
 for ic in chrome-personal chrome-work; do
-  [ -f "$HOME/work/life/setup/chrome/$ic.png" ] && cp "$HOME/work/life/setup/chrome/$ic.png" "$HOME/.local/share/icons/$ic.png"
+  [ -f "$HOME/projects/life/setup/chrome/$ic.png" ] && cp "$HOME/projects/life/setup/chrome/$ic.png" "$HOME/.local/share/icons/$ic.png"
 done
 if have magick && [ -f "$HOME/.local/share/icons/chrome-work.png" ]; then
   "$HOME/.local/bin/chrome-profile-icon" "$HOME/.config/google-chrome-personal" "Profile 1" "$HOME/.local/share/icons/chrome-personal.png"
