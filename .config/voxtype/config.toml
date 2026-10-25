@@ -27,6 +27,11 @@ key = "RIGHTCTRL"
 modifiers = []
 mode = "toggle"
 cancel_key = "ESC"
+# Double tap Right Ctrl to start and to stop (patched build). Right Ctrl
+# stays free for shortcuts: a tap only counts if no other key is pressed
+# while it is down, and each tap and the gap between them are under 300 ms.
+double_tap = true
+double_tap_ms = 300
 
 [audio]
 device = "default"
