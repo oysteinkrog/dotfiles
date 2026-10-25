@@ -23,7 +23,6 @@ sudo apt install fzf
 npm install -g @anthropic-ai/claude-code    # AI coding assistant
 npm install -g @google/gemini-cli            # Gemini AI CLI
 npm install -g @openai/codex                 # OpenAI Codex CLI
-npm install -g pm2                           # Process manager for shared MCP services
 npm install -g mcp-remote                    # MCP SSE-to-stdio bridge
 npm install -g supergateway                  # MCP stdio-to-SSE gateway
 ```
@@ -98,13 +97,13 @@ This symlinks all config files (`.gitconfig`, `.vimrc`, `.config/`, etc.) into `
 | `.gitconfig` | Git aliases, diff-so-fancy, merge config |
 | `.vimrc` + `.vim/` | Vim config with bundles |
 | `.ideavimrc` / `.vsvimrc` | IDE vim emulation |
-| `.config/` | starship, fish, pm2, and other XDG configs |
+| `.config/` | starship, fish, systemd user units, and other XDG configs |
 | `.zprezto/` | Zsh framework |
 | `.tmux.conf` | tmux config |
 | `.ripgreprc` | ripgrep defaults |
 | `bin/` | Personal scripts and tools (includes `git-hunks` for non-interactive selective hunk staging) |
 | `bin/codedb` | Patched codedb binary with WSL1 compat (see below) |
-| `SERVICES.md` | Shared MCP services managed by PM2 |
+| `SERVICES.md` | Shared services Claude Code uses (systemd user units) |
 
 ## Patched binaries
 
