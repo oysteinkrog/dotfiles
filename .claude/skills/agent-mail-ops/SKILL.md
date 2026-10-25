@@ -122,9 +122,8 @@ like the database is beyond help. On Ubuntu, build a real CLI first:
 ~/.claude/skills/agent-mail-ops/scripts/build-sqlite-recover.sh   # prints the binary path
 ```
 
-**`am-recover.sh` still stops and starts the service with pm2, which no longer
-exists here. Until it is ported to `systemctl --user`, use the manual steps below.**
-It stops the service, salvages, verifies and swaps:
+`am-recover.sh` stops `agent-mail.service`, salvages, verifies, swaps and starts it
+again:
 
 ```bash
 ~/.claude/skills/agent-mail-ops/scripts/am-recover.sh --dry-run   # always first

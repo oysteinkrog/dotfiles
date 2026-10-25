@@ -20,5 +20,4 @@ fieldtheory
 mcp-remote
 onnxruntime-node
 opencode-ai
-pm2
 supergateway

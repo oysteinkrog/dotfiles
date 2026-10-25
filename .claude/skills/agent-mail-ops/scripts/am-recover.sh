@@ -15,8 +15,7 @@ set -euo pipefail
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
-PM2_APP=mcp-agent-mail
-ECOSYSTEM="$HOME/.config/pm2/ecosystem.config.js"
+UNIT=agent-mail.service
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TABLES="projects agents messages message_recipients file_reservations"
 
@@ -26,8 +25,9 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- where is the database -------------------------------------------------
 ROOT="${STORAGE_ROOT:-}"
-if [ -z "$ROOT" ] && [ -f "$ECOSYSTEM" ]; then
-    ROOT=$(grep -oP 'STORAGE_ROOT:\s*"\K[^"]+' "$ECOSYSTEM" | head -1 || true)
+if [ -z "$ROOT" ]; then
+    ROOT=$(systemctl --user show "$UNIT" -p Environment --value 2>/dev/null \
+        | tr ' ' '\n' | sed -n 's/^STORAGE_ROOT=//p' | head -1 || true)
 fi
 ROOT="${ROOT:-$HOME/.mcp_agent_mail_git_mailbox_repo}"
 DB="$ROOT/storage.sqlite3"
@@ -55,7 +55,7 @@ if [ "$CHECK" = "ok" ]; then
     say "Database is clean. Nothing to repair."
     say "If agent-mail is still misbehaving the problem is not the database:"
     say "  curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:4809/health"
-    say "  pm2 list | grep $PM2_APP"
+    say "  systemctl --user status $UNIT"
     exit 0
 fi
 
@@ -76,7 +76,7 @@ BEFORE=$(counts "$DB"); say "$BEFORE"
 
 if [ "$DRY_RUN" = 1 ]; then
     step "plan (dry run, nothing changed)"
-    say "1. pm2 stop $PM2_APP"
+    say "1. systemctl --user stop $UNIT"
     say "2. am doctor drain, require safe_to_mutate=true"
     if [ "$MODE" = reindex ]; then
         say "3. copy the database aside, then REINDEX in place"
@@ -85,17 +85,17 @@ if [ "$DRY_RUN" = 1 ]; then
         say "4. move the old database and every sidecar aside as storage.sqlite3.corrupt-<ts>"
         say "5. install the recovered file, journal_mode=WAL"
     fi
-    say "6. pm2 start, verify health and a refreshed storage.sqlite3.bak"
+    say "6. systemctl --user start $UNIT, verify health and a refreshed storage.sqlite3.bak"
     exit 0
 fi
 
 # --- stop the server -------------------------------------------------------
 step "stopping the service"
-pm2 stop "$PM2_APP" >/dev/null 2>&1 || die "pm2 stop failed"
+systemctl --user stop "$UNIT" || die "systemctl --user stop $UNIT failed"
 sleep 6
 DRAIN=$(am doctor drain 2>&1 || true)
 echo "$DRAIN" | grep -q "safe_to_mutate: true" \
-    || { echo "$DRAIN" | head -20; pm2 start "$PM2_APP" >/dev/null 2>&1 || true
+    || { echo "$DRAIN" | head -20; systemctl --user start "$UNIT" || true
          die "a live owner still holds the database; service restarted, nothing changed"; }
 say "safe_to_mutate: true"
 
@@ -103,10 +103,7 @@ TS=$(date +%Y%m%d_%H%M%S)
 
 restart_and_verify() {
     step "starting the service"
-    pm2 start "$ECOSYSTEM" --only "$PM2_APP" >/dev/null 2>&1 \
-        || pm2 start "$PM2_APP" >/dev/null 2>&1 \
-        || die "pm2 start failed; start it by hand"
-    pm2 save >/dev/null 2>&1 || true
+    systemctl --user start "$UNIT" || die "systemctl --user start $UNIT failed; start it by hand"
     sleep 30
     local code
     code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' "http://127.0.0.1:4809/health" || true)

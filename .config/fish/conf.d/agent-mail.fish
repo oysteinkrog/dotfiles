@@ -8,7 +8,7 @@
 # wslfs is not reachable from Windows tools, which is part of the point: no
 # Windows indexer or antivirus touches the database any more.
 #
-# The pm2 service sets the same value in ~/.config/pm2/ecosystem.config.js.
+# agent-mail.service sets the same value in its Environment= lines.
 # This line is for the `am` CLI in interactive shells, so `am doctor` and
 # friends look at the database the server is actually using.
 # The server reads STORAGE_ROOT; the `am` CLI uses AGENT_MAIL_STORAGE_ROOT.

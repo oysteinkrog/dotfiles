@@ -44,7 +44,6 @@ config_dirs=(
   machine
   nvim
   omf
-  pm2
   rclone
   tridactyl
   wezterm
