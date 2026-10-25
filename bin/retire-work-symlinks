@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# retire-work-symlinks: finish the 2026-10-25 move of my own repos from ~/work to
+# ~/projects. The move left a symlink at each ~/work/<repo> and at each old Claude
+# history folder name, because running sessions and venvs still used the old path.
+#
+#   retire-work-symlinks             fix what it can, remove the symlinks nothing uses
+#   retire-work-symlinks --dry-run   print what it would do, change nothing
+#
+# retire-work-symlinks.service runs it at every login. Each run:
+# 1. points claude-persist entries whose cwd is under an old path at ~/projects, so
+#    `claude-persist.sh restore` resumes those sessions in the new folder;
+# 2. replaces the old path inside Python venvs under ~/projects (activate scripts,
+#    entry-point shebangs, pyvenv.cfg);
+# 3. removes ~/work/<repo> and ~/.claude/projects/-home-oystein-work-<repo>* symlinks
+#    once no process and no config file uses ~/work/<repo>. Anything still in use
+#    waits for the next login.
+# When no ~/work symlink into ~/projects is left, it disables its own service.
+
+set -u
+
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+PERSIST_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-persist/sessions"
+HISTORY_DIR="$HOME/.claude/projects"
+# Config that could start something from an old path. ~/.claude.json is left out:
+# its old project keys are harmless and the move copied them to the new paths.
+CONFIG_PATHS=("$HOME/.dotfiles" "$HOME/.config/systemd/user" "$HOME/.config/autostart"
+  "$HOME/.config/pm2-home.config.cjs" "$HOME/.config/qmd" "$HOME/.local/share/applications")
+
+log() { echo "retire-work-symlinks: $*"; }
+run() { if [ $DRY = 1 ]; then log "would run: $*"; else "$@"; fi; }
+slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
+
+# Print the pids of processes whose cwd, command line or environment mentions $1.
+# A shell that cd'd through the symlink has the new path as its cwd but the old one
+# in $PWD, so the environment matters as much as the cwd.
+procs_using() {
+  local old=$1 p cwd
+  for p in /proc/[0-9]*; do
+    [ "${p#/proc/}" = "$$" ] && continue
+    cwd=$(readlink "$p/cwd" 2>/dev/null) || continue
+    case "$cwd/" in "$old"/*) echo "${p#/proc/}"; continue ;; esac
+    if tr '\0' '\n' <"$p/cmdline" 2>/dev/null | grep -qF -- "$old" \
+       || tr '\0' '\n' <"$p/environ" 2>/dev/null | grep -qF -- "$old"; then
+      echo "${p#/proc/}"
+    fi
+  done
+}
+
+# Print config files that name ~/work/<name> in any spelling.
+configs_using() {
+  local name=$1
+  rg -l --hidden -g '!.git' -e "(~|\\\$HOME|%h|$HOME)/work/${name}([^A-Za-z0-9_.-]|\$)" \
+    "${CONFIG_PATHS[@]}" 2>/dev/null
+}
+
+# Step 1: claude-persist entries.
+fix_persist() {
+  local old=$1 new=$2 f cwd pid sid newcwd transcript newf
+  [ -d "$PERSIST_DIR" ] || return 0
+  for f in "$PERSIST_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    cwd=$(jq -r '.cwd // empty' "$f" 2>/dev/null)
+    case "$cwd/" in "$old"/*) ;; *) continue ;; esac
+    pid=$(jq -r '.pid // 0' "$f" 2>/dev/null)
+    if [ "${pid:-0}" -gt 0 ] && [ -d "/proc/$pid" ]; then
+      log "session entry $(basename "$f") is still running (pid $pid), left for next login"
+      continue
+    fi
+    sid=$(jq -r '.session_id' "$f")
+    newcwd="$new${cwd#"$old"}"
+    transcript="$HISTORY_DIR/$(slug "$newcwd")/$sid.jsonl"
+    newf="$PERSIST_DIR/$sid@$(slug "$newcwd").json"
+    log "session entry $sid: $cwd -> $newcwd"
+    [ $DRY = 1 ] && continue
+    if [ ! -e "$newf" ]; then
+      jq --arg cwd "$newcwd" --arg t "$transcript" '.cwd = $cwd | .transcript = $t' "$f" >"$newf.tmp" \
+        && mv -f "$newf.tmp" "$newf" || { rm -f "$newf.tmp"; continue; }
+    fi
+    rm -f "$f"
+  done
+}
+
+# Step 2: venvs with the old path written into them.
+fix_venvs() {
+  local old=$1 new=$2 cfg venv files
+  while IFS= read -r cfg; do
+    venv=$(dirname "$cfg")
+    mapfile -t files < <(grep -rlIF -- "$old" "$venv/bin" "$cfg" 2>/dev/null)
+    [ ${#files[@]} -gt 0 ] || continue
+    log "venv $venv: replacing $old in ${#files[@]} files"
+    run sed -i "s#$old#$new#g" "${files[@]}"
+  done < <(find "$new" -maxdepth 5 -name pyvenv.cfg -not -path '*/node_modules/*' 2>/dev/null)
+}
+
+# Step 3: the symlinks.
+retire() {
+  local link=$1 name=$2 old=$3 new=$4 pids cfgs h
+  mapfile -t pids < <(procs_using "$old")
+  if [ ${#pids[@]} -gt 0 ]; then
+    log "$link: kept, ${#pids[@]} processes still use $old (pids ${pids[*]:0:5})"
+    return 1
+  fi
+  mapfile -t cfgs < <(configs_using "$name")
+  if [ ${#cfgs[@]} -gt 0 ]; then
+    log "$link: kept, still named in ${cfgs[*]}"
+    return 1
+  fi
+  if [ -d "$PERSIST_DIR" ] && grep -lsF -- "\"$old" "$PERSIST_DIR"/*.json >/dev/null; then
+    log "$link: kept, a claude-persist entry still uses $old"
+    return 1
+  fi
+  log "$link: nothing uses $old, removing the symlink"
+  run unlink "$link"
+  for h in "$HISTORY_DIR/$(slug "$old")" "$HISTORY_DIR/$(slug "$old")"-*; do
+    [ -L "$h" ] || continue
+    case "$(readlink "$h")" in "$(slug "$new")"*) ;; *) continue ;; esac
+    log "history link $(basename "$h"): removing"
+    run unlink "$h"
+  done
+  return 0
+}
+
+left=0
+for link in "$HOME"/work/*; do
+  [ -L "$link" ] || continue
+  new=$(readlink "$link")
+  case "$new" in "$HOME/projects/"*) ;; *) continue ;; esac
+  name=$(basename "$link")
+  old="$HOME/work/$name"
+  fix_persist "$old" "$new"
+  [ -d "$new" ] && fix_venvs "$old" "$new"
+  retire "$link" "$name" "$old" "$new" || left=$((left + 1))
+done
+
+if [ $left -eq 0 ]; then
+  log "no ~/work symlinks left, disabling retire-work-symlinks.service"
+  run systemctl --user disable retire-work-symlinks.service
+else
+  log "$left symlinks still in use, will check again at next login"
+fi
