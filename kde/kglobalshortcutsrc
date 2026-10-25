@@ -19,3 +19,8 @@ previous activity=Meta+Shift+A,none,Walk through activities (Reverse)
 
 [slack]
 DDF5957471A155313A3A598E9EF96715-Ctrl+Shift+Space=none,Ctrl+Shift+Space,Slack shortcut: Ctrl+Shift+Space
+
+[kwin]
+# Overview from the keyboard only. The top-left hot corner is off ([Effect-overview]
+# BorderActivate=9 in kwinrc), because the pointer goes there for the start menu.
+Overview=Meta+W,Meta+W,Toggle Overview

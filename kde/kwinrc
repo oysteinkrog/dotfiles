@@ -5,6 +5,7 @@ EdgeBarrier=0
 CornerBarrier=true
 
 [Effect-overview]
+# No hot corner: top left is for the start menu. Overview is on Meta+W (kglobalshortcutsrc).
 BorderActivate=9
 
 [Effect-wobblywindows]
