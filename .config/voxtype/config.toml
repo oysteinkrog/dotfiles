@@ -77,3 +77,8 @@ on_transcription = false
 frontend = "gtk4"
 style = "default"
 layout = "compact"
+# Popup near the middle of the screen (top edge at 45% of the height),
+# 25% wider than the 400 px default, preview text 14 pt (theme default ~11).
+width_px = 500
+top_margin = 0.45
+preview_font_pt = 14.0
