@@ -8,6 +8,11 @@
 list="${XDG_CONFIG_HOME:-$HOME/.config}/voxtype/auto-enter-apps"
 [ -r "$list" ] || exit 0
 
+# Stopped with the alt double tap ([hotkey] double_tap_alt_key, Right Shift):
+# paste only, so the text can be edited before sending.
+last="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voxtype/hotkey-last"
+[ "$(cat "$last" 2>/dev/null)" = alt ] && exit 0
+
 class=$(kdotool getactivewindow getwindowclassname 2>/dev/null) || exit 0
 [ -n "$class" ] || exit 0
 
