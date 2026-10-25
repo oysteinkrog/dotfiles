@@ -1,0 +1,9 @@
+[Unit]
+Description=Relay 127.0.0.1:27015 to usbmuxd, for MotionCatalyst under Wine
+
+[Socket]
+ListenStream=127.0.0.1:27015
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
