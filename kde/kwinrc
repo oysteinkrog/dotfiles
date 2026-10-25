@@ -1,4 +1,9 @@
 # Window manager. The pin-to-monitor layout is per host: HOST_WINDOW_LAYOUT in host.sh.
+[EdgeBarrier]
+# The pointer crosses between monitors without sticking. Corners keep their barrier.
+EdgeBarrier=0
+CornerBarrier=true
+
 [Effect-overview]
 BorderActivate=9
 
