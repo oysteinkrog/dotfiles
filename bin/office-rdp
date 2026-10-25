@@ -19,13 +19,13 @@
 # (/args-from:stdin), so the password never shows in the process list.
 # /wm-class:office-rdp matches office-rdp.desktop (StartupWMClass), so KDE shows the window
 # under the taskbar launcher instead of as a separate icon.
-# FREERDP_GFX_HEVC444=1 asks KRDP for H.265 4:4:4 instead of AVC444, a private codec of
+# AVC444 is the default: H.265 showed purple fringes on subpixel text. FREERDP_GFX_HEVC444=1 asks KRDP for H.265 4:4:4 instead of AVC444, a private codec of
 # the oysteinkrog FreeRDP fork; KRDP sends it with VideoCodec=HEVC444 and AVC444 otherwise.
 # Output goes to ~/.cache/office-rdp.log (OFFICE_RDP_LOG overrides it, for test runs).
 # Run with --forget to drop the saved password.
 set -u
 log="${OFFICE_RDP_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/office-rdp.log}"
-export FREERDP_GFX_HEVC444="${FREERDP_GFX_HEVC444:-1}"
+export FREERDP_GFX_HEVC444="${FREERDP_GFX_HEVC444:-0}"
 
 if [ "${1:-}" = "--forget" ]; then
   exec secret-tool clear service office-rdp user oystein
