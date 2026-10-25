@@ -20,7 +20,10 @@ normal logout sends. Chrome then saves its session and exits cleanly. The tool
 never sends SIGKILL, never stops the systemd unit (that would SIGTERM every
 renderer at once), and never starts Chrome again. A profile whose "On startup"
 setting is not "Continue where you left off" is never closed, because a clean
-exit would then lose its tabs.
+exit would then lose its tabs. The managed policy RestoreOnStartup in
+/etc/opt/chrome/policies/managed/*.json overrides that setting. A profile that
+is playing audio, recording from the microphone or holding a camera open is
+never closed either, and neither is any profile when pactl fails.
 
 Mode: dry-run unless set to live. Order: --dry-run or --live flag, then
 CHROME_IDLE_MODE, then the file ~/.config/chrome-idle/mode (one word: live or
@@ -66,6 +69,9 @@ PROC = Path(os.environ.get("CHROME_IDLE_PROC", "/proc"))
 KWIN_PLUGIN = "chrome-idle-focus"
 KWIN_SCRIPT = Path(os.path.realpath(__file__)).with_name("chrome-idle-focus.kwin.js")
 LOG_MAX = 5 * 1024 * 1024
+POLICY_DIR = Path(
+    os.environ.get("CHROME_IDLE_POLICY_DIR", "/etc/opt/chrome/policies/managed")
+)
 
 # Data folder, profile folder and window class per profile. These match
 # ~/.local/bin/chrome-personal and ~/.local/bin/chrome-work.
@@ -187,8 +193,36 @@ def main_pids() -> dict[str, int]:
     return found
 
 
+def policy_restore() -> int | None:
+    """RestoreOnStartup from Chrome's managed policy files, or None.
+
+    Files are read in name order and a later file wins, as Chrome does not
+    promise an order and two files should not set the same policy anyway.
+    """
+    value = None
+    try:
+        files = sorted(POLICY_DIR.glob("*.json"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "RestoreOnStartup" in data:
+            value = data["RestoreOnStartup"]
+    return value
+
+
 def restore_setting(name: str) -> int | None:
-    """Chrome's session.restore_on_startup (1 = continue where you left off)."""
+    """The restore-on-startup value Chrome uses (1 = continue where you left off).
+
+    A managed policy overrides the profile's own session.restore_on_startup,
+    so the policy value wins when one is set.
+    """
+    policy = policy_restore()
+    if policy is not None:
+        return policy
     p = PROFILES[name]
     prefs = Path(p["data_dir"]) / p["profile_dir"] / "Preferences"
     try:
@@ -196,6 +230,89 @@ def restore_setting(name: str) -> int | None:
     except (OSError, ValueError):
         return None
     return value.get("restore_on_startup")
+
+
+def parent_pid(pid: int) -> int:
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return 0
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def profile_of_stream_pid(pid: int) -> str | None:
+    """Profile of an audio stream's process. Chrome plays and records from a
+    helper process, so walk up the parents until one maps to a profile."""
+    for _ in range(8):
+        if pid <= 1:
+            return None
+        prof = profile_of_pid(pid)
+        if prof:
+            return prof
+        pid = parent_pid(pid)
+    return None
+
+
+def media_use() -> dict[str, list[str]] | None:
+    """Profiles with an active audio stream: {profile: ["audio", "mic/camera"]}.
+
+    Reads PipeWire's Pulse streams with pactl. Paused (corked) streams do not
+    count. Returns None when pactl fails, so the caller keeps every profile.
+    A camera is found by an open /dev/video* file in one of the profile's
+    processes.
+    """
+    found: dict[str, list[str]] = {}
+    for kind, label in (("sink-inputs", "audio"), ("source-outputs", "mic/camera")):
+        try:
+            r = subprocess.run(
+                ["pactl", "-f", "json", "list", kind],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            streams = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            streams = None
+        if not isinstance(streams, list):
+            return None
+        for s in streams:
+            if s.get("corked"):
+                continue
+            props = s.get("properties") or {}
+            try:
+                pid = int(props.get("application.process.id", 0))
+            except (TypeError, ValueError):
+                continue
+            prof = profile_of_stream_pid(pid)
+            if prof and label not in found.setdefault(prof, []):
+                found[prof].append(label)
+    for prof in camera_users():
+        if "camera" not in found.setdefault(prof, []):
+            found[prof].append("camera")
+    return {k: v for k, v in found.items() if v}
+
+
+def camera_users() -> set[str]:
+    """Profiles with a process that holds a /dev/video* device open."""
+    users: set[str] = set()
+    for entry in PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fds = list((entry / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target.startswith("/dev/video"):
+                prof = profile_of_stream_pid(int(entry.name))
+                if prof:
+                    users.add(prof)
+                break
+    return users
 
 
 # ---------------------------------------------------------------- memory
@@ -446,7 +563,11 @@ def resolve_mode(flag: str | None) -> str:
 # ---------------------------------------------------------------- decide and close
 
 
-def decide(idle_min: float, tight: bool, restore: int | None) -> tuple[bool, str]:
+def decide(
+    idle_min: float, tight: bool, restore: int | None, media: list[str] | None = ()
+) -> tuple[bool, str]:
+    """media: what the profile is using (audio, mic/camera, camera), or None
+    when pactl failed and that is unknown."""
     if idle_min < IDLE_MIN:
         return False, f"idle {idle_min:.1f} min, under {IDLE_MIN:.0f}"
     if not tight:
@@ -456,6 +577,10 @@ def decide(idle_min: float, tight: bool, restore: int | None) -> tuple[bool, str
             f"idle and memory tight, but restore_on_startup={restore} "
             "(not 'continue where you left off'), so tabs would be lost"
         )
+    if media is None:
+        return False, "idle and memory tight, but pactl failed, so audio use is unknown"
+    if media:
+        return False, f"idle and memory tight, but in use: {', '.join(media)}"
     return True, "idle and memory tight"
 
 
@@ -498,6 +623,7 @@ def run(mode: str, status: bool) -> int:
         )
         pids = main_pids()
         active = state.get("active") or {}
+        media = media_use() if pids else {}
 
         if status:
             print(
@@ -528,12 +654,15 @@ def run(mode: str, status: bool) -> int:
             last = max(state.get("last_focus", {}).get(name, 0.0), base)
             idle = max(0.0, (now - last) / 60)
             restore = restore_setting(name)
-            close, why = decide(idle, tight, restore)
+            use = None if media is None else media.get(name, [])
+            close, why = decide(idle, tight, restore, use)
             if status:
                 verdict = "would close" if close else "keep"
                 print(
                     f"{name:9} pid={pid} idle={idle:.1f} min "
-                    f"restore_on_startup={restore} -> {verdict}: {why}"
+                    f"restore_on_startup={restore} "
+                    f"media={'unknown' if use is None else ','.join(use) or 'none'}"
+                    f" -> {verdict}: {why}"
                 )
                 continue
             line = f"profile={name} pid={pid} idle_min={idle:.1f} {mem_note}"
