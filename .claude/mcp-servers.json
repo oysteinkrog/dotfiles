@@ -2,8 +2,8 @@
   "mcpServers": {
     "pal": {
       "type": "stdio",
-      "command": "/home/oystein/work/pal-mcp-server/.pal_venv/bin/python",
-      "args": ["/home/oystein/work/pal-mcp-server/server.py"]
+      "command": "/home/oystein/projects/pal-mcp-server/.pal_venv/bin/python",
+      "args": ["/home/oystein/projects/pal-mcp-server/server.py"]
     },
 "cdb-interactive": {
       "type": "stdio",

@@ -368,7 +368,7 @@ Every patched or source-built upstream project on this machine goes through
 - Changes go on a branch of a GitHub fork (oysteinkrog for my setup), not into loose patch
   files. Changes Swing Catalyst needs go on `swing-catalyst/*` branches of the InitialForce
   forks and are built by the monorepo.
-- No hostnames, IPs, serials or account names in localbuilds; those go in `~/work/life`.
+- No hostnames, IPs, serials or account names in localbuilds; those go in `~/projects/life`.
 
 ## Dotfiles and local tools
 

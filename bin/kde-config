@@ -6,7 +6,7 @@ and the files hold per-machine IDs. So the repo holds only the keys we care abou
 in KDE's own format, and this tool writes them one by one with kwriteconfig6.
 
   Shared:    ~/.dotfiles/kde/<rcfile>                         (default for every machine)
-  Per host:  ~/work/life/setup/machines/<host>/kde/<rcfile>    (overrides, only for keys that differ)
+  Per host:  ~/projects/life/setup/machines/<host>/kde/<rcfile>    (overrides, only for keys that differ)
   Watched:   ~/.dotfiles/kde/_watch.txt    rc files `diff` scans for settings not in the repo
   Ignored:   ~/.dotfiles/kde/_ignore.txt   file:[group]:key globs `diff` never reports
 

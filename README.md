@@ -54,7 +54,7 @@ claude mcp add -s user fff -- ~/.local/bin/fff-mcp
 #### PAL MCP server (GPT and Gemini models, including Gemini 4 Argon)
 
 [PAL](https://github.com/oysteinkrog/pal-mcp-server) runs as a stdio MCP server from
-its own checkout at `~/work/pal-mcp-server`. Its API keys live in that checkout's
+its own checkout at `~/projects/pal-mcp-server`. Its API keys live in that checkout's
 gitignored `.env`, so nothing secret is in this repo. The entry in
 `.claude/mcp-servers.json` is the source of truth. Register it at user scope:
 

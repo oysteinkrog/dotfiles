@@ -130,8 +130,8 @@ else
 fi
 # Collections. The monorepo knowledge bases are added by kb-index-refresh.timer once
 # ~/work/desktop exists. ifkb keeps its own index in the clone (.qmd/index.yml).
-if [ -d "$HOME/work/life/vault" ]; then
-  qmd collection show life >/dev/null 2>&1 || qmd collection add "$HOME/work/life/vault" --name life >/dev/null
+if [ -d "$HOME/projects/life/vault" ]; then
+  qmd collection show life >/dev/null 2>&1 || qmd collection add "$HOME/projects/life/vault" --name life >/dev/null
   qmd update >/dev/null && qmd embed >/dev/null && ok "qmd: life collection indexed"
 fi
 if [ -f "$HOME/work/ifkb/.qmd/index.yml" ]; then
@@ -146,15 +146,15 @@ else
 fi
 
 step "tools: tasklens"
-# The task manager, the pacman package tasklens built from ~/work/tasklens (setup/work-repos.sh
+# The task manager, the pacman package tasklens built from ~/projects/tasklens (setup/work-repos.sh
 # in Life clones it). It cannot be copied from the other desktop: CachyOS makepkg builds Rust
 # with -C target-cpu=native (/etc/makepkg.conf.d/rust.conf), and the office build (AMD Zen 3)
 # dies with SIGILL on the home Intel CPU.
 if pacman -Q tasklens >/dev/null 2>&1; then
   ok "$(pacman -Q tasklens)"
 else
-  warn "tasklens not installed: check out the newest release tag in ~/work/tasklens, then"
-  info "cd ~/work/tasklens/packaging && heavy-build makepkg -f --nocheck && sudo pacman -U tasklens-*.pkg.tar.zst"
+  warn "tasklens not installed: check out the newest release tag in ~/projects/tasklens, then"
+  info "cd ~/projects/tasklens/packaging && heavy-build makepkg -f --nocheck && sudo pacman -U tasklens-*.pkg.tar.zst"
 fi
 
 step "tools: prebuilt binaries"
@@ -169,7 +169,7 @@ prebuilt=(
   "fff-mcp|.local/bin|curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash"
   "dcg|bin|destructive command guard; install.sh links it into ~/.local/bin"
   "gog|bin|Google Workspace CLI"
-  "aiolos-hook-forwarder|bin|built from ~/work/aiolos"
+  "aiolos-hook-forwarder|bin|built from ~/projects/aiolos"
   "claw|bin|claw"
   "claurst|bin|claurst"
   "claude-rs|bin|claude-rs"

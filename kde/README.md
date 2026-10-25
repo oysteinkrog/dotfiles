@@ -12,7 +12,7 @@ per machine (panels, monitors, activities, virtual desktops).
 ## Shared first, host overrides second
 
 - `~/.dotfiles/kde/<rcfile>` is the default for every machine.
-- `~/work/life/setup/machines/<hostname>/kde/<rcfile>` overrides single keys on one machine.
+- `~/projects/life/setup/machines/<hostname>/kde/<rcfile>` overrides single keys on one machine.
   Put a key there only when that machine should differ, with a comment saying why. The
   profiles live in the private Life repo because this repo is public.
 

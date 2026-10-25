@@ -1,6 +1,6 @@
 # Voxtype dictation. Tap Right Ctrl to start, speak, tap Right Ctrl again to stop.
 # Full option list: https://github.com/peteonrails/voxtype/blob/main/docs/CONFIGURATION.md
-# Setup notes: ~/work/life/docs/computers/voice-typing.md
+# Setup notes: ~/projects/life/docs/computers/voice-typing.md
 
 engine = "cohere"
 state_file = "auto"
@@ -112,5 +112,5 @@ opacity = 1.0
 # Set explicitly: voxtype's own default is on, but say so.
 filter_filler_words = true
 # Names and project words, kept in the private life repo (this repo is public).
-# Built by ~/work/life/setup/voxtype/glossary.py; a missing file is skipped.
-replacements_file = "~/work/life/setup/voxtype/words.toml"
+# Built by ~/projects/life/setup/voxtype/glossary.py; a missing file is skipped.
+replacements_file = "~/projects/life/setup/voxtype/words.toml"
