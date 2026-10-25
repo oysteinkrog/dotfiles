@@ -107,3 +107,10 @@ top_margin = 0.45
 preview_font_pt = 14.0
 # Solid background: the see-through panel was hard to read.
 opacity = 1.0
+
+[text]
+# Set explicitly: voxtype's own default is on, but say so.
+filter_filler_words = true
+# Names and project words, kept in the private life repo (this repo is public).
+# Built by ~/work/life/setup/voxtype/glossary.py; a missing file is skipped.
+replacements_file = "~/work/life/setup/voxtype/words.toml"
