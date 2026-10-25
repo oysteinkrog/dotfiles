@@ -21,6 +21,9 @@ live_typing = false
 live_preview_warm_secs = 300
 # Give that 1 GB back early when the machine is under memory pressure (checked every 10 s).
 live_preview_warm_release_command = "grep -qE 'level=(slow|pause)' ~/.local/state/pressure/level"
+# Keep every dictation (WAV + JSON with the texts) for review and later
+# fine-tuning on Oystein's voice. About 115 MB per hour of speech.
+live_preview_corpus_dir = "~/.local/share/voxtype/corpus"
 
 [hotkey]
 key = "RIGHTCTRL"
@@ -32,6 +35,9 @@ cancel_key = "ESC"
 # while it is down, and each tap and the gap between them are under 300 ms.
 double_tap = true
 double_tap_ms = 300
+# Double tap Right Shift also starts and stops. Stopping with it pastes
+# without the automatic Enter (voxtype-auto-enter checks hotkey-last).
+double_tap_alt_key = "RIGHTSHIFT"
 
 [audio]
 device = "default"
