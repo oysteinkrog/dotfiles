@@ -6,7 +6,7 @@ including multi-agent orchestration, secrets and the writing contract.
 ## Grove worktree manager
 
 `grove` manages git worktrees for a mono-repo workflow, each worktree a "project" with a
-short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `~/work/grove`.
+short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `~/projects/grove`.
 Never read worktree lists from the stale files in `~/.config/grove/`; `grove-workflow`
 names the live config and registry paths.
 
@@ -63,7 +63,7 @@ The full setup and recovery runbook for a new machine is
 
 This machine runs native CachyOS. `~/.dotfiles` is a normal repo and `install.sh` symlinks it into
 `~`. The setup and restore system is `setup/bootstrap.sh`. The guide and the machine profiles are
-in the private Life repo (`~/work/life`): `docs/computers/linux-setup.md` and
+in the private Life repo (`~/projects/life`): `docs/computers/linux-setup.md` and
 `setup/machines/<hostname>/`. This dotfiles repo is public, so never put hostnames of other
 machines, IP addresses, disk UUIDs, account names or internal repo names here.
 
