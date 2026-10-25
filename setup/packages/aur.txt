@@ -7,3 +7,4 @@ slack-desktop
 # Voice typing (see the Life doc docs/computers/voice-typing.md)
 voxtype-bin   # push-to-talk dictation; the CUDA build is the localbuild recipe voxtype
 dotool        # types text through uinput; works on KWin, where wtype does not
+kdotool       # reads the focused window class on KWin; voxtype-auto-enter uses it
