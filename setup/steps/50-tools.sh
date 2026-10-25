@@ -63,6 +63,20 @@ else
 fi
 "$HOME/bin/shader-wallpaper-theme-sync" && ok "themed Star Nest shader in ~/.local/share/shader-wallpaper"
 
+step "tools: Plasma Login Manager (localbuilds recipe plasma-login-manager)"
+# The pacman package plasma-login-manager-local: adds [Greeter] BlurWallpaper, which the
+# desktop step sets to false so the login screen shows the shader sharp. It replaces the
+# distro package, and pacman -U --noconfirm will not remove that by itself.
+if ! systemctl is-enabled -q plasmalogin.service 2>/dev/null; then
+  ok "Plasma Login Manager not in use; skipped"
+elif pacman -Q plasma-login-manager-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q plasma-login-manager-local)"
+else
+  "$HOME/.local/bin/localbuild" build plasma-login-manager
+  pacman -Q plasma-login-manager >/dev/null 2>&1 && sudo pacman -Rdd --noconfirm plasma-login-manager >/dev/null
+  "$HOME/.local/bin/localbuild" install plasma-login-manager || sudo pacman -S --noconfirm plasma-login-manager
+fi
+
 step "tools: agent mail (localbuilds recipe mcp-agent-mail)"
 # The pacman package mcp-agent-mail-local. agent-mail.service and older scripts use the
 # ~/.local/bin paths, so those are symlinks. See the recipe README before moving the pin.
