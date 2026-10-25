@@ -1,0 +1,5 @@
+# Apps where voxtype presses Enter after pasting the dictated text.
+# One name per line. A name matches if it appears anywhere in the window's
+# class, ignoring case. To find an app's class, focus it and run:
+#   sleep 3; kdotool getactivewindow getwindowclassname
+frankenterm

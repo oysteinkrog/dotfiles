@@ -70,6 +70,9 @@ mode = "paste"
 paste_keys = "shift+insert"
 paste_primary = true
 restore_clipboard = true
+# After each paste, press Enter if the focused app is listed in
+# ~/.config/voxtype/auto-enter-apps (FrankenTerm, so Claude Code sends it).
+post_output_command = "$HOME/bin/voxtype-auto-enter"
 fallback_to_clipboard = true
 type_delay_ms = 0
 
