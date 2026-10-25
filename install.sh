@@ -209,6 +209,7 @@ if [ -n "$native_linux" ]; then
     .local/share/applications/chrome-personal.desktop
     .local/share/applications/chrome-work.desktop
     .local/share/applications/office-rdp.desktop
+    .local/share/applications/home-rdp.desktop
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
     .local/share/applications/foobar2000-next.desktop

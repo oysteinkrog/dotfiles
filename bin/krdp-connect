@@ -1,0 +1,84 @@
+#!/bin/sh
+# RDP to one of my KRDP desktops, fullscreen. Started as office-rdp or home-rdp (links to
+# this script); the name picks the target:
+#   office-rdp  the office desktop, streamed at 2560x1440 (the home monitor)
+#   home-rdp    the home desktop, streamed at 1920x1200 (the office monitors)
+# The size is this end's monitor: KRDP's monitor hook (krdp-remote-mode) sets the far
+# monitor to it on connect, so the picture is 1:1 in fullscreen.
+# xfreerdp3 runs under XWayland, which gets real pixels from KDE. The SDL client sent
+# its 125%-scaled size (2048x1152) on fullscreen, and KRDP then shrank the far monitor.
+# -dynamic-resolution stops any resize request, so the far monitor keeps that size.
+# AVC444 video; sound and microphone go through PipeWire (pulse API).
+# Uses the localbuilds freerdp-client build in /opt/freerdp-client when it is installed:
+# the distro FreeRDP has no GPU H.264 decode (WITH_FFMPEG_HWACCEL), no Opus, and stretches
+# the picture when the window is resized. /gdi:hw is what turns the GPU decode on (FreeRDP
+# uses VA-API only when SoftwareGdi is off).
+# latency:80 asks PipeWire for an 80 ms buffer: KRDP then measured about 165 ms client
+# latency, against about 220 ms with the default buffer (2026-10-24, Opus 48 kHz).
+# Ctrl+Alt+Enter leaves fullscreen. +smart-sizing scales the picture to the window and,
+# in the freerdp-client build, keeps its aspect ratio, so the window can be resized freely.
+# (Dynamic resolution would resize the far monitor, which only has its EDID modes.)
+# /timeout:60000 raises TCP_USER_TIMEOUT from 9 s: when the far machine is under heavy
+# build load, KRDP and tailscaled stall for 10 to 35 s and the 9 s default dropped the session.
+# RDP has no key login, so the KRDP password lives in KDE Wallet (Secret Service).
+# The first run asks for it in a dialog and saves it. Arguments go to xfreerdp3 on stdin
+# (/args-from:stdin), so the password never shows in the process list.
+# /wm-class:<name> matches <name>.desktop (StartupWMClass), so KDE shows the window
+# under the taskbar launcher instead of as a separate icon.
+# AVC444 is the default: H.265 showed purple fringes on subpixel text. FREERDP_GFX_HEVC444=1
+# asks KRDP for H.265 4:4:4 instead, a private codec of the oysteinkrog FreeRDP fork; KRDP
+# sends it with VideoCodec=HEVC444 and AVC444 otherwise.
+# Output goes to ~/.cache/<name>.log (KRDP_CONNECT_LOG overrides it, for test runs).
+# Run with --forget to drop the saved password.
+set -u
+name=$(basename "$0")
+case $name in
+  office-rdp) title="Office desktop"; host=100.78.187.79; sshhost=office; size=2560x1440 ;;
+  home-rdp) title="Home desktop"; host=100.114.165.6; sshhost=home; size=1920x1200 ;;
+  *) echo "start this as office-rdp or home-rdp" >&2; exit 2 ;;
+esac
+log="${KRDP_CONNECT_LOG:-${OFFICE_RDP_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/$name.log}}"
+export FREERDP_GFX_HEVC444="${FREERDP_GFX_HEVC444:-0}"
+client=/opt/freerdp-client/bin/xfreerdp3
+[ -x "$client" ] || client=xfreerdp3
+
+if [ "${1:-}" = "--forget" ]; then
+  exec secret-tool clear service "$name" user oystein
+fi
+
+pw=$(secret-tool lookup service "$name" user oystein 2>/dev/null)
+while [ -z "$pw" ]; do
+  pw=$(kdialog --title "$title (RDP)" --password "Linux login password for oystein on the $(echo "$title" | tr 'A-Z' 'a-z') (not the wallet password):") || exit 1
+  [ -n "$pw" ] || exit 1
+  # Check it on the far machine first. unix_chkpwd skips pam_faillock, so a typo
+  # here does not count toward the 3-strikes lockout that a failed RDP login does.
+  printf '%s\0' "$pw" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$sshhost" /usr/bin/unix_chkpwd oystein nullok
+  case $? in
+    0) printf '%s' "$pw" | secret-tool store --label="$title RDP (KRDP)" service "$name" user oystein ;;
+    7) kdialog --title "$title (RDP)" --sorry "The far machine says that password is wrong. Try again."; pw= ;;
+    *) ;;  # ssh failed: cannot check, so try RDP without saving
+  esac
+done
+
+start=$(date +%s)
+{
+  printf '%s\n' "/v:$host" /u:oystein "/p:$pw" /cert:tofu \
+    "/size:$size" /f -dynamic-resolution /floatbar:sticky:off,default:hidden,show:fullscreen \
+    /gfx:AVC444:on /sound:sys:pulse,latency:80 /microphone:sys:pulse /network:lan +clipboard /timeout:60000 /gdi:hw +smart-sizing "/wm-class:$name"
+  for a in "$@"; do printf '%s\n' "$a"; done
+} | "$client" /args-from:stdin >"$log" 2>&1
+rc=$?
+elapsed=$(( $(date +%s) - start ))
+
+# Wrong password: forget it so the next launch asks again. KRDP checks the password
+# with PAM after the connection is up and then ends it as a logoff during the
+# capabilities exchange, so FreeRDP never reports a logon failure itself. A session that
+# KRDP ends later (a KRDP restart, a logoff) logs the same lines, so only a connection
+# that ended within 20 s counts; a rejected login ends within a few seconds.
+if [ "$elapsed" -lt 20 ] && grep -q -E "LOGON_FAILURE|AUTHENTICATION_FAILED|CAPABILITIES_EXCHANGE.*QUIT_SESSION" "$log"; then
+  secret-tool clear service "$name" user oystein
+  kdialog --title "$title (RDP)" --error "Login failed. The saved password was removed; launch again to enter it."
+elif [ "$rc" -ge 128 ]; then  # codes below 128 are normal disconnects and logoffs
+  kdialog --title "$title (RDP)" --sorry "xfreerdp3 exited with code $rc. Log: $log"
+fi
+exit "$rc"
