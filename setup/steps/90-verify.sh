@@ -48,7 +48,7 @@ else
 fi
 
 step "verify: commands"
-for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex pm2 claude cass am br docker tailscale frankenterm-gui localbuild; do
+for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex claude cass am br docker tailscale frankenterm-gui localbuild; do
   if have "$c"; then ok "$c"; else fail "$c not on PATH"; fi
 done
 case "$(realpath "$(command -v frankenterm-gui)")" in
