@@ -71,8 +71,15 @@ redesign, section 4:
 
   One level down only after leave_secs (60 s) in which every signal of the
   current level stayed under half its enter threshold (MemAvailable over twice
-  its threshold) and swap room stayed over 32 GiB (recover_swap_room_gib), and
-  no trigger of a higher level held.
+  its threshold, or over recover_mem_avail_gib when that is above 0) and swap
+  room stayed over 32 GiB (recover_swap_room_gib), and no trigger of a higher
+  level held.
+
+  recover_mem_avail_gib (default 0) sets the MemAvailable bar for leaving
+  pause. 0 keeps twice pause_mem_avail_gib (4 GiB with the defaults). Set it
+  lower on a machine that runs with little MemAvailable for hours and no other
+  pressure, so pause does not hold on MemAvailable alone. The reason then reads
+  "under the recovery bar: MemAvailable 2.1 GiB, needs 2.5".
 
 One change from the design: it named pgmajfault over 1000/s (slow) and
 4000/s (pause). Measured on 2026-10-22 at 09:01, ten minutes after a reboot,
@@ -131,6 +138,9 @@ DEFAULTS: dict[str, float] = {
     "slow_swap_room_gib": 24,
     "pause_swap_room_gib": 12,
     "pause_mem_avail_gib": 2,
+    # MemAvailable needed to leave pause; 0 means twice pause_mem_avail_gib
+    # (the old behaviour).
+    "recover_mem_avail_gib": 0,
     "recover_swap_room_gib": 32,
     "hold_ttl_secs": 30,
     "sample_log_secs": 60,
@@ -469,7 +479,14 @@ class Coordinator:
         if lvl == 2:
             if scale >= 1:
                 out += [t for t in self.at_once(s) if not t.startswith("swap room")]
-            if avail < c["pause_mem_avail_gib"] / scale:
+            bar = c["recover_mem_avail_gib"]
+            if scale < 1 and bar > 0:
+                if avail < bar:
+                    out.append(
+                        f"under the recovery bar: MemAvailable {avail:.1f} GiB,"
+                        f" needs {bar:g}"
+                    )
+            elif avail < c["pause_mem_avail_gib"] / scale:
                 out.append(f"MemAvailable {avail:.1f} GiB")
         return out
 
@@ -512,11 +529,16 @@ class Coordinator:
             if warm or higher:
                 self.calm_since = None
                 cur = hot[self.level] or higher or warm
-                self.reason = (
-                    "; ".join(cur)
-                    if hot[self.level] or higher
-                    else "still over half: " + "; ".join(cur)
-                )
+                if hot[self.level] or higher:
+                    self.reason = "; ".join(cur)
+                else:
+                    # The recovery bar is its own number, not half of one.
+                    half = [t for t in cur if not t.startswith("under the recovery")]
+                    bar = [t for t in cur if t.startswith("under the recovery")]
+                    self.reason = "; ".join(
+                        (["still over half: " + "; ".join(half)] if half else [])
+                        + bar
+                    )
             else:
                 if self.calm_since is None:
                     self.calm_since = mono
@@ -944,6 +966,32 @@ def self_test() -> int:
         check(
             "shutdown: the pressure hold stays for a restart (it runs out by itself)",
             (run / "heavy-build.hold.pressure").exists(),
+        )
+        # 9b. recover_mem_avail_gib sets the bar for leaving pause (2026-10-26).
+        co = fresh()
+        t = run_for(co, 6100.0, 20, avail_gib=1.5)
+        t = run_for(co, t, 70, avail_gib=3.5)
+        check(
+            "recover 0: MemAvailable 3.5 GiB (under twice 2) for 70 s: stays pause",
+            lvl(co) == "pause" and "still over half: MemAvailable 3.5" in co.reason,
+            co.reason,
+        )
+        co = fresh()
+        co.cfg["recover_mem_avail_gib"] = 2.5
+        t = run_for(co, 6300.0, 20, avail_gib=1.5)
+        t = run_for(co, t, 30, avail_gib=2.2)
+        check(
+            "recover 2.5: MemAvailable 2.2 GiB: stays pause, reason names the bar",
+            lvl(co) == "pause"
+            and "under the recovery bar: MemAvailable 2.2 GiB, needs 2.5" in co.reason
+            and "still over half" not in co.reason,
+            co.reason,
+        )
+        t = run_for(co, t, 70, avail_gib=3.5)
+        check(
+            "recover 2.5: MemAvailable 3.5 GiB for 70 s: down from pause",
+            lvl(co) != "pause",
+            co.reason,
         )
 
         # 10. Config file: numbers win, bad lines are skipped.
