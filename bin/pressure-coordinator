@@ -93,6 +93,18 @@ threshold the same signal gives slow, with the reason "memory full avg10 6.9%
 but 25 GiB free, capped at slow". The leave test uses twice the threshold, as
 for pause_mem_avail_gib. 0 turns the cap off (memory full pauses at any
 MemAvailable). Every other pause trigger is unchanged.
+
+Third change, 2026-10-25 (quiet_avail_gib, off at 0): with MemAvailable at or
+over quiet_avail_gib, memory full avg10 gives slow only from quiet_mem_full
+(15%), and keeps slow in the leave test only from half of that. On 2026-10-25,
+93 of 388 slow or pause minutes were memory full of 2% to 19% with 10 GiB or
+more free, from resting sessions faulting pages back, not a shortage. The
+leave test uses quiet_avail_gib itself, not twice it. Pause rules are unchanged.
+
+Fourth change, 2026-10-25: pause_leave_secs (0 means leave_secs) sets the
+calm time to go down from pause, so slow to normal can be quicker than pause
+to slow. A pause dropped to slow with 10 to 20 GiB free comes back only under
+10 GiB, so pause keeps the longer wait.
 """
 
 from __future__ import annotations
@@ -112,11 +124,14 @@ DEFAULTS: dict[str, float] = {
     "interval": 5,
     "enter_secs": 15,
     "leave_secs": 60,
+    "pause_leave_secs": 0,
     "rate_window_secs": 60,
     "own_limit_secs": 60,
     "slow_mem_full": 2,
     "pause_mem_full": 5,
     "pause_mem_full_avail_gib": 10,
+    "quiet_avail_gib": 0,
+    "quiet_mem_full": 15,
     "slow_scope_some": 10,
     "pause_scope_full": 10,
     "pause_scope_count": 2,
@@ -432,7 +447,14 @@ class Coordinator:
         else:
             mf = float(s["mem_full"])
             pth = c["pause_mem_full"]
-            if scale >= 1 and capped and pth > 0 and mf >= pth:
+            # With quiet_avail_gib or more available (no doubling in the leave
+            # test), memory full counts for slow only from quiet_mem_full.
+            qa = c["quiet_avail_gib"]
+            if qa > 0 and avail >= qa:
+                th = c["quiet_mem_full"]
+                if th > 0 and mf >= th * scale:
+                    out.append(f"memory full avg10 {mf:.1f}% with {avail:.0f} GiB free")
+            elif scale >= 1 and capped and pth > 0 and mf >= pth:
                 out.append(
                     f"memory full avg10 {mf:.1f}% but {avail:.0f} GiB free, capped at slow"
                 )
@@ -521,7 +543,11 @@ class Coordinator:
                 if self.calm_since is None:
                     self.calm_since = mono
                 calm = mono - self.calm_since
-                if calm >= c["leave_secs"]:
+                # pause_leave_secs (0: leave_secs) is the calm time from pause.
+                leave = c["leave_secs"]
+                if self.level == 2 and c["pause_leave_secs"] > 0:
+                    leave = c["pause_leave_secs"]
+                if calm >= leave:
                     self.level -= 1
                     self.calm_since = None
                     if self.level == 0:
@@ -532,7 +558,7 @@ class Coordinator:
                             or f"calm for {calm:.0f} s, down from pause"
                         )
                 else:
-                    self.reason = f"calm for {calm:.0f} of {c['leave_secs']:.0f} s"
+                    self.reason = f"calm for {calm:.0f} of {leave:.0f} s"
         else:
             pending = hot[2] or hot[1]
             self.reason = (
@@ -1148,6 +1174,34 @@ def self_test() -> int:
             lvl(co) == "slow",
             co.reason,
         )
+        # 19. quiet_avail_gib: memory full under quiet_mem_full with plenty free.
+        co = fresh()
+        co.cfg["quiet_avail_gib"] = 10
+        t = run_for(co, 17000.0, 60, mem_full=12, avail_gib=25)
+        check("quiet: mem full 12%, 25 GiB free: normal", lvl(co) == "normal", co.reason)
+        t = run_for(co, t, 30, mem_full=25, avail_gib=25)
+        check(
+            "quiet: mem full 25%, 25 GiB free: slow",
+            lvl(co) == "slow" and "with 25 GiB free" in co.reason,
+            co.reason,
+        )
+        t = run_for(co, t, 60, mem_full=12, avail_gib=25)
+        check("quiet: then 12% (over half of 15): stays slow", lvl(co) == "slow", co.reason)
+        t = run_for(co, t, 65, mem_full=4, avail_gib=25)
+        check("quiet: then 4% for 65 s: normal", lvl(co) == "normal", co.reason)
+        t = run_for(co, t, 30, mem_full=3, avail_gib=8)
+        check("quiet: mem full 3%, 8 GiB free: slow", lvl(co) == "slow", co.reason)
+        # 20. pause_leave_secs: 60 s from pause while slow to normal takes 30 s.
+        co = fresh()
+        co.cfg.update(leave_secs=30, pause_leave_secs=60)
+        t = run_for(co, 17500.0, 20, mem_full=12, avail_gib=8)
+        check("pause_leave: mem full 12%, 8 GiB: pause", lvl(co) == "pause", co.reason)
+        t = run_for(co, t, 35, mem_full=0, avail_gib=25)
+        check("pause_leave: calm 35 s: still pause", lvl(co) == "pause", co.reason)
+        t = run_for(co, t, 30, mem_full=0, avail_gib=25)
+        check("pause_leave: calm 65 s: slow", lvl(co) == "slow", co.reason)
+        t = run_for(co, t, 35, mem_full=0, avail_gib=25)
+        check("pause_leave: then 35 s calm: normal", lvl(co) == "normal", co.reason)
         co = fresh()
         co.cfg["pause_mem_full_avail_gib"] = 0
         run_for(co, 16500.0, 20, mem_full=6, avail_gib=25)
