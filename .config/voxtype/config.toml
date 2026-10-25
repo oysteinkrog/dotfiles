@@ -82,3 +82,5 @@ layout = "compact"
 width_px = 500
 top_margin = 0.45
 preview_font_pt = 14.0
+# Solid background: the see-through panel was hard to read.
+opacity = 1.0
