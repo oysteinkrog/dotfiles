@@ -1,0 +1,8 @@
+[Unit]
+Description=Relay one MotionCatalyst connection to usbmuxd
+
+[Service]
+ExecStart=/usr/bin/socat STDIO UNIX-CONNECT:/run/usbmuxd
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

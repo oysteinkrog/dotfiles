@@ -20,6 +20,7 @@ HOST_EDID_ADD_MODE=""     # connector_sizes added to that monitor's EDID at boot
 HOST_WINDOW_LAYOUT=""     # pin-to-monitor KWin script layout (JSON), see the office profile
 HOST_FRANKENTERM_BADGE=none  # badge on the main Frankenterm icon: house, building, a letter or none
 HOST_FRANKENTERM_REMOTES=()  # other muxes to open over ssh, as <ssh-host>:<badge>, e.g. work:building
+HOST_USER_UNITS=()        # systemd user units only this machine enables (70-services.sh)
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)
 
 if [ -f "$HOST_DIR/host.sh" ]; then
