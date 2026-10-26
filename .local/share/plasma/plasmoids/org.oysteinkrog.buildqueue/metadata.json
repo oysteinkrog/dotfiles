@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "Øystein Krog" }],
+        "Category": "System Information",
+        "Description": "The heavy-build queue: running and waiting builds, why they wait, how fast the queue moves, and the memory signals that gate it.",
+        "Icon": "run-build",
+        "Id": "org.oysteinkrog.buildqueue",
+        "License": "MIT",
+        "Name": "Build Queue",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

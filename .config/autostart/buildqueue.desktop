@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Build Queue
+Comment=The heavy-build queue and how fast it moves (org.oysteinkrog.buildqueue widget)
+Icon=run-build
+Exec=sh -c '"$HOME/bin/buildqueue-window"'
+X-KDE-autostart-phase=2
