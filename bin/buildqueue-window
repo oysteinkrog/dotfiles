@@ -5,7 +5,8 @@
 # the running one, which swaps its applet for X. So the Agenda window would turn into the
 # build queue. This gives the build queue its own small session bus, with no service
 # activation, so it never touches the Agenda process and starts no portals or daemons.
-# The widget needs nothing from the session bus: its data comes from buildqueue-fetch.
+# The widget needs nothing from the session bus: its data comes from buildqueue-fetch, which
+# this script runs and which writes $XDG_RUNTIME_DIR/buildqueue/queue.json.
 
 set -eu
 dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/buildqueue"
@@ -24,4 +25,11 @@ cat >"$dir/bus.conf" <<EOF
   </policy>
 </busconfig>
 EOF
-exec dbus-run-session --config-file="$dir/bus.conf" -- plasmawindowed org.oysteinkrog.buildqueue
+
+# One fetch process for the life of the window, writing the file the widget reads. It
+# stops when this script exits (it watches its parent), or on the trap below.
+"$HOME/bin/buildqueue-fetch" --serve "$dir/queue.json" 5 &
+fetch=$!
+trap 'kill "$fetch" 2>/dev/null' EXIT INT TERM
+# The widget reads queue.json with XMLHttpRequest, which needs this for a local file.
+QML_XHR_ALLOW_FILE_READ=1 dbus-run-session --config-file="$dir/bus.conf" -- plasmawindowed org.oysteinkrog.buildqueue
