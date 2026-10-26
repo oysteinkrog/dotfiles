@@ -43,7 +43,7 @@ PlasmaComponents.ItemDelegate {
             anchors.fill: parent
             anchors.topMargin: item.nowLineHeight
             visible: item.isFocus || item.hovered
-            color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, item.accent, item.hovered ? 0.25 : 0.15)
+            color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, item.accent, item.hovered ? 0.13 : 0.08)
         }
         Rectangle {
             visible: item.isFocus
