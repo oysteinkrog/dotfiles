@@ -178,6 +178,40 @@ class Decide(unittest.TestCase):
         self.assertFalse(cic.decide(30, True, 5)[0])
         self.assertTrue(cic.decide(15, True, 1)[0])
 
+    def test_away_rule(self):
+        # Away 60 min closes an idle profile even when memory is not tight.
+        self.assertTrue(cic.decide(30, False, 1, 60, 60)[0])
+        self.assertFalse(cic.decide(30, False, 1, 59, 60)[0])
+        self.assertFalse(cic.decide(30, False, 1, 600, 0)[0])  # 0 = off
+        self.assertFalse(cic.decide(10, False, 1, 600, 60)[0])  # focus rule still holds
+        self.assertFalse(cic.decide(30, False, 5, 600, 60)[0])  # tabs would be lost
+
+    def test_away_min_reads_presence(self):
+        import json
+
+        st = Path(_tmp) / "presence-state"
+        cic.PRESENCE_STATE = st
+        now = 10_000.0
+        st.write_text(
+            json.dumps({"state": "away", "since": now - 3900, "updated": now - 3})
+        )
+        self.assertAlmostEqual(cic.away_min(now), 65.0)
+        st.write_text(
+            json.dumps({"state": "remote", "since": now - 3900, "updated": now - 3})
+        )
+        self.assertEqual(cic.away_min(now), 0.0)
+        st.write_text(
+            json.dumps({"state": "away", "since": now - 3900, "updated": now - 300})
+        )
+        self.assertEqual(cic.away_min(now), 0.0)  # stale state counts as not away
+        st.unlink()
+        self.assertEqual(cic.away_min(now), 0.0)
+        conf = Path(_tmp) / "presence.conf"
+        cic.PRESENCE_CONF = conf
+        self.assertEqual(cic.away_limit_min(), 60.0)
+        conf.write_text("fooyin_quit=1\nchrome_away_min=0  # off\n")
+        self.assertEqual(cic.away_limit_min(), 0.0)
+
     def test_mode_defaults_to_dry_run(self):
         self.assertEqual(cic.resolve_mode(None), "dry-run")
         Path(os.environ["CHROME_IDLE_MODE_FILE"]).write_text("live\n")
