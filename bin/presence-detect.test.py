@@ -94,6 +94,110 @@ class StateModel(unittest.TestCase):
         self.assertEqual(rec["not_here_since"], t)
 
 
+class MissingSignals(unittest.TestCase):
+    """A machine without local-input-watch, without KRDP or without a lock reading
+    must never read away only because that signal is missing."""
+
+    def test_no_local_input_file_unlocked_is_here_for_hours(self):
+        t = 4_000_000.0
+        rec = pd.step(t, sig(li=None), {})
+        self.assertEqual(rec["state"], "here")
+        for dt in (600, 3600, 4 * 3600, 24 * 3600):
+            rec = pd.step(t + dt, sig(li=None), rec)
+            self.assertEqual(rec["state"], "here", dt)
+
+    def test_no_local_input_file_after_rdp_left(self):
+        t = 5_000_000.0
+        rec = pd.step(t, sig(li=None, clients=["c"]), {})
+        self.assertEqual(rec["state"], "remote")
+        rec = pd.step(t + 60, sig(li=None), rec)  # client gone, may reconnect
+        for dt in (600, 1200, 3600):
+            rec = pd.step(t + dt, sig(li=None), rec)
+            self.assertNotEqual(rec["state"], "away", dt)
+
+    def test_stale_rdp_record_after_reboot_without_input_file(self):
+        t = 6_000_000.0
+        prev = {"state": "here", "rdp_last_seen": t - 7 * 86400, "updated": t - 86400}
+        for dt in (0, 600, 1200):
+            prev = pd.step(t + dt, sig(li=None), prev)
+            self.assertEqual(prev["state"], "here", dt)
+
+    def test_no_ss_and_no_lock_source(self):
+        t = 7_000_000.0
+        s = sig(li=None)
+        s["rdp_clients"] = None  # ss missing or failed
+        s["lock_source"] = "none"
+        rec = pd.step(t, s, {})
+        rec = pd.step(t + 3 * 3600, s, rec)
+        self.assertEqual(rec["state"], "here")
+
+    def test_missing_input_file_reads_as_none(self):
+        orig = pd.LOCAL_INPUT
+        pd.LOCAL_INPUT = Path(_tmp) / "no-such-dir" / "last"
+        try:
+            self.assertIsNone(pd.last_local_input())
+        finally:
+            pd.LOCAL_INPUT = orig
+
+    def test_locked_long_is_still_away_without_input_file(self):
+        t = 8_000_000.0
+        rec = pd.step(t, sig(li=None, locked=True, locked_s=600), {})
+        self.assertEqual(rec["state"], "away")
+
+
+class UnknownStateNoBoost(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.orig = (pd.set_cpu_weight, pd.signals)
+        pd.set_cpu_weight = lambda w: self.calls.append(w) or True
+
+    def tearDown(self):
+        pd.set_cpu_weight, pd.signals = self.orig
+        try:
+            pd.OVERRIDE.unlink()
+        except FileNotFoundError:
+            pass
+
+    def test_want_boost_only_for_away(self):
+        conf = {"build_boost": "1"}
+        self.assertFalse(pd.want_boost({}, conf))
+        self.assertFalse(pd.want_boost({"state": None}, conf))
+        self.assertFalse(pd.want_boost({"state": "here"}, conf))
+        self.assertFalse(pd.want_boost({"state": "remote"}, conf))
+        self.assertTrue(pd.want_boost({"state": "away"}, conf))
+        self.assertFalse(pd.want_boost({"state": "away"}, {"build_boost": "0"}))
+
+    def test_failed_check_turns_boost_off(self):
+        b = pd.Boost({})
+        b.apply(True, 100.0, "away")
+        self.assertTrue(pd.OVERRIDE.exists())
+
+        def broken(now):
+            raise RuntimeError("signal read failed")
+
+        pd.signals = broken
+        fy = pd.Fooyin()
+        rec = pd.check(110.0, {"state": "away", "boost": True}, b, fy)
+        self.assertFalse(b.active)
+        self.assertFalse(rec["boost"])
+        self.assertFalse(pd.OVERRIDE.exists())
+        self.assertEqual(self.calls, [100, 20])
+
+    def test_first_check_with_no_state_file_and_no_signals(self):
+        pd.signals = lambda now: sig(li=None)
+        orig_fp = pd.fooyin_players
+        pd.fooyin_players = lambda: {}
+        try:
+            b = pd.Boost({})
+            rec = pd.check(200.0, {}, b, pd.Fooyin())
+        finally:
+            pd.fooyin_players = orig_fp
+        self.assertEqual(rec["state"], "here")
+        self.assertFalse(b.active)
+        self.assertFalse(pd.OVERRIDE.exists())
+        self.assertEqual(self.calls, [])
+
+
 class FooyinConfig(unittest.TestCase):
     def test_flip_existing(self):
         text = "[General]\nA=1\n\n[Player]\nPlayMode=0\nSavePlaybackState=false\n\n[Z]\nB=2\n"

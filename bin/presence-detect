@@ -50,6 +50,10 @@ Signals:
   ss                     established TCP on the KRDP port = an RDP client.
   ScreenSaver            GetActive and GetActiveTime (KDE returns ms);
                          loginctl LockedHint as a fallback.
+  A missing signal never means away: no input file (local-input-watch not set up,
+  or no key since boot), no ss or no RDP listener, and no lock reading all fall back
+  to the other signals, and with none left the state is here. The build boost is on
+  only for a known away; a failed check turns it off.
 """
 
 from __future__ import annotations
@@ -216,7 +220,10 @@ def classify(now: float, sig: dict, prev: dict) -> tuple[str, str]:
             return "remote", "RDP client connected"
         return prev.get("state", "here"), "RDP client just connected, waiting"
     last_rdp = prev.get("rdp_last_seen")
-    if last_rdp and (li is None or li > now - last_rdp):
+    # Needs the local input signal: without local-input-watch (a new machine, or no
+    # key press since boot) "no office input since" is unknown, so fall through to the
+    # lock rules instead of calling it away.
+    if last_rdp and li is not None and li > now - last_rdp:
         if now - last_rdp < RDP_OFF_S:
             return "remote", f"RDP client gone {now - last_rdp:.0f} s, may reconnect"
         return "away", (
@@ -621,24 +628,40 @@ def main() -> int:
         li = last_local_input()
         if now - last_check >= CHECK_S or li != last_input:
             last_check, last_input = now, li
-            try:
-                conf = read_conf()
-                sig = signals(now)
-                old = rec.get("state")
-                rec = step(now, sig, rec)
-                if rec["state"] != old:
-                    log(
-                        f'event=state from={old or "-"} to={rec["state"]} reason="{rec["reason"]}"'
-                    )
-                want = rec["state"] == "away" and on(conf, "build_boost")
-                boost.apply(want, now, f"state {rec['state']}")
-                rec["boost"] = boost.active
-                held["rec"] = rec
-                save_state(rec)
-                fy.tick(now, rec, on(conf, "fooyin_quit"))
-            except Exception as e:  # keep watching; the next check retries
-                log(f'event=error error="{e}"')
+            rec = check(now, rec, boost, fy)
+            held["rec"] = rec
         time.sleep(1)
+
+
+def want_boost(rec: dict, conf: dict[str, str]) -> bool:
+    """The boost is on only for a known away state; any other or no state means off."""
+    return rec.get("state") == "away" and on(conf, "build_boost")
+
+
+def check(now: float, rec: dict, boost: Boost, fy: Fooyin) -> dict:
+    """One check: read the signals, step the state, apply the actions. A failed check
+    leaves the state unknown, so the boost goes off until a check works again."""
+    try:
+        conf = read_conf()
+        sig = signals(now)
+        old = rec.get("state")
+        rec = step(now, sig, rec)
+        if rec["state"] != old:
+            log(
+                f'event=state from={old or "-"} to={rec["state"]} reason="{rec["reason"]}"'
+            )
+        boost.apply(want_boost(rec, conf), now, f"state {rec['state']}")
+        rec["boost"] = boost.active
+        save_state(rec)
+        fy.tick(now, rec, on(conf, "fooyin_quit"))
+    except Exception as e:  # keep watching; the next check retries
+        log(f'event=error error="{e}"')
+        try:
+            boost.apply(False, now, "check failed, state unknown")
+            rec["boost"] = boost.active
+        except Exception as e2:
+            log(f'event=error error="boost-off failed: {e2}"')
+    return rec
 
 
 if __name__ == "__main__":
