@@ -312,8 +312,16 @@ session_running() {
 # aiolos-rc would send inference straight to Anthropic. The timer runs with
 # systemd's short PATH, so give the tab the PATH of a login shell.
 spawn_tab() {
-  local window_id=$1 cwd=$2 cmd=$3 lp
+  local window_id=$1 cwd=$2 cmd=$3 lp listing
   local -a where=(--new-window)
+  # Without a window id, ask the server again. Open a new window only when the
+  # server really has none; if it cannot be asked, fail rather than split tabs
+  # into a window the user did not ask for.
+  if [ -z "$window_id" ]; then
+    listing=$(ft list --json 2>/dev/null) || { echo "spawn_tab: cannot list mux windows, not spawning" >&2; return 1; }
+    window_id=$(jq -r '.[0].window_id // empty' <<<"$listing") \
+      || { echo "spawn_tab: unreadable mux listing, not spawning" >&2; return 1; }
+  fi
   [ -n "$window_id" ] && where=(--window-id "$window_id")
   lp=$(fish -lc 'string join : $PATH' 2>/dev/null)
   [ -n "$lp" ] && cmd="export PATH=$(printf '%q' "$lp"); $cmd"
