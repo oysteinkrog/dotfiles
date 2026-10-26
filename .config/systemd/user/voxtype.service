@@ -15,6 +15,13 @@ ExecStart=/usr/lib/voxtype-local/voxtype daemon
 Restart=on-failure
 RestartSec=5
 Environment=XDG_RUNTIME_DIR=%t
+# Dictation comes before everything else Oystein runs, builds and agents included.
+# session.slice (cpu.weight 1000) is the top user slice, above app.slice (500),
+# claude.slice (80) and builds.slice (20); the worker and the popup are children
+# of this unit, so they share these weights.
+Slice=session.slice
+CPUWeight=10000
+IOWeight=10000
 
 [Install]
 WantedBy=graphical-session.target
