@@ -12,7 +12,10 @@
 // class:   the window's resourceClass (see the KWin debug console)
 // caption: optional regex the window title must match
 // output:  connector name (see `kscreen-doctor -o`)
-// mode:    "max" maximizes, "left" or "right" fills that half, "move" only moves it
+// mode:    "max" maximizes, "left" or "right" fills that half, "move" only moves it,
+//          "fraction" fills a full-height slice: "side" is "left" or "right", "width" the
+//          share of the monitor (0.3 for 30%). Two slices whose widths add up to 1 meet
+//          without a gap or an overlap.
 
 // Outputs need a moment to settle after a monitor turns on.
 const SETTLE_MS = 2000;
@@ -62,6 +65,15 @@ function place(w) {
             x: rule.mode === "left" ? a.x : a.x + half, y: a.y,
             width: half, height: a.height,
         };
+    } else if (rule.mode === "fraction") {
+        w.setMaximize(false, false);
+        const a = workspace.clientArea(KWin.MaximizeArea, output, workspace.currentDesktop);
+        const share = Math.min(1, Math.max(0, Number(rule.width) || 0.5));
+        // The edge between the slices is at the same pixel for both sides.
+        const edge = rule.side === "right" ? Math.floor(a.width * (1 - share)) : Math.floor(a.width * share);
+        w.frameGeometry = rule.side === "right"
+            ? { x: a.x + edge, y: a.y, width: a.width - edge, height: a.height }
+            : { x: a.x, y: a.y, width: edge, height: a.height };
     }
 }
 
