@@ -1,0 +1,22 @@
+[Unit]
+Description=Presence (here, remote, away) and the actions approved for it (presence-detect)
+Documentation=file://%h/bin/presence-detect
+After=plasma-core.target
+
+[Service]
+# Writes ~/.local/state/presence/{state,log,heavy-build.override}. Quits fooyin only
+# through its own MPRIS Quit; never sends a signal to any app. On stop it removes the
+# build boost (builds.slice CPUWeight back to 20, override file removed).
+# Switches: ~/.config/presence.conf (fooyin_quit, build_boost, chrome_away_min).
+Slice=background.slice
+Type=simple
+ExecStartPre=/usr/bin/python3 %h/bin/presence-detect.test.py
+ExecStart=/usr/bin/python3 %h/bin/presence-detect
+Restart=always
+RestartSec=10
+SyslogIdentifier=presence-detect
+MemoryHigh=64M
+TimeoutStopSec=15
+
+[Install]
+WantedBy=plasma-workspace.target
