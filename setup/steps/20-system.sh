@@ -128,11 +128,13 @@ WantedBy=multi-user.target'
   fi
   sudo systemctl enable --now slab-guard.service >/dev/null 2>&1
   ok "slab-guard"
+fi
 
-  # A key press or click at this machine ends an RDP session left open (bin/local-input-watch).
-  sudo install -m 0755 -o root -g root "$DOTFILES/bin/local-input-watch" /usr/local/sbin/local-input-watch
-  unit=/etc/systemd/system/local-input-watch.service
-  want='[Unit]
+# Local key presses and clicks (bin/local-input-watch) for krdp-remote-mode and presence-detect.
+# Installed on every machine: it only records the time of the last press, never key codes.
+sudo install -m 0755 -o root -g root "$DOTFILES/bin/local-input-watch" /usr/local/sbin/local-input-watch
+unit=/etc/systemd/system/local-input-watch.service
+want='[Unit]
 Description=Record key presses and clicks on local USB input for krdp-remote-mode
 
 [Service]
@@ -141,13 +143,12 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target'
-  if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
-    printf '%s\n' "$want" | sudo tee "$unit" >/dev/null
-    sudo systemctl daemon-reload
-  fi
-  sudo systemctl enable --now local-input-watch.service >/dev/null 2>&1
-  ok "local-input-watch"
+if [ "$(sudo cat "$unit" 2>/dev/null)" != "$want" ]; then
+  printf '%s\n' "$want" | sudo tee "$unit" >/dev/null
+  sudo systemctl daemon-reload
 fi
+sudo systemctl enable --now local-input-watch.service >/dev/null 2>&1
+ok "local-input-watch"
 
 # The Plasma Login greeter keeps its own monitor layout. Copy the user's layout to it on
 # every change, and once at boot before the greeter starts (bin/greeter-output-sync).
