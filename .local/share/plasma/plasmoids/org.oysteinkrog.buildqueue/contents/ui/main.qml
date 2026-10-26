@@ -289,9 +289,10 @@ PlasmoidItem {
     readonly property var style: q.theme || ({})
     readonly property bool styled: style.background !== undefined
 
-    // Type scale, from the Plasma font so it follows the owner's font size.
-    readonly property real fs: Kirigami.Theme.defaultFont.pointSize
-    readonly property real fsRow: fs * 0.92
+    // Type scale, from the Plasma font so it follows the owner's font size. Shared with the
+    // Agenda widget: docs/desktop-panels-style.md.
+    readonly property real fs: Kirigami.Theme.defaultFont.pointSize * 1.08
+    readonly property real fsRow: fs * 0.95
     readonly property real fsSmall: Kirigami.Theme.smallFont.pointSize
 
     // Data colours are the Plasma ones, a little less saturated so they sit calmly on the
@@ -304,11 +305,11 @@ PlasmoidItem {
         return Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, amount);
     }
 
-    // A section title: body size, semi-bold, neutral.
+    // A section title: body size, semi-bold, in a light tint of the accent.
     component Heading: PlasmaComponents.Label {
         font.pointSize: root.fs
         font.weight: Font.DemiBold
-        opacity: 0.92
+        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.highlightColor, "white", 0.35)
     }
 
     // Muted small text: labels, captions, axis text.
@@ -572,8 +573,9 @@ PlasmoidItem {
         PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
     }
 
-    // A session's build priority as one boxed control: ‹ low ›, ‹ normal ›, ‹ high ›. The
-    // arrows run heavy-build-prio. Without `match` (no known owner) it shows a dash.
+    // A session's build priority as one control: ‹ low ›, ‹ high ›. The arrows run
+    // heavy-build-prio. A session with a rule gets the accent fill, since the owner chose that
+    // value. Without a rule, or without `match` (no known owner), it is flat and shows a dash.
     component Stepper: Rectangle {
         id: stepper
         property var prio: null
@@ -581,14 +583,12 @@ PlasmoidItem {
         property bool editable: true
         readonly property int step: root.prioStep(prio)
         readonly property bool busy: root.prioBusy !== "" && root.prioBusy === match
-        readonly property color tone: step < 0 ? Kirigami.Theme.negativeTextColor : step > 0 ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
+        readonly property bool ruled: prio !== null && prio !== undefined
         readonly property bool can: editable && match !== "" && root.q.prioTool && root.prioBusy === ""
         implicitWidth: Kirigami.Units.gridUnit * 4.6
         implicitHeight: Kirigami.Units.gridUnit * 1.05
         radius: 4
-        color: step !== 0 ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, tone, 0.13) : "transparent"
-        border.width: match !== "" ? 1 : 0
-        border.color: step !== 0 ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, tone, 0.55) : root.tint(0.16)
+        color: ruled ? Kirigami.Theme.highlightColor : "transparent"
         RowLayout {
             anchors.fill: parent
             spacing: 0
@@ -602,10 +602,11 @@ PlasmoidItem {
             PlasmaComponents.Label {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
-                text: stepper.match === "" ? "–" : stepper.busy ? "…" : (stepper.prio ? stepper.prio.prio : i18n("normal"))
+                text: stepper.busy ? "…" : stepper.ruled ? stepper.prio.prio : "–"
                 font.pointSize: root.fsSmall
-                color: stepper.step !== 0 ? stepper.tone : Kirigami.Theme.textColor
-                opacity: stepper.match === "" ? 0.35 : stepper.step !== 0 ? 1 : 0.6
+                font.weight: stepper.ruled ? Font.DemiBold : Font.Normal
+                color: stepper.ruled ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                opacity: stepper.ruled ? 1 : 0.45
                 HoverHandler {
                     id: valueHover
                 }
@@ -742,37 +743,36 @@ PlasmoidItem {
                 Layout.topMargin: -Kirigami.Units.smallSpacing
                 implicitHeight: banner.implicitHeight + Kirigami.Units.smallSpacing * 3
                 radius: 6
-                color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, view.gateColor, 0.13)
-                border.width: 1
-                border.color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, view.gateColor, 0.45)
+                color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, view.gateColor, 0.08)
+                clip: true
+                // The state bar on the left edge.
+                Rectangle {
+                    width: 3
+                    height: parent.height
+                    color: view.gateColor
+                }
                 RowLayout {
                     id: banner
                     anchors.fill: parent
-                    anchors.leftMargin: Kirigami.Units.smallSpacing * 2
+                    anchors.leftMargin: Kirigami.Units.smallSpacing * 2 + 3
                     anchors.rightMargin: Kirigami.Units.smallSpacing * 2
                     spacing: Kirigami.Units.smallSpacing * 2.5
-                    Rectangle {
-                        implicitWidth: gateRow.implicitWidth + Kirigami.Units.smallSpacing * 3
-                        implicitHeight: gateRow.implicitHeight + Kirigami.Units.smallSpacing * 1.2
-                        radius: 4
-                        color: view.gateColor
-                        RowLayout {
+                    RowLayout {
                             id: gateRow
-                            anchors.centerIn: parent
                             spacing: Kirigami.Units.smallSpacing
                             Kirigami.Icon {
                                 source: root.gate.state === "paused" ? "media-playback-pause-symbolic" : root.gate.state === "slowed" ? "media-seek-forward-symbolic" : "media-playback-start-symbolic"
                                 isMask: true
-                                color: Kirigami.Theme.backgroundColor
+                                color: view.gateColor
                                 implicitWidth: Kirigami.Units.iconSizes.small
                                 implicitHeight: implicitWidth
                             }
                             PlasmaComponents.Label {
                                 text: root.gate.state === "paused" ? i18n("PAUSED") : root.gate.state === "slowed" ? i18n("SLOWED") : root.gate.state === "open" ? i18n("OPEN") : i18n("UNKNOWN")
-                                color: Kirigami.Theme.backgroundColor
+                                color: view.gateColor
+                                font.pointSize: root.fs
                                 font.weight: Font.Bold
                             }
-                        }
                     }
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
@@ -1287,11 +1287,11 @@ PlasmoidItem {
                     }
                     Head {
                         text: i18n("Session")
-                        Layout.preferredWidth: view.gu * 5
+                        Layout.fillWidth: true
                     }
                     Head {
                         text: i18n("Worktree")
-                        Layout.fillWidth: true
+                        Layout.preferredWidth: view.gu * 5
                     }
                     Head {
                         text: i18n("Class")
@@ -1322,13 +1322,13 @@ PlasmoidItem {
                         }
                         Cell {
                             text: root.ownerName(nextRow.job.owner) + (nextRow.job.owner && root.inferred(nextRow.job) ? " ≈" : "")
-                            Layout.preferredWidth: view.gu * 5
+                            Layout.fillWidth: true
                             font.italic: !nextRow.job.owner
                             opacity: nextRow.job.owner ? 1 : 0.55
                         }
                         Cell {
                             text: nextRow.job.project || ""
-                            Layout.fillWidth: true
+                            Layout.preferredWidth: view.gu * 5
                             opacity: 0.85
                         }
                         Cell {
