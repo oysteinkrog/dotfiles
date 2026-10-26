@@ -183,6 +183,7 @@ if [ -n "$native_linux" ]; then
     .config/pipewire/iem-eq
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
+    .config/autostart/buildqueue.desktop
     .config/systemd/user/plasma-kwin_wayland.service.d
     .config/systemd/user/session.slice.d
     .config/systemd/user/plasma-powerdevil.service.d
@@ -190,6 +191,7 @@ if [ -n "$native_linux" ]; then
     '.config/systemd/user/app-chrome\x2dpersonal@.service.d'
     .local/share/kwin/scripts/pin-to-monitor
     .local/share/plasma/plasmoids/org.oysteinkrog.agenda
+    .local/share/plasma/plasmoids/org.oysteinkrog.buildqueue
     .local/share/applications/org.wezfurlong.wezterm.desktop
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
