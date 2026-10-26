@@ -1,0 +1,52 @@
+# file:[group]:key patterns that `kde-config diff` never reports as untracked.
+# Only * is a wildcard. Machine IDs, state, history and values KDE derives from another setting.
+
+# Colours written by the colour scheme (kdeglobals [General] ColorScheme picks it)
+kdeglobals:[Colors:*:*
+kdeglobals:[WM]:*Background
+kdeglobals:[WM]:*Blend
+kdeglobals:[WM]:*Foreground
+kdeglobals:[General]:ColorSchemeHash
+
+# Virtual desktop and tiling IDs differ per machine
+kwinrc:[Desktops]:Id_*
+kwinrc:[Tiling]*:*
+
+# Set per host by 60-desktop.sh from host.sh (HOST_WINDOW_LAYOUT)
+kwinrc:[Plugins]:pin-to-monitorEnabled
+kwinrc:[Script-pin-to-monitor]:Layout
+
+# Lock screen wallpaper: set by 60-desktop.sh, only when the shader plugin is installed
+kscreenlockerrc:[Greeter]*:*
+
+# Activity IDs, saved sessions, per-app notification history
+kglobalshortcutsrc:[ActivityManager]:switch-to-activity-*
+ksmserverrc:[Session: *]*:*
+ksmserverrc:[LegacySession: *]*:*
+plasmanotifyrc:[Applications]*:Seen
+*:[$Version]:*
+
+# Recent files, last folders, dialog state, counters
+*:*:*Timestamp*
+*:*:lastImageSaveLocation
+*:*:translatedScreen*Folder
+*:*:shownCount
+*:[MainWindow]*:*
+*:*:*Recent*
+*:[KFileDialog Settings]:*
+*:[DirSelect Dialog]:*
+konsolerc:[General]:ConfigVersion
+kded5rc:[General]:dbVersion
+
+# Written by KDE itself or the colour scheme
+kdeglobals:[ColorEffects:*:*
+baloofilerc:[General]:*
+*:[General]:Version
+kaccessrc:[ScreenReader]:SystemdManaged
+
+# Per machine: wallpaper picked from Downloads, KRDP certificate files
+plasmarc:[Wallpapers]:usersWallpapers
+krdpserverrc:[General]:Certificate*
+krdpserverrc:[General]:AutogenerateCertificates
+konsolerc:[UiSettings]:ColorScheme
+kwinrulesrc:[General]:Order

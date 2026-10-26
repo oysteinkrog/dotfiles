@@ -6,26 +6,25 @@
 # retention tooling and regrows continuously with swarm activity. This keeps
 # only the newest N rows by experience_id and reclaims the space with VACUUM.
 #
-# Safe-against-server method: stop the pm2 service before touching the live
+# Safe-against-server method: stop agent-mail.service before touching the live
 # file, operate via a stdin heredoc (VACUUM as a `-cmd` argument is a silent
-# no-op on this sqlite3 build), then restart and verify with both /health and
+# no-op on some sqlite3 builds), then restart and verify with both /health and
 # a real JSON-RPC call before declaring success. The EXIT trap guarantees the
 # server is restarted even if an earlier step fails, so a bad run never
 # leaves the service down.
+#
+# The unit sets AM_ATC_ENABLED=false, so the table should not grow any more.
+# Run this by hand if it ever does.
 
 set -uo pipefail
 
-HOME_DIR="${HOME:-/home/oystein}"
-DB="$HOME_DIR/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
-LOG="$HOME_DIR/bin/logs/agent-mail-prune.log"
-ECOSYSTEM="$HOME_DIR/.config/pm2/ecosystem.config.js"
+DB="$HOME/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3"
+LOG="$HOME/bin/logs/agent-mail-prune.log"
 KEEP=5000
-HEALTH_URL="http://127.0.0.1:8765/health"
-RPC_URL="http://127.0.0.1:8765/mcp/"
-PM2_NAME="mcp-agent-mail"
-PROJECT_KEY="$HOME_DIR/work/desktop/metrics"
-
-export PATH="$HOME_DIR/.nvm/versions/node/v22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+HEALTH_URL="http://127.0.0.1:4809/health"
+RPC_URL="http://127.0.0.1:4809/mcp/"
+UNIT="agent-mail.service"
+PROJECT_KEY="$HOME/work/desktop/metrics"
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -35,41 +34,13 @@ log() {
   printf '%s %s\n' "$(date -Iseconds)" "$*" >>"$LOG"
 }
 
-pm2_status() {
-  pm2 jlist 2>/dev/null | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print(next((p['pm2_env']['status'] for p in d if p['name'] == '${PM2_NAME}'), 'missing'))
-except Exception:
-    print('unknown')
-" 2>/dev/null
-}
-
-# `pm2 start <name>` only works if the app entry is still online/stopped in
-# pm2's table. A process that crash-looped (errored / "waiting restart", or
-# removed entirely) needs `pm2 restart` first, with a full reload from the
-# ecosystem file as the last resort if the entry is gone outright. This
-# distinction is why the first validation run of this script needed three
-# manual `pm2 restart` interventions before the never-left-down guarantee
-# actually held end to end.
-ensure_running() {
-  log "ensure_running: pm2 restart ${PM2_NAME} (current status: $(pm2_status))"
-  if pm2 restart "$PM2_NAME" >>"$LOG" 2>&1; then
-    pm2 save >>"$LOG" 2>&1
-    return 0
-  fi
-  log "pm2 restart failed, falling back to full reload from ${ECOSYSTEM}"
-  pm2 start "$ECOSYSTEM" --only "$PM2_NAME" >>"$LOG" 2>&1
-  pm2 save >>"$LOG" 2>&1
-}
-
 restart_server() {
   if [[ "$RESTARTED" -eq 1 ]]; then
     return 0
   fi
   RESTARTED=1
-  ensure_running
+  log "starting ${UNIT}"
+  systemctl --user start "$UNIT" >>"$LOG" 2>&1 || log "ERROR: systemctl --user start ${UNIT} failed"
 }
 
 on_exit() {
@@ -90,10 +61,10 @@ if [[ ! -f "$DB" ]]; then
 fi
 
 BEFORE_SIZE=$(stat -c %s "$DB") || { log "ERROR: cannot stat db"; exit 1; }
-log "pre-stop file size=${BEFORE_SIZE} bytes (row count deferred until after stop -- querying atc_experiences while the server holds the WAL trips the WSL1 'locking protocol' error)"
+log "pre-stop file size=${BEFORE_SIZE} bytes"
 
-log "stopping pm2 service ${PM2_NAME}"
-pm2 stop "$PM2_NAME" >>"$LOG" 2>&1 || { log "ERROR: pm2 stop failed"; exit 1; }
+log "stopping ${UNIT}"
+systemctl --user stop "$UNIT" >>"$LOG" 2>&1 || { log "ERROR: systemctl --user stop ${UNIT} failed"; exit 1; }
 sleep 2
 
 BEFORE_ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM atc_experiences;") || { log "ERROR: cannot query before-count after stop"; exit 1; }
@@ -124,31 +95,17 @@ log "after: size=${AFTER_SIZE} bytes atc_experiences_rows=${AFTER_ROWS} freelist
 restart_server
 
 HEALTH_OK=0
-RESTART_ATTEMPTS=1
-MAX_RESTART_ATTEMPTS=4
 for i in $(seq 1 90); do
   if curl -sf -m 3 "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ready"'; then
     HEALTH_OK=1
-    log "health check OK after ~$((i * 2))s (restart attempts: ${RESTART_ATTEMPTS})"
+    log "health check OK after ~$((i * 2))s"
     break
-  fi
-  # Every ~30s, if pm2 doesn't show the process online, escalate with another
-  # restart rather than sit out the whole timeout waiting on a stuck
-  # "waiting restart" state (observed in practice: pm2 can sit there
-  # indefinitely without auto-retrying despite a 5s restart_delay).
-  if (( i % 15 == 0 )) && [[ "$RESTART_ATTEMPTS" -lt "$MAX_RESTART_ATTEMPTS" ]]; then
-    STATUS=$(pm2_status)
-    if [[ "$STATUS" != "online" ]]; then
-      RESTART_ATTEMPTS=$((RESTART_ATTEMPTS + 1))
-      log "not healthy after $((i * 2))s, pm2 status=${STATUS}; escalating with restart attempt ${RESTART_ATTEMPTS}"
-      ensure_running
-    fi
   fi
   sleep 2
 done
 
 if [[ $HEALTH_OK -ne 1 ]]; then
-  log "ERROR: health check did not report ready within timeout (restart attempts: ${RESTART_ATTEMPTS})"
+  log "ERROR: health check did not report ready within 180s ($(systemctl --user is-active "$UNIT"))"
   exit 1
 fi
 

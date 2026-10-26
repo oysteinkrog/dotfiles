@@ -1,0 +1,23 @@
+# rc files in ~/.config that `kde-config diff` scans for settings not yet in the repo
+baloofilerc
+dolphinrc
+kaccessrc
+katerc
+kcminputrc
+kded5rc
+kded6rc
+kdeglobals
+kglobalshortcutsrc
+kiorc
+konsolerc
+krdpserverrc
+kscreenlockerrc
+ksmserverrc
+kwinrc
+kwinrulesrc
+kxkbrc
+plasma-localerc
+plasmanotifyrc
+plasmarc
+powerdevilrc
+spectaclerc

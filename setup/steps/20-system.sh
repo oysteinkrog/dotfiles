@@ -85,6 +85,20 @@ if have ufw; then
   ok "ufw rules for Sunshine and RDP${HOST_UFW_LAN:+ (tailnet and $HOST_UFW_LAN)}"
 fi
 
+# SSH between the desktops: key login only, port 22 from the tailnet only.
+# Allowed keys are per machine; see ssh-access/README.md in the Life repo.
+sshd_conf='# Key-only login. Reachable through Tailscale only (ufw allows 22 on tailscale0).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers '"$(id -un)"
+if [ "$(sudo cat /etc/ssh/sshd_config.d/10-hardening.conf 2>/dev/null)" != "$sshd_conf" ]; then
+  printf '%s\n' "$sshd_conf" | sudo install -m 0644 /dev/stdin /etc/ssh/sshd_config.d/10-hardening.conf
+fi
+sudo sshd -t && sudo systemctl enable -q sshd.service && sudo systemctl reload-or-restart sshd.service
+have ufw && sudo ufw allow in on tailscale0 to any port 22 proto tcp >/dev/null
+ok "sshd: key login only, port 22 on tailscale0"
+
 # EDID override: lets KRDP switch the streamed monitor to a size its own EDID lacks (see
 # bin/edid-add-mode). The script runs as root, so install a root-owned copy rather than
 # pointing a root unit at a file in the home directory.

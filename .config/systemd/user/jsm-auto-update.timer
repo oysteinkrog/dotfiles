@@ -1,0 +1,11 @@
+[Unit]
+Description=JSM skill auto-update timer
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+AccuracySec=60
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

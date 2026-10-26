@@ -1,0 +1,30 @@
+# Music keys for the launchers in .local/share/applications/foobar2000-*.desktop. They run
+# ~/.local/bin/music-control, which drives fooyin (or foobar2000) or Spotify. Alt+Z switches
+# between fooyin and Spotify.
+# New keys work after the next login.
+[services][foobar2000-back.desktop]
+_launch=Alt+S
+
+[services][foobar2000-next.desktop]
+_launch=Alt+A\tAlt+V
+
+[services][foobar2000-playpause.desktop]
+_launch=Alt+C
+
+[services][foobar2000-random.desktop]
+_launch=Alt+X
+
+[services][foobar2000-switch.desktop]
+_launch=Alt+Z
+
+[plasmashell]
+next activity=Meta+A,none,Walk through activities
+previous activity=Meta+Shift+A,none,Walk through activities (Reverse)
+
+[slack]
+DDF5957471A155313A3A598E9EF96715-Ctrl+Shift+Space=none,Ctrl+Shift+Space,Slack shortcut: Ctrl+Shift+Space
+
+[kwin]
+# Overview from the keyboard only. The top-left hot corner is off ([Effect-overview]
+# BorderActivate=9 in kwinrc), because the pointer goes there for the start menu.
+Overview=Meta+W,Meta+W,Toggle Overview

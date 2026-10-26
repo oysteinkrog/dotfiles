@@ -1,0 +1,21 @@
+# Shared KDE settings. Format and rules: ~/.dotfiles/kde/README.md
+[General]
+BrowserApplication=chrome-work.desktop
+ColorScheme=BreezeDark
+XftAntialias=true
+XftHintStyle=hintslight
+XftSubPixel=rgb
+fixed=Consolas,11,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+font=Sans Serif,11,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0
+menuFont=Segoe UI,11,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+smallestReadableFont=Segoe UI,9,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+toolBarFont=Segoe UI,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+
+[KDE]
+AnimationDurationFactor=0.25
+LookAndFeelPackage=Sweet
+contrast=4
+frameContrast=0.2
+
+[WM]
+activeFont=Segoe UI,11,-1,5,600,0,0,0,0,0,0,0,0,0,0,1

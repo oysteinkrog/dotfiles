@@ -1,0 +1,13 @@
+[Unit]
+Description=JSM skill auto-update
+Documentation=https://jeffreys-skills.md/docs/cli/auto-update
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/jsm auto-update run
+Environment=JSM_AUTO_UPDATE_RUN=1
+Environment=JSM_AUTO_UPDATE_JITTER_APPLIED=1
+SuccessExitStatus=0 1
+TimeoutStartSec=600
+Nice=10
+IOSchedulingClass=idle

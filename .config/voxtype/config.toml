@@ -1,0 +1,125 @@
+# Voxtype dictation. Tap Right Ctrl to start, speak, tap Right Ctrl again to stop.
+# Full option list: https://github.com/peteonrails/voxtype/blob/main/docs/CONFIGURATION.md
+# Setup notes: ~/projects/life/docs/computers/voice-typing.md
+
+engine = "cohere"
+state_file = "auto"
+
+# Patched build (localbuild recipe voxtype): the model runs in a worker process
+# that exits after each recording, so the daemon stays at about 25 MB.
+engine_isolation = true
+# Live text while you speak (Parakeet streaming on the CPU), shown in the overlay.
+# The final text comes from Cohere, loaded in the background meanwhile.
+live_preview_model = "parakeet-unified-en-0.6b-int8"
+# Type the live words into the focused app too, like Claude Code's /voice. On stop,
+# Cohere's text replaces them. Needs toggle mode: letters typed while Ctrl is held
+# would become shortcuts.
+live_typing = false
+# Keep a worker with the preview model loaded for 5 minutes after each recording,
+# so the next one starts typing about 1.6 s sooner. Costs about 1 GB RAM (no VRAM)
+# during those 5 minutes only. 0 = load fresh every time.
+live_preview_warm_secs = 300
+# No early release under memory pressure: dictation has priority over builds.
+# Releasing at "pause" made the office PC reload the model for every dictation
+# (5 to 28 s under load, 2026-10-26), because it sat at "pause" for hours.
+# To bring it back:
+# live_preview_warm_release_command = "grep -q 'level=pause' ~/.local/state/pressure/level"
+# Keep every dictation (WAV + JSON with the texts) for review and later
+# fine-tuning on Oystein's voice. About 115 MB per hour of speech.
+live_preview_corpus_dir = "~/.local/share/voxtype/corpus"
+# Final text from Cohere on the GPU ("engine"), or the preview model's own
+# text on the CPU only ("preview": one model, no VRAM, about 1 GB less RAM).
+# "preview" since 2026-10-25: memory is the main criterion. Measured with 20
+# CPU workers running: 1.4 GB RAM per recording (GPU final: 3.0 GB + 2.4 GiB
+# VRAM), text 0.3 s after stop. Back to Cohere: set "engine".
+live_preview_final = "preview"
+# Load Cohere only with at least 2.6 GiB VRAM free (its 2.4 GiB peak plus
+# margin); otherwise paste the preview text and say so in the popup.
+live_preview_min_free_vram_mib = 2662
+
+[hotkey]
+key = "RIGHTCTRL"
+modifiers = []
+mode = "toggle"
+# Double tap Right Alt (AltGr) to discard the recording: nothing is pasted.
+# A single Esc used to do this, but Esc also reaches the app, so pressing it
+# in Claude Code or an editor while talking would throw the dictation away.
+double_tap_cancel_key = "RIGHTALT"
+# Double tap Right Ctrl to start and to stop (patched build). Right Ctrl
+# stays free for shortcuts: a tap only counts if no other key is pressed
+# while it is down, and each tap and the gap between them are under 300 ms.
+double_tap = true
+double_tap_ms = 300
+# Double tap Right Shift also starts and stops. Stopping with it pastes
+# without the automatic Enter (voxtype-auto-enter checks hotkey-last).
+double_tap_alt_key = "RIGHTSHIFT"
+
+[audio]
+device = "default"
+sample_rate = 16000
+max_duration_secs = 300
+
+[audio.feedback]
+enabled = true
+volume = 0.5
+
+# Cohere Transcribe 2B, 4-bit weights: about 2.2 GiB VRAM while a recording runs.
+# on_demand_loading must stay false for the live preview: the daemon then holds
+# only the small worker launcher, and the worker loads the model per recording.
+[cohere]
+model = "cohere-transcribe-q4f16"
+language = "en"
+on_demand_loading = false
+
+# Fast alternative: about 0.4 GiB VRAM, roughly 3x faster.
+# Switch with: voxtype record start --model parakeet-tdt-0.6b-v3-int8
+[parakeet]
+model = "parakeet-tdt-0.6b-v3-int8"
+on_demand_loading = true
+
+[whisper]
+model = "base.en"
+language = "en"
+on_demand_loading = true
+
+[output]
+# Paste the final text in one keystroke instead of typing it letter by letter.
+# Shift+Insert pastes the clipboard in GUI apps and the primary selection in
+# terminals (WezTerm/FrankenTerm, Konsole); paste_primary fills both.
+# The keystroke goes through dotoold (patched build).
+mode = "paste"
+paste_keys = "shift+insert"
+paste_primary = true
+restore_clipboard = true
+# After each paste, press Enter if the focused app is listed in
+# ~/.config/voxtype/auto-enter-apps (FrankenTerm, so Claude Code sends it).
+post_output_command = "$HOME/bin/voxtype-auto-enter"
+fallback_to_clipboard = true
+type_delay_ms = 0
+
+[output.notification]
+on_recording_start = false
+on_recording_stop = false
+on_transcription = false
+
+[osd]
+frontend = "gtk4"
+# Swiss look (patched build): time and word count, hairline waveform, large
+# transcript, status line, in the KDE Plasma colors and fonts.
+theme = "swiss"
+style = "default"
+layout = "compact"
+# Popup near the middle of the screen (top edge at 45% of the height),
+# 50% wider than the 400 px default, transcript text 17 pt.
+width_px = 600
+top_margin = 0.45
+preview_font_pt = 17.0
+# Solid background: the see-through panel was hard to read.
+opacity = 1.0
+
+[text]
+# Set explicitly: voxtype's own default is on, but say so.
+filter_filler_words = true
+# Names and project words, kept in the private life repo (this repo is public).
+# Built by ~/projects/life/setup/voxtype/glossary.py; a missing file is skipped.
+replacements_file = "~/projects/life/setup/voxtype/words.toml"

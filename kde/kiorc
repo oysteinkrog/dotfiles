@@ -1,0 +1,3 @@
+# Delete without asking
+[Confirmations]
+ConfirmDelete=false

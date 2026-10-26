@@ -4,9 +4,9 @@ DOTFILES="${DOTFILES:-$HOME/.dotfiles}"
 SETUP="$DOTFILES/setup"
 
 # Machine profile: <DOTFILES_HOSTS>/<hostname>/host.sh. The profiles live in a private
-# repo, cloned to ~/work/life, because they name disks, networks and devices.
+# repo, cloned to ~/projects/life, because they name disks, networks and devices.
 # DOTFILES_HOST=<name> picks another profile, DOTFILES_HOSTS=<dir> another folder.
-HOSTS_ROOT="${DOTFILES_HOSTS:-$HOME/work/life/setup/machines}"
+HOSTS_ROOT="${DOTFILES_HOSTS:-$HOME/projects/life/setup/machines}"
 HOST_NAME="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
 HOST_DIR="$HOSTS_ROOT/$HOST_NAME"
 
@@ -15,10 +15,12 @@ HOST_PACKAGES=()          # extra pacman packages for this machine
 HOST_AUR_PACKAGES=()      # extra AUR packages for this machine
 HOST_PIPEWIRE_CONFS=()    # files in <profile>/pipewire/ to link into filter-chain.conf.d
 HOST_UFW_LAN=""           # LAN subnet allowed to reach Sunshine and RDP, e.g. 192.168.1.0/24
-HOST_KDE_SCALE=""         # kwinrc [Xwayland] Scale, e.g. 1.1
 HOST_KRDP_MONITOR=""      # monitor index KRDP streams, for multi-monitor hosts, e.g. 1
 HOST_EDID_ADD_MODE=""     # connector_sizes added to that monitor's EDID at boot, e.g. DP-2_2560x1440_1440x900
 HOST_WINDOW_LAYOUT=""     # pin-to-monitor KWin script layout (JSON), see the office profile
+HOST_FRANKENTERM_BADGE=none  # badge on the main Frankenterm icon: house, building, a letter or none
+HOST_FRANKENTERM_REMOTES=()  # other muxes to open over ssh, as <ssh-host>:<badge>, e.g. work:building
+HOST_USER_UNITS=()        # systemd user units only this machine enables (70-services.sh)
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)
 
 if [ -f "$HOST_DIR/host.sh" ]; then

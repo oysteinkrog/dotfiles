@@ -16,7 +16,7 @@ who it matters for: Initial Force (Swing Catalyst), his own setup and repos, or 
 |---|---|
 | `ft-sync.timer` | Syncs bookmarks from X into `~/.ft-bookmarks/` once an hour. |
 | `ft-review-queue` | Lists bookmarks not yet reviewed and marks them done. State: `~/.local/state/ft-review/reviewed.txt`. |
-| `~/work/life/vault/060-knowledge/bookmark-reviews/YYYY-MM-DD.md` | One review file per day. Append, never rewrite earlier entries. |
+| `~/projects/life/vault/060-knowledge/bookmark-reviews/YYYY-MM-DD.md` | One review file per day. Append, never rewrite earlier entries. |
 
 ## One run
 
@@ -41,7 +41,7 @@ who it matters for: Initial Force (Swing Catalyst), his own setup and repos, or 
        `gh repo list InitialForce`. Never read or name `ifboard` in the review.
      - **Oystein's setup.** `~/.dotfiles` (Claude Code skills, hooks, agents, KDE and
        CachyOS setup), `~/src/localbuilds` (patched Wine, KWin, FrankenTerm, cass),
-       `~/work/grove`, `~/work/tasklens`, `~/work/aiolos`, agent tooling (beads,
+       `~/projects/grove`, `~/projects/tasklens`, `~/projects/aiolos`, agent tooling (beads,
        agent-mail, cass, heavy-build).
      - Check whether something similar is already in use, so the review can say
        "we already have X, this adds Y" or "this replaces X".

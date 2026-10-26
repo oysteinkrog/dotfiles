@@ -1,0 +1,91 @@
+#!/bin/bash
+# Make the Frankenterm menu entries and taskbar icons for this machine.
+# Usage: frankenterm-launchers [--local <badge>] [<ssh-host>:<badge> ...]
+#   --local    badge on the main Frankenterm icon (icon name ...frankenterm.local)
+#   ssh-host   one "Frankenterm <Host>" entry per remote mux, run by frankenterm-remote
+#   badge      house, building, one letter, or none
+# The icon is the Frankenterm logo with a round badge in the bottom-right corner,
+# the same size as chrome-profile-icon's. The setup desktop step runs this with
+# HOST_FRANKENTERM_BADGE and HOST_FRANKENTERM_REMOTES from the machine profile.
+# Entries it made before for hosts no longer listed are removed.
+set -eu
+apps="$HOME/.local/share/applications"
+icons="$HOME/.local/share/icons/hicolor/256x256/apps"
+logo="$HOME/.dotfiles/.local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg"
+tmp=$(mktemp -d)
+trap 'rm -r "$tmp"' EXIT
+mkdir -p "$apps" "$icons"
+magick -background none -density 384 "$logo" -resize 256x256 "$tmp/logo.png"
+
+# draw <badge> <out.png>
+draw() {
+  local color glyph
+  case "$1" in
+    none|'') cp "$tmp/logo.png" "$2"; return ;;
+    house)
+      color='#27AE60'
+      glyph='<path d="M60 26 L94 56 H84 V92 H68 V72 H52 V92 H36 V56 H26 Z" fill="white"/>' ;;
+    building)
+      color='#2980B9'
+      glyph='<path d="M38 28 H82 V94 H66 V80 H54 V94 H38 Z" fill="white"/>
+        <g fill="#2980B9">
+          <rect x="45" y="36" width="10" height="9"/><rect x="65" y="36" width="10" height="9"/>
+          <rect x="45" y="51" width="10" height="9"/><rect x="65" y="51" width="10" height="9"/>
+          <rect x="45" y="66" width="10" height="9"/><rect x="65" y="66" width="10" height="9"/>
+        </g>' ;;
+    ?)
+      color='#8E44AD'
+      glyph='<text x="60" y="82" font-family="DejaVu Sans" font-weight="bold" font-size="64" fill="white" text-anchor="middle">'"$1"'</text>' ;;
+    *) echo "frankenterm-launchers: unknown badge '$1'" >&2; exit 2 ;;
+  esac
+  # 112 px coloured disc with a white glyph, on a 120 px white ring
+  cat >"$tmp/badge.svg" <<EOF
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
+  <circle cx="60" cy="60" r="60" fill="white"/>
+  <circle cx="60" cy="60" r="56" fill="$color"/>
+  $glyph
+</svg>
+EOF
+  magick -background none "$tmp/badge.svg" "$tmp/badge.png"
+  # replace, never write through: an older install linked these into the dotfiles
+  rm -f "$2"
+  magick "$tmp/logo.png" "$tmp/badge.png" -gravity SouthEast \
+    -geometry +0+0 -compose Over -composite "$2"
+}
+
+local_badge=none
+if [ "${1:-}" = --local ]; then local_badge=$2; shift 2; fi
+draw "$local_badge" "$icons/com.dicklesworthstone.frankenterm.local.png"
+
+keep=()
+for spec in "$@"; do
+  host=${spec%%:*}; badge=${spec#*:}
+  [ "$badge" = "$spec" ] && badge=none
+  id="com.dicklesworthstone.frankenterm.$host"
+  keep+=("$id.desktop")
+  draw "$badge" "$icons/$id.png"
+  rm -f "$apps/$id.desktop"
+  cat >"$apps/$id.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Frankenterm ${host^}
+GenericName=Terminal
+Comment=Terminal attached to the Frankenterm session server on $host, over ssh
+Exec=$HOME/.local/bin/frankenterm-remote $host
+Icon=$id
+Categories=System;TerminalEmulator;
+Terminal=false
+StartupWMClass=$id
+X-Frankenterm-Launchers=true
+EOF
+done
+
+# drop entries this made earlier for hosts that are no longer listed
+for f in "$apps"/com.dicklesworthstone.frankenterm.*.desktop; do
+  [ -f "$f" ] && grep -q '^X-Frankenterm-Launchers=true' "$f" || continue
+  name=${f##*/}
+  case " ${keep[*]:-} " in *" $name "*) continue ;; esac
+  rm -f "$f" "$icons/${name%.desktop}.png"
+done
+
+command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true

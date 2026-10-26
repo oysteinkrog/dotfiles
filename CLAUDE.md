@@ -6,7 +6,7 @@ including multi-agent orchestration, secrets and the writing contract.
 ## Grove worktree manager
 
 `grove` manages git worktrees for a mono-repo workflow, each worktree a "project" with a
-short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `~/work/grove`.
+short tag. This is the rust build: binary `~/.cargo/bin/grove`, source `~/projects/grove`.
 Never read worktree lists from the stale files in `~/.config/grove/`; `grove-workflow`
 names the live config and registry paths.
 
@@ -63,11 +63,13 @@ The full setup and recovery runbook for a new machine is
 
 This machine runs native CachyOS. `~/.dotfiles` is a normal repo and `install.sh` symlinks it into
 `~`. The setup and restore system is `setup/bootstrap.sh`. The guide and the machine profiles are
-in the private Life repo (`~/work/life`): `docs/computers/linux-setup.md` and
+in the private Life repo (`~/projects/life`): `docs/computers/linux-setup.md` and
 `setup/machines/<hostname>/`. This dotfiles repo is public, so never put hostnames of other
 machines, IP addresses, disk UUIDs, account names or internal repo names here.
 
 When you install a package, change a KDE setting or add a config file that both desktops should
-share, record it: the package lists in `setup/packages/`, the KDE keys in
-`setup/steps/60-desktop.sh`, new links in `install.sh`. Machine-only settings go in the Life
-machine profile, and new procedures in the Life docs.
+share, record it: the package lists in `setup/packages/`, the KDE keys in `kde/` (run
+`kde-config diff`, then `kde-config capture <rcfile>`; see `kde/README.md`), new links in
+`install.sh`. Machine-only settings go in the Life machine profile (KDE keys in its `kde/`
+folder, with `kde-config capture --host`), and new procedures in the Life docs. Never symlink a
+KDE rc file: KDE replaces it on save and the link silently becomes a copy.

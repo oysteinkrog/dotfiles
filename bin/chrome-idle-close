@@ -6,8 +6,9 @@ closed only when both hold:
   1. No window of that profile has had focus for IDLE_MIN minutes (15).
   2. Memory is tight: swap used is over SWAP_PCT (60%) of SwapTotal, or
      one heavy-build job has waited for memory, swap or interactive memory
-     pressure for HB_MIN_WAIT seconds (600) and still waits (a wait line in
-     the last HB_WINDOW seconds, 120, and no start line since).
+     pressure for HB_MIN_WAIT seconds (600) and still waits (its job file is
+     still in the heavy-build queue dir and no start line came after the
+     first wait).
      Or Oystein is away: presence-detect has said "away" for AWAY_MIN
      minutes (chrome_away_min in ~/.config/presence.conf, default 60, 0
      turns it off). Remote does not count. Approved 2026-10-26.
@@ -23,7 +24,10 @@ normal logout sends. Chrome then saves its session and exits cleanly. The tool
 never sends SIGKILL, never stops the systemd unit (that would SIGTERM every
 renderer at once), and never starts Chrome again. A profile whose "On startup"
 setting is not "Continue where you left off" is never closed, because a clean
-exit would then lose its tabs.
+exit would then lose its tabs. The managed policy RestoreOnStartup in
+/etc/opt/chrome/policies/managed/*.json overrides that setting. A profile that
+is playing audio, recording from the microphone or holding a camera open is
+never closed either, and neither is any profile when pactl fails.
 
 Mode: dry-run unless set to live. Order: --dry-run or --live flag, then
 CHROME_IDLE_MODE, then the file ~/.config/chrome-idle/mode (one word: live or
@@ -54,7 +58,7 @@ IDLE_MIN = float(os.environ.get("CHROME_IDLE_MIN", "15"))
 SWAP_PCT = float(os.environ.get("CHROME_IDLE_SWAP_PCT", "60"))
 HB_WINDOW = float(os.environ.get("CHROME_IDLE_HB_WINDOW", "120"))
 HB_MIN_WAIT = float(os.environ.get("CHROME_IDLE_HB_MIN_WAIT", "600"))
-HB_LOOKBACK = HB_MIN_WAIT + 600
+HB_TAIL_BYTES = 16 * 1024 * 1024
 PRESENCE_STATE = Path(
     os.environ.get("CHROME_IDLE_PRESENCE_STATE", HOME / ".local/state/presence/state")
 )
@@ -69,13 +73,18 @@ STATE_DIR = Path(
 MODE_FILE = Path(
     os.environ.get("CHROME_IDLE_MODE_FILE", HOME / ".config/chrome-idle/mode")
 )
-HB_LOG = Path(
-    os.environ.get("CHROME_IDLE_HB_LOG", HOME / ".local/state/heavy-build/live.log")
-)
+# heavy-build writes live.log in live mode and shadow.log in shadow mode.
+HB_LOG_DIR = HOME / ".local/state/heavy-build"
+HB_LOG_ENV = os.environ.get("CHROME_IDLE_HB_LOG")
+# One file per waiting or running job, named by job id.
+HB_QUEUE_ENV = os.environ.get("CHROME_IDLE_HB_QUEUE")
 PROC = Path(os.environ.get("CHROME_IDLE_PROC", "/proc"))
 KWIN_PLUGIN = "chrome-idle-focus"
 KWIN_SCRIPT = Path(os.path.realpath(__file__)).with_name("chrome-idle-focus.kwin.js")
 LOG_MAX = 5 * 1024 * 1024
+POLICY_DIR = Path(
+    os.environ.get("CHROME_IDLE_POLICY_DIR", "/etc/opt/chrome/policies/managed")
+)
 
 # Data folder, profile folder and window class per profile. These match
 # ~/.local/bin/chrome-personal and ~/.local/bin/chrome-work.
@@ -94,6 +103,7 @@ PROFILES = {
 DEFAULT_DATA_DIR = str(HOME / ".config/google-chrome")
 
 HB_LINE = re.compile(r'^(\S+) mode=\S+ job=(\S+) decision=(\w+) reason="([a-z-]+)')
+HB_ACTUAL = re.compile(r" actual=(\w+)")
 FOCUS_LINE = re.compile(r"chrome-idle-focus pid=(-?\d+) class=(\S*)")
 
 
@@ -197,8 +207,36 @@ def main_pids() -> dict[str, int]:
     return found
 
 
+def policy_restore() -> int | None:
+    """RestoreOnStartup from Chrome's managed policy files, or None.
+
+    Files are read in name order and a later file wins, as Chrome does not
+    promise an order and two files should not set the same policy anyway.
+    """
+    value = None
+    try:
+        files = sorted(POLICY_DIR.glob("*.json"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "RestoreOnStartup" in data:
+            value = data["RestoreOnStartup"]
+    return value
+
+
 def restore_setting(name: str) -> int | None:
-    """Chrome's session.restore_on_startup (1 = continue where you left off)."""
+    """The restore-on-startup value Chrome uses (1 = continue where you left off).
+
+    A managed policy overrides the profile's own session.restore_on_startup,
+    so the policy value wins when one is set.
+    """
+    policy = policy_restore()
+    if policy is not None:
+        return policy
     p = PROFILES[name]
     prefs = Path(p["data_dir"]) / p["profile_dir"] / "Preferences"
     try:
@@ -206,6 +244,89 @@ def restore_setting(name: str) -> int | None:
     except (OSError, ValueError):
         return None
     return value.get("restore_on_startup")
+
+
+def parent_pid(pid: int) -> int:
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return 0
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def profile_of_stream_pid(pid: int) -> str | None:
+    """Profile of an audio stream's process. Chrome plays and records from a
+    helper process, so walk up the parents until one maps to a profile."""
+    for _ in range(8):
+        if pid <= 1:
+            return None
+        prof = profile_of_pid(pid)
+        if prof:
+            return prof
+        pid = parent_pid(pid)
+    return None
+
+
+def media_use() -> dict[str, list[str]] | None:
+    """Profiles with an active audio stream: {profile: ["audio", "mic/camera"]}.
+
+    Reads PipeWire's Pulse streams with pactl. Paused (corked) streams do not
+    count. Returns None when pactl fails, so the caller keeps every profile.
+    A camera is found by an open /dev/video* file in one of the profile's
+    processes.
+    """
+    found: dict[str, list[str]] = {}
+    for kind, label in (("sink-inputs", "audio"), ("source-outputs", "mic/camera")):
+        try:
+            r = subprocess.run(
+                ["pactl", "-f", "json", "list", kind],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            streams = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            streams = None
+        if not isinstance(streams, list):
+            return None
+        for s in streams:
+            if s.get("corked"):
+                continue
+            props = s.get("properties") or {}
+            try:
+                pid = int(props.get("application.process.id", 0))
+            except (TypeError, ValueError):
+                continue
+            prof = profile_of_stream_pid(pid)
+            if prof and label not in found.setdefault(prof, []):
+                found[prof].append(label)
+    for prof in camera_users():
+        if "camera" not in found.setdefault(prof, []):
+            found[prof].append("camera")
+    return {k: v for k, v in found.items() if v}
+
+
+def camera_users() -> set[str]:
+    """Profiles with a process that holds a /dev/video* device open."""
+    users: set[str] = set()
+    for entry in PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fds = list((entry / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target.startswith("/dev/video"):
+                prof = profile_of_stream_pid(int(entry.name))
+                if prof:
+                    users.add(prof)
+                break
+    return users
 
 
 # ---------------------------------------------------------------- memory
@@ -225,27 +346,50 @@ def swap_pct(meminfo: str | None = None) -> float:
     return 100.0 * (total - vals.get("SwapFree", 0)) / total
 
 
-def read_hb_tail(now: float) -> str:
-    """The end of heavy-build's live.log, far enough back to cover the last
-    HB_LOOKBACK seconds (or the whole file)."""
+def hb_log_path() -> Path:
+    """The heavy-build log to read: CHROME_IDLE_HB_LOG, else the newest of
+    live.log and shadow.log (the mode decides which one heavy-build writes)."""
+    if HB_LOG_ENV:
+        return Path(HB_LOG_ENV)
+    found = []
+    for name in ("live.log", "shadow.log"):
+        p = HB_LOG_DIR / name
+        try:
+            found.append((p.stat().st_mtime, p))
+        except OSError:
+            pass
+    return max(found)[1] if found else HB_LOG_DIR / "live.log"
+
+
+def hb_queue_dir() -> Path:
+    if HB_QUEUE_ENV:
+        return Path(HB_QUEUE_ENV)
+    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(run) / "heavy-build.queue"
+
+
+def hb_queued_jobs() -> set[str] | None:
+    """Job ids still in heavy-build's queue dir, or None if it cannot be read."""
     try:
-        with HB_LOG.open("rb") as f:
+        return {p.name for p in hb_queue_dir().iterdir()}
+    except OSError:
+        return None
+
+
+def read_hb_tail() -> str:
+    """The last HB_TAIL_BYTES of the heavy-build log. A job logs one wait line
+    per decision change, so a long wait may be a single old line: read by
+    bytes, not by age."""
+    try:
+        with hb_log_path().open("rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
-            chunk = 512 * 1024
-            while True:
-                f.seek(max(0, size - chunk))
-                data = f.read()
-                first = HB_LINE.search(data.decode(errors="replace").split("\n", 1)[-1])
-                if size <= chunk or chunk >= 64 * 1024 * 1024:
-                    break
-                if first and now - parse_ts(first.group(1)) > HB_LOOKBACK:
-                    break
-                chunk *= 2
+            f.seek(max(0, size - HB_TAIL_BYTES))
+            data = f.read()
     except OSError:
         return ""
     text = data.decode(errors="replace")
-    return text if size <= chunk else text.split("\n", 1)[-1]
+    return text if size <= HB_TAIL_BYTES else text.split("\n", 1)[-1]
 
 
 def parse_ts(stamp: str) -> float:
@@ -255,16 +399,26 @@ def parse_ts(stamp: str) -> float:
         return 0.0
 
 
-def hb_memory_waits(now: float, text: str | None = None) -> int:
+def hb_memory_waits(
+    now: float, text: str | None = None, queued: set[str] | None = None
+) -> int:
     """Number of heavy-build jobs stuck waiting for memory.
 
     A job counts when its first wait line with reason memory, swap or
-    interactive is at least HB_MIN_WAIT seconds old, its latest such line is
-    within the last HB_WINDOW seconds, and it has no start line since that
-    first wait. Short waits happen all the time and do not count.
+    interactive is at least HB_MIN_WAIT seconds old, it has no start line since
+    that first wait, and it is still in the queue dir. heavy-build logs a wait
+    line only when a job's decision or reason changes, so a job that still
+    waits may have no recent line. If the queue dir cannot be read, fall back
+    to a memory wait line in the last HB_WINDOW seconds. Short waits happen all
+    the time and do not count.
+
+    Shadow lines carry actual=<what really happened> next to the decision
+    heavy-build would take, so actual wins when present.
     """
     if text is None:
-        text = read_hb_tail(now)
+        text = read_hb_tail()
+    if queued is None:
+        queued = hb_queued_jobs()
     first: dict[str, float] = {}
     latest: dict[str, float] = {}
     started: set[str] = set()
@@ -274,6 +428,9 @@ def hb_memory_waits(now: float, text: str | None = None) -> int:
             continue
         ts = parse_ts(m.group(1))
         job, decision, reason = m.group(2), m.group(3), m.group(4)
+        a = HB_ACTUAL.search(line)
+        if a:
+            decision = a.group(1)
         if decision == "start":
             if job in first:
                 started.add(job)
@@ -285,7 +442,7 @@ def hb_memory_waits(now: float, text: str | None = None) -> int:
         for job, t0 in first.items()
         if job not in started
         and now - t0 >= HB_MIN_WAIT
-        and now - latest[job] <= HB_WINDOW
+        and (job in queued if queued is not None else now - latest[job] <= HB_WINDOW)
     )
 
 
@@ -490,7 +647,10 @@ def decide(
     restore: int | None,
     away: float = 0.0,
     away_limit: float = 0.0,
+    media: list[str] | None = (),
 ) -> tuple[bool, str]:
+    """media: what the profile is using (audio, mic/camera, camera), or None
+    when pactl failed and that is unknown."""
     if idle_min < IDLE_MIN:
         return False, f"idle {idle_min:.1f} min, under {IDLE_MIN:.0f}"
     is_away = away_limit > 0 and away >= away_limit
@@ -502,6 +662,10 @@ def decide(
             f"{why}, but restore_on_startup={restore} "
             "(not 'continue where you left off'), so tabs would be lost"
         )
+    if media is None:
+        return False, f"{why}, but pactl failed, so audio use is unknown"
+    if media:
+        return False, f"{why}, but in use: {', '.join(media)}"
     return True, why
 
 
@@ -547,6 +711,7 @@ def run(mode: str, status: bool) -> int:
         )
         pids = main_pids()
         active = state.get("active") or {}
+        media = media_use() if pids else {}
 
         if status:
             print(
@@ -577,12 +742,15 @@ def run(mode: str, status: bool) -> int:
             last = max(state.get("last_focus", {}).get(name, 0.0), base)
             idle = max(0.0, (now - last) / 60)
             restore = restore_setting(name)
-            close, why = decide(idle, tight, restore, away, away_limit)
+            use = None if media is None else media.get(name, [])
+            close, why = decide(idle, tight, restore, away, away_limit, use)
             if status:
                 verdict = "would close" if close else "keep"
                 print(
                     f"{name:9} pid={pid} idle={idle:.1f} min "
-                    f"restore_on_startup={restore} -> {verdict}: {why}"
+                    f"restore_on_startup={restore} "
+                    f"media={'unknown' if use is None else ','.join(use) or 'none'}"
+                    f" -> {verdict}: {why}"
                 )
                 continue
             line = f"profile={name} pid={pid} idle_min={idle:.1f} {mem_note}"
