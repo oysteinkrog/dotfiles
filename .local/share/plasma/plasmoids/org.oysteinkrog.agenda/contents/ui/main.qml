@@ -27,9 +27,10 @@ PlasmoidItem {
     // Per day (keyed by the day's start): event count, booked minutes and busy segments.
     property var days: ({})
 
-    // Text is a little larger than the Plasma default, so the panel reads from a metre away.
-    readonly property real textSize: Kirigami.Theme.defaultFont.pointSize * 1.15
-    readonly property real smallSize: Kirigami.Theme.defaultFont.pointSize * 0.95
+    // Type scale, shared with the Build Queue panel (docs/desktop-panels-style.md): a little
+    // larger than the Plasma font, so the panel reads from a metre away.
+    readonly property real textSize: Kirigami.Theme.defaultFont.pointSize * 1.08
+    readonly property real smallSize: Kirigami.Theme.smallFont.pointSize
     // The busy strip covers the working day.
     readonly property int stripFrom: 8
     readonly property int stripTo: 18
@@ -98,6 +99,12 @@ PlasmoidItem {
     // For the top card: "in 25 min" today, otherwise the day ("Tomorrow", "Wednesday").
     function whenText(ms) {
         return dayStart(ms) === dayStart(now) ? untilText(ms) : dayLabel(ms);
+    }
+
+    // "Updated 1 min ago", in the same form as the Build Queue panel.
+    readonly property string updatedText: {
+        const min = Math.max(0, Math.round((now - agenda.updated) / 60000));
+        return min < 1 ? i18n("Updated just now") : i18n("Updated %1 ago", durationText(min));
     }
 
     function untilText(ms) {
@@ -237,8 +244,16 @@ PlasmoidItem {
     // lighter tint of it.
     readonly property color accent: styled ? style.accent : Kirigami.Theme.highlightColor
     readonly property color accentText: Kirigami.ColorUtils.tintWithAlpha(accent, "white", 0.35)
-    readonly property color busyColor: "#42d692"
-    readonly property color homeColor: "#4a8fe7"
+    // Data colours are the Plasma ones, a little less saturated so they sit calmly on the
+    // dark cards (the same rule as the Build Queue panel).
+    function muted(c) {
+        return Qt.hsla(c.hslHue, c.hslSaturation * 0.78, Math.min(c.hslLightness, 0.6), 1);
+    }
+    function tint(amount) {
+        return Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, amount);
+    }
+    readonly property color busyColor: muted(Kirigami.Theme.positiveTextColor)
+    readonly property color homeColor: muted(Kirigami.Theme.linkColor)
 
     fullRepresentation: Rectangle {
         Layout.minimumWidth: Kirigami.Units.gridUnit * 18
@@ -257,22 +272,30 @@ PlasmoidItem {
         Kirigami.Theme.highlightedTextColor: root.styled ? root.style.accentText : undefined
         Kirigami.Theme.hoverColor: root.styled ? root.style.accent : undefined
         Kirigami.Theme.focusColor: root.styled ? root.style.accent : undefined
-        color: Kirigami.Theme.backgroundColor
+        // The window sits a step darker than the cards, so the cards lift off it.
+        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: Kirigami.Units.largeSpacing
+            anchors.margins: Kirigami.Units.largeSpacing * 1.25
             spacing: Kirigami.Units.largeSpacing
 
-            // Header: today's date and week, and when the data was last read.
+            // Header: title, today's date and week, and when the data was last read.
             RowLayout {
                 Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.smallSpacing * 1.5
 
                 PlasmaComponents.Label {
+                    text: i18n("Agenda")
+                    font.pointSize: root.textSize * 1.4
+                    font.weight: Font.Bold
+                }
+                PlasmaComponents.Label {
                     Layout.fillWidth: true
-                    text: Qt.formatDate(new Date(root.now), "dddd d MMMM") + "  ·  " + i18n("week %1", weekNumber(new Date(root.now)))
-                    opacity: 0.7
+                    Layout.alignment: Qt.AlignBaseline
+                    text: Qt.formatDate(new Date(root.now), "ddd d MMM") + "  ·  " + i18n("week %1", weekNumber(new Date(root.now)))
+                    font.pointSize: root.smallSize
+                    opacity: 0.62
 
                     function weekNumber(d) {
                         const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -292,9 +315,16 @@ PlasmoidItem {
                 }
                 PlasmaComponents.Label {
                     visible: root.agenda.updated > 0
-                    text: i18n("Updated %1", Qt.formatTime(new Date(root.agenda.updated), "HH:mm"))
+                    text: root.updatedText
                     font.pointSize: root.smallSize
-                    opacity: 0.5
+                    opacity: 0.62
+                }
+                Rectangle {
+                    visible: root.agenda.updated > 0
+                    implicitWidth: Kirigami.Units.smallSpacing * 2
+                    implicitHeight: implicitWidth
+                    radius: width / 2
+                    color: root.agenda.error !== "" || root.now - root.agenda.updated > 600000 ? Kirigami.Theme.neutralTextColor : root.busyColor
                 }
                 PlasmaComponents.ToolButton {
                     icon.name: "view-refresh"
@@ -318,11 +348,22 @@ PlasmoidItem {
                 accent: root.accent
                 accentText: root.accentText
                 textSize: root.textSize
+                cardColor: root.tint(0.045)
+                borderColor: root.tint(0.11)
             }
 
-            PlasmaComponents.ScrollView {
+            Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                radius: 6
+                color: root.tint(0.045)
+                border.width: 1
+                border.color: root.tint(0.11)
+                clip: true
+
+            PlasmaComponents.ScrollView {
+                anchors.fill: parent
+                anchors.margins: 1
 
                 ListView {
                     id: list
@@ -344,6 +385,8 @@ PlasmoidItem {
                         accentText: root.accentText
                         textSize: root.textSize
                         smallSize: root.smallSize
+                        background: root.tint(0.07)
+                        line: root.tint(0.11)
                     }
 
                     delegate: EventDelegate {
@@ -370,14 +413,22 @@ PlasmoidItem {
                     }
                 }
             }
-
-            Kirigami.Separator {
-                Layout.fillWidth: true
             }
 
-            // Bottom: who is away today, and open Google Tasks beside it.
-            RowLayout {
+            // Bottom: who is away today, and open Google Tasks beside it, on one card.
+            Rectangle {
                 Layout.fillWidth: true
+                implicitHeight: bottom.implicitHeight + Kirigami.Units.smallSpacing * 5
+                visible: awayList.visible || tasks.visible
+                radius: 6
+                color: root.tint(0.045)
+                border.width: 1
+                border.color: root.tint(0.11)
+
+            RowLayout {
+                id: bottom
+                anchors.fill: parent
+                anchors.margins: Kirigami.Units.smallSpacing * 2.5
                 spacing: Kirigami.Units.largeSpacing * 2
 
                 // Entries that have ended are left out; Slack statuses without an end time
@@ -392,10 +443,11 @@ PlasmoidItem {
 
                     RowLayout {
                         spacing: Kirigami.Units.smallSpacing
-                        PlasmaExtras.Heading {
-                            level: 4
+                        PlasmaComponents.Label {
                             text: i18n("Away today")
                             color: root.accentText
+                            font.pointSize: root.textSize
+                            font.weight: Font.DemiBold
                         }
                         PlasmaComponents.Label {
                             text: i18np("1 person", "%1 people", awayList.people.length)
@@ -428,9 +480,11 @@ PlasmoidItem {
                     }
                 }
 
-                Kirigami.Separator {
+                Rectangle {
                     Layout.fillHeight: true
+                    implicitWidth: 1
                     visible: awayList.visible && tasks.visible
+                    color: root.tint(0.11)
                 }
 
                 // Open Google Tasks, overdue first.
@@ -442,10 +496,11 @@ PlasmoidItem {
                     visible: root.agenda.tasks.length > 0
                     spacing: Kirigami.Units.smallSpacing
 
-                    PlasmaExtras.Heading {
-                        level: 4
+                    PlasmaComponents.Label {
                         text: i18np("1 open task", "%1 open tasks", root.agenda.tasks.length)
                         color: root.accentText
+                        font.pointSize: root.textSize
+                        font.weight: Font.DemiBold
                     }
 
                     Repeater {
@@ -489,6 +544,7 @@ PlasmoidItem {
                         }
                     }
                 }
+            }
             }
         }
     }

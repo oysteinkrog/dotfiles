@@ -17,14 +17,28 @@ Rectangle {
     property color accent
     property color accentText
     property real textSize
+    property color cardColor
+    property color borderColor
 
     readonly property bool hasEvent: event !== null
 
     implicitHeight: content.implicitHeight + Kirigami.Units.largeSpacing * 2
-    radius: Kirigami.Units.cornerRadius
-    color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, accent, area.containsMouse ? 0.22 : 0.15)
+    // The hero card of the shared panel style: a neutral card with a faint accent tint and a
+    // 3 px accent bar on the left.
+    radius: 6
+    color: Kirigami.ColorUtils.tintWithAlpha(cardColor, accent, area.containsMouse ? 0.13 : 0.08)
     border.width: 1
-    border.color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, accent, 0.7)
+    border.color: borderColor
+    clip: true
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.margins: 1
+        width: 3
+        color: card.accent
+    }
 
     MouseArea {
         id: area
@@ -38,6 +52,7 @@ Rectangle {
         id: content
         anchors.fill: parent
         anchors.margins: Kirigami.Units.largeSpacing
+        anchors.leftMargin: Kirigami.Units.largeSpacing + 3
         spacing: Kirigami.Units.largeSpacing * 2
 
         ColumnLayout {

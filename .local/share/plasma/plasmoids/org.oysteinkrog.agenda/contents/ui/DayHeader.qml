@@ -19,9 +19,11 @@ Rectangle {
     property color accentText
     property real textSize
     property real smallSize
+    property color background
+    property color line
 
     implicitHeight: row.implicitHeight + Kirigami.Units.smallSpacing * 2
-    color: Kirigami.Theme.alternateBackgroundColor
+    color: header.background
 
     RowLayout {
         id: row
@@ -32,8 +34,7 @@ Rectangle {
 
         PlasmaComponents.Label {
             text: header.label
-            color: header.accentText
-            font.bold: true
+            font.weight: Font.DemiBold
             font.pointSize: header.textSize
         }
         PlasmaComponents.Label {
