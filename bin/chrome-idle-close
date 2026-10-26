@@ -8,6 +8,9 @@ closed only when both hold:
      one heavy-build job has waited for memory, swap or interactive memory
      pressure for HB_MIN_WAIT seconds (600) and still waits (a wait line in
      the last HB_WINDOW seconds, 120, and no start line since).
+     Or Oystein is away: presence-detect has said "away" for AWAY_MIN
+     minutes (chrome_away_min in ~/.config/presence.conf, default 60, 0
+     turns it off). Remote does not count. Approved 2026-10-26.
 
 Focus: a small KWin script (chrome-idle-focus.kwin.js, next to this file)
 writes a journal line each time the active window changes. Each run reads the
@@ -52,6 +55,13 @@ SWAP_PCT = float(os.environ.get("CHROME_IDLE_SWAP_PCT", "60"))
 HB_WINDOW = float(os.environ.get("CHROME_IDLE_HB_WINDOW", "120"))
 HB_MIN_WAIT = float(os.environ.get("CHROME_IDLE_HB_MIN_WAIT", "600"))
 HB_LOOKBACK = HB_MIN_WAIT + 600
+PRESENCE_STATE = Path(
+    os.environ.get("CHROME_IDLE_PRESENCE_STATE", HOME / ".local/state/presence/state")
+)
+PRESENCE_CONF = Path(
+    os.environ.get("CHROME_IDLE_PRESENCE_CONF", HOME / ".config/presence.conf")
+)
+PRESENCE_FRESH_S = 60  # presence-detect rewrites its state about every 5 s
 CLOSE_WAIT = 60.0
 STATE_DIR = Path(
     os.environ.get("CHROME_IDLE_STATE_DIR", HOME / ".local/state/chrome-idle")
@@ -279,6 +289,34 @@ def hb_memory_waits(now: float, text: str | None = None) -> int:
     )
 
 
+# ---------------------------------------------------------------- presence
+
+
+def away_limit_min() -> float:
+    """chrome_away_min from ~/.config/presence.conf; 60 when unset, 0 means off."""
+    try:
+        for line in PRESENCE_CONF.read_text().splitlines():
+            k, _, v = line.split("#", 1)[0].partition("=")
+            if k.strip() == "chrome_away_min":
+                return max(0.0, float(v.strip()))
+    except (OSError, ValueError):
+        pass
+    return 60.0
+
+
+def away_min(now: float) -> float:
+    """Minutes presence-detect has said away, 0 when not away or its state is stale."""
+    try:
+        rec = json.loads(PRESENCE_STATE.read_text())
+        if rec.get("state") != "away":
+            return 0.0
+        if not 0 <= now - float(rec["updated"]) <= PRESENCE_FRESH_S:
+            return 0.0
+        return max(0.0, (now - float(rec["since"])) / 60)
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
+
+
 # ---------------------------------------------------------------- KWin focus
 
 
@@ -446,17 +484,25 @@ def resolve_mode(flag: str | None) -> str:
 # ---------------------------------------------------------------- decide and close
 
 
-def decide(idle_min: float, tight: bool, restore: int | None) -> tuple[bool, str]:
+def decide(
+    idle_min: float,
+    tight: bool,
+    restore: int | None,
+    away: float = 0.0,
+    away_limit: float = 0.0,
+) -> tuple[bool, str]:
     if idle_min < IDLE_MIN:
         return False, f"idle {idle_min:.1f} min, under {IDLE_MIN:.0f}"
-    if not tight:
+    is_away = away_limit > 0 and away >= away_limit
+    if not tight and not is_away:
         return False, "idle, but memory is not tight"
+    why = "idle and memory tight" if tight else f"idle and away {away:.0f} min"
     if restore != 1:
         return False, (
-            f"idle and memory tight, but restore_on_startup={restore} "
+            f"{why}, but restore_on_startup={restore} "
             "(not 'continue where you left off'), so tabs would be lost"
         )
-    return True, "idle and memory tight"
+    return True, why
 
 
 def close_profile(pid: int) -> str:
@@ -493,8 +539,11 @@ def run(mode: str, status: bool) -> int:
         sw = swap_pct()
         waits = hb_memory_waits(now)
         tight = sw > SWAP_PCT or waits > 0
+        away = away_min(now)
+        away_limit = away_limit_min()
         mem_note = (
             f"swap={sw:.1f}% hb_stuck_mem_jobs={waits} tight={'yes' if tight else 'no'}"
+            f" away_min={away:.0f}"
         )
         pids = main_pids()
         active = state.get("active") or {}
@@ -528,7 +577,7 @@ def run(mode: str, status: bool) -> int:
             last = max(state.get("last_focus", {}).get(name, 0.0), base)
             idle = max(0.0, (now - last) / 60)
             restore = restore_setting(name)
-            close, why = decide(idle, tight, restore)
+            close, why = decide(idle, tight, restore, away, away_limit)
             if status:
                 verdict = "would close" if close else "keep"
                 print(
