@@ -1,6 +1,6 @@
-// Agenda: today and the coming days from Google Calendar, plus open Google Tasks.
-// Data comes from ~/bin/agenda-fetch (gog), run every two minutes. Colours and fonts come
-// from the Plasma style, so the window matches the panels.
+// Agenda: the next meeting, today and the coming days from Google Calendar, who is away
+// today, and open Google Tasks. Data comes from ~/bin/agenda-fetch (gog), run every two
+// minutes. Colours come from the Plasma style, so the window matches the panels.
 // Run as a window with: plasmawindowed org.oysteinkrog.agenda
 
 import QtQuick
@@ -24,6 +24,17 @@ PlasmoidItem {
         })
     property double now: Date.now()
     property bool fetching: false
+    // Per day (keyed by the day's start): event count, booked minutes and busy segments.
+    property var days: ({})
+
+    // Text is a little larger than the Plasma default, so the panel reads from a metre away.
+    readonly property real textSize: Kirigami.Theme.defaultFont.pointSize * 1.15
+    readonly property real smallSize: Kirigami.Theme.defaultFont.pointSize * 0.95
+    // The busy strip covers the working day.
+    readonly property int stripFrom: 8
+    readonly property int stripTo: 18
+    // Absences that end more than this many days from now are shown as long leave.
+    readonly property int longLeaveDays: 30
 
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
@@ -47,7 +58,7 @@ PlasmoidItem {
             return i18n("Today");
         if (days === 1)
             return i18n("Tomorrow");
-        return Qt.formatDate(new Date(start), "dddd d MMMM");
+        return Qt.formatDate(new Date(start), "dddd");
     }
 
     function timeText(e) {
@@ -56,15 +67,22 @@ PlasmoidItem {
         return Qt.formatTime(new Date(e.start), "HH:mm") + "–" + Qt.formatTime(new Date(e.end), "HH:mm");
     }
 
-    // "out until Tue 3 Nov", "home", "out 08:00–12:00", "works 08:00–14:00".
+    function durationText(min) {
+        const h = Math.floor(min / 60), m = min % 60;
+        if (!h)
+            return i18n("%1 min", m);
+        return m ? i18n("%1 h %2 min", h, m) : i18n("%1 h", h);
+    }
+
+    // "until Tue 3 Nov", "home until 13:30", "out 08:00–12:00", "works 08:00–14:00". The
+    // avatar colour says out or home. Slack statuses use their own text; the tooltip says it
+    // came from Slack.
     function awayText(p) {
         if (p.source === "slack") {
             const text = p.title.toLowerCase();
-            if (!p.end)
-                return i18n("%1 (Slack, no end set)", text);
-            if (p.end - now < 86400000 && dayStart(p.end) === dayStart(now))
-                return i18n("%1 (Slack)", text);
-            return i18n("%1 until %2 (Slack)", text, Qt.formatDate(new Date(p.end), "ddd d MMM"));
+            if (!p.end || dayStart(p.end) === dayStart(now))
+                return text;
+            return i18n("%1 until %2", text, Qt.formatDate(new Date(p.end), "ddd d MMM"));
         }
         const what = p.kind === "hours" ? i18n("works") : p.kind === "home" ? i18n("home") : i18n("out");
         if (!p.allDay)
@@ -73,35 +91,100 @@ PlasmoidItem {
         if (lastDay <= dayStart(now))
             return what;
         const sameYear = new Date(lastDay).getFullYear() === new Date(now).getFullYear();
-        return i18n("%1 until %2", what, Qt.formatDate(new Date(lastDay), sameYear ? "ddd d MMM" : "d MMM yyyy"));
+        const date = Qt.formatDate(new Date(lastDay), sameYear ? "ddd d MMM" : "d MMM yyyy");
+        return p.kind === "out" ? i18n("until %1", date) : i18n("%1 until %2", what, date);
+    }
+
+    // For the top card: "in 25 min" today, otherwise the day ("Tomorrow", "Wednesday").
+    function whenText(ms) {
+        return dayStart(ms) === dayStart(now) ? untilText(ms) : dayLabel(ms);
     }
 
     function untilText(ms) {
         const min = Math.round((ms - now) / 60000);
-        if (min < 60)
-            return i18n("in %1 min", min);
-        const h = Math.floor(min / 60), m = min % 60;
-        return m ? i18n("in %1 h %2 min", h, m) : i18n("in %1 h", h);
+        return i18n("in %1", durationText(Math.max(min, 0)));
     }
 
-    // The next timed event that has not started yet, today or later.
+    // The meeting for the top card: the one going on now, or else the next one to start.
+    readonly property var focusEvent: {
+        const timed = agenda.events.filter(e => !e.allDay && e.end > now);
+        return timed.find(e => e.start <= now) || timed.find(e => e.start > now) || null;
+    }
+    readonly property bool focusIsNow: focusEvent !== null && focusEvent.start <= now
     readonly property double nextStart: {
         const e = agenda.events.find(e => !e.allDay && e.start > now);
         return e ? e.start : 0;
     }
 
+    function sameEvent(a, b) {
+        return a && b && a.start === b.start && a.end === b.end && a.title === b.title;
+    }
+
+    // Shorter meetings that start or end inside the top card's meeting.
+    function overlapsFocus(e) {
+        const f = focusEvent;
+        return f !== null && !e.allDay && !sameEvent(e, f) && e.start < f.end && e.end > f.start;
+    }
+    readonly property var focusOverlaps: agenda.events.filter(e => overlapsFocus(e))
+
     function rebuild() {
         eventModel.clear();
         const todayStart = dayStart(now);
+        const info = {};
         for (const e of agenda.events) {
             if (e.end <= todayStart)
                 continue;
             const start = Math.max(e.start, todayStart);
+            // A string key: Qt writes some numbers as "1.793142e+12" when it turns the
+            // section value into text, and the lookup in days then misses that day.
+            const key = String(dayStart(start));
             eventModel.append(Object.assign({}, e, {
-                day: dayLabel(start),
-                dayKey: dayStart(start)
+                dayKey: key
             }));
+            const d = info[key] || (info[key] = {
+                    count: 0,
+                    spans: []
+                });
+            d.count++;
+            if (!e.allDay)
+                d.spans.push([e.start, Math.min(e.end, key + 86400000)]);
         }
+        // Booked time is the union of the day's timed events, so overlaps count once.
+        for (const key in info) {
+            const d = info[key];
+            d.spans.sort((a, b) => a[0] - b[0]);
+            const merged = [];
+            for (const s of d.spans) {
+                const last = merged[merged.length - 1];
+                if (last && s[0] <= last[1])
+                    last[1] = Math.max(last[1], s[1]);
+                else
+                    merged.push([s[0], s[1]]);
+            }
+            d.busy = merged;
+            d.minutes = Math.round(merged.reduce((sum, s) => sum + s[1] - s[0], 0) / 60000);
+        }
+        days = info;
+    }
+
+    // The row the now line sits above: the first event today that has not started, when an
+    // earlier event today has.
+    readonly property int nowIndex: {
+        now; eventModel.count;
+        const todayStart = String(dayStart(now));
+        let started = false;
+        for (let i = 0; i < eventModel.count; i++) {
+            const e = eventModel.get(i);
+            if (e.dayKey !== todayStart)
+                break;
+            if (e.allDay)
+                continue;
+            if (e.start <= now)
+                started = true;
+            else
+                return started ? i : -1;
+        }
+        return -1;
     }
 
     onAgendaChanged: rebuild()
@@ -152,7 +235,10 @@ PlasmoidItem {
     readonly property bool styled: style.background !== undefined
     // The style's accent is often too dark for text on its own background, so text uses a
     // lighter tint of it.
-    readonly property color accentText: Kirigami.ColorUtils.tintWithAlpha(styled ? style.accent : Kirigami.Theme.highlightColor, "white", 0.35)
+    readonly property color accent: styled ? style.accent : Kirigami.Theme.highlightColor
+    readonly property color accentText: Kirigami.ColorUtils.tintWithAlpha(accent, "white", 0.35)
+    readonly property color busyColor: "#42d692"
+    readonly property color homeColor: "#4a8fe7"
 
     fullRepresentation: Rectangle {
         Layout.minimumWidth: Kirigami.Units.gridUnit * 18
@@ -175,35 +261,25 @@ PlasmoidItem {
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: Kirigami.Units.smallSpacing
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.largeSpacing
 
-            // Header: today's date, and when the data was last read.
+            // Header: today's date and week, and when the data was last read.
             RowLayout {
                 Layout.fillWidth: true
-                Layout.margins: Kirigami.Units.largeSpacing
+                spacing: Kirigami.Units.smallSpacing
 
-                ColumnLayout {
-                    spacing: 0
-                    PlasmaExtras.Heading {
-                        level: 1
-                        text: Qt.formatDate(new Date(root.now), "dddd")
-                    }
-                    PlasmaComponents.Label {
-                        text: Qt.formatDate(new Date(root.now), "d MMMM yyyy") + "  ·  " + i18n("week %1", weekNumber(new Date(root.now)))
-                        opacity: 0.7
-
-                        function weekNumber(d) {
-                            const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-                            t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
-                            return Math.ceil(((t - new Date(Date.UTC(t.getUTCFullYear(), 0, 1))) / 86400000 + 1) / 7);
-                        }
-                    }
-                }
-
-                Item {
+                PlasmaComponents.Label {
                     Layout.fillWidth: true
-                }
+                    text: Qt.formatDate(new Date(root.now), "dddd d MMMM") + "  ·  " + i18n("week %1", weekNumber(new Date(root.now)))
+                    opacity: 0.7
 
+                    function weekNumber(d) {
+                        const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+                        t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+                        return Math.ceil(((t - new Date(Date.UTC(t.getUTCFullYear(), 0, 1))) / 86400000 + 1) / 7);
+                    }
+                }
                 Kirigami.Icon {
                     visible: root.agenda.error !== ""
                     source: "data-warning"
@@ -214,77 +290,34 @@ PlasmoidItem {
                     }
                     HoverHandler {}
                 }
+                PlasmaComponents.Label {
+                    visible: root.agenda.updated > 0
+                    text: i18n("Updated %1", Qt.formatTime(new Date(root.agenda.updated), "HH:mm"))
+                    font.pointSize: root.smallSize
+                    opacity: 0.5
+                }
                 PlasmaComponents.ToolButton {
                     icon.name: "view-refresh"
                     enabled: !root.fetching
                     onClicked: root.fetch()
                     PlasmaComponents.ToolTip {
-                        text: root.agenda.updated ? i18n("Updated %1", Qt.formatTime(new Date(root.agenda.updated), "HH:mm")) : i18n("Not updated yet")
+                        text: i18n("Read the calendar again")
                     }
                 }
             }
 
-            // Who is out, working from home or on part-time hours today, as chips that
-            // wrap across the width. Entries that have ended are left out; Slack statuses
-            // without an end time (end 0) stay.
-            ColumnLayout {
-                id: awayList
-                readonly property var people: (root.agenda.away || []).filter(p => p.end === 0 || p.end > root.now)
+            NextCard {
                 Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.largeSpacing
-                Layout.rightMargin: Kirigami.Units.largeSpacing
-                visible: people.length > 0
-                spacing: Kirigami.Units.smallSpacing
-
-                PlasmaExtras.Heading {
-                    level: 4
-                    text: i18n("Away today")
-                    color: root.accentText
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: Kirigami.Units.smallSpacing
-
-                    Repeater {
-                        model: awayList.people
-                        delegate: PlasmaComponents.ItemDelegate {
-                            id: person
-                            required property var modelData
-                            readonly property color dot: modelData.kind === "out" ? Kirigami.Theme.negativeTextColor
-                                : modelData.kind === "home" ? root.accentText
-                                : Kirigami.Theme.disabledTextColor
-                            topPadding: Kirigami.Units.smallSpacing
-                            bottomPadding: Kirigami.Units.smallSpacing
-                            leftPadding: Kirigami.Units.largeSpacing
-                            rightPadding: Kirigami.Units.largeSpacing
-                            enabled: true
-                            onClicked: if (modelData.link) Qt.openUrlExternally(modelData.link)
-                            background: Rectangle {
-                                radius: height / 2
-                                color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, person.dot, person.hovered ? 0.3 : 0.15)
-                                border.width: 1
-                                border.color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, person.dot, 0.5)
-                            }
-                            contentItem: RowLayout {
-                                spacing: Kirigami.Units.smallSpacing
-                                PlasmaComponents.Label {
-                                    text: person.modelData.name
-                                    font.bold: true
-                                }
-                                PlasmaComponents.Label {
-                                    text: root.awayText(person.modelData)
-                                    opacity: 0.8
-                                }
-                            }
-                            PlasmaComponents.ToolTip {
-                                text: person.modelData.source === "slack"
-                                    ? i18n("Slack status: %1", person.modelData.title) + (person.modelData.end ? "" : "\n" + i18n("No end time set in Slack"))
-                                    : person.modelData.title
-                            }
-                        }
-                    }
-                }
+                visible: root.focusEvent !== null
+                event: root.focusEvent
+                isNow: root.focusIsNow
+                overlaps: root.focusOverlaps
+                whenText: root.focusEvent === null ? "" : root.focusIsNow
+                    ? i18n("ends %1", Qt.formatTime(new Date(root.focusEvent.end), "HH:mm"))
+                    : root.whenText(root.focusEvent.start)
+                accent: root.accent
+                accentText: root.accentText
+                textSize: root.textSize
             }
 
             PlasmaComponents.ScrollView {
@@ -295,28 +328,37 @@ PlasmoidItem {
                     id: list
                     model: eventModel
                     clip: true
-                    spacing: Kirigami.Units.smallSpacing
                     reuseItems: true
 
                     section.property: "dayKey"
-                    section.delegate: PlasmaExtras.Heading {
+                    section.delegate: DayHeader {
                         required property string section
                         width: ListView.view.width
-                        level: 4
-                        topPadding: Kirigami.Units.largeSpacing
-                        bottomPadding: Kirigami.Units.smallSpacing
-                        leftPadding: Kirigami.Units.largeSpacing
-                        text: root.dayLabel(Number(section))
-                        color: root.accentText
+                        dayKey: Number(section)
+                        label: root.dayLabel(dayKey)
+                        info: root.days[section] || null
+                        durationText: info ? root.durationText(info.minutes) : ""
+                        stripFrom: root.stripFrom
+                        stripTo: root.stripTo
+                        busyColor: root.busyColor
+                        accentText: root.accentText
+                        textSize: root.textSize
+                        smallSize: root.smallSize
                     }
 
                     delegate: EventDelegate {
                         width: ListView.view.width
                         now: root.now
                         isNext: !model.allDay && model.start === root.nextStart
+                        isFocus: root.sameEvent(model, root.focusEvent)
+                        overlapsFocus: root.overlapsFocus(model)
+                        nowLineAbove: index === root.nowIndex
                         untilText: isNext ? root.untilText(model.start) : ""
                         timeText: root.timeText(model)
-                    accentText: root.accentText
+                        accent: root.accent
+                        accentText: root.accentText
+                        textSize: root.textSize
+                        smallSize: root.smallSize
                     }
 
                     PlasmaExtras.PlaceholderMessage {
@@ -329,53 +371,120 @@ PlasmoidItem {
                 }
             }
 
-            // Open Google Tasks, overdue first.
-            ColumnLayout {
+            Kirigami.Separator {
                 Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.largeSpacing
-                Layout.rightMargin: Kirigami.Units.largeSpacing
-                Layout.bottomMargin: Kirigami.Units.largeSpacing
-                visible: root.agenda.tasks.length > 0
-                spacing: Kirigami.Units.smallSpacing
+            }
+
+            // Bottom: who is away today, and open Google Tasks beside it.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.largeSpacing * 2
+
+                // Entries that have ended are left out; Slack statuses without an end time
+                // (end 0) stay.
+                ColumnLayout {
+                    id: awayList
+                    readonly property var people: (root.agenda.away || []).filter(p => p.end === 0 || p.end > root.now)
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignTop
+                    visible: people.length > 0
+                    spacing: Kirigami.Units.smallSpacing
+
+                    RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        PlasmaExtras.Heading {
+                            level: 4
+                            text: i18n("Away today")
+                            color: root.accentText
+                        }
+                        PlasmaComponents.Label {
+                            text: i18np("1 person", "%1 people", awayList.people.length)
+                            font.pointSize: root.smallSize
+                            opacity: 0.5
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: Math.max(2, Math.floor(awayList.width / (Kirigami.Units.gridUnit * 8.5)))
+                        columnSpacing: Kirigami.Units.largeSpacing
+                        rowSpacing: Kirigami.Units.smallSpacing
+
+                        Repeater {
+                            model: awayList.people
+                            delegate: AwayPerson {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                person: modelData
+                                detail: root.awayText(modelData)
+                                dot: modelData.kind === "out"
+                                    ? (modelData.end - root.now > root.longLeaveDays * 86400000 ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.negativeTextColor)
+                                    : modelData.kind === "home" ? root.homeColor
+                                    : Kirigami.Theme.disabledTextColor
+                                smallSize: root.smallSize
+                            }
+                        }
+                    }
+                }
 
                 Kirigami.Separator {
-                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: awayList.visible && tasks.visible
                 }
 
-                PlasmaExtras.Heading {
-                    level: 4
-                    text: i18n("Tasks")
-                    color: root.accentText
-                }
+                // Open Google Tasks, overdue first.
+                ColumnLayout {
+                    id: tasks
+                    Layout.preferredWidth: awayList.visible ? Kirigami.Units.gridUnit * 9 : -1
+                    Layout.fillWidth: !awayList.visible
+                    Layout.alignment: Qt.AlignTop
+                    visible: root.agenda.tasks.length > 0
+                    spacing: Kirigami.Units.smallSpacing
 
-                Repeater {
-                    model: root.agenda.tasks
-                    delegate: PlasmaComponents.ItemDelegate {
-                        id: task
-                        required property var modelData
-                        readonly property bool overdue: modelData.due !== "" && new Date(modelData.due + "T23:59:59").getTime() < root.now
-                        Layout.fillWidth: true
-                        onClicked: Qt.openUrlExternally(modelData.link)
-                        contentItem: RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Kirigami.Icon {
-                                source: "checkbox"
-                                implicitWidth: Kirigami.Units.iconSizes.small
-                                implicitHeight: implicitWidth
-                            }
-                            PlasmaComponents.Label {
-                                Layout.fillWidth: true
-                                text: task.modelData.title
-                                elide: Text.ElideRight
-                            }
-                            PlasmaComponents.Label {
-                                visible: task.modelData.due !== ""
-                                text: {
-                                    const d = new Date(task.modelData.due + "T12:00:00");
-                                    return Qt.formatDate(d, d.getFullYear() === new Date(root.now).getFullYear() ? "d MMM" : "d MMM yyyy");
+                    PlasmaExtras.Heading {
+                        level: 4
+                        text: i18np("1 open task", "%1 open tasks", root.agenda.tasks.length)
+                        color: root.accentText
+                    }
+
+                    Repeater {
+                        model: root.agenda.tasks
+                        delegate: PlasmaComponents.ItemDelegate {
+                            id: task
+                            required property var modelData
+                            readonly property bool overdue: modelData.due !== "" && new Date(modelData.due + "T23:59:59").getTime() < root.now
+                            Layout.fillWidth: true
+                            leftPadding: 0
+                            onClicked: Qt.openUrlExternally(modelData.link)
+                            contentItem: RowLayout {
+                                spacing: Kirigami.Units.smallSpacing
+                                Kirigami.Icon {
+                                    Layout.alignment: Qt.AlignTop
+                                    source: "checkbox"
+                                    implicitWidth: Kirigami.Units.iconSizes.small
+                                    implicitHeight: implicitWidth
                                 }
-                                color: task.overdue ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
-                                opacity: task.overdue ? 1 : 0.7
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    PlasmaComponents.Label {
+                                        Layout.fillWidth: true
+                                        text: task.modelData.title
+                                        elide: Text.ElideRight
+                                    }
+                                    PlasmaComponents.Label {
+                                        visible: task.modelData.due !== ""
+                                        text: {
+                                            const d = new Date(task.modelData.due + "T12:00:00");
+                                            const date = Qt.formatDate(d, d.getFullYear() === new Date(root.now).getFullYear() ? "d MMM" : "d MMM yyyy");
+                                            return task.overdue ? i18n("Overdue %1", date) : i18n("Due %1", date);
+                                        }
+                                        font.pointSize: root.smallSize
+                                        color: task.overdue ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                                        opacity: task.overdue ? 1 : 0.7
+                                    }
+                                }
                             }
                         }
                     }
