@@ -1,27 +1,36 @@
 // Build Queue: the heavy-build queue at a glance. What runs, what waits and why, how fast
 // the queue moves, which projects wait, and the memory signals that gate it.
-// Data comes from ~/bin/buildqueue-fetch, run every five seconds. It only reads. Colours
-// and fonts come from the Plasma style, so the window matches the panels.
-// Run as a window with: plasmawindowed org.oysteinkrog.buildqueue
+// Data comes from $XDG_RUNTIME_DIR/buildqueue/queue.json, which ~/bin/buildqueue-fetch
+// rewrites every five seconds. It only reads. Colours and fonts come from the Plasma style,
+// so the window matches the panels.
+// Run as a window with ~/bin/buildqueue-window, which starts the fetch and sets
+// QML_XHR_ALLOW_FILE_READ=1 so the widget may read the file.
 
+import QtCore
 import QtQuick
 import QtQuick.Layouts
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.extras as PlasmaExtras
-import org.kde.plasma.plasma5support as P5Support
 import org.kde.kirigami as Kirigami
 
 PlasmoidItem {
     id: root
 
-    readonly property string fetchCommand: "$HOME/bin/buildqueue-fetch"
+    readonly property url dataFile: StandardPaths.writableLocation(StandardPaths.RuntimeLocation) + "/buildqueue/queue.json"
     property var q: ({
             updated: 0,
             error: ""
         })
-    property bool fetching: false
+    property string lastText: ""
+    property double now: Date.now()
+    // The fetch writes every 5 s, so 30 s without a new file means it has stopped.
+    readonly property bool stale: q.updated > 0 && now - q.updated > 30000
+    readonly property string problem: stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - q.updated) / 1000))
+        : q.updated === 0 && now - startedAt > 15000 ? i18n("No data in %1. Start the window with buildqueue-window.", dataFile)
+        : (q.error || "")
+    readonly property double startedAt: Date.now()
 
     readonly property var running: q.running || []
     readonly property var waiting: q.waiting || ({
@@ -39,11 +48,31 @@ PlasmoidItem {
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
 
-    function fetch() {
-        if (fetching)
-            return;
-        fetching = true;
-        exec.connectSource(fetchCommand);
+    function load() {
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            root.now = Date.now();
+            // An unchanged file means nothing new, so nothing is rebuilt.
+            if (!xhr.responseText || xhr.responseText === root.lastText)
+                return;
+            root.lastText = xhr.responseText;
+            try {
+                const next = JSON.parse(xhr.responseText);
+                // On an error the fetch writes only the error, so the last data stays.
+                root.q = next.running ? next : Object.assign({}, root.q, {
+                    updated: next.updated,
+                    error: next.error
+                });
+            } catch (err) {
+                root.q = Object.assign({}, root.q, {
+                    error: String(err)
+                });
+            }
+        };
+        xhr.open("GET", dataFile);
+        xhr.send();
     }
 
     // 45 s, 12 min, 3 h 5 min.
@@ -79,32 +108,12 @@ PlasmoidItem {
         return i18n("steady over %1 min", velocity.trendMinutes);
     }
 
-    P5Support.DataSource {
-        id: exec
-        engine: "executable"
-        onNewData: (source, data) => {
-            disconnectSource(source);
-            root.fetching = false;
-            try {
-                const next = JSON.parse(data.stdout);
-                // On an error the fetch prints only the error, so the last data stays.
-                root.q = next.running ? next : Object.assign({}, root.q, {
-                    error: next.error
-                });
-            } catch (err) {
-                root.q = Object.assign({}, root.q, {
-                    error: data.stderr || String(err)
-                });
-            }
-        }
-    }
-
     Timer {
         interval: 5000
         running: true
         repeat: true
         triggeredOnStart: true
-        onTriggered: root.fetch()
+        onTriggered: root.load()
     }
 
     // Plasma style (panel) colours from buildqueue-fetch. Empty until the first fetch, and
@@ -213,7 +222,7 @@ PlasmoidItem {
                     PlasmaComponents.ToolTip.text: root.machine.levelReason || ""
                 }
                 Kirigami.Icon {
-                    visible: (root.q.error || "") !== ""
+                    visible: root.problem !== ""
                     source: "data-warning"
                     implicitWidth: Kirigami.Units.iconSizes.small
                     implicitHeight: implicitWidth
@@ -221,7 +230,7 @@ PlasmoidItem {
                         id: errHover
                     }
                     PlasmaComponents.ToolTip.visible: errHover.hovered
-                    PlasmaComponents.ToolTip.text: root.q.error || ""
+                    PlasmaComponents.ToolTip.text: root.problem
                 }
             }
             Dim {
@@ -230,6 +239,14 @@ PlasmoidItem {
                 text: i18n("%1 since %2", root.machine.levelReason || "", Qt.formatTime(new Date(root.machine.levelSince * 1000), "HH:mm"))
                 wrapMode: Text.Wrap
                 color: view.levelColor
+            }
+
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                visible: root.problem !== ""
+                text: root.problem
+                color: Kirigami.Theme.negativeTextColor
+                wrapMode: Text.Wrap
             }
 
             // The three numbers that matter most.
