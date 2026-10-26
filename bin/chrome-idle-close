@@ -6,8 +6,9 @@ closed only when both hold:
   1. No window of that profile has had focus for IDLE_MIN minutes (15).
   2. Memory is tight: swap used is over SWAP_PCT (60%) of SwapTotal, or
      one heavy-build job has waited for memory, swap or interactive memory
-     pressure for HB_MIN_WAIT seconds (600) and still waits (a wait line in
-     the last HB_WINDOW seconds, 120, and no start line since).
+     pressure for HB_MIN_WAIT seconds (600) and still waits (its job file is
+     still in the heavy-build queue dir and no start line came after the
+     first wait).
 
 Focus: a small KWin script (chrome-idle-focus.kwin.js, next to this file)
 writes a journal line each time the active window changes. Each run reads the
@@ -54,7 +55,7 @@ IDLE_MIN = float(os.environ.get("CHROME_IDLE_MIN", "15"))
 SWAP_PCT = float(os.environ.get("CHROME_IDLE_SWAP_PCT", "60"))
 HB_WINDOW = float(os.environ.get("CHROME_IDLE_HB_WINDOW", "120"))
 HB_MIN_WAIT = float(os.environ.get("CHROME_IDLE_HB_MIN_WAIT", "600"))
-HB_LOOKBACK = HB_MIN_WAIT + 600
+HB_TAIL_BYTES = 16 * 1024 * 1024
 CLOSE_WAIT = 60.0
 STATE_DIR = Path(
     os.environ.get("CHROME_IDLE_STATE_DIR", HOME / ".local/state/chrome-idle")
@@ -62,9 +63,11 @@ STATE_DIR = Path(
 MODE_FILE = Path(
     os.environ.get("CHROME_IDLE_MODE_FILE", HOME / ".config/chrome-idle/mode")
 )
-HB_LOG = Path(
-    os.environ.get("CHROME_IDLE_HB_LOG", HOME / ".local/state/heavy-build/live.log")
-)
+# heavy-build writes live.log in live mode and shadow.log in shadow mode.
+HB_LOG_DIR = HOME / ".local/state/heavy-build"
+HB_LOG_ENV = os.environ.get("CHROME_IDLE_HB_LOG")
+# One file per waiting or running job, named by job id.
+HB_QUEUE_ENV = os.environ.get("CHROME_IDLE_HB_QUEUE")
 PROC = Path(os.environ.get("CHROME_IDLE_PROC", "/proc"))
 KWIN_PLUGIN = "chrome-idle-focus"
 KWIN_SCRIPT = Path(os.path.realpath(__file__)).with_name("chrome-idle-focus.kwin.js")
@@ -90,6 +93,7 @@ PROFILES = {
 DEFAULT_DATA_DIR = str(HOME / ".config/google-chrome")
 
 HB_LINE = re.compile(r'^(\S+) mode=\S+ job=(\S+) decision=(\w+) reason="([a-z-]+)')
+HB_ACTUAL = re.compile(r" actual=(\w+)")
 FOCUS_LINE = re.compile(r"chrome-idle-focus pid=(-?\d+) class=(\S*)")
 
 
@@ -332,27 +336,50 @@ def swap_pct(meminfo: str | None = None) -> float:
     return 100.0 * (total - vals.get("SwapFree", 0)) / total
 
 
-def read_hb_tail(now: float) -> str:
-    """The end of heavy-build's live.log, far enough back to cover the last
-    HB_LOOKBACK seconds (or the whole file)."""
+def hb_log_path() -> Path:
+    """The heavy-build log to read: CHROME_IDLE_HB_LOG, else the newest of
+    live.log and shadow.log (the mode decides which one heavy-build writes)."""
+    if HB_LOG_ENV:
+        return Path(HB_LOG_ENV)
+    found = []
+    for name in ("live.log", "shadow.log"):
+        p = HB_LOG_DIR / name
+        try:
+            found.append((p.stat().st_mtime, p))
+        except OSError:
+            pass
+    return max(found)[1] if found else HB_LOG_DIR / "live.log"
+
+
+def hb_queue_dir() -> Path:
+    if HB_QUEUE_ENV:
+        return Path(HB_QUEUE_ENV)
+    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(run) / "heavy-build.queue"
+
+
+def hb_queued_jobs() -> set[str] | None:
+    """Job ids still in heavy-build's queue dir, or None if it cannot be read."""
     try:
-        with HB_LOG.open("rb") as f:
+        return {p.name for p in hb_queue_dir().iterdir()}
+    except OSError:
+        return None
+
+
+def read_hb_tail() -> str:
+    """The last HB_TAIL_BYTES of the heavy-build log. A job logs one wait line
+    per decision change, so a long wait may be a single old line: read by
+    bytes, not by age."""
+    try:
+        with hb_log_path().open("rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
-            chunk = 512 * 1024
-            while True:
-                f.seek(max(0, size - chunk))
-                data = f.read()
-                first = HB_LINE.search(data.decode(errors="replace").split("\n", 1)[-1])
-                if size <= chunk or chunk >= 64 * 1024 * 1024:
-                    break
-                if first and now - parse_ts(first.group(1)) > HB_LOOKBACK:
-                    break
-                chunk *= 2
+            f.seek(max(0, size - HB_TAIL_BYTES))
+            data = f.read()
     except OSError:
         return ""
     text = data.decode(errors="replace")
-    return text if size <= chunk else text.split("\n", 1)[-1]
+    return text if size <= HB_TAIL_BYTES else text.split("\n", 1)[-1]
 
 
 def parse_ts(stamp: str) -> float:
@@ -362,16 +389,26 @@ def parse_ts(stamp: str) -> float:
         return 0.0
 
 
-def hb_memory_waits(now: float, text: str | None = None) -> int:
+def hb_memory_waits(
+    now: float, text: str | None = None, queued: set[str] | None = None
+) -> int:
     """Number of heavy-build jobs stuck waiting for memory.
 
     A job counts when its first wait line with reason memory, swap or
-    interactive is at least HB_MIN_WAIT seconds old, its latest such line is
-    within the last HB_WINDOW seconds, and it has no start line since that
-    first wait. Short waits happen all the time and do not count.
+    interactive is at least HB_MIN_WAIT seconds old, it has no start line since
+    that first wait, and it is still in the queue dir. heavy-build logs a wait
+    line only when a job's decision or reason changes, so a job that still
+    waits may have no recent line. If the queue dir cannot be read, fall back
+    to a memory wait line in the last HB_WINDOW seconds. Short waits happen all
+    the time and do not count.
+
+    Shadow lines carry actual=<what really happened> next to the decision
+    heavy-build would take, so actual wins when present.
     """
     if text is None:
-        text = read_hb_tail(now)
+        text = read_hb_tail()
+    if queued is None:
+        queued = hb_queued_jobs()
     first: dict[str, float] = {}
     latest: dict[str, float] = {}
     started: set[str] = set()
@@ -381,6 +418,9 @@ def hb_memory_waits(now: float, text: str | None = None) -> int:
             continue
         ts = parse_ts(m.group(1))
         job, decision, reason = m.group(2), m.group(3), m.group(4)
+        a = HB_ACTUAL.search(line)
+        if a:
+            decision = a.group(1)
         if decision == "start":
             if job in first:
                 started.add(job)
@@ -392,7 +432,7 @@ def hb_memory_waits(now: float, text: str | None = None) -> int:
         for job, t0 in first.items()
         if job not in started
         and now - t0 >= HB_MIN_WAIT
-        and now - latest[job] <= HB_WINDOW
+        and (job in queued if queued is not None else now - latest[job] <= HB_WINDOW)
     )
 
 
