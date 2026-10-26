@@ -510,6 +510,7 @@ out=$(est capkey cargo-check)
 check "estimate: a failed run at 98% of MemoryHigh counts as capped too (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
 : > "$E/hist"
 rowh cargo-check capkey 15.6 0 ok 18 16
+rowh cargo-check capkey 15.6 0 ok 18 16
 out=$(est capkey cargo-check)
 check "estimate: a run at 97.5% of MemoryHigh keeps its own peak (got '$out')" '[[ $out == "15.6 history,mem=key" ]]'
 : > "$E/hist"
@@ -517,6 +518,7 @@ rowh cargo-check capkey 16 0 ok 18 -
 out=$(est capkey cargo-check)
 check "estimate: an older line without column 10 uses MemoryMax minus 2 GiB as the cap (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
 : > "$E/hist"
+rowh cargo-check capkey 10 0 ok 18 16
 rowh cargo-check capkey 10 0 ok 18 16
 out=$(est capkey cargo-check)
 check "estimate: a run well under its cap keeps its own peak (got '$out')" '[[ $out == "10.0 history,mem=key" ]]'
@@ -533,6 +535,7 @@ out=$(est w1 wine-run-tests)
 check "own history: 2 runs at 2 GiB give 2.4 under the 6 GiB class floor (got '$out')" '[[ $out == "2.4 history,mem=key-own" ]]'
 for i in $(seq 7 20); do row wine-run-tests "w$i" 2 0 ok; done
 row wine-run-tests leakkey 17 0 ok
+row wine-run-tests leakkey 17 0 ok
 out=$(est leakkey wine-run-tests)
 check "estimate: a key that used 17 GiB keeps its own peak over the floor (got '$out')" '[[ $out == "17.0 history,mem=key" ]]'
 : > "$E/hist"
@@ -543,6 +546,7 @@ check "estimate: a new wine-run-tests-prebuilt key gets 3 GiB (got '$out')" '[[ 
 for i in $(seq 1 6); do row wine-run-tests-prebuilt "p$i" 1 0 ok; done
 out=$(est newkey wine-run-tests-prebuilt)
 check "estimate: the prebuilt floor (3) wins over a lower p90 (got '$out')" '[[ $out == "3.0 class-history,mem=floor" ]]'
+row wine-run-tests bigkey 30 0 ok
 row wine-run-tests bigkey 30 0 ok
 out=$(est bigkey wine-run-tests)
 check "estimate: never above the 22 GiB scope cap (got '$out')" '[[ $out == "22.0 history,mem=cap" ]]'
@@ -767,7 +771,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
-      -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
+      -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
@@ -1485,9 +1489,9 @@ check "app estimate: no history gives 8 GiB and 4 h (got '$out')" '[[ $out == "8
 for i in 1 2 3 4 5 6; do printf '%s\tapp-run\tk%s\t3600\t900\t%s\t143\tstopped\t12884901888\t10737418240\t-\t-\n' "$EPOCHSECONDS" "$i" "$(( 3 * G ))" >> "$E/hist"; done
 out=$(est2 k9 app-run)
 check "app estimate: stopped runs count, and the 6 GiB floor holds (got '$out')" '[[ $out == "6.0 0.2 3600 class-history,mem=floor" ]]'
-printf '%s\tapp-run\tk1\t3600\t900\t%s\t143\tcancelled\t12884901888\t10737418240\t-\t-\n' "$EPOCHSECONDS" "$(( 9 * G ))" >> "$E/hist"
+printf '%s\tapp-run\tk1\t3600\t900\t%s\t143\tcancelled\t12884901888\t10737418240\t-\t-\n' "$EPOCHSECONDS" "$(( 7 * G ))" >> "$E/hist"
 out=$(est2 k1 app-run)
-check "app estimate: a cancelled run's 9 GiB peak counts for its key (got '$out')" '[[ $out == 9.0\ * ]]'
+check "app estimate: a cancelled run's 7 GiB peak counts for its key (got '$out')" '[[ $out == 7.0\ * ]]'
 printf '%s\tcargo-test\tk2\t60\t60\t%s\t143\tfail\tNA\tNA\t-\t-\n' "$EPOCHSECONDS" "$(( 20 * G ))" >> "$E/hist"
 out=$(est2 k2 cargo-test)
 check "estimate: other classes still skip signal-ended runs (got '$out')" '[[ $out == 13.3\ * ]]'
@@ -1812,14 +1816,40 @@ check "lanes: grove owner matches, first rule wins (got '$a')" '[[ $a == high\ *
 check "lanes: a glob matches the session name (got '$b')" '[[ $b == high\ * ]]'
 teardown
 
-# Precedence: a critical session beats a low rule and a caller's low.
+# Precedence (2026-10-26): a matching rule beats a critical session; with
+# no matching rule the critical session beats the caller's low.
 setup
 printf 'theme low\n' > "$T/config/heavy-build.lanes"
+LP_CLASS=critical run_lp "$on" HEAVY_BUILD_PRIORITY=normal HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^low '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: a matching rule beats a critical session (got '$got')" '[[ $got == low\ * ]]'
+check "lanes: the override of critical is logged" 'lplog | grep -q "event=prio-change prio_from=normal prio_to=low rule=\"theme low (overrides critical: this session is critical"'
+teardown
+setup
+printf 'other low\n' > "$T/config/heavy-build.lanes"
 LP_CLASS=critical run_lp "$on" HEAVY_BUILD_PRIORITY=low HB_LANE_IDENT="theme - - $T/work"
 wait_tk 2 '^critical '; got=$(tk 2)
 wait "$hbpid"
-check "lanes: critical session beats the rule and the caller (got '$got')" '[[ $got == critical\ * ]]'
+check "lanes: with no matching rule a critical session beats the caller (got '$got')" '[[ $got == critical\ * ]]'
 check "lanes: logged as a change to critical" 'lplog | grep -q "event=prio-change prio_from=low prio_to=critical rule=\"critical: this session is critical"'
+teardown
+# The cass case: no HEAVY_BUILD_PRIORITY, a critical session (so critical at
+# submit), and a path rule for the build's directory: the rule wins.
+setup
+printf '%s low\n' "$T/work" > "$T/config/heavy-build.lanes"
+LP_CLASS=critical run_lp "$on" HEAVY_BUILD_PRIORITY= HB_LANE_IDENT="- - coordinator $T/work"
+wait_tk 2 '^low '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: a path rule beats critical from the session at submit (got '$got')" '[[ $got == low\ * ]]'
+check "lanes: logged as critical to low with the override" 'lplog | grep -q "event=prio-change prio_from=critical prio_to=low rule=\"$T/work low (overrides critical: this session is critical"'
+teardown
+setup
+printf 'other low\n' > "$T/config/heavy-build.lanes"
+LP_CLASS=critical run_lp "$on" HEAVY_BUILD_PRIORITY= HB_LANE_IDENT="- - coordinator $T/work"
+wait_tk 2 '^critical '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: no matching rule, a critical session keeps critical at submit (got '$got')" '[[ $got == critical\ * ]] && ! lplog | grep -q "event=prio-change"'
 teardown
 
 # A rule beats the caller's own priority.
@@ -2024,7 +2054,7 @@ est_hist 16 2; est_hist 16 2
 printf 'HEAVY_BUILD_EST_REFRESH=1\nHEAVY_BUILD_EST_REFRESH_SECS=2\n' > "$T/config/heavy-build.conf"
 run_lp HEAVY_BUILD_WAIT=60
 wait_tk 2 '^normal '; a=$(mem2)
-est_hist 16 12
+est_hist 16 12; est_hist 16 12
 for _ in $(seq 1 30); do [[ $(mem2) != "$a" ]] && break; sleep 0.2; done
 b=$(mem2)
 kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
@@ -2334,6 +2364,105 @@ kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
 kill "$blocker"; wait "$blocker" 2>/dev/null
 teardown2
 HB=$HBREAL
+
+# 15. Backfill floor (HEAVY_BUILD_BACKFILL_FLOOR_SECS, awk bfloor). A 20 GiB
+# build runs past its expected end, so the shadow time is the next poll
+# (5 s). The 36 GiB head waits for memory. now=1000000, 40 GiB available.
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo"
+B_R='R r1 999000 20 4 999900 21474836480 - 0 normal -'
+B_H='W 0000000999500000000-1-head 999500 normal 36 2 600 -'
+B_60='W 0000000999600000000-2-s60 999600 normal 1 1 60 -'
+B_100='W 0000000999600000000-3-s100 999600 normal 1 1 100 -'
+out=$(printf '%s\n' "$B_R" "$B_H" "$B_60" | adm 0000000999600000000-2-s60 0 1 12)
+check "backfill floor off: a 60 s build waits behind an overdue run, as before (got '$out')" '[[ $out == "wait|behind: it would not end before 0000000999500000000-1-head can start, in about 0 min|"* ]]'
+out=$(printf '%s\n' "$B_R" "$B_H" "$B_60" | ADM_BFLOOR=120 adm 0000000999600000000-2-s60 0 1 12)
+check "backfill floor 120 s: the 60 s build (90 s with margin) passes (got '$out')" '[[ $out == "start|backfill: it fits and is short (about 60 s), so 0000000999500000000-1-head starts at most 120 s later|0" ]]'
+out=$(printf '%s\n' "$B_R" "$B_H" "$B_100" | ADM_BFLOOR=120 adm 0000000999600000000-3-s100 0 1 12)
+check "backfill floor 120 s: a 100 s build (150 s with margin) still waits (got '$out')" '[[ $out == wait\|behind:* ]]'
+out=$(printf '%s\n' "$B_R" "$B_H" "$B_60" | ADM_BFLOOR=120 adm 0000000999500000000-1-head 0 1 12)
+check "backfill floor: the head itself still waits for memory (got '$out')" '[[ $out == wait\|memory:* ]]'
+# A head that starts later than the floor keeps the old rule and message.
+B_RL='R r1 999000 20 4 1003000 21474836480 - 0 normal -'
+out=$(printf '%s\n' "$B_RL" "$B_H" "$B_100" | ADM_BFLOOR=120 adm 0000000999600000000-3-s100 0 1 12)
+check "backfill floor: when the head starts later than the floor, the old rule and message apply (got '$out')" '[[ $out == "start|backfill: it fits and should end before 0000000999500000000-1-head can start|0" ]]'
+check "backfill floor: the HEAVY_BUILD_BACKFILL_FLOOR_SECS default is 120" 'grep -q "^  setting HEAVY_BUILD_BACKFILL_FLOOR_SECS 120$" "$HB"'
+check "backfill floor: passed to the admission awk" 'grep -q "\-v bfloor=\"\$BACKFILL_FLOOR_SECS\"" "$HB"'
+rm -rf -- "$A"
+
+# 16. One-row limit and the non-file cap (2026-10-26). row, rowh, rows and
+# classrows are the helpers from section 6; E is made again here.
+E=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+G=1073741824
+rownf() {  # class key peak_gib nonfile_gib [wall] ; values may have decimals
+  awk -v c="$1" -v k="$2" -v p="$3" -v n="$4" -v w="${5:-10}" -v G="$G" 'BEGIN {
+    printf "1\t%s\t%s\t%d\t20\t%d\t0\tok\t%d\t%d\t-\t-\t%d\n", c, k, w, p * G, 24 * G, 22 * G, n * G }' >> "$E/hist"
+}
+est() {  # key class [sig filtered] ; prints "mem source"
+  (
+    HIST=$E/hist
+    eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^SIG_DAYS=/p;/^estimate()/,/^}/p' "$HB")"
+    estimate "$@" | awk '{print $1, $4}'
+  )
+}
+T=$E; : > "$T/out"
+: > "$E/hist"
+rownf cargo-check bigone 10.2 14.4 4245
+out=$(est bigone cargo-check)
+check "one row: the 2026-10-26 case (non-file 14.4 over peak 10.2, one run) gives 8 GiB, not 14.4 (got '$out')" '[[ $out == "8.0 history,mem=key-one" ]]'
+out=$(EST_ONE_ROW_GIB=0 est bigone cargo-check)
+check "one row: with the limit off, the non-file value is still capped at the 10.2 GiB peak (got '$out')" '[[ $out == "10.2 history,mem=key" ]]'
+rownf cargo-check bigone 3 2
+out=$(est bigone cargo-check)
+check "one row: a second run under 8 GiB does not confirm it (got '$out')" '[[ $out == "8.0 history,mem=key-one" ]]'
+rownf cargo-check bigone 9.5 9
+out=$(est bigone cargo-check)
+check "one row: a second run over 8 GiB confirms the highest (got '$out')" '[[ $out == "10.2 history,mem=key" ]]'
+: > "$E/hist"
+rownf cargo-check padkey 10 6
+rownf cargo-check padkey 10 6
+out=$(est padkey cargo-check)
+check "non-file cap: 1.25 x 6 = 7.5 is under the 10 GiB peak, so 7.5 counts (got '$out')" '[[ $out == "7.5 history,mem=key" ]]'
+: > "$E/hist"
+row cargo-check oomone 3 0 ok
+row cargo-check oomone 12 1 oom 12
+out=$(est oomone cargo-check)
+check "one row: an OOM-killed run counts alone (got '$out')" '[[ $out == "12.0 history,mem=key" ]]'
+: > "$E/hist"
+rowh cargo-check capone 16 0 ok 18 16
+out=$(est capone cargo-check)
+check "one row: a run held at its cap counts alone (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
+# Astra: a capped run whose peak is already over 1.25 x MemoryHigh is still
+# capped, so it counts alone too (with and without a non-file peak).
+: > "$E/hist"
+rowh cargo-check capover 21 0 ok 24 16
+out=$(est capover cargo-check)
+check "one row: a capped run with its peak over 1.25 x MemoryHigh counts alone (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
+: > "$E/hist"
+awk -v G="$G" 'BEGIN { printf "1\tcargo-check\tcapnf\t10\t20\t%d\t0\tok\t%d\t%d\t-\t-\t%d\n", 20 * G, 24 * G, 16 * G, 16 * G }' >> "$E/hist"
+out=$(est capnf cargo-check)
+check "one row: a non-file run at its cap with peak 20 = 1.25 x 16 counts alone (got '$out')" '[[ $out == "20.0 history,mem=key" ]]'
+: > "$E/hist"
+row cargo-check ownone 2 0 ok
+row cargo-check ownone 12 0 ok
+for i in $(seq 1 20); do row cargo-check "o$i" 19 0 ok; done
+out=$(est ownone cargo-check)
+check "one row: own history uses the 8 GiB limit without the 1.2 factor (got '$out')" '[[ $out == "8.0 history,mem=key-own" ]]'
+: > "$E/hist"; classrows
+rows wine-run-tests s1 21 sigC
+out=$(est newkey wine-run-tests sigC 1)
+check "one row: a single sig run over 8 GiB counts as 8, so the class p75 decides (got '$out')" '[[ $out == "16.0 class-history,mem=class-p75" ]]'
+: > "$E/hist"
+for i in $(seq 1 6); do row wine-run-tests "c$i" 2 0 ok; done
+rows wine-run-tests s1 21 sigC
+out=$(est newkey wine-run-tests sigC 1)
+check "one row: a single sig run over 8 GiB gives sig-max-one at 8 GiB (got '$out')" '[[ $out == "8.0 class-history,mem=sig-max-one" ]]'
+: > "$E/hist"
+for i in $(seq 1 6); do row dotnet-build "d$i" 1 0 ok; done
+out=$(est newkey dotnet-build)
+check "dotnet-build: a p90 of 1 GiB is raised to the 3 GiB floor, not 5 (got '$out')" '[[ $out == "3.0 class-history,mem=floor" ]]'
+rm -rf -- "$E"
 
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
