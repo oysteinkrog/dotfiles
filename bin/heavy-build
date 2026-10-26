@@ -158,6 +158,34 @@
 # Its waiting line says which, and asks the submitter to shrink it. The
 # give-up clock still runs, so such a build ends with exit 75 after
 # HEAVY_BUILD_WAIT seconds unless memory frees up first.
+# Memory controller (HEAVY_BUILD_MEM_CONTROLLER, default 0; 1 turns it on):
+# replaces the reserve rule for memory with a rule that keeps RAM nearly full
+# and holds builds only on signs of harmful swapping. Design and replay:
+# /var/tmp/claude/hb-fullmem/PROPOSAL.md (2026-10-26). While it is on:
+# - A build may start when MemAvailable, minus what young builds are still
+#   expected to take, minus HEAVY_BUILD_MC_STEP_PCT percent (default 50) of
+#   its own estimate, leaves HEAVY_BUILD_MC_TARGET_GIB (default 6), and
+#   MemAvailable is at least HEAVY_BUILD_MC_HARD_GIB (default 3). A young
+#   build (as for the real-use rule: under max(YOUNG_MIN_SECS, YOUNG_PCT % of
+#   its expected wall time) old) is expected to take its full estimate minus
+#   what it holds in its first HEAVY_BUILD_MC_NEW_FULL_SECS (default 60), then
+#   HEAVY_BUILD_TC_PCT percent of it minus what it holds. Older builds are
+#   expected to take nothing more. Untracked scopes keep their 2 GiB. The
+#   critical-first reserve uses the same "still to come".
+# - Brake: a normal or low build waits ("pressure: memory controller brake")
+#   while, in a sample of the last HEAVY_BUILD_MC_CALM_SECS (default 60),
+#   MemAvailable was under HEAVY_BUILD_MC_BRAKE_GIB (default 10) and disk
+#   swap-in was at least HEAVY_BUILD_MC_BRAKE_SWAPIN pages/s (default 2000)
+#   or memory full avg10 at least HEAVY_BUILD_MC_BRAKE_FULL_PCT (default 10).
+#   Above 10 GiB free the swap-in comes from sessions paging back in, which
+#   holding builds does not fix (2026-10-26 08:40 to 09:40).
+# - No normal or low build starts while MemAvailable fell more than
+#   HEAVY_BUILD_MC_FALL_GIB (default 2) in the last 15 s.
+# - Pace: one normal or low start per 15 s above 16 GiB free, per 30 s from
+#   10 to 16 GiB, per 60 s under 10 GiB. This takes the place of the slow
+#   level's gap; the pause level still holds normal and low builds.
+# - Samples ("epoch pswpin MemAvailable_kB harm") live in
+#   $XDG_RUNTIME_DIR/heavy-build.cpu/mem.samples, shared by every waiter.
 # Pressure level: pressure-coordinator.service writes
 # ~/.local/state/pressure/level ("level=normal|slow|pause ... updated=<epoch>
 # reason=...") every 5 s, and at pause also
@@ -645,6 +673,16 @@ read_conf() {
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
+  setting HEAVY_BUILD_MEM_CONTROLLER 0
+  setting HEAVY_BUILD_MC_TARGET_GIB 6
+  setting HEAVY_BUILD_MC_HARD_GIB 3
+  setting HEAVY_BUILD_MC_STEP_PCT 50
+  setting HEAVY_BUILD_MC_NEW_FULL_SECS 60
+  setting HEAVY_BUILD_MC_BRAKE_GIB 10
+  setting HEAVY_BUILD_MC_BRAKE_SWAPIN 2000
+  setting HEAVY_BUILD_MC_BRAKE_FULL_PCT 10
+  setting HEAVY_BUILD_MC_CALM_SECS 60
+  setting HEAVY_BUILD_MC_FALL_GIB 2
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_CRIT_AGE_SECS 1800
@@ -1520,6 +1558,45 @@ psi_watch() {
 
 # ---------------------------------------------------------------- budget rule
 
+# mem_watch: for the memory controller. Sets mc_swapin (disk swap-in pages/s
+# over the oldest kept sample at least 10 s old, or -1), mc_fall (MiB that
+# MemAvailable fell from its highest point in the last 15 s) and mc_harm_ago
+# (seconds since a sample met the brake test, or 999999). Samples are kept
+# for max(120, 2 x MC_CALM_SECS) seconds and written at most every 5 s, with
+# a temp file and mv, like slice_cpu.
+mem_watch() {
+  local f=$CPUDIR/mem.samples k v p= a= full= t0 p0 a0 h0 keep=() base= last=0 hi=0 harm=0 win now=$EPOCHSECONDS
+  mc_swapin=-1 mc_fall=0 mc_harm_ago=999999
+  while read -r k v; do [[ $k == pswpin ]] && { p=$v; break; }; done 2>/dev/null < "$PROC/vmstat"
+  while read -r k v _; do [[ $k == MemAvailable: ]] && { a=$v; break; }; done 2>/dev/null < "$MEMINFO"
+  while read -r k v; do [[ $k == full ]] && { full=${v#*avg10=}; full=${full%% *}; break; }; done 2>/dev/null < "$PROC/pressure/memory"
+  [[ $p =~ ^[0-9]+$ && $a =~ ^[0-9]+$ ]] || return 0
+  [[ $full =~ ^[0-9]+(\.[0-9]+)?$ ]] || full=0
+  win=$(( MC_CALM_SECS * 2 > 120 ? MC_CALM_SECS * 2 : 120 ))
+  while read -r t0 p0 a0 h0; do
+    [[ $t0 =~ ^[0-9]+$ && $p0 =~ ^[0-9]+$ && $a0 =~ ^[0-9]+$ ]] || continue
+    (( t0 <= now && now - t0 <= win && p0 <= p )) || continue
+    keep+=("$t0 $p0 $a0 ${h0:-0}"); last=$t0
+    if [[ -z $base ]] && (( now - t0 >= 10 )); then base="$t0 $p0"; fi
+    (( now - t0 <= 15 && a0 > hi )) && hi=$a0
+    [[ ${h0:-0} == 1 ]] && mc_harm_ago=$(( now - t0 ))
+  done 2>/dev/null < "$f"
+  if [[ -n $base ]]; then
+    read -r t0 p0 <<< "$base"
+    mc_swapin=$(( (p - p0) / (now - t0) ))
+  fi
+  (( hi > a )) && mc_fall=$(( (hi - a) / 1024 ))
+  if (( a < MC_BRAKE_GIB * 1048576 )) && { (( mc_swapin >= MC_BRAKE_SWAPIN )) || (( ${full%%.*} >= MC_BRAKE_FULL_PCT )); }; then
+    harm=1 mc_harm_ago=0
+  fi
+  if (( now - last >= 5 || harm )); then
+    keep+=("$now $p $a $harm")
+    mkdir -p "$CPUDIR" 2>/dev/null
+    printf '%s\n' "${keep[@]}" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
+  fi
+  return 0
+}
+
 # slice_cpu: sets slice_cores (builds.slice CPU use in cores, two decimals,
 # or empty) and slice_win (the seconds it was measured over). Samples
 # ("epoch_us usage_usec", one per line, at least 5 s apart) live in
@@ -1662,6 +1739,17 @@ function psifull10(f,   l, a, b, v) {
 function pressure_why(i,   gap) {
   if (w_pr[i] == "high" || w_pr[i] == "critical") return ""
   if (plevel == "pause") return "pressure: level pause, only high and critical builds start (" preason ")"
+  # The memory controller (memctl=1) takes the place of the slow level gap.
+  if (memctl) {
+    if (mcharmago < mccalm)
+      return sprintf("pressure: memory controller brake, %d s ago under %d GiB free with disk swap-in at least %d pages/s or memory full at least %d%%; it waits until %d s calm", mcharmago, mcbrakegib, mcbrakeswapin, mcbrakefull, mccalm)
+    if (mcfall > mcfallgib * 1024)
+      return sprintf("pressure: memory controller, MemAvailable fell %.1f GiB in the last 15 s, the limit is %d", mcfall / 1024, mcfallgib)
+    gap = (avail > 16) ? 15 : (avail >= 10) ? 30 : 60
+    if (lastnc > 0 && lastnc <= now && now - lastnc < gap)
+      return sprintf("pressure: memory controller, %.1f GiB free, one new build per %d s; the last one started %d s ago", avail, gap, now - lastnc)
+    return ""
+  }
   if (plevel != "slow") return ""
   gap = (avail > slowfastgib) ? slowfastgap : slowgap
   if (lastnc > 0 && lastnc <= now && now - lastnc < gap)
@@ -1712,6 +1800,12 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
+    # The memory controller: only young builds still take more, a new one its
+    # full estimate. Untracked scopes (start 0) keep their charge.
+    if (memctl && start > 0) {
+      tc = 0
+      if (now - start < max(youngmin, (end - start) * youngpct / 100)) tc = max(0, mem * (now - start < mcnewfull ? 100 : pct) / 100 - cur)
+    }
     cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
     if (start > 0 && now - start < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur) * growpct / 100
     # sliceavg already holds the CPU this build used inside its window, so a
@@ -1748,7 +1842,11 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh) {
   }
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
-  if (av + swx - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, reserve %d", w_mem[i], av, swxnote, tc, reserve)
+  if (memctl) {
+    if (av < mchard) return sprintf("memory: %.1f GiB available, the memory controller starts nothing under %d", av, mchard)
+    if (av + swx - tc - w_mem[i] * mcstep / 100 < mctarget) return sprintf("memory: needs %.1f GiB, charged %d%%; %.1f available%s, %.1f still to come for young builds, target %d", w_mem[i], mcstep, av, swxnote, tc, mctarget)
+  }
+  else if (av + swx - tc - w_mem[i] < reserve) return sprintf("memory: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, reserve %d", w_mem[i], av, swxnote, tc, reserve)
   if (held + w_mem[i] > slicecap) {
     if (memreal) return sprintf("slice-cap: needs %.1f GiB; builds.slice uses %.1f GiB%s and running builds may take %.1f more, of the %.1f GiB cap (%s)", w_mem[i], slicecur, slicecache > 0 ? sprintf(" (%.1f GiB inactive cache not counted)", slicecache) : "", held - slicecur, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
     return sprintf("slice-cap: needs %.1f GiB; builds hold %.1f of the %.1f GiB builds.slice cap (%s)", w_mem[i], held, slicecap, capsrc == "high" ? "MemoryHigh" : "MemoryMax")
@@ -1825,6 +1923,20 @@ BEGIN {
     slicecur -= slicecache
   }
   if (sliceavg == "") sliceavg = -1
+  memctl += 0
+  if (memctl) {
+    if (mctarget == "") mctarget = 6
+    if (mchard == "") mchard = 3
+    if (mcstep == "") mcstep = 50
+    if (mcnewfull == "") mcnewfull = 60
+    if (mcbrakegib == "") mcbrakegib = 10
+    if (mcbrakeswapin == "") mcbrakeswapin = 2000
+    if (mcbrakefull == "") mcbrakefull = 10
+    if (mccalm == "") mccalm = 60
+    if (mcfallgib == "") mcfallgib = 2
+    if (mcharmago == "") mcharmago = 999999
+    mcharmago += 0; mcfall += 0
+  }
   if (growpct == "") growpct = 100
   sliceavg += 0
   # Swap headroom: while system memory pressure (some avg10 and avg60) is
@@ -2019,6 +2131,8 @@ decide() {
   psi_watch
   slice_cores= slice_win=0
   (( REAL_USE )) && slice_cpu
+  mc_swapin=-1 mc_fall=0 mc_harm_ago=999999
+  (( MEM_CONTROLLER )) && mem_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
@@ -2033,7 +2147,10 @@ decide() {
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
     -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
-    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" "$ADMIT_AWK")
+    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
+    -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcnewfull="$MC_NEW_FULL_SECS" \
+    -v mcbrakegib="$MC_BRAKE_GIB" -v mcbrakeswapin="$MC_BRAKE_SWAPIN" -v mcbrakefull="$MC_BRAKE_FULL_PCT" -v mccalm="$MC_CALM_SECS" -v mcfallgib="$MC_FALL_GIB" \
+    -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0

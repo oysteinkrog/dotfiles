@@ -769,7 +769,8 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v starve=1800 -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
-      -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" "$ADMIT_AWK" \
+      -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
+      -v memctl="${ADM_MC:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1651,6 +1652,82 @@ run_hb
 wait "$hbpid"
 check "interactive: claude.slice full 9% gates (budget rule)" 'grep -q "interactive: claude.slice memory pressure (full) 9.0%" "$T/state/heavy-build/shadow.log"'
 teardown
+
+
+# 9. The memory controller (HEAVY_BUILD_MEM_CONTROLLER=1, awk memctl=1).
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+mi() { printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( $1 * 1048576 )); }
+RUN_OLD4='R o1 999000 4 2 999500 4294967296 - 0 normal -'
+W_10='W 0000000999000000000-1-n 999000 normal 10 2 600 -'
+W_4='W 0000000999000000000-1-n 999000 normal 4 2 600 -'
+W_1='W 0000000999000000000-1-n 999000 normal 1 2 600 -'
+W_H1='W 0000000999000000000-3-h 999000 high 1 2 600 -'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_10" | ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl off: a 10 GiB build with 13 GiB free waits for the reserve (got '$out')" '[[ $out == wait\|memory:\ needs\ 10.0\ GiB\;* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_10" | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: the same build starts, 13 - 0 - 50% of 10 leaves 8 of the 6 target (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" 'W 0000000999000000000-1-n 999000 normal 16 2 600 -' | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: a 16 GiB build would leave 5 of the 6 target, so it waits (got '$out')" '[[ $out == "wait|memory: needs 16.0 GiB, charged 50%; 13.0 available, 0.0 still to come for young builds, target 6|0" ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MEMINFO=<(mi 2) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: nothing starts under the 3 GiB hard floor (got '$out')" '[[ $out == "wait|memory: 2.0 GiB available, the memory controller starts nothing under 3|0" ]]'
+out=$(printf '%s\n' 'R y1 999970 8 2 1000600 1073741824 - 0 normal -' "$W_4" | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: a build 30 s old is charged its full estimate, 13 - 7 - 2 < 6 (got '$out')" '[[ $out == wait\|memory:*7.0\ still\ to\ come\ for\ young\ builds* ]]'
+out=$(printf '%s\n' 'R y1 999910 8 2 1000600 1073741824 - 0 normal -' "$W_4" | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: at 90 s it is charged 50%, 13 - 3 - 2 >= 6, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' 'R o2 999000 20 2 999500 1073741824 - 0 normal -' "$W_4" | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: an old build is expected to take nothing more (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" "$W_H1" | ADM_MC=1 ADM_MCHARMAGO=30 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: the brake holds a normal build, clock held (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller\ brake*\|1 ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" "$W_H1" | ADM_MC=1 ADM_MCHARMAGO=30 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-3-h 0 1 12)
+check "memctl on: the brake does not hold a high build (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCHARMAGO=61 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: 61 s calm releases the brake (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCFALL=3000 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: MemAvailable fell 2.9 GiB in 15 s, so it waits (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ MemAvailable\ fell\ 2.9\ GiB* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999980 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: 13 GiB free, one start per 30 s, the last 20 s ago (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 13.0\ GiB\ free,\ one\ new\ build\ per\ 30\ s* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999980 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: 20 GiB free, one start per 15 s, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999950 ADM_MEMINFO=<(mi 8) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: 8 GiB free, one start per 60 s, the last 50 s ago (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 8.0\ GiB\ free,\ one\ new\ build\ per\ 60\ s* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl off: level slow at 13 GiB holds 120 s (got '$out')" '[[ $out == wait\|pressure:\ level\ slow* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: level slow is replaced by the 30 s pace (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_PLEVEL=pause ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: level pause still holds a normal build (got '$out')" '[[ $out == wait\|pressure:\ level\ pause* ]]'
+out=$(printf '%s\n' "$W_10" | ADM_MC=1 ADM_MEMINFO=<(mi 12) adm 0000000999000000000-1-n 0 1 12)
+check "memctl on: with no build running the solo rule still decides (got '$out')" '[[ $out == start\|fits:* ]]'
+
+# mem_watch: the sampler behind the brake and the fall test.
+mwn=0
+mw() {  # vmstat_pswpin avail_gib full10 ; samples file on stdin ; prints "swapin fall harm_ago samples"
+  local M=$A/mw$(( ++mwn ))
+  mkdir -p "$M/pressure" "$M/cpu"
+  printf 'pgpgin 1\npswpin %s\npswpout 1\n' "$1" > "$M/vmstat"
+  printf 'MemTotal: 65753100 kB\nMemAvailable: %d kB\n' $(( $2 * 1048576 )) > "$M/meminfo"
+  printf 'some avg10=1.00 avg60=0 avg300=0 total=1\nfull avg10=%s avg60=0 avg300=0 total=1\n' "$3" > "$M/pressure/memory"
+  cat > "$M/cpu/mem.samples"
+  (
+    eval "$(sed -n '/^mem_watch() {/,/^}/p' "$HB")"
+    PROC=$M MEMINFO=$M/meminfo CPUDIR=$M/cpu MC_CALM_SECS=60 MC_BRAKE_GIB=10 MC_BRAKE_SWAPIN=2000 MC_BRAKE_FULL_PCT=10
+    mem_watch
+    echo "$mc_swapin $mc_fall $mc_harm_ago $(wc -l < "$M/cpu/mem.samples")"
+  )
+}
+now=$EPOCHSECONDS
+out=$(printf '%s 0 %d 0\n' $(( now - 20 )) $(( 8 * 1048576 )) | mw 60000 8 0.5)
+check "mem_watch: 60000 pages in 20 s is 3000/s, under 10 GiB, so the brake fires now (got '$out')" '[[ $out == "3000 0 0 2" ]]'
+out=$(printf '%s 0 %d 0\n' $(( now - 20 )) $(( 12 * 1048576 )) | mw 60000 12 0.5)
+check "mem_watch: the same swap-in with 12 GiB free is no harm (got '$out')" '[[ $out == "3000 0 999999 2" ]]'
+out=$(printf '%s 0 %d 0\n' $(( now - 20 )) $(( 20 * 1048576 )) | mw 0 8 12.5)
+check "mem_watch: memory full 12.5% under 10 GiB is harm (got '$out')" '[[ $out == "0 0 0 2" ]]'
+out=$(printf '%s 0 %d 0\n%s 0 %d 1\n' $(( now - 20 )) $(( 20 * 1048576 )) $(( now - 10 )) $(( 15 * 1048576 )) | mw 0 12 0)
+check "mem_watch: 15 to 12 GiB in 10 s is a 3072 MiB fall, harm 10 s ago (got '$out')" '[[ $out == "0 3072 10 3" ]]'
+out=$(printf '%s 0 %d 1\n' $(( now - 200 )) $(( 20 * 1048576 )) | mw 0 12 0)
+check "mem_watch: a sample older than the window is dropped (got '$out')" '[[ $out == "-1 0 999999 1" ]]'
+rm -rf -- "$A"
 
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
