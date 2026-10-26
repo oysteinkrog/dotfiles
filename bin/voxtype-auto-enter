@@ -13,7 +13,10 @@ list="${XDG_CONFIG_HOME:-$HOME/.config}/voxtype/auto-enter-apps"
 last="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voxtype/hotkey-last"
 [ "$(cat "$last" 2>/dev/null)" = alt ] && exit 0
 
-class=$(kdotool getactivewindow getwindowclassname 2>/dev/null) || exit 0
+# kdotool answers in about 5 ms. When KWin hands its script an id that another
+# loaded script already has, it waits 5 s and fails; voxtype keeps the popup up
+# until this hook ends, so give up after 1 s.
+class=$(timeout 1 kdotool getactivewindow getwindowclassname 2>/dev/null) || exit 0
 [ -n "$class" ] || exit 0
 
 grep -v '^[[:space:]]*\(#\|$\)' "$list" | while IFS= read -r app; do
