@@ -1,52 +1,38 @@
-# Shared Services (PM2)
+# Shared Services
 
-Persistent services managed by PM2, shared across all Claude Code instances.
-Auto-started on first shell open via fish config.
-
-Config: `~/.config/pm2/ecosystem.config.js`
+Long-running services that every Claude Code session on the desktop shares. Each is a
+systemd user unit in `.config/systemd/user/`, linked into `~/.config/systemd/user/` by
+`install.sh` and enabled by `setup/steps/70-services.sh`. Units only one machine runs
+are listed in that machine's `host.sh` (`HOST_USER_UNITS`) in the life repo.
 
 ## Services
 
-| Service | Port | What |
-|---------|------|------|
-| **better-ccflare** | 4800 | Claude API load balancer/proxy. All Claude Code instances route through this via `ANTHROPIC_BASE_URL`. Windows exe at `/c/WORK/better-ccflare/apps/cli/dist/`. |
-| **pal-mcp** | 4801 | MCP server for multi-provider LLM access (Gemini, GPT, etc). SSE transport. Python at `/c/WORK/pal-mcp-server/server.py`. |
-| **google-workspace-mcp** | 4802 | MCP server for Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Tasks, Contacts. Streamable HTTP. Uses [workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp) via uvx. |
+| Unit | Port | What |
+|------|------|------|
+| `agent-mail.service` | 4809 | MCP Agent Mail (`am serve-http`), localhost only, no auth. Registered once at user scope as `mcp-agent-mail`. Storage root `~/.mcp_agent_mail_git_mailbox_repo`. Repair and restart: the `agent-mail-ops` skill. |
+| `qmd-ifkb.service` | 8181 | qmd search server for the ifkb knowledge base (GPU, localhost, no auth). |
+| `aiolos-rc-shim.service` | | Shared TLS shim for `--no-pin` aiolos-rc Claude sessions. See `.config/aiolos-rc/README.md`. |
 
 ## Commands
 
 ```bash
-pm2 status                    # check all services
-pm2 logs <name>               # tail logs
-pm2 restart <name>            # restart one
-pm2 restart all               # restart everything
-pm2 start ~/.config/pm2/ecosystem.config.js  # start all (idempotent)
+systemctl --user status agent-mail.service     # state, last log lines
+journalctl --user -u agent-mail.service -f     # follow the log
+systemctl --user restart agent-mail.service    # restart one
+systemctl --user list-units --type=service     # everything running as me
 ```
 
-## Remote MCP servers (shared, no local process)
+## MCP servers without a local service
 
-These connect to hosted endpoints — zero local overhead:
+These start per Claude Code session (stdio) or are hosted elsewhere, so nothing runs
+between sessions:
 
-| Server | Endpoint | What |
-|--------|----------|------|
-| **context7** | `mcp.context7.com/mcp` | Up-to-date library docs. Add "use context7" to prompts. |
-| **github** | `api.githubcopilot.com/mcp/` | GitHub API — PRs, issues, code search, CI workflows. Needs `GITHUB_PERSONAL_ACCESS_TOKEN`. |
-
-## Per-instance MCP servers (stdio, not shared)
-
-These spawn per Claude Code session:
-
-| Server | Notes |
-|--------|-------|
-| **atlassian** | Proxies to `mcp.atlassian.com` via mcp-remote. |
-| **slack** | Slack workspace access. Needs `SLACK_BOT_TOKEN` + `SLACK_TEAM_ID`. |
-| **sentry** | Error tracking. Needs Sentry auth token. |
-| **cdb-interactive** | Windows debugger (CDB). Disabled by default. |
-| **motioncatalyst-ui** | FlaUI UI automation. Disabled by default. |
+- The claude.ai connectors (Gmail, Google Calendar, Google Drive, Claude Docs, TinyFish).
+- The stdio servers in `.claude/mcp-servers.json`, restored into `~/.claude.json` by
+  `bin/claude-restore-mcp`.
 
 ## Config files
 
-- `~/.claude/settings.json` — `ANTHROPIC_BASE_URL` points to better-ccflare on `:4800`
-- `~/.claude.json` `"mcpServers"` — all MCP server configs (shared + per-instance)
-- `~/.config/pm2/ecosystem.config.js` — PM2 process definitions
-- `~/.config/fish/config.fish` — auto-starts PM2 on first shell open
+- `.config/systemd/user/*.service`, `*.timer`: the unit files.
+- `~/.claude.json` `"mcpServers"`: MCP server registrations at user scope.
+- `.claude/mcp-servers.json`: the stdio MCP server definitions kept in git.

@@ -44,7 +44,6 @@ config_dirs=(
   machine
   nvim
   omf
-  pm2
   rclone
   tridactyl
   wezterm
@@ -67,6 +66,11 @@ claude_items=(
   hooks
   output
   skills
+  commands
+  keybindings.json
+  scripts
+  skills-sources.json
+  skills-sources.lock.json
 )
 
 mkdir -p "$olddir"
@@ -155,7 +159,7 @@ if [ -n "$native_linux" ]; then
   echo "=== Linking systemd user units (native Linux) ==="
   mkdir -p "$HOME/.config/systemd/user"
   units=()
-  for unit_path in "$dir"/.config/systemd/user/*.service "$dir"/.config/systemd/user/*.timer "$dir"/.config/systemd/user/*.slice; do
+  for unit_path in "$dir"/.config/systemd/user/*.service "$dir"/.config/systemd/user/*.timer "$dir"/.config/systemd/user/*.path "$dir"/.config/systemd/user/*.socket "$dir"/.config/systemd/user/*.slice; do
     [ -e "$unit_path" ] || continue
     unit="$(basename "$unit_path")"
     target="$HOME/.config/systemd/user/$unit"
@@ -180,6 +184,8 @@ if [ -n "$native_linux" ]; then
     .config/micro/settings.json
     .config/micro/colorschemes
     .config/dcg/config.toml
+    .config/voxtype/config.toml
+    .config/voxtype/auto-enter-apps
     .config/pipewire/iem-eq
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
@@ -193,6 +199,18 @@ if [ -n "$native_linux" ]; then
     .local/share/plasma/plasmoids/org.oysteinkrog.agenda
     .local/share/plasma/plasmoids/org.oysteinkrog.buildqueue
     .local/share/applications/org.wezfurlong.wezterm.desktop
+    .local/share/applications/com.dicklesworthstone.frankenterm.desktop
+    .local/share/icons/hicolor/scalable/apps/com.dicklesworthstone.frankenterm.svg
+    .local/bin/frankenterm
+    .local/bin/frankenterm-remote
+    .local/bin/frankenterm-launchers
+    .local/bin/chrome-personal
+    .local/bin/chrome-work
+    .local/bin/chrome-profile-icon
+    .local/share/applications/chrome-personal.desktop
+    .local/share/applications/chrome-work.desktop
+    .local/share/applications/office-rdp.desktop
+    .local/share/applications/home-rdp.desktop
     .local/share/applications/foobar2000.desktop
     .local/share/applications/foobar2000-back.desktop
     .local/share/applications/foobar2000-next.desktop
@@ -224,7 +242,7 @@ if [ -n "$native_linux" ]; then
 
   # Per-machine files from the machine profile in the private Life repo (see setup/lib.sh).
   host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
-  host_dir="${DOTFILES_HOSTS:-$HOME/work/life/setup/machines}/$host"
+  host_dir="${DOTFILES_HOSTS:-$HOME/projects/life/setup/machines}/$host"
   if [ -d "$host_dir/pipewire" ]; then
     echo ""
     echo "=== Linking PipeWire filter-chain files for $host ==="

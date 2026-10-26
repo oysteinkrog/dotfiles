@@ -1,0 +1,7 @@
+# US keyboard with AltGr dead keys. The system step sets the same for the login screen.
+# A running session only picks this up after a re-login or a change in System Settings.
+[Layout]
+LayoutList=us
+Model=pc105
+Use=true
+VariantList=altgr-intl

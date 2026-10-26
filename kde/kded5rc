@@ -1,0 +1,6 @@
+# No USB automount popups, no browser integration nag
+[Module-browserintegrationreminder]
+autoload=false
+
+[Module-device_automounter]
+autoload=false

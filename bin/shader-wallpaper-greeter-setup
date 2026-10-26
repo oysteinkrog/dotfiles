@@ -18,6 +18,9 @@ sudo install -d -o "$USER_NAME" -g "$(id -gn)" -m 755 "$DIR"
 
 w() { sudo kwriteconfig6 --file "$CONF" --group Greeter --group Wallpaper --group "$PLUGIN" --group General --key "$1" -- "$2"; }
 sudo kwriteconfig6 --file "$CONF" --group Greeter --key WallpaperPluginId "$PLUGIN"
+# No blur behind the login form. Needs plasma-login-manager-local (tools step); the distro
+# package ignores the key.
+sudo kwriteconfig6 --file "$CONF" --group Greeter --key BlurWallpaper false
 w selectedShaderPath "file://$DIR/Star_Nest_Themed.frag"
 w shaderSpeed 0.035
 w targetFps 30

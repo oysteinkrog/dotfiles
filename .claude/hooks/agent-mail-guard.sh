@@ -17,8 +17,9 @@
 #
 # Availability is re-checked on every turn. A transient 503 or a slow health
 # probe is not an outage: the server can briefly degrade while SQLite performs
-# validation, checkpointing, or archive maintenance. PM2 is the only crash
-# supervisor. Prompt hooks never restart or repair the SQLite-backed service.
+# validation, checkpointing, or archive maintenance. systemd (agent-mail.service)
+# is the only crash supervisor. Prompt hooks never restart or repair the
+# SQLite-backed service.
 #
 # Identity is stored per session id, so resume and compact reuse the name
 # already registered instead of minting a second one for the same session.
@@ -63,7 +64,7 @@ probe() {
 }
 
 # Report an outage at most once per interval. This is deliberately diagnostic
-# only: PM2 owns crash recovery, while database repair requires a drained owner
+# only: systemd owns crash recovery, while database repair requires a drained owner
 # and validated backups and therefore must remain an operator action.
 notice_unreachable() {
   local stamp="$STATE_DIR/last-outage-notice" now last

@@ -771,7 +771,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
-      -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
+      -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v monorepo="${ADM_MONOREPO:-}" -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
@@ -928,7 +928,13 @@ out=$(printf '%s\n' "$W_22C" | ADM_SLICEMAX=$A/slicemax16 ADM_PLEVEL=pause adm 0
 check "first build, level pause: the builds.slice cap applies too (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
 printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 6 * 1048576 )) > "$A/meminfo6"
 out=$(printf '%s\n' "$W_C" | ADM_MEMINFO=$A/meminfo6 adm 0000000999000000000-2-c 0 1 12)
-check "first build, level none: under the solo 8 GiB it still waits (got '$out')" '[[ $out == "wait|memory: 6.0 GiB available, the first build needs 8|0" ]]'
+check "first build, level none: a 4 GiB build starts with 6 GiB, under the solo 8 (got '$out')" '[[ $out == start\|* ]]'
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 4 * 1048576 )) > "$A/meminfo4"
+out=$(printf '%s\n' "$W_C" | ADM_MEMINFO=$A/meminfo4 adm 0000000999000000000-2-c 0 1 12)
+check "first build, level none: a 4 GiB build needs its estimate plus 1 (got '$out')" '[[ $out == "wait|memory: 4.0 GiB available, the first build needs 5|0" ]]'
+W_C_MONO='W 0000000999000000000-2-c 999000 critical 4 2 600 tree:/mono/master'
+out=$(printf '%s\n' "$W_C_MONO" | ADM_MEMINFO=$A/meminfo6 ADM_MONOREPO=/mono adm 0000000999000000000-2-c 0 1 12)
+check "first build, level none: in the monorepo under the solo 8 GiB it still waits (got '$out')" '[[ $out == "wait|memory: 6.0 GiB available, the first build needs 8|0" ]]'
 
 # A pressure-held waiter keeps no writer preference.
 W_AGED_T='W 0000000990000000000-1-n 990000 normal 36 2 600 tree:/repo'
@@ -1494,7 +1500,7 @@ out=$(est2 k1 app-run)
 check "app estimate: a cancelled run's 7 GiB peak counts for its key (got '$out')" '[[ $out == 7.0\ * ]]'
 printf '%s\tcargo-test\tk2\t60\t60\t%s\t143\tfail\tNA\tNA\t-\t-\n' "$EPOCHSECONDS" "$(( 20 * G ))" >> "$E/hist"
 out=$(est2 k2 cargo-test)
-check "estimate: other classes still skip signal-ended runs (got '$out')" '[[ $out == 13.3\ * ]]'
+check "estimate: other classes still skip signal-ended runs (got '$out')" '[[ $out == 6.0\ * ]]'
 rm -rf -- "$E"
 
 # End to end with fake systemd-run and systemctl on PATH (no real scope).

@@ -1,0 +1,9 @@
+[Unit]
+Description=Remove the ~/work symlinks left by the move to ~/projects once nothing uses them
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/retire-work-symlinks
+
+[Install]
+WantedBy=default.target
