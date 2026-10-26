@@ -61,6 +61,7 @@ FIRST_LIVE_BYTES = 6 << 20
 FIRST_HISTORY_BYTES = 256 << 10
 KEEP_S = 2 * 3600
 HOUR = 3600
+DAY = 24 * HOUR
 SAMPLE_EVERY_S = 30
 LANE_SAMPLE_S = 60
 NEXT_SHOWN = 6
@@ -83,6 +84,8 @@ TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-])(\d\d)(\d\d
 # A worktree named in a transcript: .scratch/<tag>, work/desktop/<tag>, work/<tag>, src/<tag> or
 # /var/tmp/claude[/<task>]/<tag>.
 MENTION_RE = re.compile(rb"(?:\.scratch|work/desktop|work|/var/tmp/claude(?:/[\w.-]+)?)/([A-Za-z0-9][\w.-]{1,60})")
+# A file name (README.md, test_break.py) is never a worktree; 26.2 is.
+FILE_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,5}$")
 IDLE_RE = re.compile(r"\s*\(idle, not counted[^)]*\)")
 
 
@@ -534,22 +537,28 @@ def update_sessions(ow, now):
         except OSError:
             pass
     # Subagent transcripts number in the thousands, so only those written in the last hour,
-    # or not read yet, are checked for new bytes.
+    # or written in the last two days and not read yet, are checked for new bytes. Offsets
+    # are kept for the last two days' files only: older ones do not grow again.
     offsets = ow.get("offsets", {})
-    paths = []
+    paths, keep = [], []
     for sid, s in sessions.items():
         if s["live"] and sid in dirs:
             d = pathlib.Path(dirs[sid])
-            paths.append([sid, str(d / f"{sid}.jsonl")])
+            main = str(d / f"{sid}.jsonl")
+            paths.append([sid, main])
+            keep.append(main)
             for f in (d / sid / "subagents").glob("*.jsonl"):
                 path = str(f)
                 try:
-                    if path not in offsets or f.stat().st_mtime > now - HOUR:
-                        paths.append([sid, path])
+                    age = now - f.stat().st_mtime
                 except OSError:
-                    pass
+                    continue
+                if age < HOUR or (path not in offsets and age < 2 * DAY):
+                    paths.append([sid, path])
+                if age < 2 * DAY:
+                    keep.append(path)
     ow["files"] = paths
-    ow["keep"] = [p for p in offsets if p.startswith(tuple(dirs[sid] for sid, s in sessions.items() if s["live"] and sid in dirs))]
+    ow["keep"] = keep
 
 
 def update_mentions(ow):
@@ -583,7 +592,10 @@ def update_mentions(ow):
         budget -= end
         offsets[path] = start + end
         for m in MENTION_RE.finditer(data, 0, end):
-            c = counts.setdefault(m.group(1).decode(errors="replace"), {})
+            tag = m.group(1).decode(errors="replace")
+            if FILE_RE.search(tag):
+                continue
+            c = counts.setdefault(tag, {})
             c[sid] = c.get(sid, 0) + 1
         ow["dirty"] = True
     # Forget transcripts of sessions that have ended.
