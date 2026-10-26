@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# heavy-build-prio: read and change the build lane priority file
+# ~/.config/heavy-build.lanes, which heavy-build reads on every poll when
+# HEAVY_BUILD_LANE_PRIO=1 is set in ~/.config/heavy-build.conf.
+#
+# Usage:
+#   heavy-build-prio list                                  rules, then the waiting jobs
+#   heavy-build-prio set [--by WHO] <match> <prio> [note]  add or change the rule for <match>
+#   heavy-build-prio clear [--by WHO] <match>              remove the rule for <match>
+#
+# <prio> is high, normal or low. critical comes only from
+# ~/.config/machine/sessions.toml. <match> is a glob: one that starts with / or
+# ~/ matches the build's directories (the current directory, its git top, the
+# lock-key directories, and anything under them); any other matches the grove
+# lane tag, the lane's grove owner or the calling Claude session's name. In the
+# file the first matching rule wins. set keeps the place of an existing rule
+# and adds a new one at the end. A rule lasts until it is cleared.
+#
+# WHO is who changes the rule: oystein (the Build Queue panel), manager (the
+# default) or an agent's name. A rule line is `<match> <prio> by=<who> [# note]`.
+# Any of them may change any rule; the last writer wins. Each set and clear is
+# logged to ~/.local/state/heavy-build/lanes.log with the time, the old rule,
+# the new one and who changed it.
+#
+# The file is written to a temp file and moved into place under a lock, so a
+# waiter never reads half of it and two writers do not lose a change.
+#
+# Exit codes: 0 done, 1 nothing to clear, 2 usage error.
+set -uo pipefail
+
+LANES=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.lanes
+QDIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/heavy-build.queue
+LANES_LOG=${XDG_STATE_HOME:-$HOME/.local/state}/heavy-build/lanes.log
+
+usage() { sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "${BASH_SOURCE[0]}" >&2; exit 2; }
+die() { echo "heavy-build-prio: $1" >&2; exit "${2:-2}"; }
+
+# Parses the file into M (match), P (priority), B (by), L (line), N (line number).
+load() {
+  local l body m p by extra n=0
+  M=() P=() B=() L=() N=()
+  [[ -r $LANES ]] || return 0
+  while IFS= read -r l || [[ -n $l ]]; do
+    n=$(( n + 1 ))
+    body=${l%%#*}
+    m= p= by= extra=
+    read -r m p by extra <<< "$body"
+    [[ -z $m ]] && continue
+    if [[ -n $extra || ! $p =~ ^(high|normal|low)$ || ( -n $by && ! $by =~ ^by=[A-Za-z0-9_.@:-]+$ ) ]]; then
+      echo "heavy-build-prio: warning: line $n is skipped by heavy-build: $l" >&2
+      continue
+    fi
+    M+=("$m") P+=("$p") B+=("${by#by=}") L+=("$l") N+=("$n")
+  done < "$LANES"
+}
+
+# rule_for "lane owner session dirs": index of the first matching rule, or
+# nothing. The same match as lane_rule_match in heavy-build.
+rule_for() {
+  local i m n d lane owner sess dirs
+  local -a ds
+  read -r lane owner sess dirs <<< "$1"
+  IFS=, read -ra ds <<< "${dirs:--}"
+  for i in "${!M[@]}"; do
+    m=${M[i]}
+    if [[ $m == /* || $m == "~/"* ]]; then
+      [[ $m == "~/"* ]] && m=$HOME/${m#"~/"}
+      m=${m%/}
+      for d in "${ds[@]}"; do
+        [[ $d == - ]] && continue
+        d=${d//%20/ }; d=${d//%2C/,}
+        # shellcheck disable=SC2053
+        if [[ $d == $m || $d == $m/* ]]; then echo "$i"; return; fi
+      done
+    else
+      for n in "$lane" "$owner" "$sess"; do
+        [[ -z $n || $n == - || $n == '?' ]] && continue
+        n=${n//%20/ }; n=${n//%2C/,}
+        # shellcheck disable=SC2053
+        if [[ $n == $m ]]; then echo "$i"; return; fi
+      done
+    fi
+  done
+}
+
+cmd_list() {
+  local i t name l1 p mem c w k cl l3 kv sess agent lane owner dirs hit r
+  local -A count=()
+  local -a rows=()
+  load
+  for t in "$QDIR"/[0-9]*; do
+    [[ -e $t && $t != *.tmp ]] || continue
+    name=${t##*/}
+    p= k= l3=
+    { read -r l1; read -r p mem c w k cl; read -r l3; } < "$t" 2>/dev/null
+    sess='?' agent='?' lane='?' owner='?' dirs=
+    for kv in $l3; do
+      case $kv in
+        session=*) sess=${kv#*=} ;; agent=*) agent=${kv#*=} ;;
+        lane=*) lane=${kv#*=} ;; owner=*) owner=${kv#*=} ;; dirs=*) dirs=${kv#*=} ;;
+      esac
+    done
+    # A ticket from an older heavy-build: only directory rules can be checked.
+    [[ -n $dirs ]] || dirs=$(tr ',' '\n' <<< "${k:--}" | sed -n 's/^\(tree\|cargo\):\([^#]*\).*/\2/p' | paste -sd, -)
+    hit=$(rule_for "$lane $owner $sess ${dirs:--}")
+    r=-
+    if [[ -n $hit ]]; then count[$hit]=$(( ${count[$hit]:-0} + 1 )) r=${N[hit]}; fi
+    rows+=("$name ${p:-normal} rule:$r session=$sess agent=$agent lane=$lane owner=$owner dirs=${dirs:--}")
+  done
+  echo "rules ($LANES):"
+  if (( ${#M[@]} == 0 )); then echo "  (none: heavy-build uses the old priority rules)"; fi
+  for i in "${!M[@]}"; do
+    printf '  %3s  %-40s %-6s by=%-10s waiting=%s   %s\n' "${N[i]}" "${M[i]}" "${P[i]}" "${B[i]:--}" "${count[$i]:-0}" "$( [[ ${L[i]} == *#* ]] && echo "#${L[i]#*#}")"
+  done
+  echo "waiting jobs (job prio rule-line who and where; ? = queued by an older heavy-build):"
+  (( ${#rows[@]} )) || echo "  (none)"
+  for i in "${rows[@]}"; do echo "  $i"; done
+}
+
+# write_lines LINE...: replaces the file with these lines, atomically.
+write_lines() {
+  local tmp=$LANES.tmp.$$
+  { if (( $# )); then printf '%s\n' "$@"; fi; } > "$tmp" && mv -f -- "$tmp" "$LANES"
+}
+
+# log_change ACTION MATCH OLD NEW: one line in lanes.log.
+log_change() {
+  mkdir -p -- "$(dirname -- "$LANES_LOG")" 2>/dev/null
+  printf '%(%Y-%m-%dT%H:%M:%S%z)T action=%s match=%s old="%s" new="%s" by=%s\n' -1 "$1" "$2" "${3//\"/\'}" "${4//\"/\'}" "$BY" >> "$LANES_LOG"
+}
+
+# Runs "$@" under a lock, so two writers do not lose each other's change.
+locked() {
+  mkdir -p -- "$(dirname -- "$LANES")"
+  exec 9>> "$LANES.lock"
+  flock 9
+  "$@"
+}
+
+# Strips the leading spaces of a line.
+trim() { local x; read -r x <<< "$1"; printf '%s' "$x"; }
+
+cmd_set() {
+  local m=$1 p=$2 note=${3:-} l body lm done= line old=-
+  local -a out=()
+  [[ $m =~ ^[^[:space:]#]+$ ]] || die "the match must be one word without spaces or #, not '$m'"
+  [[ $p =~ ^(high|normal|low)$ ]] || die "priority must be high, normal or low, not '$p' (critical comes only from sessions.toml)"
+  [[ $note == *$'\n'* ]] && die "the note must be one line"
+  line="$m $p by=$BY"
+  [[ -n $note ]] && line+="  # $note"
+  if [[ -r $LANES ]]; then
+    while IFS= read -r l || [[ -n $l ]]; do
+      body=${l%%#*}
+      lm=
+      read -r lm _ <<< "$body"
+      if [[ $lm == "$m" ]]; then
+        [[ -z $done ]] && { out+=("$line"); old=$(trim "$l"); }
+        done=1
+        continue
+      fi
+      out+=("$l")
+    done < "$LANES"
+  fi
+  [[ -n $done ]] || out+=("$line")
+  write_lines "${out[@]}"
+  log_change set "$m" "$old" "$line"
+  echo "set: $line"
+}
+
+cmd_clear() {
+  local m=$1 l body lm n=0 old=
+  local -a out=()
+  [[ -r $LANES ]] || die "no rule for '$m' ($LANES does not exist)" 1
+  while IFS= read -r l || [[ -n $l ]]; do
+    body=${l%%#*}
+    lm=
+    read -r lm _ <<< "$body"
+    if [[ $lm == "$m" ]]; then n=$(( n + 1 )); old=${old:-$(trim "$l")}; continue; fi
+    out+=("$l")
+  done < "$LANES"
+  (( n )) || die "no rule for '$m' in $LANES" 1
+  write_lines "${out[@]}"
+  log_change clear "$m" "$old" -
+  echo "cleared: $m"
+}
+
+BY=manager
+cmd=${1:-}
+(( $# )) && shift
+args=()
+while (( $# )); do
+  case $1 in
+    --by) (( $# >= 2 )) || die "--by needs a name"; BY=$2; shift 2 ;;
+    --by=*) BY=${1#--by=}; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+[[ $BY =~ ^[A-Za-z0-9_.@:-]+$ ]] || die "--by must be one word such as oystein, manager or an agent's name, not '$BY'"
+case $cmd in
+  list) (( ${#args[@]} == 0 )) || usage; cmd_list ;;
+  set) (( ${#args[@]} == 2 || ${#args[@]} == 3 )) || usage; locked cmd_set "${args[@]}" ;;
+  clear) (( ${#args[@]} == 1 )) || usage; locked cmd_clear "${args[0]}" ;;
+  -h|--help) sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "${BASH_SOURCE[0]}"; exit 0 ;;
+  *) usage ;;
+esac
