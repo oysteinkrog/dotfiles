@@ -1,5 +1,7 @@
-// Build Queue: the heavy-build queue at a glance. What runs, what waits and why, how fast
-// the queue moves, which projects wait, and the memory signals that gate it.
+// Build Queue: the heavy-build queue at a glance. Whether the gate lets jobs start, what
+// runs and what starts next, why jobs wait, how the queue grew over the last hour, and each
+// lane (project) with its jobs and its priority. Machine resources are left out: Tasklens
+// shows them beside this window.
 // Data comes from $XDG_RUNTIME_DIR/buildqueue/queue.json, which ~/bin/buildqueue-fetch
 // rewrites every five seconds. It only reads. Colours and fonts come from the Plasma style,
 // so the window matches the panels.
@@ -36,14 +38,21 @@ PlasmoidItem {
     readonly property var waiting: q.waiting || ({
             count: 0,
             oldest: 0,
-            causes: [],
-            prios: {}
+            causes: []
         })
     readonly property var velocity: q.velocity || ({
             finished: {}
         })
     readonly property var projects: q.projects || []
-    readonly property var machine: q.machine || ({})
+    readonly property var gate: q.gate || ({
+            state: "unknown"
+        })
+    readonly property var slots: q.slots || ({})
+    readonly property var nextJobs: q.next || []
+    readonly property var history: q.history || []
+
+    // Lane name -> true or false, for lanes the owner opened or closed. The top lane starts open.
+    property var expanded: ({})
 
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
@@ -89,23 +98,106 @@ PlasmoidItem {
         return rest ? i18n("%1 h %2 min", h, rest) : i18n("%1 h", h);
     }
 
-    function gib(bytes) {
-        return (bytes / 1073741824).toFixed(1);
+    // The plain words for a wait cause, from the first word of heavy-build's reason.
+    function causeLabel(kind) {
+        const labels = {
+            pressure: i18n("held by memory pressure"),
+            memory: i18n("not enough memory for it"),
+            starve: i18n("behind a job that waited too long"),
+            behind: i18n("behind an older job"),
+            interactive: i18n("keeping the desktop responsive"),
+            hold: i18n("new jobs on hold"),
+            critical: i18n("a critical job goes first"),
+            key: i18n("same tree already building"),
+            cores: i18n("not enough CPU cores"),
+            "app-cap": i18n("all app-run slots in use")
+        };
+        return labels[kind] || kind;
     }
 
-    function pct(v) {
-        return v === null || v === undefined ? "–" : v.toFixed(1);
+    function isAppRun(b) {
+        return b.cls === "app-run";
     }
 
-    readonly property string trendText: {
-        const t = velocity.trend;
-        if (t === null || t === undefined)
-            return i18n("trend after %1 min", velocity.trendMinutes || 15);
-        if (t > 0)
-            return i18n("growing: %1 more than %2 min ago", t, velocity.trendMinutes);
-        if (t < 0)
-            return i18n("shrinking: %1 fewer than %2 min ago", -t, velocity.trendMinutes);
-        return i18n("steady over %1 min", velocity.trendMinutes);
+    function laneOpen(name, index) {
+        return expanded[name] === undefined ? index === 0 : expanded[name];
+    }
+
+    function toggleLane(name, index) {
+        const next = Object.assign({}, expanded);
+        next[name] = !laneOpen(name, index);
+        expanded = next;
+    }
+
+    // A lane's priority setting as a step: low -1, normal 0, high +1, critical +2.
+    function prioStep(p) {
+        if (!p)
+            return 0;
+        return {
+            low: -1,
+            normal: 0,
+            high: 1,
+            critical: 2
+        }[p.prio] || 0;
+    }
+
+    // The rows of an open lane: sessions and subagents when heavy-build names them, then
+    // their jobs. Jobs without a session come first, as a flat list.
+    function laneRows(lane, max) {
+        const rows = [];
+        const groups = {};
+        const order = [];
+        for (const j of lane.jobs || []) {
+            const key = (j.session || "") + "\u0000" + (j.agent || "");
+            if (!groups[key]) {
+                groups[key] = [];
+                order.push(key);
+            }
+            groups[key].push(j);
+        }
+        order.sort((a, b) => (a === "\u0000" ? -1 : b === "\u0000" ? 1 : a < b ? -1 : 1));
+        let lastSession = null;
+        let shown = 0;
+        for (const key of order) {
+            const [session, agent] = key.split("\u0000");
+            let depth = 0;
+            if (session) {
+                if (session !== lastSession)
+                    rows.push({
+                        kind: "group",
+                        depth: 0,
+                        text: i18n("session %1", session)
+                    });
+                lastSession = session;
+                depth = 1;
+            }
+            if (agent) {
+                rows.push({
+                    kind: "group",
+                    depth: depth,
+                    text: i18n("subagent %1", agent)
+                });
+                depth += 1;
+            }
+            for (const j of groups[key]) {
+                if (shown >= max)
+                    break;
+                rows.push({
+                    kind: "job",
+                    depth: depth,
+                    job: j
+                });
+                shown += 1;
+            }
+        }
+        const total = lane.waiting + lane.running + lane.finished;
+        if (total > shown)
+            rows.push({
+                kind: "more",
+                depth: 0,
+                text: i18n("+ %1 more jobs", total - shown)
+            });
+        return rows;
     }
 
     Timer {
@@ -122,43 +214,95 @@ PlasmoidItem {
     readonly property bool styled: style.background !== undefined
     readonly property color accentText: Kirigami.ColorUtils.tintWithAlpha(styled ? style.accent : Kirigami.Theme.highlightColor, "white", 0.35)
 
-    component Heading: PlasmaExtras.Heading {
-        level: 4
+    component Heading: PlasmaComponents.Label {
         color: root.accentText
+        font.bold: true
         Layout.topMargin: Kirigami.Units.smallSpacing
-    }
-
-    component Stat: ColumnLayout {
-        property alias value: v.text
-        property alias label: l.text
-        property alias valueColor: v.color
-        spacing: 0
-        Layout.fillWidth: true
-        PlasmaExtras.Heading {
-            id: v
-            level: 1
-        }
-        PlasmaComponents.Label {
-            id: l
-            opacity: 0.7
-            font: Kirigami.Theme.smallFont
-        }
     }
 
     component Dim: PlasmaComponents.Label {
         opacity: 0.7
     }
 
+    component Small: PlasmaComponents.Label {
+        font: Kirigami.Theme.smallFont
+        opacity: 0.75
+    }
+
+    // A row of cells, `used` of `total` filled: job slots and app-run slots.
+    component CellMeter: Row {
+        property int total: 0
+        property int used: 0
+        property color fill: Kirigami.Theme.positiveTextColor
+        spacing: 2
+        Repeater {
+            model: Math.max(0, parent.total)
+            delegate: Rectangle {
+                required property int index
+                width: Kirigami.Units.gridUnit * 0.75
+                height: Kirigami.Units.gridUnit * 0.6
+                radius: 2
+                color: index < parent.used ? parent.fill : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.12)
+            }
+        }
+    }
+
+    // A bar `value` long on a scale of `max`, with a faint track behind it.
+    component ValueBar: Rectangle {
+        property real value: 0
+        property real max: 1
+        property color fill: root.accentText
+        implicitHeight: Kirigami.Units.smallSpacing * 2
+        radius: height / 2
+        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.08)
+        Rectangle {
+            height: parent.height
+            radius: parent.radius
+            width: parent.max > 0 ? Math.max(value > 0 ? 2 : 0, parent.width * Math.min(1, parent.value / parent.max)) : 0
+            color: parent.fill
+        }
+    }
+
+    // Segments side by side, each `[count, colour]`, scaled to `max` (default: their sum).
+    component StackBar: Item {
+        property var parts: []
+        property real max: 0
+        implicitHeight: Kirigami.Units.smallSpacing * 2.5
+        readonly property real sum: parts.reduce((a, p) => a + p[0], 0)
+        Rectangle {
+            anchors.fill: parent
+            radius: 2
+            color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.08)
+        }
+        Row {
+            height: parent.height
+            Repeater {
+                model: parent.parent.parts
+                delegate: Rectangle {
+                    required property var modelData
+                    readonly property real scale: parent.parent.max > 0 ? parent.parent.max : parent.parent.sum
+                    height: parent.height
+                    width: scale > 0 ? parent.parent.width * modelData[0] / scale : 0
+                    color: modelData[1]
+                }
+            }
+        }
+    }
+
     fullRepresentation: Rectangle {
         id: view
 
         // Colours are worked out here, not on root, so they come from the Plasma style.
-        readonly property color levelColor: root.machine.level === "pause" ? Kirigami.Theme.negativeTextColor
-            : root.machine.level === "slow" ? Kirigami.Theme.neutralTextColor
-            : Kirigami.Theme.positiveTextColor
-        readonly property color trendColor: (root.velocity.trend || 0) > 0 ? Kirigami.Theme.negativeTextColor
-            : (root.velocity.trend || 0) < 0 ? Kirigami.Theme.positiveTextColor
-            : Kirigami.Theme.textColor
+        readonly property color gateColor: root.gate.state === "paused" ? Kirigami.Theme.negativeTextColor
+            : root.gate.state === "slowed" ? Kirigami.Theme.neutralTextColor
+            : root.gate.state === "open" ? Kirigami.Theme.positiveTextColor
+            : Kirigami.Theme.disabledTextColor
+        readonly property color runColor: Kirigami.Theme.linkColor
+        readonly property color waitColor: Kirigami.Theme.neutralTextColor
+        readonly property color okColor: Kirigami.Theme.positiveTextColor
+        readonly property color failColor: Kirigami.Theme.negativeTextColor
+        readonly property var causePalette: [Kirigami.Theme.negativeTextColor, Kirigami.Theme.neutralTextColor, Kirigami.Theme.linkColor, root.accentText, Kirigami.Theme.positiveTextColor, Kirigami.Theme.disabledTextColor]
+        readonly property color faint: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.08)
 
         function prioColor(p) {
             if (p === "critical")
@@ -168,10 +312,27 @@ PlasmoidItem {
             return Kirigami.Theme.disabledTextColor;
         }
 
-        Layout.minimumWidth: Kirigami.Units.gridUnit * 20
-        Layout.minimumHeight: Kirigami.Units.gridUnit * 24
-        Layout.preferredWidth: Kirigami.Units.gridUnit * 28
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 50
+        function stateColor(s) {
+            return s === "running" ? runColor : s === "waiting" ? waitColor : s === "ok" ? okColor : failColor;
+        }
+
+        // Where a wait of `s` seconds sits on the 1 min to 10 h log axis, from 0 to 1.
+        function logPos(s) {
+            const v = Math.log(Math.max(60, s) / 60) / Math.log(600);
+            return Math.max(0, Math.min(1, v));
+        }
+
+        readonly property var causeParts: (root.waiting.causes || []).map((c, i) => [c.count, causePalette[Math.min(i, causePalette.length - 1)]])
+        readonly property real runMax: root.running.reduce((a, b) => Math.max(a, b.runtime), 60)
+        readonly property real nextMax: root.nextJobs.reduce((a, j) => Math.max(a, j.waited), 60)
+        readonly property real laneMax: root.projects.reduce((a, p) => Math.max(a, p.waiting + p.running + p.finished), 1)
+        readonly property int finishedTotal: Object.values(root.velocity.finished || {}).reduce((a, n) => a + n, 0)
+        readonly property real flowMax: Math.max(1, root.velocity.arrived || 0, root.velocity.started || 0, finishedTotal)
+
+        Layout.minimumWidth: Kirigami.Units.gridUnit * 22
+        Layout.minimumHeight: Kirigami.Units.gridUnit * 30
+        Layout.preferredWidth: Kirigami.Units.gridUnit * 29
+        Layout.preferredHeight: Kirigami.Units.gridUnit * 60
 
         Kirigami.Theme.inherit: !root.styled
         Kirigami.Theme.colorSet: Kirigami.Theme.Window
@@ -191,35 +352,15 @@ PlasmoidItem {
             anchors.margins: Kirigami.Units.largeSpacing
             spacing: Kirigami.Units.smallSpacing
 
-            // Header: the pressure level, and when the data was last read.
+            // Header: the gate state, and why.
             RowLayout {
                 Layout.fillWidth: true
                 PlasmaExtras.Heading {
-                    level: 1
-                    text: i18n("Build queue")
+                    level: 2
+                    text: i18n("Build Queue")
                 }
                 Item {
                     Layout.fillWidth: true
-                }
-                Rectangle {
-                    implicitWidth: levelLabel.implicitWidth + Kirigami.Units.largeSpacing * 2
-                    implicitHeight: levelLabel.implicitHeight + Kirigami.Units.smallSpacing * 2
-                    radius: height / 2
-                    color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, view.levelColor, 0.2)
-                    border.width: 1
-                    border.color: view.levelColor
-                    PlasmaComponents.Label {
-                        id: levelLabel
-                        anchors.centerIn: parent
-                        text: i18n("pressure %1", root.machine.level || "?")
-                        color: view.levelColor
-                        font.bold: true
-                    }
-                    HoverHandler {
-                        id: levelHover
-                    }
-                    PlasmaComponents.ToolTip.visible: levelHover.hovered
-                    PlasmaComponents.ToolTip.text: root.machine.levelReason || ""
                 }
                 Kirigami.Icon {
                     visible: root.problem !== ""
@@ -232,15 +373,36 @@ PlasmoidItem {
                     PlasmaComponents.ToolTip.visible: errHover.hovered
                     PlasmaComponents.ToolTip.text: root.problem
                 }
+                Rectangle {
+                    implicitWidth: gateLabel.implicitWidth + Kirigami.Units.largeSpacing * 2
+                    implicitHeight: gateLabel.implicitHeight + Kirigami.Units.smallSpacing * 2
+                    radius: Kirigami.Units.smallSpacing
+                    color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, view.gateColor, 0.25)
+                    border.width: 1
+                    border.color: view.gateColor
+                    PlasmaComponents.Label {
+                        id: gateLabel
+                        anchors.centerIn: parent
+                        text: root.gate.state === "paused" ? i18n("PAUSED") : root.gate.state === "slowed" ? i18n("SLOWED") : root.gate.state === "open" ? i18n("OPEN") : i18n("UNKNOWN")
+                        color: view.gateColor
+                        font.bold: true
+                    }
+                }
             }
-            Dim {
+            PlasmaComponents.Label {
                 Layout.fillWidth: true
-                visible: !!root.machine.level && root.machine.level !== "normal"
-                text: i18n("%1 since %2", root.machine.levelReason || "", Qt.formatTime(new Date(root.machine.levelSince * 1000), "HH:mm"))
                 wrapMode: Text.Wrap
-                color: view.levelColor
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                color: root.gate.state === "open" ? Kirigami.Theme.textColor : view.gateColor
+                text: {
+                    const since = root.gate.since ? Qt.formatTime(new Date(root.gate.since * 1000), "HH:mm") : "";
+                    const what = root.gate.state === "paused" ? i18n("Only high and critical jobs start.")
+                        : root.gate.state === "slowed" ? i18n("One new job at a time.")
+                        : root.gate.state === "open" ? i18n("Jobs start when they fit.") : "";
+                    return since && root.gate.state !== "open" ? i18n("Since %1: %2. %3", since, root.gate.reason || "", what) : what;
+                }
             }
-
             PlasmaComponents.Label {
                 Layout.fillWidth: true
                 visible: root.problem !== ""
@@ -249,124 +411,279 @@ PlasmoidItem {
                 wrapMode: Text.Wrap
             }
 
-            // The three numbers that matter most.
+            // The key numbers, each with a visual.
             RowLayout {
                 Layout.fillWidth: true
-                spacing: Kirigami.Units.largeSpacing
-                Stat {
-                    value: root.running.length
-                    label: i18n("running")
-                }
-                Stat {
-                    value: root.waiting.count
-                    label: i18n("waiting, %1 GiB est.", root.waiting.memGib || 0)
-                    valueColor: root.waiting.count > 0 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
-                }
-                Stat {
-                    value: root.waiting.count > 0 ? root.dur(root.waiting.oldest) : "–"
-                    label: i18n("oldest wait")
-                }
-            }
+                spacing: Kirigami.Units.largeSpacing * 1.5
 
-            // Velocity over the last hour.
-            Heading {
-                text: i18n("Last hour")
-            }
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: Kirigami.Units.largeSpacing
-                rowSpacing: 0
-
-                Dim {
-                    text: i18n("Finished")
-                }
-                PlasmaComponents.Label {
-                    Layout.fillWidth: true
-                    textFormat: Text.StyledText
-                    text: {
-                        const f = root.velocity.finished || {};
-                        const parts = [];
-                        parts.push("<b>" + (f.ok || 0) + "</b> " + i18n("ok"));
-                        parts.push("<font color='" + Kirigami.Theme.negativeTextColor + "'><b>" + (f.fail || 0) + "</b> " + i18n("failed") + "</font>");
-                        const other = Object.keys(f).filter(k => k !== "ok" && k !== "fail");
-                        for (const k of other)
-                            parts.push("<b>" + f[k] + "</b> " + k);
-                        return parts.join(",  ");
+                ColumnLayout {
+                    spacing: 2
+                    Layout.alignment: Qt.AlignTop
+                    Small {
+                        text: i18n("Running")
+                    }
+                    PlasmaExtras.Heading {
+                        level: 1
+                        text: i18n("%1 of %2", root.running.length, root.slots.jobs || "?")
+                    }
+                    CellMeter {
+                        total: root.slots.jobs || 0
+                        used: root.running.length
+                        fill: view.runColor
+                    }
+                    Small {
+                        Layout.topMargin: Kirigami.Units.smallSpacing
+                        text: i18n("app runs %1 of %2", root.slots.appRunsUsed || 0, root.slots.appRuns || "?")
+                    }
+                    CellMeter {
+                        total: root.slots.appRuns || 0
+                        used: root.slots.appRunsUsed || 0
+                        fill: root.accentText
                     }
                 }
-                Dim {
-                    text: i18n("Started")
+
+                ColumnLayout {
+                    spacing: 2
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignTop
+                    Small {
+                        text: i18n("Waiting")
+                    }
+                    PlasmaExtras.Heading {
+                        level: 1
+                        text: root.waiting.count
+                        color: root.waiting.count > 0 ? view.waitColor : Kirigami.Theme.textColor
+                    }
+                    StackBar {
+                        Layout.fillWidth: true
+                        parts: view.causeParts
+                    }
+                    Repeater {
+                        model: (root.waiting.causes || []).slice(0, 4)
+                        delegate: RowLayout {
+                            required property var modelData
+                            required property int index
+                            spacing: Kirigami.Units.smallSpacing
+                            Layout.fillWidth: true
+                            Rectangle {
+                                implicitWidth: Kirigami.Units.smallSpacing * 2
+                                implicitHeight: implicitWidth
+                                radius: width / 2
+                                color: view.causePalette[Math.min(index, view.causePalette.length - 1)]
+                            }
+                            PlasmaComponents.Label {
+                                text: modelData.count
+                                font: Kirigami.Theme.smallFont
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 1.4
+                                horizontalAlignment: Text.AlignRight
+                            }
+                            Small {
+                                Layout.fillWidth: true
+                                text: root.causeLabel(modelData.kind)
+                                elide: Text.ElideRight
+                                HoverHandler {
+                                    id: causeHover
+                                }
+                                PlasmaComponents.ToolTip.visible: causeHover.hovered && modelData.example !== ""
+                                PlasmaComponents.ToolTip.text: modelData.example
+                            }
+                        }
+                    }
                 }
-                PlasmaComponents.Label {
-                    text: i18n("<b>%1</b>, while %2 arrived", root.velocity.started || 0, root.velocity.arrived || 0)
-                    textFormat: Text.StyledText
-                }
-                Dim {
-                    text: i18n("Queue wait")
-                }
-                PlasmaComponents.Label {
-                    text: i18n("median <b>%1</b>, p90 <b>%2</b>", root.dur(root.velocity.waitMedian), root.dur(root.velocity.waitP90))
-                    textFormat: Text.StyledText
-                }
-                Dim {
-                    text: i18n("Queue")
-                }
-                PlasmaComponents.Label {
-                    text: root.trendText
-                    color: view.trendColor
+
+                ColumnLayout {
+                    spacing: 2
+                    Layout.preferredWidth: Kirigami.Units.gridUnit * 8
+                    Layout.alignment: Qt.AlignTop
+                    Small {
+                        text: i18n("Oldest wait")
+                    }
+                    PlasmaExtras.Heading {
+                        level: 1
+                        text: root.waiting.count > 0 ? root.dur(root.waiting.oldest) : "–"
+                    }
+                    // A log axis from 1 min to 10 h: median and slowest 10% of the jobs that
+                    // started in the last hour, and the oldest job still waiting.
+                    Item {
+                        Layout.fillWidth: true
+                        implicitHeight: Kirigami.Units.gridUnit * 1.6
+                        Rectangle {
+                            y: Kirigami.Units.smallSpacing
+                            width: parent.width
+                            height: 2
+                            color: view.faint
+                        }
+                        Repeater {
+                            model: [[root.velocity.waitMedian, view.okColor], [root.velocity.waitP90, view.waitColor], [root.waiting.count > 0 ? root.waiting.oldest : null, view.failColor]]
+                            delegate: Rectangle {
+                                required property var modelData
+                                visible: modelData[0] !== null && modelData[0] !== undefined
+                                x: parent.width * view.logPos(modelData[0] || 0) - width / 2
+                                width: Kirigami.Units.smallSpacing * 2
+                                height: width
+                                radius: width / 2
+                                color: modelData[1]
+                            }
+                        }
+                        Repeater {
+                            model: [[60, i18n("1 min")], [3600, i18n("1 h")], [36000, i18n("10 h")]]
+                            delegate: PlasmaComponents.Label {
+                                required property var modelData
+                                required property int index
+                                y: Kirigami.Units.smallSpacing * 2.5
+                                x: Math.max(0, Math.min(parent.width - width, parent.width * view.logPos(modelData[0]) - width / 2))
+                                text: modelData[1]
+                                font: Kirigami.Theme.smallFont
+                                opacity: 0.5
+                            }
+                        }
+                    }
+                    Small {
+                        textFormat: Text.StyledText
+                        text: i18n("<font color='%1'>●</font> median %2", view.okColor, root.dur(root.velocity.waitMedian))
+                    }
+                    Small {
+                        textFormat: Text.StyledText
+                        text: i18n("<font color='%1'>●</font> slowest 10% %2", view.waitColor, root.dur(root.velocity.waitP90))
+                    }
                 }
             }
 
-            // Why jobs wait: the cause of each waiting job's last wait decision.
-            Heading {
-                visible: root.waiting.count > 0
-                text: i18n("Why they wait")
-            }
-            Repeater {
-                model: (root.waiting.causes || []).slice(0, 4)
-                delegate: ColumnLayout {
-                    required property var modelData
-                    required property int index
+            // Queue length over the last hour, with the slowed and paused stretches shaded,
+            // and the flow of jobs beside it.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.largeSpacing * 1.5
+
+                ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 0
+                    spacing: 2
                     RowLayout {
                         Layout.fillWidth: true
-                        PlasmaComponents.Label {
-                            text: modelData.kind
-                            font.bold: true
-                            Layout.preferredWidth: Kirigami.Units.gridUnit * 6
-                            elide: Text.ElideRight
-                        }
-                        Rectangle {
-                            Layout.preferredWidth: Math.max(2, (parent.width - Kirigami.Units.gridUnit * 9) * modelData.count / Math.max(1, root.waiting.count))
-                            implicitHeight: Kirigami.Units.smallSpacing * 2
-                            radius: height / 2
-                            color: root.accentText
-                            opacity: 0.7
+                        Heading {
+                            Layout.topMargin: 0
+                            text: i18n("Queue, last hour")
                         }
                         Item {
                             Layout.fillWidth: true
                         }
                         PlasmaComponents.Label {
-                            text: modelData.count
+                            readonly property int t: root.velocity.trend || 0
+                            visible: root.velocity.trend !== null && root.velocity.trend !== undefined
+                            text: t > 0 ? i18n("+%1 in %2 min", t, root.velocity.trendMinutes) : t < 0 ? i18n("%1 in %2 min", t, root.velocity.trendMinutes) : i18n("steady")
+                            color: t > 0 ? Kirigami.Theme.negativeTextColor : t < 0 ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
+                            font: Kirigami.Theme.smallFont
                         }
                     }
-                    Dim {
+                    Canvas {
+                        id: chart
                         Layout.fillWidth: true
-                        visible: index === 0 && modelData.example !== ""
-                        text: modelData.example
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 2
-                        elide: Text.ElideRight
-                        font: Kirigami.Theme.smallFont
+                        implicitHeight: Kirigami.Units.gridUnit * 4
+                        readonly property var points: root.history
+                        readonly property color line: view.waitColor
+                        readonly property color slowBand: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.neutralTextColor, 0.18)
+                        readonly property color pauseBand: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.negativeTextColor, 0.22)
+                        readonly property color text: Kirigami.Theme.disabledTextColor
+                        onPointsChanged: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            const ctx = getContext("2d");
+                            ctx.reset();
+                            const pts = points;
+                            if (pts.length < 2)
+                                return;
+                            const t1 = pts[pts.length - 1][0], t0 = t1 - 3600;
+                            const top = Math.max(10, ...pts.map(p => p[1]));
+                            const fontPx = 11;
+                            const h = height - fontPx - 4, w = width;
+                            const X = t => w * (t - t0) / 3600;
+                            const Y = n => h - h * n / top;
+                            for (let i = 0; i < pts.length - 1; i++) {
+                                const lvl = pts[i][2];
+                                if (lvl === "slow" || lvl === "pause") {
+                                    ctx.fillStyle = lvl === "pause" ? pauseBand : slowBand;
+                                    ctx.fillRect(X(pts[i][0]), 0, X(pts[i + 1][0]) - X(pts[i][0]) + 0.5, h);
+                                }
+                            }
+                            ctx.beginPath();
+                            ctx.moveTo(X(pts[0][0]), h);
+                            for (const p of pts)
+                                ctx.lineTo(X(p[0]), Y(p[1]));
+                            ctx.lineTo(X(t1), h);
+                            ctx.closePath();
+                            ctx.fillStyle = Qt.rgba(line.r, line.g, line.b, 0.18);
+                            ctx.fill();
+                            ctx.beginPath();
+                            for (let i = 0; i < pts.length; i++) {
+                                if (i === 0)
+                                    ctx.moveTo(X(pts[i][0]), Y(pts[i][1]));
+                                else
+                                    ctx.lineTo(X(pts[i][0]), Y(pts[i][1]));
+                            }
+                            ctx.strokeStyle = line;
+                            ctx.lineWidth = 1.5;
+                            ctx.stroke();
+                            ctx.fillStyle = text;
+                            ctx.font = fontPx + "px sans-serif";
+                            ctx.textBaseline = "bottom";
+                            ctx.fillText(i18n("1 h ago"), 2, height);
+                            const peak = i18n("top %1", top);
+                            ctx.fillText(peak, (w - ctx.measureText(peak).width) / 2, height);
+                            const nowText = i18n("now %1", pts[pts.length - 1][1]);
+                            ctx.fillText(nowText, w - ctx.measureText(nowText).width - 2, height);
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.preferredWidth: Kirigami.Units.gridUnit * 9
+                    Layout.alignment: Qt.AlignTop
+                    spacing: 2
+                    Heading {
+                        Layout.topMargin: 0
+                        text: i18n("Jobs, last hour")
+                    }
+                    Repeater {
+                        model: [[i18n("arrived"), root.velocity.arrived || 0], [i18n("started"), root.velocity.started || 0], [i18n("finished"), view.finishedTotal]]
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+                            Small {
+                                text: modelData[0]
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 3.2
+                            }
+                            ValueBar {
+                                Layout.fillWidth: true
+                                value: modelData[1]
+                                max: view.flowMax
+                            }
+                            PlasmaComponents.Label {
+                                text: modelData[1]
+                                font: Kirigami.Theme.smallFont
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 1.4
+                                horizontalAlignment: Text.AlignRight
+                            }
+                        }
+                    }
+                    StackBar {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 2
+                        readonly property var f: root.velocity.finished || {}
+                        parts: [[f.ok || 0, view.okColor], [f.fail || 0, view.failColor], [view.finishedTotal - (f.ok || 0) - (f.fail || 0), Kirigami.Theme.neutralTextColor]]
+                    }
+                    Small {
+                        textFormat: Text.StyledText
+                        readonly property var f: root.velocity.finished || {}
+                        text: i18n("<font color='%1'>%2 ok</font>, <font color='%3'>%4 failed</font>", view.okColor, f.ok || 0, view.failColor, f.fail || 0)
                     }
                 }
             }
 
-            // Running builds, longest first.
+            // Running builds, longest first, each with a bar for how long it has run.
             Heading {
-                text: i18n("Running")
+                text: i18n("Running now")
             }
             Repeater {
                 model: root.running
@@ -375,18 +692,19 @@ PlasmoidItem {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
                     Rectangle {
-                        implicitWidth: Kirigami.Units.smallSpacing
-                        Layout.fillHeight: true
+                        implicitWidth: Kirigami.Units.smallSpacing * 2
+                        implicitHeight: implicitWidth
                         radius: width / 2
-                        color: view.prioColor(modelData.prio)
+                        color: view.runColor
                     }
                     PlasmaComponents.Label {
                         text: modelData.cls
-                        font.bold: true
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 6
+                        elide: Text.ElideRight
                     }
                     PlasmaComponents.Label {
-                        Layout.fillWidth: true
                         text: modelData.project
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 6
                         elide: Text.ElideRight
                         opacity: 0.8
                         HoverHandler {
@@ -395,8 +713,17 @@ PlasmoidItem {
                         PlasmaComponents.ToolTip.visible: runHover.hovered && modelData.why !== ""
                         PlasmaComponents.ToolTip.text: modelData.why
                     }
-                    Dim {
-                        text: i18n("%1 GiB", root.gib(modelData.mem))
+                    PlasmaComponents.Label {
+                        visible: modelData.prio === "high" || modelData.prio === "critical"
+                        text: modelData.prio
+                        color: view.prioColor(modelData.prio)
+                        font: Kirigami.Theme.smallFont
+                    }
+                    ValueBar {
+                        Layout.fillWidth: true
+                        value: modelData.runtime
+                        max: view.runMax
+                        fill: view.runColor
                     }
                     PlasmaComponents.Label {
                         text: root.dur(modelData.runtime)
@@ -410,103 +737,251 @@ PlasmoidItem {
                 text: i18n("Nothing running")
             }
 
-            // Per project: waiting now, started and finished in the last hour.
-            Heading {
-                text: i18n("Projects")
-            }
+            // The next jobs in queue order, each with a bar for how long it has waited.
             RowLayout {
                 Layout.fillWidth: true
-                Dim {
-                    Layout.fillWidth: true
-                    text: i18n("project")
-                    font: Kirigami.Theme.smallFont
+                visible: root.nextJobs.length > 0
+                Heading {
+                    text: i18n("Next in line")
                 }
-                Repeater {
-                    model: [i18n("waiting"), i18n("started"), i18n("done"), i18n("failed")]
-                    delegate: Dim {
-                        required property string modelData
-                        text: modelData
-                        font: Kirigami.Theme.smallFont
+                Item {
+                    Layout.fillWidth: true
+                }
+                Small {
+                    Layout.topMargin: Kirigami.Units.smallSpacing
+                    text: root.waiting.count > root.nextJobs.length ? i18n("%1 more waiting", root.waiting.count - root.nextJobs.length) : ""
+                }
+            }
+            Repeater {
+                model: root.nextJobs
+                delegate: RowLayout {
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+                    Small {
+                        text: index + 1
+                        Layout.preferredWidth: Kirigami.Units.smallSpacing * 2
+                    }
+                    PlasmaComponents.Label {
+                        text: modelData.project
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 6.5
+                        elide: Text.ElideRight
+                    }
+                    PlasmaComponents.Label {
+                        text: modelData.cls
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 5.5
+                        elide: Text.ElideRight
+                        opacity: 0.8
+                        HoverHandler {
+                            id: nextHover
+                        }
+                        PlasmaComponents.ToolTip.visible: nextHover.hovered
+                        PlasmaComponents.ToolTip.text: i18n("%1 priority, %2, runs about %3", modelData.prio, root.causeLabel(modelData.cause), root.dur(modelData.est))
+                    }
+                    ValueBar {
+                        Layout.fillWidth: true
+                        value: modelData.waited
+                        max: view.nextMax
+                        fill: modelData.prio === "critical" || modelData.prio === "high" ? view.prioColor(modelData.prio) : view.waitColor
+                    }
+                    PlasmaComponents.Label {
+                        text: root.dur(modelData.waited)
                         horizontalAlignment: Text.AlignRight
-                        Layout.preferredWidth: Kirigami.Units.gridUnit * 3.5
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 4
                     }
                 }
             }
-            PlasmaComponents.ScrollView {
+
+            // Lanes: one row per project, as a tree. Each row has a bar split into waiting,
+            // running and finished jobs, a sparkline of its queue over the hour, and its
+            // priority setting.
+            RowLayout {
+                Layout.fillWidth: true
+                Heading {
+                    text: i18n("Lanes")
+                }
+                Item {
+                    Layout.fillWidth: true
+                }
+                Repeater {
+                    model: [[i18n("waiting"), view.waitColor], [i18n("running"), view.runColor], [i18n("ok"), view.okColor], [i18n("failed"), view.failColor]]
+                    delegate: Small {
+                        required property var modelData
+                        Layout.topMargin: Kirigami.Units.smallSpacing
+                        textFormat: Text.StyledText
+                        text: "<font color='" + modelData[1] + "'>■</font> " + modelData[0]
+                    }
+                }
+            }
+            ListView {
+                id: lanes
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: Kirigami.Units.gridUnit * 4
+                clip: true
+                model: root.projects
+                boundsBehavior: Flickable.StopAtBounds
+                delegate: ColumnLayout {
+                    id: lane
+                    required property var modelData
+                    required property int index
+                    readonly property bool open: root.laneOpen(modelData.name, index)
+                    readonly property int step: root.prioStep(modelData.prio)
+                    width: ListView.view.width
+                    spacing: 0
 
-                ListView {
-                    model: root.projects
-                    clip: true
-                    delegate: RowLayout {
-                        required property var modelData
-                        width: ListView.view.width
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+                        Kirigami.Icon {
+                            source: lane.open ? "go-down-symbolic" : "go-next-symbolic"
+                            implicitWidth: Kirigami.Units.iconSizes.small
+                            implicitHeight: implicitWidth
+                        }
                         PlasmaComponents.Label {
-                            Layout.fillWidth: true
-                            text: modelData.name
+                            text: lane.modelData.name
+                            font.bold: lane.open
+                            Layout.preferredWidth: Kirigami.Units.gridUnit * 6.5
                             elide: Text.ElideRight
                         }
-                        Repeater {
-                            model: [modelData.waiting, modelData.started, modelData.finished, modelData.failed]
-                            delegate: PlasmaComponents.Label {
-                                required property int modelData
-                                required property int index
-                                text: modelData || "·"
-                                opacity: modelData ? 1 : 0.4
-                                font.bold: index === 0 && modelData > 0
-                                color: index === 3 && modelData > 0 ? Kirigami.Theme.negativeTextColor
-                                    : index === 0 && modelData > 0 ? Kirigami.Theme.neutralTextColor
-                                    : Kirigami.Theme.textColor
-                                horizontalAlignment: Text.AlignRight
-                                Layout.preferredWidth: Kirigami.Units.gridUnit * 3.5
+                        StackBar {
+                            Layout.fillWidth: true
+                            max: view.laneMax
+                            parts: [[lane.modelData.waiting, view.waitColor], [lane.modelData.running, view.runColor], [lane.modelData.finished - lane.modelData.failed, view.okColor], [lane.modelData.failed, view.failColor]]
+                        }
+                        PlasmaComponents.Label {
+                            text: lane.modelData.waiting
+                            font: Kirigami.Theme.smallFont
+                            color: lane.modelData.waiting > 0 ? view.waitColor : Kirigami.Theme.disabledTextColor
+                            Layout.preferredWidth: Kirigami.Units.gridUnit * 1.4
+                            horizontalAlignment: Text.AlignRight
+                        }
+                        Canvas {
+                            implicitWidth: Kirigami.Units.gridUnit * 3
+                            implicitHeight: Kirigami.Units.gridUnit * 0.9
+                            readonly property var spark: lane.modelData.spark || []
+                            readonly property color line: view.waitColor
+                            onSparkChanged: requestPaint()
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                const s = spark;
+                                if (s.length < 2)
+                                    return;
+                                const top = Math.max(1, ...s);
+                                ctx.beginPath();
+                                for (let i = 0; i < s.length; i++) {
+                                    const x = width * i / (s.length - 1), y = height - 1 - (height - 2) * s[i] / top;
+                                    if (i === 0)
+                                        ctx.moveTo(x, y);
+                                    else
+                                        ctx.lineTo(x, y);
+                                }
+                                ctx.strokeStyle = line;
+                                ctx.lineWidth = 1;
+                                ctx.stroke();
+                            }
+                        }
+                        // Priority: a track with a marker at -1, 0 or +1. The buttons are
+                        // off until heavy-build-prio is installed.
+                        PlasmaComponents.ToolButton {
+                            icon.name: "go-down-symbolic"
+                            enabled: false
+                            implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+                            implicitHeight: implicitWidth
+                            PlasmaComponents.ToolTip.text: i18n("Lower this lane's priority (needs heavy-build-prio)")
+                        }
+                        Item {
+                            implicitWidth: Kirigami.Units.gridUnit * 2
+                            implicitHeight: Kirigami.Units.gridUnit * 0.8
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width
+                                height: 2
+                                color: view.faint
+                            }
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: parent.width * (Math.max(-1, Math.min(1, lane.step)) + 1) / 2 - width / 2
+                                width: Kirigami.Units.smallSpacing * 2.5
+                                height: width
+                                radius: width / 2
+                                color: lane.step > 0 ? Kirigami.Theme.positiveTextColor : lane.step < 0 ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+                            }
+                            HoverHandler {
+                                id: prioHover
+                            }
+                            PlasmaComponents.ToolTip.visible: prioHover.hovered
+                            PlasmaComponents.ToolTip.text: lane.modelData.prio ? i18n("Priority %1 (set by %2, rule %3)", lane.modelData.prio.prio, lane.modelData.prio.by || "?", lane.modelData.prio.rule) : i18n("Normal priority")
+                        }
+                        PlasmaComponents.ToolButton {
+                            icon.name: "go-up-symbolic"
+                            enabled: false
+                            implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+                            implicitHeight: implicitWidth
+                            PlasmaComponents.ToolTip.text: i18n("Raise this lane's priority (needs heavy-build-prio)")
+                        }
+                        TapHandler {
+                            onTapped: root.toggleLane(lane.modelData.name, lane.index)
+                        }
+                    }
+
+                    // The open lane's sessions, subagents and jobs.
+                    Repeater {
+                        model: lane.open ? root.laneRows(lane.modelData, 8) : []
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: Kirigami.Units.gridUnit * (1 + modelData.depth * 0.8)
+                            spacing: Kirigami.Units.smallSpacing
+                            Rectangle {
+                                visible: modelData.kind === "job"
+                                implicitWidth: Kirigami.Units.smallSpacing * 1.6
+                                implicitHeight: implicitWidth
+                                radius: width / 2
+                                color: modelData.kind === "job" ? view.stateColor(modelData.job.state) : "transparent"
+                            }
+                            PlasmaComponents.Label {
+                                visible: modelData.kind !== "job"
+                                text: modelData.text || ""
+                                font: Kirigami.Theme.smallFont
+                                opacity: modelData.kind === "more" ? 0.6 : 0.85
+                            }
+                            PlasmaComponents.Label {
+                                visible: modelData.kind === "job"
+                                text: modelData.kind === "job" ? modelData.job.cls : ""
+                                font: Kirigami.Theme.smallFont
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 6
+                                elide: Text.ElideRight
+                            }
+                            Small {
+                                visible: modelData.kind === "job"
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                text: {
+                                    if (modelData.kind !== "job")
+                                        return "";
+                                    const j = modelData.job;
+                                    if (j.state === "running")
+                                        return i18n("running %1", root.dur(j.age));
+                                    if (j.state === "waiting")
+                                        return i18n("waiting #%1, %2, %3", j.pos, root.dur(j.age), root.causeLabel(j.cause));
+                                    const at = Qt.formatTime(new Date(j.end * 1000), "HH:mm");
+                                    return j.state === "ok" ? i18n("finished ok %1", at) : i18n("failed %1", at);
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Machine signals that gate the queue.
-            Kirigami.Separator {
+            Small {
                 Layout.fillWidth: true
-            }
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: Kirigami.Units.largeSpacing
-                rowSpacing: 0
-                Dim {
-                    text: i18n("Memory free")
-                }
-                PlasmaComponents.Label {
-                    text: i18n("%1 of %2 GiB", root.gib(root.machine.memAvail || 0), root.gib(root.machine.memTotal || 0))
-                    color: (root.machine.memAvail || 0) < 10 * 1073741824 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
-                }
-                Dim {
-                    text: i18n("Builds use")
-                }
-                PlasmaComponents.Label {
-                    text: i18n("%1 GiB", root.gib(root.machine.slice || 0))
-                }
-                Dim {
-                    text: i18n("Swap")
-                }
-                PlasmaComponents.Label {
-                    text: i18n("%1 GiB used, %2 pages/s in", root.gib(root.machine.swapUsed || 0), root.machine.swapinPs === null || root.machine.swapinPs === undefined ? "–" : Math.round(root.machine.swapinPs))
-                }
-                Dim {
-                    text: i18n("Memory stall")
-                }
-                PlasmaComponents.Label {
-                    text: i18n("some %1%, full %2% (10 s)", root.pct(root.machine.psiSome10), root.pct(root.machine.psiFull10))
-                }
-            }
-            Dim {
-                Layout.fillWidth: true
-                text: i18n("Limits: %1", root.q.limits || "?")
-                font: Kirigami.Theme.smallFont
+                text: i18n("Queue rules: %1", root.q.limits || "?")
                 wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
             }
         }
     }
