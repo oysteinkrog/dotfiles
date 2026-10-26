@@ -366,9 +366,15 @@
 #   by=<who> after the priority (who set it: oystein, manager or an agent's
 #   name); heavy-build ignores it and heavy-build-prio list shows it.
 # - Who submitted a job: worked out once at submit, always. The Claude session
-#   is the first ancestor with a live ~/.claude/sessions/PID.json, else the
-#   session CLAUDE_PID names, else the session in the same claude scope (a
-#   build started with systemd-run --user has none of these, so "-"). The
+#   is, in this order: the session HEAVY_BUILD_SESSION_PID names, when live;
+#   HEAVY_BUILD_SESSION when no pid is given and a live session has that
+#   name; the first ancestor with a live
+#   ~/.claude/sessions/PID.json; the session CLAUDE_PID names; the session in
+#   the same claude scope. Ticket line 3 says which one as via=env-name,
+#   env-pid, parent, claude-pid or scope (- for none). The SessionStart hook
+#   heavy-build-session-env.py sets both HEAVY_BUILD_SESSION variables and
+#   passes them through systemd-run, which otherwise starts a unit with none
+#   of the caller's environment. The
 #   agent is CLAUDE_AGENT_NAME or HEAVY_BUILD_AGENT, else "subagent" in a
 #   Claude subagent's shell, else "-". It goes into ticket line 3, the end of
 #   every live.log line (session= agent=) and history column 14.
@@ -1388,7 +1394,7 @@ PY
 
 # ---------------------------------------------------------------- lane priority
 
-# lane_ident_py PID DIR...: prints "lane owner session dirs" for the lanes
+# lane_ident_py PID DIR...: prints "lane owner session dirs via" for the lanes
 # file: the grove lane tag that holds the first of DIR that is in a lane, that
 # lane's grove owner, the Claude session that owns PID (an ancestor that is a
 # session, else a session in the same claude scope, as machine-session does),
@@ -1454,28 +1460,39 @@ for f in Path(env("MACHINE_SESSION_SESSIONS_DIR", home / ".claude/sessions")).gl
     if not rest or (s.get("procStart") and len(rest) > 19 and rest[19] != str(s["procStart"])):
         continue
     sessions[sp] = s.get("name") or f"pid-{sp}"
-session, p, seen = None, pid, set()
-while p > 1 and p not in seen:
+# The session, and how it was found ("via"). HEAVY_BUILD_SESSION_PID wins
+# when it is a live session, and gives its current name, so a rename since
+# the SessionStart hook ran does not matter. HEAVY_BUILD_SESSION, a name,
+# counts only when no pid was given and a live session has that name: with
+# a pid that is gone, the name may belong to a newer session by now.
+session, via = None, "-"
+want, wpid = env("HEAVY_BUILD_SESSION", ""), env("HEAVY_BUILD_SESSION_PID", "")
+if wpid.isdigit() and int(wpid) in sessions:
+    session, via = sessions[int(wpid)], "env-pid"
+elif not wpid and want and want in sessions.values():
+    session, via = want, "env-name"
+p, seen = pid, set()
+while session is None and p > 1 and p not in seen:
     if p in sessions:
-        session = sessions[p]
+        session, via = sessions[p], "parent"
         break
     seen.add(p)
     rest = stat_rest(p)
     p = int(rest[1]) if len(rest) > 1 else 0
-if session is None and env("CLAUDE_PID", "").isdigit():
-    session = sessions.get(int(env("CLAUDE_PID")))
+if session is None and env("CLAUDE_PID", "").isdigit() and int(env("CLAUDE_PID")) in sessions:
+    session, via = sessions[int(env("CLAUDE_PID"))], "claude-pid"
 if session is None:
     cg = cgroup(pid) or ""
     if "/claude-" in cg and cg.endswith(".scope"):
         for sp, name in sessions.items():
             if cgroup(sp) == cg:
-                session = name
+                session, via = name, "scope"
                 break
 
 def enc(v):
     return (v or "-").replace(" ", "%20").replace(",", "%2C") if v else "-"
 
-print(enc(lane), enc(owner), enc(session), ",".join(enc(d) for d in dirs) or "-")
+print(enc(lane), enc(owner), enc(session), ",".join(enc(d) for d in dirs) or "-", via)
 PY
 }
 
@@ -1509,7 +1526,7 @@ lanes_load() {
 lane_rule_match() {
   local i m n d lane owner sess dirs
   local -a ds
-  read -r lane owner sess dirs <<< "$lane_ident"
+  read -r lane owner sess dirs _ <<< "$lane_ident"
   IFS=, read -ra ds <<< "${dirs:--}"
   for i in "${!LR_M[@]}"; do
     m=${LR_M[i]}
@@ -1540,7 +1557,7 @@ lane_rule_match() {
 # when set; a Claude subagent without one (CLAUDE_CODE_CHILD_SESSION=1) is
 # "subagent"; otherwise "-". HB_LANE_IDENT is a test hook.
 job_ident() {
-  local top lane owner dirs
+  local top lane owner dirs via
   local -a kd
   mapfile -t kd < <(key_dirs)
   if [[ -n ${HB_LANE_IDENT:-} ]]; then
@@ -1550,12 +1567,12 @@ job_ident() {
     lane_ident=$(lane_ident_py $$ "$PWD" ${top:+"$top"} "${kd[@]}")
   fi
   [[ -n $lane_ident ]] || lane_ident="- - - -"
-  read -r lane owner own_session dirs <<< "$lane_ident"
+  read -r lane owner own_session dirs via <<< "$lane_ident"
   own_agent=${CLAUDE_AGENT_NAME:-${HEAVY_BUILD_AGENT:-}}
   [[ -z $own_agent && ${CLAUDE_CODE_CHILD_SESSION:-} == 1 ]] && own_agent=subagent
   own_agent=${own_agent//[^A-Za-z0-9_.@:-]/_}
   own_agent=${own_agent:--} own_session=${own_session:--}
-  ticket_l3="session=$own_session agent=$own_agent lane=${lane:--} owner=${owner:--} dirs=${dirs:--}"
+  ticket_l3="session=$own_session agent=$own_agent lane=${lane:--} owner=${owner:--} dirs=${dirs:--} via=${via:--}"
 }
 
 # lane_setup: once per run, works out the session class when the caller set
