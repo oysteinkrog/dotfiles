@@ -289,6 +289,8 @@
 #   12 the Wine test sig (see wine_sig; - for other classes), 13 the
 #   non-file peak in bytes (see sample_scope; NA when memory.stat could not
 #   be read). Lines before the non-file change (2026-10-25) have no column 13.
+#   14 who submitted it, as <session>/<agent> ("-" for either one not known;
+#   see "Who submitted a job"). Older lines have no column 14.
 #   Lines written before 2026-10-09 have no column 8, lines before
 #   2026-10-16 no column 9, lines before 2026-10-20 no column 10 or 11, and
 #   lines before the sig change (2026-10-20 afternoon) no column 12.
@@ -343,6 +345,49 @@
 #     normal or low build may start ahead of it (no backfill past it);
 #   - low when the calling session is pausable.
 #   HEAVY_BUILD_PRIORITY=critical cannot be set by hand.
+# - Lane priority (HEAVY_BUILD_LANE_PRIO=1 in heavy-build.conf, default 0):
+#   the manager sets priority per lane in ~/.config/heavy-build.lanes, one
+#   rule per line, `<match> <high|normal|low> [by=<who>] [# note]`, first
+#   match wins.
+#   A match that starts with / or ~/ is a glob on the build's directories (the
+#   current directory, its git top and the lock-key directories), for example
+#   /var/tmp/claude/cass*. Any other match is a glob on the grove lane tag,
+#   the lane's grove owner and the calling Claude session's name, for example
+#   theme, release-* or hotfix-a. A rule lasts until it is removed
+#   (heavy-build-prio set and clear write the file). Each waiter reads the
+#   file on every poll and rewrites line 2 of its ticket when its priority
+#   changes, so its place among the others changes too; live.log gets one
+#   event=prio-change line. Order: critical from sessions.toml beats
+#   everything, then the first matching rule, then HEAVY_BUILD_PRIORITY,
+#   then the session default (low when pausable). A caller's own high with no
+#   rule for it counts as normal: the manager owns priority. A bad line is
+#   skipped with a warning. With the switch off, or with no lanes file or an
+#   empty one, priority works as described above. A rule may carry
+#   by=<who> after the priority (who set it: oystein, manager or an agent's
+#   name); heavy-build ignores it and heavy-build-prio list shows it.
+# - Who submitted a job: worked out once at submit, always. The Claude session
+#   is the first ancestor with a live ~/.claude/sessions/PID.json, else the
+#   session CLAUDE_PID names, else the session in the same claude scope (a
+#   build started with systemd-run --user has none of these, so "-"). The
+#   agent is CLAUDE_AGENT_NAME or HEAVY_BUILD_AGENT, else "subagent" in a
+#   Claude subagent's shell, else "-". It goes into ticket line 3, the end of
+#   every live.log line (session= agent=) and history column 14.
+# - Re-exec (HEAVY_BUILD_REEXEC=1, default 0): bash keeps the code a
+#   heavy-build started with, so an install used to reach only new jobs (on
+#   2026-10-26, 41 of 82 waiters ran rules from before that day's installs).
+#   With this on, a waiter that has not started its build checks its own
+#   script's inode and mtime on every poll. When they changed, it re-execs the
+#   new script with the same arguments, environment and directory, as the same
+#   process. The new code takes back the same ticket file (handed over in
+#   HB_ADOPT_TICKET), so the build keeps its place in line, and its give-up
+#   clock. live.log gets event=reexec. It re-execs at most once per script
+#   version, and not at all when the new file fails `bash -n` or cannot adopt
+#   a ticket (event=reexec-skip).
+# - Estimate refresh (HEAVY_BUILD_EST_REFRESH=1, default 0): a waiter works
+#   out its estimate again when a setting in heavy-build.conf changes, and
+#   otherwise every HEAVY_BUILD_EST_REFRESH_SECS (default 600) seconds. When
+#   it changes, ticket line 2 is rewritten and live.log gets one
+#   event=est-change est_from= est_to= line.
 # - Checks again every HEAVY_BUILD_POLL seconds (default 5).
 # - Gives up after HEAVY_BUILD_WAIT seconds without progress (default 7200)
 #   with exit code 75. The clock starts again each time the waiter moves up
@@ -502,6 +547,17 @@ set -uo pipefail
 # wait loop that way and their stale charge held the queue for 76 min.
 {
 
+# The script this process loaded: bash keeps it open on fd 255, so this is the
+# inode it read even when an install replaced the path since. Taken first, so
+# an install during setup still counts as a change (see "Re-exec").
+script_id=$(stat -L -c '%i %Y' -- "/proc/$$/fd/255" 2>/dev/null || stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)
+# The arguments as given, and what a re-exec while waiting hands over (see
+# "Re-exec"). The HB_ADOPT_* and HB_REEXEC_IDS variables leave the environment
+# here, so the build never sees them.
+orig_args=("$@")
+adopt_t=${HB_ADOPT_TICKET:-} adopt_st=${HB_ADOPT_STATE:-} reexec_ids=${HB_REEXEC_IDS:-}
+unset HB_ADOPT_TICKET HB_ADOPT_STATE HB_REEXEC_IDS
+
 if [[ $# -lt 1 || $1 == -h || $1 == --help ]]; then
   sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "${BASH_SOURCE[0]}" >&2
   [[ $# -ge 1 ]] && exit 0
@@ -564,6 +620,7 @@ QDIR=$RUNDIR/heavy-build.queue
 JDIR=$RUNDIR/heavy-build.jobs
 ADMIT=$RUNDIR/heavy-build.admit
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.conf
+LANES=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.lanes
 STATE=${XDG_STATE_HOME:-$HOME/.local/state}/heavy-build
 HIST=$STATE/history.tsv
 PRIO=${HEAVY_BUILD_PRIORITY:-normal}
@@ -638,6 +695,7 @@ SLOTS=("$LOCK" "$LOCK.1" "$LOCK.2")
 read_conf() {
   local k v
   declare -gA CONFV=()
+  CONF_SIG=
   if [[ -r $CONF ]]; then
     while IFS='=' read -r k v || [[ -n $k ]]; do
       k=${k//[[:space:]]/}
@@ -645,6 +703,7 @@ read_conf() {
       v=${v%%#*}
       v=${v//[[:space:]\"\']/}
       CONFV[$k]=$v
+      CONF_SIG+="$k=$v;"
     done < "$CONF"
   fi
   MODE=shadow
@@ -674,6 +733,11 @@ read_conf() {
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
   setting HEAVY_BUILD_MEM_CONTROLLER 0
+  setting HEAVY_BUILD_LANE_PRIO 0
+  setting HEAVY_BUILD_EST_REFRESH 0
+  setting HEAVY_BUILD_REEXEC 0
+  setting HEAVY_BUILD_EST_REFRESH_SECS 600
+  (( EST_REFRESH_SECS >= 1 )) || EST_REFRESH_SECS=600
   setting HEAVY_BUILD_MC_TARGET_GIB 6
   setting HEAVY_BUILD_MC_HARD_GIB 3
   setting HEAVY_BUILD_MC_STEP_PCT 50
@@ -1322,6 +1386,324 @@ for d in sys.argv[1:]:
 PY
 }
 
+# ---------------------------------------------------------------- lane priority
+
+# lane_ident_py PID DIR...: prints "lane owner session dirs" for the lanes
+# file: the grove lane tag that holds the first of DIR that is in a lane, that
+# lane's grove owner, the Claude session that owns PID (an ancestor that is a
+# session, else a session in the same claude scope, as machine-session does),
+# and DIR as a comma list. "-" for each one not found; spaces become %20.
+# When no ancestor is a session, CLAUDE_PID (set by Claude Code in its shells)
+# names the session if its session file is live; then the claude scope.
+lane_ident_py() {
+  timeout 5 python3 -I - "$@" 2> /dev/null <<'PY'
+import json, os, sys
+from pathlib import Path
+
+home = Path.home()
+env = os.environ.get
+pid, dirs = int(sys.argv[1]), [d.rstrip("/") or "/" for d in sys.argv[2:]]
+dirs = list(dict.fromkeys(dirs + [os.path.realpath(d) for d in dirs]))
+lanes = []
+try:
+    repos = json.loads(Path(env("MACHINE_SESSION_GROVE_REPOS", home / ".config/grove/repos.json")).read_text())
+    repos = repos.get("repos", {})
+except (OSError, ValueError, AttributeError):
+    repos = {}
+for repo in repos.values():
+    try:
+        projects = json.loads((Path(repo["work_dir"]) / ".grove/registry.json").read_text())["projects"]
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    for tag, p in projects.items():
+        if p.get("path"):
+            lanes.append((p["path"].rstrip("/"), tag, (p.get("owner") or {}).get("session_name")))
+lanes.sort(key=lambda l: len(l[0]), reverse=True)
+lane = owner = None
+for d in dirs:
+    for path, tag, own in lanes:
+        if d == path or d.startswith(path + "/"):
+            lane, owner = tag, own
+            break
+    if lane:
+        break
+
+proc = Path(env("MACHINE_SESSION_PROC", "/proc"))
+
+def stat_rest(p):
+    try:
+        s = (proc / str(p) / "stat").read_text()
+    except OSError:
+        return []
+    return s[s.rfind(")") + 2 :].split()
+
+def cgroup(p):
+    try:
+        return (proc / str(p) / "cgroup").read_text().strip().split(":")[-1]
+    except OSError:
+        return None
+
+sessions = {}
+for f in Path(env("MACHINE_SESSION_SESSIONS_DIR", home / ".claude/sessions")).glob("*.json"):
+    try:
+        s = json.loads(f.read_text())
+        sp = int(s["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    rest = stat_rest(sp)
+    if not rest or (s.get("procStart") and len(rest) > 19 and rest[19] != str(s["procStart"])):
+        continue
+    sessions[sp] = s.get("name") or f"pid-{sp}"
+session, p, seen = None, pid, set()
+while p > 1 and p not in seen:
+    if p in sessions:
+        session = sessions[p]
+        break
+    seen.add(p)
+    rest = stat_rest(p)
+    p = int(rest[1]) if len(rest) > 1 else 0
+if session is None and env("CLAUDE_PID", "").isdigit():
+    session = sessions.get(int(env("CLAUDE_PID")))
+if session is None:
+    cg = cgroup(pid) or ""
+    if "/claude-" in cg and cg.endswith(".scope"):
+        for sp, name in sessions.items():
+            if cgroup(sp) == cg:
+                session = name
+                break
+
+def enc(v):
+    return (v or "-").replace(" ", "%20").replace(",", "%2C") if v else "-"
+
+print(enc(lane), enc(owner), enc(session), ",".join(enc(d) for d in dirs) or "-")
+PY
+}
+
+# lanes_load: reads the lanes file without a fork. When its text changed, parses
+# it into LR_M (match), LR_P (priority) and LR_L (the whole line), and says each
+# bad line once. A missing file reads as empty.
+lanes_text=$'\x01' LR_M=() LR_P=() LR_L=()
+lanes_load() {
+  local -a raw=()
+  local txt l body m p by extra n=0 IFS=$' \t\n'
+  [[ -r $LANES ]] && mapfile -t raw < "$LANES" 2>/dev/null
+  IFS=$'\n'; txt="${raw[*]}"; IFS=$' \t\n'
+  [[ $txt == "$lanes_text" ]] && return 0
+  lanes_text=$txt LR_M=() LR_P=() LR_L=()
+  for l in "${raw[@]}"; do
+    n=$(( n + 1 ))
+    body=${l%%#*}
+    m= p= by= extra=
+    read -r m p by extra <<< "$body"
+    [[ -z $m ]] && continue
+    if [[ -n $extra || ! $p =~ ^(high|normal|low)$ || ( -n $by && ! $by =~ ^by=[A-Za-z0-9_.@:-]+$ ) ]]; then
+      say "warning: $LANES line $n skipped: want '<match> high|normal|low [by=<who>] [# note]', got '$l'"
+      continue
+    fi
+    LR_M+=("$m") LR_P+=("$p") LR_L+=("$(read -r x <<< "$l"; printf '%s' "$x")")
+  done
+}
+
+# lane_rule_match: true when a lanes rule matches this build; sets lane_rule
+# (the line) and lane_rule_prio. First match wins.
+lane_rule_match() {
+  local i m n d lane owner sess dirs
+  local -a ds
+  read -r lane owner sess dirs <<< "$lane_ident"
+  IFS=, read -ra ds <<< "${dirs:--}"
+  for i in "${!LR_M[@]}"; do
+    m=${LR_M[i]}
+    if [[ $m == /* || $m == "~/"* ]]; then
+      [[ $m == "~/"* ]] && m=$HOME/${m#"~/"}
+      m=${m%/}
+      for d in "${ds[@]}"; do
+        [[ $d == - ]] && continue
+        d=${d//%20/ }; d=${d//%2C/,}
+        # shellcheck disable=SC2053
+        if [[ $d == $m || $d == $m/* ]]; then lane_rule=${LR_L[i]} lane_rule_prio=${LR_P[i]}; return 0; fi
+      done
+    else
+      for n in "$lane" "$owner" "$sess"; do
+        [[ -z $n || $n == - ]] && continue
+        n=${n//%20/ }; n=${n//%2C/,}
+        # shellcheck disable=SC2053
+        if [[ $n == $m ]]; then lane_rule=${LR_L[i]} lane_rule_prio=${LR_P[i]}; return 0; fi
+      done
+    fi
+  done
+  return 1
+}
+
+# job_ident: once, at submit. Sets lane_ident ("lane owner session dirs",
+# from lane_ident_py), own_session, own_agent and ticket_l3, the ticket's
+# line 3. The agent name comes from CLAUDE_AGENT_NAME or HEAVY_BUILD_AGENT
+# when set; a Claude subagent without one (CLAUDE_CODE_CHILD_SESSION=1) is
+# "subagent"; otherwise "-". HB_LANE_IDENT is a test hook.
+job_ident() {
+  local top lane owner dirs
+  local -a kd
+  mapfile -t kd < <(key_dirs)
+  if [[ -n ${HB_LANE_IDENT:-} ]]; then
+    lane_ident=$HB_LANE_IDENT
+  else
+    top=$(git rev-parse --show-toplevel 2>/dev/null)
+    lane_ident=$(lane_ident_py $$ "$PWD" ${top:+"$top"} "${kd[@]}")
+  fi
+  [[ -n $lane_ident ]] || lane_ident="- - - -"
+  read -r lane owner own_session dirs <<< "$lane_ident"
+  own_agent=${CLAUDE_AGENT_NAME:-${HEAVY_BUILD_AGENT:-}}
+  [[ -z $own_agent && ${CLAUDE_CODE_CHILD_SESSION:-} == 1 ]] && own_agent=subagent
+  own_agent=${own_agent//[^A-Za-z0-9_.@:-]/_}
+  own_agent=${own_agent:--} own_session=${own_session:--}
+  ticket_l3="session=$own_session agent=$own_agent lane=${lane:--} owner=${owner:--} dirs=${dirs:--}"
+}
+
+# lane_setup: once per run, works out the session class when the caller set
+# HEAVY_BUILD_PRIORITY, which the old default leaves out.
+lane_setup() {
+  local -a kd
+  if [[ -z ${lane_class_done:-} ]]; then
+    lane_class_done=1
+    if [[ -n ${HEAVY_BUILD_PRIORITY:-} ]]; then
+      SESSION_CLASS=$(timeout 5 "${HB_MACHINE_SESSION:-machine-session}" class --pid $$ 2> /dev/null)
+      if [[ $SESSION_CLASS == critical ]]; then
+        crit_why="this session is critical in ~/.config/machine/sessions.toml"
+      else
+        mapfile -t kd < <(key_dirs)
+        crit_why=$(critical_lane "$PWD" "${kd[@]}")
+      fi
+    fi
+  fi
+}
+
+# lane_prio_apply: sets PRIO for this poll (see "Lane priority" in the help).
+# When it changes, logs it once and rewrites line 2 of the ticket, so the
+# other waiters rank this build by the new priority.
+lane_prio_apply() {
+  local new=$BASE_PRIO rule="none: lane priority is off or the lanes file has no rules" q
+  if (( LANE_PRIO )); then
+    lanes_load
+    if (( ${#LR_M[@]} )); then
+      lane_setup
+      if [[ -n ${crit_why:-} ]]; then
+        new=critical rule="critical: $crit_why"
+      elif lane_rule_match; then
+        new=$lane_rule_prio rule=$lane_rule
+      elif [[ -n ${HEAVY_BUILD_PRIORITY:-} ]]; then
+        new=$HEAVY_BUILD_PRIORITY
+        if [[ $new == high ]]; then
+          new=normal rule="none: a caller's own high needs a lanes rule"
+          if [[ -z ${lane_demote_said:-} ]]; then
+            lane_demote_said=1
+            say "priority normal, not high: the manager session owns build priority (~/.config/heavy-build.lanes has no rule for this build). Ask the manager session if this build must go first."
+            log_line "event=prio-demoted asked=high reason=\"$HEAVY_BUILD_REASON\" ident=\"$lane_ident\" cmd=\"$cmdline\""
+          fi
+        fi
+      elif [[ ${SESSION_CLASS:-} == pausable ]]; then
+        new=low
+      else
+        new=normal
+      fi
+    fi
+  fi
+  [[ $new == "$PRIO" ]] && return 0
+  q=${rule//\"/\'}
+  log_line "event=prio-change prio_from=$PRIO prio_to=$new rule=\"$q\" ident=\"${lane_ident:--}\" cmd=\"$cmdline\""
+  say "priority $new (was $PRIO): $rule"
+  PRIO=$new state_prio=$new
+  [[ -n $ticket && -e $ticket ]] && write_ticket
+  return 0
+}
+
+# ---------------------------------------------------------------- estimate refresh
+
+# An app run is never planned above its own MemoryHigh.
+app_est_cap() {
+  if [[ $cls == app-run ]] && awk -v m="$est_mem" -v h="$APP_MEM_HIGH_GIB" 'BEGIN { exit !(m > h) }'; then
+    est_mem=$APP_MEM_HIGH_GIB.0 est_src="${est_src%%,mem=*},mem=app-high"
+  fi
+}
+
+# est_refresh: with HEAVY_BUILD_EST_REFRESH=1, a waiter works out its estimate
+# again when a setting in heavy-build.conf changed, and otherwise every
+# HEAVY_BUILD_EST_REFRESH_SECS (default 600). When it changes, line 2 of the
+# ticket is rewritten and live.log gets one event=est-change line. On
+# 2026-10-26 a tl-ui cargo test queued at 07:45 kept its 19.2 GiB estimate
+# after HEAVY_BUILD_EST_NONFILE=1 went live at 08:42 (a new submit got about
+# 7 GiB), and as the starve head it held about 80 jobs for 5 hours.
+est_refresh() {
+  local old new
+  if (( ! EST_REFRESH )) || { [[ $CONF_SIG == "$est_sig" ]] && (( EPOCHSECONDS - est_ts < EST_REFRESH_SECS )); }; then
+    est_sig=$CONF_SIG
+    return 0
+  fi
+  est_sig=$CONF_SIG est_ts=$EPOCHSECONDS
+  old="$est_mem $est_cores $est_wall"
+  read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
+  app_est_cap
+  new="$est_mem $est_cores $est_wall"
+  [[ $new == "$old" ]] && return 0
+  local om oc ow
+  read -r om oc ow <<< "$old"
+  log_line "event=est-change est_from=${om}G/${oc}c/${ow}s est_to=${est_mem}G/${est_cores}c/${est_wall}s($est_src) cmd=\"$cmdline\""
+  say "estimate now ${est_mem} GiB, ${est_cores} cores, ${est_wall} s (was ${om} GiB, ${oc} cores, ${ow} s)"
+  [[ -n $ticket && -e $ticket ]] && write_ticket
+  return 0
+}
+
+# ---------------------------------------------------------------- re-exec
+
+# adopt_ticket: after a re-exec, restores the give-up clock of the ticket the
+# start of main took back (adopted, which is also ticket).
+adopt_ticket() {
+  local q s b
+  read -r q s b _ <<< "$adopt_st"
+  [[ $q =~ ^[0-9]+$ ]] && queued_ts=$q
+  [[ $s =~ ^[0-9]+$ ]] && stuck=$s
+  [[ $b =~ ^[0-9]+$ ]] && adopt_best=$b
+  log_line "event=reexec-adopted ticket=${ticket##*/} queued_s=$(( EPOCHSECONDS - queued_ts )) script=\"$script_id\" cmd=\"$cmdline\""
+  return 0
+}
+
+# reexec_check: with HEAVY_BUILD_REEXEC=1, re-execs a waiting heavy-build
+# whose script file changed. See "Re-exec" in the help text.
+reexec_check() {
+  local now_id tag abs why=
+  (( REEXEC )) || return 0
+  [[ -z ${build_started:-} && -n $ticket && -e $ticket ]] || return 0
+  now_id=$(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null) || return 0
+  [[ -n $now_id && $now_id != "$script_id" ]] || return 0
+  tag=${now_id// /:}
+  [[ " $reexec_ids " == *" $tag "* ]] && return 0
+  reexec_ids+=" $tag"
+  # Everything that can fail is checked before the exec, which replaces this
+  # process: a failure after it would end the waiter.
+  abs=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)
+  if [[ -z $abs || ! -f $abs || ! -r $abs ]]; then
+    why="the script ${BASH_SOURCE[0]} cannot be read"
+  elif ! "$BASH" -n -- "$abs" 2>/dev/null; then
+    why="the new script fails bash -n"
+  elif ! grep -q 'HB_ADOPT_TICKET' -- "$abs" 2>/dev/null; then
+    why="the new script cannot take back a ticket (no HB_ADOPT_TICKET)"
+  elif [[ ! -x $BASH ]]; then
+    why="bash ($BASH) is gone"
+  fi
+  if [[ -n $why ]]; then
+    log_line "event=reexec-skip from=\"$script_id\" to=\"$now_id\" reason=\"$why\" cmd=\"$cmdline\""
+    say "heavy-build was updated, but this waiter stays on its old code: $why"
+    return 0
+  fi
+  log_line "event=reexec from=\"$script_id\" to=\"$now_id\" ticket=${ticket##*/} waited_s=$(( EPOCHSECONDS - queued_ts )) cmd=\"$cmdline\""
+  say "heavy-build was updated; going on with the new code, same place in line"
+  export HB_ADOPT_TICKET=$ticket HB_ADOPT_STATE="$queued_ts $stuck ${best:--} ${tstate:--}" HB_REEXEC_IDS="${reexec_ids# }"
+  shopt -s execfail
+  exec "$BASH" -- "$abs" "${orig_args[@]}"
+  shopt -u execfail
+  unset HB_ADOPT_TICKET HB_ADOPT_STATE HB_REEXEC_IDS
+  log_line "event=reexec-skip from=\"$script_id\" to=\"$now_id\" reason=\"exec failed\" cmd=\"$cmdline\""
+  return 0
+}
+
 # ---------------------------------------------------------------- old rule
 
 # True when a process above us holds one of the slot locks, for example
@@ -1374,6 +1756,9 @@ proc_start() {
 
 # A ticket's first line is "pid starttime"; it is live while that process
 # runs. The second line is "prio mem cores wall keys" for the budget rule.
+# The third line, "session= agent= lane= owner= dirs=", says who submitted the
+# build and which lanes-file rules can match (heavy-build-prio list reads it).
+# Values have spaces as %20 and commas as %2C; dirs is a comma list.
 # Waiters running an older heavy-build read only the first line.
 ticket_alive() {
   local pid st
@@ -1385,8 +1770,8 @@ ticket_alive() {
 write_ticket() {
   rm -f -- "$JDIR/$unit"
   mkdir -p "$QDIR" 2>/dev/null
-  printf '%s %s\n%s %s %s %s %s %s\n' "$$" "$(proc_start $$)" "$PRIO" "$est_mem" "$est_cores" "$est_wall" "$keys_csv" "$cls" \
-    > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
+  printf '%s %s\n%s %s %s %s %s %s\n%s' "$$" "$mystart" "$PRIO" "$est_mem" "$est_cores" "$est_wall" "$keys_csv" "$cls" \
+    "${ticket_l3:+$ticket_l3$'\n'}" > "$ticket.tmp" && mv -f "$ticket.tmp" "$ticket"
 }
 
 # Sets pos (our place in line, 1 = next), total, and dup (an earlier ticket has
@@ -2165,7 +2550,7 @@ log_line() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%(%Y-%m-%dT%H:%M:%S%z)T mode=%s job=%s %s\n' -1 "$MODE" "$jobid" "$*" >&6
+    printf '%(%Y-%m-%dT%H:%M:%S%z)T mode=%s job=%s %s session=%s agent=%s\n' -1 "$MODE" "$jobid" "$*" "${own_session:--}" "${own_agent:--}" >&6
     sz=$(stat -c %s -- "$f" 2>/dev/null || echo 0)
     if (( sz > 20000000 )); then tail -n 50000 -- "$f" > "$f.tmp" && mv -f -- "$f.tmp" "$f"; fi
   } 6>>"$f"
@@ -2652,7 +3037,7 @@ append_history() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" "$nfb" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" "$nfb" "${own_session:--}/${own_agent:--}" >&6
     local hl=${HISTORY_LINES:-20000}; (( hl >= 100 )) || hl=20000
     # Keep HISTORY_LINES lines (about 2 weeks at 1,300 builds a day); trim at 10% over.
     if (( $(wc -l < "$HIST") > hl + hl / 10 )); then tail -n "$hl" -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
@@ -2660,6 +3045,19 @@ append_history() {
 }
 
 # ---------------------------------------------------------------- main
+
+# After a re-exec, take back the ticket before any slow setup, and remove it
+# on any exit from here on, so a signal in setup cannot leave it behind. The
+# full on_exit trap replaces this one below.
+adopted=
+if [[ -n $adopt_t && $adopt_t == "$QDIR"/[0-9]* && $adopt_t != *.tmp && -e $adopt_t ]] \
+  && { read -r a_pid a_st < "$adopt_t"; } 2>/dev/null && [[ $a_pid == "$$" && $a_st == "$(proc_start $$)" ]]; then
+  adopted=$adopt_t
+  trap 'rm -f -- "$adopted" "$adopted.tmp"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+fi
 
 hash=$(printf '%s\0' "$PWD" "$@" | md5sum | cut -c1-8)
 cmdline="$*"
@@ -2725,7 +3123,8 @@ unit="heavy-build-$$-$RANDOM"
 build_env+=(SharedCompilationId="${SharedCompilationId:-hb-$unit}")
 # PRIO in the state file; <prio>:aged for a build let in by the aging slot.
 state_prio=$PRIO
-script_id=$(stat -L -c '%i %Y' -- "${BASH_SOURCE[0]}" 2>/dev/null)
+# The priority without lanes rules; lane_prio_apply goes back to it.
+BASE_PRIO=$PRIO lane_ident= own_session=- own_agent=- ticket_l3=
 # Ends this heavy-build if it comes back to the wait section after its build
 # started. Only a script rewritten in place under an older heavy-build (one
 # without the { } block) can do that; on 2026-10-10 it ran a build twice.
@@ -2738,7 +3137,8 @@ reentry_guard() {
 jobid=$unit
 mystart=$(proc_start $$)
 start_ts=$EPOCHSECONDS
-ticket=
+ticket=$adopted
+[[ -n $adopted ]] && jobid=${adopted##*/}
 scope_up= child= cancel_sig=
 # Runs on every exit bash can catch, signals included: removes the ticket and
 # state file and, once the scope exists, stops it, so nothing from this build
@@ -2752,16 +3152,24 @@ trap on_exit EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+job_ident
 read_conf
-# An app run is never planned above its own MemoryHigh.
-if [[ $cls == app-run ]] && awk -v m="$est_mem" -v h="$APP_MEM_HIGH_GIB" 'BEGIN { exit !(m > h) }'; then
-  est_mem=$APP_MEM_HIGH_GIB.0 est_src="${est_src%%,mem=*},mem=app-high"
-fi
+lane_prio_apply
+app_est_cap
+est_sig=$CONF_SIG est_ts=$EPOCHSECONDS
 
 # The rerun guard (see the help text). tstate goes into history column 11.
 tstate=-
-(( RERUN_FAILS > 0 )) && tstate=$(tree_state)
-rr=$(rerun_check "$hash" "$tstate")
+if [[ -n $adopted ]]; then
+  # A re-exec'd waiter passed the guard when it was queued; it keeps that
+  # tree state and is not refused now.
+  read -r _ _ _ tstate <<< "$adopt_st"
+  [[ $tstate =~ ^[A-Za-z0-9-]+$ ]] || tstate=-
+  rr=
+else
+  (( RERUN_FAILS > 0 )) && tstate=$(tree_state)
+  rr=$(rerun_check "$hash" "$tstate")
+fi
 if [[ -n $rr ]]; then
   rtree=$(git rev-parse --show-toplevel 2>/dev/null) || rtree=$PWD
   read -r rr_n rr_ago <<< "$rr"
@@ -2784,18 +3192,22 @@ if ancestor_holds_lock; then
 else
   # Lexical order of ticket names is arrival order: time in ns (fixed width),
   # then pid, then a short hash of the directory and command.
-  ticket=$QDIR/$(date +%s%N)-$$-$hash
+  adopt_best=
+  if [[ -n $adopted ]]; then adopt_ticket; else ticket=$QDIR/$(date +%s%N)-$$-$hash; fi
   jobid=${ticket##*/}
   write_ticket
   if [[ -n $keys_note ]]; then
     log_line "$keys_note keys=$keys_csv cmd=\"$cmdline\""
     say "lock key not split by AgentOutputSuffix: this tree has no suffix blocks ($SPLIT_MARK)"
   fi
-  said= best= last_log= would_since=
+  said= best=$adopt_best last_log= would_since=
   while :; do
     reentry_guard
     [[ -e $ticket ]] || write_ticket
     read_conf
+    lane_prio_apply
+    est_refresh
+    reexec_check
     queue_scan
     started=
     if [[ $MODE == live ]]; then
