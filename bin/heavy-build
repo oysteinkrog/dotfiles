@@ -148,6 +148,16 @@
 #   HEAVY_BUILD_SOLO_MEM_GIB free), builds behind it that fit may start.
 # - A head that fits only when no other build runs says so in its waiting
 #   line, with a hint to lower its memory use.
+# Starve bound (HEAVY_BUILD_STARVE_BOUND, default 1; 0 turns it off): a
+# starving head that waits for memory holds back only builds whose end can
+# let it in. Untracked scopes count as staying. If by the current numbers it
+# would not fit even if every build ended (memory outside builds.slice too
+# low, pressure level slow or pause, or the builds.slice cap), it holds back
+# nothing. If it would fit only once the running app runs have ended too, it
+# holds back new app runs and nothing else.
+# Its waiting line says which, and asks the submitter to shrink it. The
+# give-up clock still runs, so such a build ends with exit 75 after
+# HEAVY_BUILD_WAIT seconds unless memory frees up first.
 # Pressure level: pressure-coordinator.service writes
 # ~/.local/state/pressure/level ("level=normal|slow|pause ... updated=<epoch>
 # reason=...") every 5 s, and at pause also
@@ -634,6 +644,7 @@ read_conf() {
   (( SLICE_CPU_SECS >= 5 )) || SLICE_CPU_SECS=30
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_STARVE_FIX 1
+  setting HEAVY_BUILD_STARVE_BOUND 1
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_CRIT_AGE_SECS 1800
@@ -1714,6 +1725,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   Y_held += grow; Y_cpu += cy
   if (realuse && slicecur >= 0) held = cur + grow
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
+  r_app[nr] = (cls == "app-run")
   r_cur[nr] = cur; r_high[nr] = (prio == "high" && stalled != 1); r_job[nr] = (stalled != 1)
   T_n += r_job[nr]; T_cpu += cc; T_tc += tc; T_held += held; T_high += r_high[nr]; T_aged += (prio ~ /:aged$/)
   T_nc += (prio !~ /^(high|critical)(:aged)?$/)
@@ -1771,6 +1783,14 @@ function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh, u0) {
   }
   untsolo = u0
   return nr > 0 ? r_end[idx[nr]] : now
+}
+# Why waiter i would still wait once every running build has ended except
+# untracked scopes and, with keepapp, app runs (both can run for hours).
+# "" when it would fit then.
+function why_left(i, keepapp,   k, nrun, cpu, tc, held, av, nh) {
+  nrun = T_n; cpu = T_cpu; tc = T_tc; held = T_held; av = avail; nh = T_high
+  for (k = 1; k <= nr; k++) if (!r_unt[k] && !(keepapp && r_app[k])) { nrun -= r_job[k]; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k] }
+  return why_not(i, nrun, cpu, tc, held, av, nh)
 }
 BEGIN {
   while ((getline l < meminfo) > 0) {
@@ -1887,7 +1907,7 @@ END {
   else if (sessionpsi >= maxmempsi) gate = sprintf("interactive: session.slice memory pressure (full) %.1f%%, the limit is %d%%", sessionpsi, maxmempsi)
   # critw: the first critical waiter that waits for job slots, cores or CPU
   # pressure. Normal and low builds may not start ahead of it.
-  headi = 0; starving = 0; shadow = 0; critw = 0; critmempass = 0
+  headi = 0; starving = 0; shadow = 0; critw = 0; critmempass = 0; bound = ""
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
@@ -1922,7 +1942,23 @@ END {
       # less than solo GiB free), builds behind it that fit may start. No
       # build is due to end, so the shadow time gives no bound.
       if (starvefix && T_n - T_unt <= 0 && T_idle == 0) { starving = 0; shadow = now + 86400 }
-      if (starvefix && shadowlast && T_n - T_unt > 0 && r ~ /^(memory|slice-cap):/) why[i] = r "; it fits only when no other build runs, so it may wait long (lower its memory use, for example CARGO_BUILD_JOBS or --test-threads)"
+      # Starve bound (starvebound=1): a starving head that waits for memory
+      # holds back only builds whose end lets it in. nofit: it does not fit
+      # even with no build running, so it holds back nothing. app: it fits
+      # only once the app runs have ended, so it holds back new app runs and
+      # nothing else. Both log the reason in its waiting line. On 2026-10-26
+      # two such heads held 20 to 44 builds for 2 to 3 h behind app runs and
+      # memory outside builds.slice.
+      if (starvebound && starving && r ~ /^(memory|slice-cap):/) {
+        untsolo = T_unt
+        rk = why_left(i, 1)
+        if (rk ~ /^(memory|slice-cap):/) bound = (why_left(i, 0) == "") ? "app" : "nofit"
+        untsolo = 0
+        if (bound != "") { starving = 0; shadow = now + 86400 }
+      }
+      if (bound == "nofit") why[i] = r "; by the current numbers it would not fit even if every build ended, so builds behind it may start. Lower its memory use (for example CARGO_BUILD_JOBS or --test-threads); it can start when memory outside builds frees up"
+      else if (bound == "app") why[i] = r sprintf("; it fits only once the running app %s (%d) %s ended, so no new app run starts and other builds may pass it", T_app == 1 ? "run" : "runs", T_app, T_app == 1 ? "has" : "have")
+      else if (starvefix && shadowlast && T_n - T_unt > 0 && r ~ /^(memory|slice-cap):/) why[i] = r "; it fits only when no other build runs, so it may wait long (lower its memory use, for example CARGO_BUILD_JOBS or --test-threads)"
       # An aged critical head that waits for memory lets critical builds that fit pass it.
       critmempass = (starving && w_caged[i] && r ~ /^(memory|slice-cap):/)
       if (w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
@@ -1933,6 +1969,7 @@ END {
       if (r == "") { pick(i); why[i] = "fits: the aged critical build " w_id[headi] " waits for memory, and critical builds that fit may pass it"; continue }
     }
     if (starving) { why[i] = sprintf("starve: %s has waited %d min, so nothing may pass it", w_id[headi], (now - w_arr[headi]) / 60); continue }
+    if (bound == "app" && w_cls[i] == "app-run") { why[i] = sprintf("starve: %s waits for the running app runs to end, so no new app run starts", w_id[headi]); continue }
     r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
     if (r == "") r = cf_why(i, T_nc, T_tc, avail)
     if (r != "" && !critw && w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
@@ -1989,7 +2026,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v solo="$SOLO_MEM_GIB" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
