@@ -2520,6 +2520,12 @@ if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
 fi
 # Settings first, so HEAVY_BUILD_WINE_FALLBACK_PCT reaches estimate().
 read_conf
+# Time limit for Wine test runs: HEAVY_BUILD_WINE_TIMEOUT seconds (conf or
+# environment). A caller's own HEAVY_BUILD_TIMEOUT wins. 0 or unset: no limit.
+if [[ -z $TIMEOUT && $cls == wine-run-tests* ]]; then
+  setting HEAVY_BUILD_WINE_TIMEOUT 0
+  (( WINE_TIMEOUT > 0 )) && TIMEOUT=$WINE_TIMEOUT
+fi
 read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
 keys_out=$(lock_keys "$@")
 keys_note=$(grep '^!' <<< "$keys_out" | sed 's/^!//' | paste -sd' ' -)
@@ -2845,7 +2851,7 @@ scope_up=
 if [[ -n $orphan_stopped ]]; then
   rc=124
 elif [[ -n $TIMEOUT ]] && (( rc > 128 && EPOCHSECONDS - start_ts >= TIMEOUT - 1 )); then
-  say "stopped after HEAVY_BUILD_TIMEOUT=${TIMEOUT}s"
+  say "exit 124, stopped after ${TIMEOUT}s (time limit). The command hung or ran far too long. Read the log for the hang or the first failure and fix it. Do not resubmit unchanged. Set HEAVY_BUILD_TIMEOUT=<seconds> only with a reason."
   rc=124
 fi
 if (( oom > 0 )); then reason=oom
