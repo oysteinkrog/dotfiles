@@ -771,7 +771,8 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
-      -v memctl="${ADM_MC:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" "$ADMIT_AWK" \
+      -v memctl="${ADM_MC:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -2252,6 +2253,83 @@ sleep 1
 re_install
 re_wait_log 'event=reexec-adopted'; r=$?
 check "reexec fix 3: a script replaced during setup is picked up in the wait loop (r $r)" '(( r == 0 )) && kill -0 "$hbpid" 2>/dev/null'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+HB=$HBREAL
+
+# 14. Low no-starve (HEAVY_BUILD_LOW_NO_STARVE=1, awk lownostarve=1). Run
+# against the admission awk with fake input: now=1000000, 40 GiB available,
+# 6 jobs, reserve 6 GiB. The 2026-10-26 case: a theme low Wine test that had
+# waited 155 min did not fit in memory and, aged to normal, was the starve head.
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo"
+# One build runs, so a build must fit in memory (an empty machine always
+# starts the first build).
+L_R='R r1 999000 1 1 1000600 1073741824 - 0 normal -'
+L_OLD='W 0000000990700000000-1-low 990700 low 45 2 600 -'
+L_N='W 0000000999000000000-2-n 999000 normal 4 2 600 -'
+L_C='W 0000000999000000000-3-c 999000 critical 4 2 600 -'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_N" | ADM_STARVEFIX=1 adm 0000000999000000000-2-n 0 1 12)
+check "low no-starve off: the aged low build starves the queue, as on 2026-10-26 (got '$out')" '[[ $out == "wait|starve: 0000000990700000000-1-low has waited 155 min, so nothing may pass it|"* ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_N" | ADM_STARVEFIX=1 ADM_LNS=1 adm 0000000999000000000-2-n 0 1 12)
+check "low no-starve: a normal build that fits passes the low head (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_C" | ADM_STARVEFIX=1 ADM_LNS=1 adm 0000000999000000000-3-c 0 1 12)
+check "low no-starve: so does a critical build (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_N" | ADM_STARVEFIX=1 ADM_LNS=1 adm 0000000990700000000-1-low 0 1 12)
+check "low no-starve: the low build says it holds back nothing (got '$out')" '[[ $out == "wait|memory: "*"; it is low, so it holds back no other build|"* ]]'
+# A long-waiting normal build behind the low one still gets the starve rule.
+L_NBIG='W 0000000995000000000-4-nb 995000 normal 45 2 600 -'
+L_NNEW='W 0000000999900000000-5-nn 999900 normal 4 2 600 -'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_NBIG" "$L_NNEW" | ADM_STARVEFIX=1 ADM_LNS=1 adm 0000000999900000000-5-nn 0 1 12)
+check "low no-starve: a normal build that waited 83 min is still a starve head (got '$out')" '[[ $out == "wait|starve: 0000000995000000000-4-nb has waited 83 min, so nothing may pass it|"* ]]'
+# With 5 jobs running there is room for one more. A low build waits for the
+# normal build, even after an hour (no aging slot), until it has waited 2 h.
+L_RUN=$(for i in 1 2 3 4 5; do echo "${L_R/r1/r$i}"; done)
+L_L1H='W 0000000996000000000-1-low 996000 low 4 2 600 -'
+L_L2H='W 0000000992000000000-1-low 992000 low 4 2 600 -'
+out=$(printf '%s\n' "$L_RUN" "$L_L1H" "$L_N" | ADM_LNS=1 adm 0000000996000000000-1-low 0 1 12)
+check "low no-starve: after 67 min a low build still waits for a newer normal one (got '$out')" '[[ $out == wait\|jobs:* ]]'
+out=$(printf '%s\n' "$L_RUN" "$L_L1H" "$L_N" | adm 0000000996000000000-1-low 0 1 12)
+check "low no-starve off: the same low build takes the aging slot today (got '$out')" '[[ $out == start\|aged:* ]]'
+out=$(printf '%s\n' "$L_RUN" "$L_L2H" "$L_N" | ADM_LNS=1 adm 0000000992000000000-1-low 0 1 12)
+check "low no-starve: after 2 h it ranks with normal by arrival and starts first (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$L_RUN" "$L_L2H" "$L_N" | ADM_LNS=1 ADM_LOWAGE2=36000 adm 0000000992000000000-1-low 0 1 12)
+check "low no-starve: HEAVY_BUILD_LOW_AGE_SECS moves that point (got '$out')" '[[ $out == wait\|jobs:* ]]'
+out=$(printf '%s\n' "$L_L1H" | ADM_LNS=1 adm 0000000996000000000-1-low 0 1 12)
+check "low no-starve: a low build alone in line starts when it fits (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+# Astra: a skipped low waiter took writer preference on its tree, so a normal
+# build on a suffixed key in that tree waited ("writer"). It must not.
+L_OLDK='W 0000000990700000000-1-low 990700 low 45 2 600 tree:/a'
+L_NX='W 0000000999000000000-2-n 999000 normal 4 2 600 tree:/a#x'
+out=$(printf '%s\n' "$L_R" "$L_OLDK" "$L_NX" | adm 0000000999000000000-2-n 0 1 12)
+check "low no-starve off: the old low build holds writer preference today (got '$out')" '[[ $out == wait\|writer:* ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLDK" "$L_NX" | ADM_LNS=1 adm 0000000999000000000-2-n 0 1 12)
+check "low no-starve: a skipped low build takes no writer preference (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+# The bounded turn (HEAVY_BUILD_LOW_HEAD_SECS): after that long a low build
+# may be the head again, with the starve rule and writer preference.
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_N" | ADM_STARVEFIX=1 ADM_LNS=1 ADM_LOWHEAD=7200 adm 0000000999000000000-2-n 0 1 12)
+check "low turn: after HEAVY_BUILD_LOW_HEAD_SECS the low build starves the queue as a head (got '$out')" '[[ $out == "wait|starve: 0000000990700000000-1-low has waited 155 min, so nothing may pass it|"* ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLD" "$L_N" | ADM_STARVEFIX=1 ADM_LNS=1 ADM_LOWHEAD=36000 adm 0000000999000000000-2-n 0 1 12)
+check "low turn: before that time it still holds nothing back (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$L_R" "$L_OLDK" "$L_NX" | ADM_LNS=1 ADM_LOWHEAD=7200 adm 0000000999000000000-2-n 0 1 12)
+check "low turn: in its turn it holds writer preference again (got '$out')" '[[ $out == wait\|writer:* ]]'
+rm -rf -- "$A"
+
+# End to end: a waiting low build re-execs onto a new script and stays low.
+setup2
+re_blocker
+printf 'HEAVY_BUILD_REEXEC=1\nHEAVY_BUILD_LOW_NO_STARVE=1\n' > "$T/config/heavy-build.conf"
+re_install
+HB=$T/hb hbe HEAVY_BUILD_PRIORITY=low -- true
+re_wait_log 'decision=wait'
+t1=$(re_tk)
+re_install
+re_wait_log 'event=reexec-adopted'; r=$?
+sleep 2
+t2=$(re_tk); p2=$(sed -n 2p "$T/run/heavy-build.queue/$t2" 2>/dev/null | cut -d' ' -f1)
+check "low no-starve: a low waiter re-execs, keeps its ticket and stays low (r $r, got '$t1' '$t2' '$p2')" '(( r == 0 )) && [[ -n $t1 && $t1 == "$t2" && $p2 == low ]] && kill -0 "$hbpid" 2>/dev/null'
 kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
 kill "$blocker"; wait "$blocker" 2>/dev/null
 teardown2
