@@ -2464,6 +2464,44 @@ out=$(est newkey dotnet-build)
 check "dotnet-build: a p90 of 1 GiB is raised to the 3 GiB floor, not 5 (got '$out')" '[[ $out == "3.0 class-history,mem=floor" ]]'
 rm -rf -- "$E"
 
+# presence-detect's away override: read on every poll, raises only, expires.
+P=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$P; : > "$T/out"
+po() {  # [VAR=value...] ; prints "MAX_JOBS CPU_BUDGET PRESENCE_AWAY"
+  (
+    for a in "$@"; do export "${a?}"; done
+    CONF=$P/conf PRESENCE_OVR=$P/ovr
+    eval "$(sed -n '/^read_conf()/,/^}/p;/^setting()/,/^}/p;/^presence_override()/,/^}/p' "$HB")"
+    read_conf
+    echo "$MAX_JOBS $CPU_BUDGET $PRESENCE_AWAY"
+  )
+}
+printf 'HEAVY_BUILD_MAX_JOBS=9\nHEAVY_BUILD_CPU_BUDGET=28\n' > "$P/conf"
+out=$(po)
+check "presence: no override file, conf values (got '$out')" '[[ $out == "9 28 0" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=11\nHEAVY_BUILD_CPU_BUDGET=32\nexpires=%s\n' "$(( EPOCHSECONDS + 120 ))" > "$P/ovr"
+out=$(po)
+check "presence: away override raises jobs and budget (got '$out')" '[[ $out == "11 32 1" ]]'
+out=$(po HEAVY_BUILD_MAX_JOBS=4)
+check "presence: the environment still wins (got '$out')" '[[ $out == "4 32 1" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=12\nHEAVY_BUILD_CPU_BUDGET=40\n' > "$P/conf"
+out=$(po)
+check "presence: never lowers a higher conf value (got '$out')" '[[ $out == "12 40 1" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=9\nHEAVY_BUILD_CPU_BUDGET=28\n' > "$P/conf"
+printf 'HEAVY_BUILD_MAX_JOBS=11\nHEAVY_BUILD_CPU_BUDGET=32\nexpires=%s\n' "$(( EPOCHSECONDS - 1 ))" > "$P/ovr"
+out=$(po)
+check "presence: expired override is ignored (got '$out')" '[[ $out == "9 28 0" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=11\nexpires=%s\n' "$(( EPOCHSECONDS + 3600 ))" > "$P/ovr"
+out=$(po)
+check "presence: expires over 10 min ahead is ignored (got '$out')" '[[ $out == "9 28 0" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=99\nHEAVY_BUILD_CPU_BUDGET=999\nexpires=%s\n' "$(( EPOCHSECONDS + 60 ))" > "$P/ovr"
+out=$(po)
+check "presence: capped at 16 jobs and budget 64 (got '$out')" '[[ $out == "16 64 1" ]]'
+printf 'HEAVY_BUILD_MAX_JOBS=x;y\nexpires=%s\n' "$(( EPOCHSECONDS + 60 ))" > "$P/ovr"
+out=$(po)
+check "presence: a non-number is ignored (got '$out')" '[[ $out == "9 28 1" ]]'
+rm -r -- "$P"
+
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
 check "help: no cargo build && cargo test example" '! grep -q "heavy-build bash -c .*cargo build && cargo test" <<< "$help"'

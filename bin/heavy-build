@@ -658,6 +658,7 @@ JDIR=$RUNDIR/heavy-build.jobs
 ADMIT=$RUNDIR/heavy-build.admit
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.conf
 LANES=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.lanes
+PRESENCE_OVR=${HB_PRESENCE_OVERRIDE:-${XDG_STATE_HOME:-$HOME/.local/state}/presence/heavy-build.override}
 STATE=${XDG_STATE_HOME:-$HOME/.local/state}/heavy-build
 HIST=$STATE/history.tsv
 PRIO=${HEAVY_BUILD_PRIORITY:-normal}
@@ -814,6 +815,43 @@ read_conf() {
     APP_CPU_QUOTA=0
   fi
   APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
+  presence_override
+}
+
+# presence-detect's away override (approved by Oystein 2026-10-26). While nobody
+# is at the desktop, presence-detect writes HEAVY_BUILD_MAX_JOBS and
+# HEAVY_BUILD_CPU_BUDGET (11 and 32) with expires=<epoch> to PRESENCE_OVR and
+# removes the file on return. Read on every poll, after the conf file. It only
+# counts while expires= is in the next 10 min, it can only raise a limit (up to
+# 16 jobs and a budget of 64), and a value in the environment still wins.
+# Builds already running are never stopped when the limits drop back.
+presence_override() {
+  PRESENCE_AWAY=0
+  [[ -r $PRESENCE_OVR ]] || return 0
+  local k v exp= jobs= budget=
+  while IFS='=' read -r k v || [[ -n $k ]]; do
+    k=${k//[[:space:]]/}
+    v=${v%%#*}
+    v=${v//[[:space:]]/}
+    [[ $v =~ ^[0-9]{1,12}$ ]] || continue
+    case $k in
+      expires) exp=$v ;;
+      HEAVY_BUILD_MAX_JOBS) jobs=$(( 10#$v )) ;;
+      HEAVY_BUILD_CPU_BUDGET) budget=$(( 10#$v )) ;;
+    esac
+  done < "$PRESENCE_OVR"
+  [[ -n $exp ]] || return 0
+  exp=$(( 10#$exp ))
+  (( exp > EPOCHSECONDS && exp <= EPOCHSECONDS + 600 )) || return 0
+  PRESENCE_AWAY=1
+  (( jobs > 16 )) && jobs=16
+  (( budget > 64 )) && budget=64
+  if [[ -n $jobs && ! ${HEAVY_BUILD_MAX_JOBS:-} =~ ^[0-9]+$ ]] && (( jobs > MAX_JOBS )); then
+    MAX_JOBS=$jobs
+  fi
+  if [[ -n $budget && ! ${HEAVY_BUILD_CPU_BUDGET:-} =~ ^[0-9]+$ ]] && (( budget > CPU_BUDGET )); then
+    CPU_BUDGET=$budget
+  fi
 }
 
 setting() {
