@@ -18,6 +18,7 @@ import configparser
 import datetime as dt
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -143,6 +144,16 @@ def fetch(cfg):
     }
 
 
+def own_names(email):
+    """First names an email's owner may use in a title: "oystein" also as "øystein"."""
+    first = email.split("@")[0].split(".")[0].lower()
+    return {
+        first,
+        first.replace("oe", "ø").replace("o", "ø", 1),
+        first.replace("aa", "å"),
+    }
+
+
 def is_home(title):
     """True when an absence entry is working from home rather than being away."""
     low = title.lower()
@@ -165,12 +176,15 @@ def away(account, sources, slack=False):
             if e.get("status") == "cancelled":
                 continue
             email = e.get("creator", {}).get("email", "")
-            if email == account:
-                continue
-            name = email.split("@")[0].split(".")[0].capitalize() or e.get(
-                "summary", ""
-            )
             title = e.get("summary", "")
+            name = email.split("@")[0].split(".")[0].capitalize()
+            if email == account:
+                # Entries you post for someone else ("Stian OOO") name them in the
+                # title. Only entries whose title names you are your own.
+                name = re.split(r"[\s\-:]+", title.strip())[0].capitalize()
+                if name.lower() in own_names(account):
+                    continue
+            email = email if name.lower() in own_names(email) else f"title:{name}"
             if src["kind"] == "hours":
                 kind = "hours"
             elif is_home(title):
@@ -199,10 +213,17 @@ def away(account, sources, slack=False):
     # because a sick day is the news there.
     slack_people, emails = slack_away() if slack else ([], [])
     for extra in (native_ooo(account, emails), slack_people):
-        listed = {p["email"] for p in people if p["kind"] != "hours"} | {account}
-        extra = [p for p in extra if p["email"] not in listed]
+        # Match on email and on first name: entries you post for someone else only
+        # carry their name.
+        kept = [p for p in people if p["kind"] != "hours"]
+        listed = {p["email"] for p in kept} | {p["name"] for p in kept} | {account}
+        extra = [
+            p for p in extra if p["email"] not in listed and p["name"] not in listed
+        ]
         out = {p["email"] for p in extra if p["kind"] == "out"}
-        people = [p for p in people if p["email"] not in out] + extra
+        out |= {p["name"] for p in extra if p["kind"] == "out"}
+        people = [p for p in people if p["email"] not in out and p["name"] not in out]
+        people += extra
     order = {"out": 0, "home": 1, "hours": 2}
     people.sort(key=lambda p: (order[p["kind"]], p["name"]))
     return people
