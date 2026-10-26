@@ -1,0 +1,27 @@
+[Unit]
+Description=Voxtype push-to-talk dictation (patched build with live preview)
+Documentation=https://voxtype.io
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service dotoold.service
+# dotoold keeps one virtual keyboard for typing. KDE can drop keys when every
+# dotool call creates a new one, which live typing does several times a second.
+Wants=dotoold.service
+
+[Service]
+Type=simple
+# localbuild recipe voxtype (package voxtype-cuda-local). Run directly, not through
+# /usr/bin/voxtype, which `voxtype setup` rewrites to the stock build.
+ExecStart=/usr/lib/voxtype-local/voxtype daemon
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=%t
+# Dictation comes before everything else Oystein runs, builds and agents included.
+# session.slice (cpu.weight 1000) is the top user slice, above app.slice (500),
+# claude.slice (80) and builds.slice (20); the worker and the popup are children
+# of this unit, so they share these weights.
+Slice=session.slice
+CPUWeight=10000
+IOWeight=10000
+
+[Install]
+WantedBy=graphical-session.target

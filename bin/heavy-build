@@ -22,6 +22,8 @@
 # - Waiters form a first-come, first-served line. Only the first may start.
 # - A build starts when MemAvailable is at least HEAVY_BUILD_MIN_MEM_GIB
 #   (default 12), or HEAVY_BUILD_SOLO_MEM_GIB (default 8) when no build runs.
+#   Outside the monorepo (HEAVY_BUILD_MONOREPO, default ~/work/desktop) that
+#   solo floor is at most the estimate rounded up plus 1 GiB (see solo_need).
 # - A build scope left over from a killed heavy-build counts as a used slot.
 # - The budget rule below runs beside it and only logs what it would decide,
 #   to ~/.local/state/heavy-build/shadow.log. One line each time its decision
@@ -103,8 +105,11 @@
 # - the pressure level allows it (see "Pressure level" below);
 # - no running build holds one of its lock keys.
 # When no build runs, a build starts once MemAvailable is at least
-# HEAVY_BUILD_SOLO_MEM_GIB, whatever its estimate (the builds.slice cap does
-# not apply), so one big build is never blocked forever. At pressure level
+# HEAVY_BUILD_SOLO_MEM_GIB, or its estimate rounded up plus 1 GiB if that is
+# less (the builds.slice cap does not apply), so one big build is never
+# blocked forever. A build with a lock key or directory in the monorepo
+# (HEAVY_BUILD_MONOREPO) keeps the full HEAVY_BUILD_SOLO_MEM_GIB, since big
+# unseen tests are likely there. At pressure level
 # slow or pause that shortcut is off: the first build needs every test above
 # too. Order is priority, then
 # arrival. A build whose lock key is busy is skipped and keeps its place.
@@ -642,6 +647,7 @@ WAIT=${HEAVY_BUILD_WAIT:-7200}
 REFUSE_GIB=${HEAVY_BUILD_REFUSE_GIB:-60}
 MIN_MEM_GIB=${HEAVY_BUILD_MIN_MEM_GIB:-12}
 SOLO_MEM_GIB=${HEAVY_BUILD_SOLO_MEM_GIB:-8}
+MONOREPO=${HEAVY_BUILD_MONOREPO:-$HOME/work/desktop}
 MIN_SWAP_ROOM_GIB=${HEAVY_BUILD_MIN_SWAP_ROOM_GIB:-10}
 POLL=${HEAVY_BUILD_POLL:-5}
 HOLD=$RUNDIR/heavy-build.hold
@@ -1009,13 +1015,16 @@ classify() {
 # about 1 in 6 dotnet estimates. The class p90 (1.25 x non-file) still
 # applies above the floor. dotnet-test has no floor (median non-file peak
 # 0.5 GiB, p90 1.1 GiB over 97 runs).
+# The cargo-test default was lowered on 2026-10-25 for oystein-home-primary
+# from 13.3 GiB (floor 6, office data) to 6 GiB (floor 4), because a 3.6 GiB
+# voxtype test waited 27 min.
 class_table() {
   case $1 in
     cargo-release)  echo "16.3 3.4 4500 0" ;;
     wine-script)    echo "7.4 5.6 537 0" ;;
     wine-run-tests) echo "6 5.9 114 6" ;;
     wine-run-tests-prebuilt) echo "3 5.9 33 3" ;;
-    cargo-test)     echo "13.3 3.4 96 6" ;;
+    cargo-test)     echo "6 3.4 96 4" ;;
     cargo-clippy)   echo "7.6 2.6 42 6" ;;
     dotnet-build)   echo "5 8.0 17 3" ;;
     dotnet-test)    echo "5.2 6.9 45 0" ;;
@@ -1745,6 +1754,24 @@ app_est_cap() {
   fi
 }
 
+# solo_need_set: the old rule's floor when no build runs: SOLO_MEM_GIB, or the
+# estimate rounded up plus 1 GiB if that is less. Lowered on 2026-10-25: a
+# 3.6 GiB voxtype test waited 27 min for a flat 8 GiB. A build in the
+# monorepo, by its directory or a lock key, keeps the full SOLO_MEM_GIB.
+# why_not's solo_of does the same for the budget rule. Called again after
+# est_refresh, since the estimate can change while a build waits.
+solo_need_set() {
+  local in_mono=0
+  solo_need=$SOLO_MEM_GIB
+  if [[ -n $MONOREPO ]]; then
+    [[ $PWD == "$MONOREPO" || $PWD == "$MONOREPO"/* ]] && in_mono=1
+    [[ ,$keys_csv, =~ ,[a-z]+:"$MONOREPO"[/#,] ]] && in_mono=1
+  fi
+  if (( ! in_mono )); then
+    solo_need=$(awk -v m="$est_mem" -v s="$SOLO_MEM_GIB" 'BEGIN { c = int(m); if (c < m) c++; c++; print (c < s ? c : s) }')
+  fi
+}
+
 # est_refresh: with HEAVY_BUILD_EST_REFRESH=1, a waiter works out its estimate
 # again when a setting in heavy-build.conf changed, and otherwise every
 # HEAVY_BUILD_EST_REFRESH_SECS (default 600). When it changes, line 2 of the
@@ -2332,13 +2359,21 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   T_app += (cls == "app-run")
   hold(keys, id)
 }
-function why_not(i, nrun, cpu, tc, held, av, nhigh) {
-  # With no build running, MemAvailable >= solo is enough, except at pressure
-  # level slow or pause: then the first build also needs the full tests below.
-  # Idle builds are not counted in nrun, but while one runs the full tests
-  # still apply, since it may use CPU again. For a starving head (untsolo set
-  # by the walk) running untracked scopes do not count here.
-  if (nrun - untsolo <= 0 && T_idle == 0 && av < solo) return sprintf("memory: %.1f GiB available, the first build needs %d", av, solo)
+# The solo floor of waiter i: solo, or its estimate rounded up plus 1 GiB if
+# that is less. A waiter with a lock key in the monorepo keeps the full solo.
+function solo_of(i,   c) {
+  if (monorepo != "" && ("," w_keys[i] ",") ~ ("[,][a-z]+:" monorepo "([/#,])")) return solo
+  c = int(w_mem[i]); if (c < w_mem[i]) c++
+  return min(solo, c + 1)
+}
+function why_not(i, nrun, cpu, tc, held, av, nhigh,   sn) {
+  # With no build running, MemAvailable >= solo_of(i) is enough, except at
+  # pressure level slow or pause: then the first build also needs the full
+  # tests below. Idle builds are not counted in nrun, but while one runs the
+  # full tests still apply, since it may use CPU again. For a starving head
+  # (untsolo set by the walk) running untracked scopes do not count here.
+  sn = solo_of(i)
+  if (nrun - untsolo <= 0 && T_idle == 0 && av < sn) return sprintf("memory: %.1f GiB available, the first build needs %d", av, sn)
   if (nrun - untsolo <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
@@ -2668,7 +2703,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
@@ -3300,6 +3335,7 @@ job_ident
 read_conf
 lane_prio_apply
 app_est_cap
+solo_need_set
 est_sig=$CONF_SIG est_ts=$EPOCHSECONDS
 
 # The rerun guard (see the help text). tstate goes into history column 11.
@@ -3351,6 +3387,7 @@ else
     read_conf
     lane_prio_apply
     est_refresh
+    solo_need_set
     reexec_check
     queue_scan
     started=
@@ -3383,7 +3420,7 @@ else
         mem=$(mem_avail_gib)
         room=$(swap_room_gib)
         need=$MIN_MEM_GIB
-        (( $(active_build_scopes) == 0 )) && need=$SOLO_MEM_GIB
+        (( $(active_build_scopes) == 0 )) && need=$solo_need
         if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
           why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
         elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then

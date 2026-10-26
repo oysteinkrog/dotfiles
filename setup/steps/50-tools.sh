@@ -63,6 +63,81 @@ else
 fi
 "$HOME/bin/shader-wallpaper-theme-sync" && ok "themed Star Nest shader in ~/.local/share/shader-wallpaper"
 
+step "tools: Plasma Login Manager (localbuilds recipe plasma-login-manager)"
+# The pacman package plasma-login-manager-local: adds [Greeter] BlurWallpaper, which the
+# desktop step sets to false so the login screen shows the shader sharp. It replaces the
+# distro package, and pacman -U --noconfirm will not remove that by itself.
+if ! systemctl is-enabled -q plasmalogin.service 2>/dev/null; then
+  ok "Plasma Login Manager not in use; skipped"
+elif pacman -Q plasma-login-manager-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q plasma-login-manager-local)"
+else
+  "$HOME/.local/bin/localbuild" build plasma-login-manager
+  pacman -Q plasma-login-manager >/dev/null 2>&1 && sudo pacman -Rdd --noconfirm plasma-login-manager >/dev/null
+  "$HOME/.local/bin/localbuild" install plasma-login-manager || sudo pacman -S --noconfirm plasma-login-manager
+fi
+
+step "tools: agent mail (localbuilds recipe mcp-agent-mail)"
+# The pacman package mcp-agent-mail-local. agent-mail.service and older scripts use the
+# ~/.local/bin paths, so those are symlinks. See the recipe README before moving the pin.
+if pacman -Q mcp-agent-mail-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+  ok "$(pacman -Q mcp-agent-mail-local)"
+else
+  "$HOME/.local/bin/localbuild" build mcp-agent-mail
+  "$HOME/.local/bin/localbuild" install mcp-agent-mail
+fi
+ln -sfn /usr/bin/am "$HOME/.local/bin/am"
+ln -sfn /usr/bin/mcp-agent-mail "$HOME/.local/bin/mcp-agent-mail"
+for alias in agent-mail agentmail mcp_agent_mail mcpagentmail; do
+  ln -sfn mcp-agent-mail "$HOME/.local/bin/$alias"
+done
+
+step "tools: krdp-local (localbuilds recipes freerdp, kpipewire, krdp)"
+# RDP sound, microphone and a streamed monitor that takes the client's size. Only on
+# machines that stream a monitor (HOST_KRDP_MONITOR). freerdp and kpipewire are private
+# copies in /opt/krdp-local, so they go first. krdp-local conflicts with the repo krdp,
+# which `localbuild install` cannot replace, so its package goes in with pacman --ask=4.
+if [ -n "$HOST_KRDP_MONITOR" ]; then
+  for r in freerdp kpipewire; do
+    if pacman -Q "$r-krdp-local" >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+      ok "$(pacman -Q "$r-krdp-local")"
+    else
+      heavy-build "$HOME/.local/bin/localbuild" build "$r" && "$HOME/.local/bin/localbuild" install "$r"
+    fi
+  done
+  if pacman -Q krdp-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+    ok "$(pacman -Q krdp-local)"
+  else
+    heavy-build "$HOME/.local/bin/localbuild" build krdp
+    pkg=$(find "$HOME/.cache/build/krdp" -path '*/out/*' -name 'krdp-local-*.pkg.tar.*' ! -name '*-debug-*' ! -name '*.sig' \
+      -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2)
+    sudo pacman -U --noconfirm --ask=4 "$pkg" && ok "krdp-local installed; restart app-org.kde.krdpserver.service"
+  fi
+fi
+
+step "tools: qmd"
+# Markdown search for the Life vault and the knowledge bases. Installed under ~/.local
+# (not the nvm prefix), because qmd-ifkb.service runs ~/.local/lib/node_modules/@tobilu/qmd.
+# Its native modules must be built by the nvm Node in packages/node-version.
+qmd_ver=2.8.3
+qmd_pkg="$HOME/.local/lib/node_modules/@tobilu/qmd"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use -s "$(cat "$SETUP/packages/node-version")" >/dev/null
+if [ "$(jq -r .version "$qmd_pkg/package.json" 2>/dev/null)" = "$qmd_ver" ]; then
+  ok "qmd $qmd_ver"
+else
+  npm install -g --prefix "$HOME/.local" "@tobilu/qmd@$qmd_ver" && ok "qmd $qmd_ver installed"
+fi
+# Collections. The monorepo knowledge bases are added by kb-index-refresh.timer once
+# ~/work/desktop exists. ifkb keeps its own index in the clone (.qmd/index.yml).
+if [ -d "$HOME/projects/life/vault" ]; then
+  qmd collection show life >/dev/null 2>&1 || qmd collection add "$HOME/projects/life/vault" --name life >/dev/null
+  qmd update >/dev/null && qmd embed >/dev/null && ok "qmd: life collection indexed"
+fi
+if [ -f "$HOME/work/ifkb/.qmd/index.yml" ]; then
+  (cd "$HOME/work/ifkb" && qmd update >/dev/null && qmd embed >/dev/null) && ok "qmd: ifkb index built"
+fi
+
 step "tools: aiolos-rc"
 if [ -f "$DOTFILES/.config/aiolos-rc/preload.so" ]; then
   ok "preload.so built"
@@ -70,11 +145,21 @@ else
   bash "$DOTFILES/.config/aiolos-rc/setup.sh"
 fi
 
+step "tools: tasklens"
+# The task manager, the pacman package tasklens built from ~/projects/tasklens (setup/work-repos.sh
+# in Life clones it). It cannot be copied from the other desktop: CachyOS makepkg builds Rust
+# with -C target-cpu=native (/etc/makepkg.conf.d/rust.conf), and the office build (AMD Zen 3)
+# dies with SIGILL on the home Intel CPU.
+if pacman -Q tasklens >/dev/null 2>&1; then
+  ok "$(pacman -Q tasklens)"
+else
+  warn "tasklens not installed: check out the newest release tag in ~/projects/tasklens, then"
+  info "cd ~/projects/tasklens/packaging && heavy-build makepkg -f --nocheck && sudo pacman -U tasklens-*.pkg.tar.zst"
+fi
+
 step "tools: prebuilt binaries"
 # name|where it lives|where it comes from
 prebuilt=(
-  "am|.local/bin|mcp-agent-mail (rust); also links agent-mail agentmail mcp_agent_mail mcpagentmail -> mcp-agent-mail"
-  "mcp-agent-mail|.local/bin|mcp-agent-mail (rust)"
   "br|.local/bin|beads_rust"
   "cm|.local/bin|cass-memory"
   "jsm|.local/bin|jeffreys-skills CLI (needs a login)"
@@ -84,7 +169,7 @@ prebuilt=(
   "fff-mcp|.local/bin|curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash"
   "dcg|bin|destructive command guard; install.sh links it into ~/.local/bin"
   "gog|bin|Google Workspace CLI"
-  "aiolos-hook-forwarder|bin|built from ~/work/aiolos"
+  "aiolos-hook-forwarder|bin|built from ~/projects/aiolos"
   "claw|bin|claw"
   "claurst|bin|claurst"
   "claude-rs|bin|claude-rs"

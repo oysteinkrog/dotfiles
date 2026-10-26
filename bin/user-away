@@ -1,0 +1,40 @@
+#!/bin/bash
+# user-away: exit 0 when Oystein is away from this desktop, 1 when he is here.
+#
+# Away means either:
+#   - the screen is locked (org.freedesktop.ScreenSaver GetActive), or
+#   - no keyboard or mouse input for 20 minutes. user-idle-watch.service (swayidle,
+#     Wayland idle-notify) creates $XDG_RUNTIME_DIR/user-idle/idle after 20 minutes
+#     and removes it on the next input. KDE on Wayland does not support
+#     GetSessionIdleTime, and logind's IdleHint and LockedHint are not reliable here.
+#
+# If neither check can be made (no session bus, watcher not running), the answer is
+# "here" (exit 1), so a job never takes the machine while he might be using it.
+#
+#   user-away           exit status only
+#   user-away --status  also print the reason
+#
+# Works from a system service running as oystein: it sets XDG_RUNTIME_DIR and the
+# session bus address itself when they are missing.
+set -u
+
+uid=$(id -u)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+say() { [ "${1:-}" = --status ] && echo "$2"; }
+
+locked=$(busctl --user call org.freedesktop.ScreenSaver /org/freedesktop/ScreenSaver \
+  org.freedesktop.ScreenSaver GetActive 2>/dev/null)
+if [ "$locked" = "b true" ]; then
+  say "${1:-}" "away: screen locked"; exit 0
+fi
+
+if ! systemctl --user is-active -q user-idle-watch.service 2>/dev/null; then
+  say "${1:-}" "here: user-idle-watch.service is not running, so idle time is unknown"; exit 1
+fi
+flag="$XDG_RUNTIME_DIR/user-idle/idle"
+if [ -e "$flag" ]; then
+  say "${1:-}" "away: no input since $(date -r "$flag" +%H:%M) (20 minute idle flag)"; exit 0
+fi
+say "${1:-}" "here: input in the last 20 minutes, screen not locked"
+exit 1

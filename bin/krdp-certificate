@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Gives KRDP (the KDE RDP server) a TLS certificate that lasts 10 years, for this machine's
+# host name, its Tailscale name and its Tailscale IP. Restarting KRDP drops an open session.
+#
+#   krdp-certificate          make one only if missing, expiring or for another host
+#   krdp-certificate --force  always make a new one
+#
+# Why: without a certificate KRDP exits at start ("A valid TLS certificate ... is required").
+# KDE's Remote Desktop settings page makes one with `openssl req ... -days 1` and no host
+# name, so Windows warns "the identity of the remote computer cannot be verified" on every
+# connection once it expires. This sets AutogenerateCertificates=false so the page keeps
+# this one. Run by setup/steps/70-services.sh. After a new certificate, trust krdp.crt on the
+# Windows clients (Life repo: docs/computers/linux-setup.md, "RDP certificate").
+set -euo pipefail
+
+host="$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)"
+d="$HOME/.local/share/krdpserver"
+crt="$d/krdp.crt"
+key="$d/krdp.key"
+changed=0
+
+san="DNS:$host"
+if command -v tailscale >/dev/null 2>&1; then
+  ts_name="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')"
+  ts_ip="$(tailscale ip -4 2>/dev/null | head -1)"
+  [ -n "$ts_name" ] && san="$san,DNS:$ts_name"
+  [ -n "$ts_ip" ] && san="$san,IP:$ts_ip"
+fi
+
+if [ "${1:-}" != "--force" ] && [ -f "$crt" ] && [ -f "$key" ] &&
+  openssl x509 -in "$crt" -noout -checkend $((30 * 24 * 3600)) >/dev/null &&
+  openssl x509 -in "$crt" -noout -subject | grep -q "CN *= *$host\$"; then
+  echo "Certificate is fine:"
+else
+  mkdir -p "$d"
+  openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
+    -keyout "$key" -out "$crt" \
+    -subj "/CN=$host" \
+    -addext "subjectAltName=$san" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth" 2>/dev/null
+  chmod 600 "$key"
+  changed=1
+  echo "New certificate ($san):"
+fi
+
+# Fixed paths, and stop the settings page from making its own certificate.
+set_key() {
+  if [ "$(kreadconfig6 --file krdpserverrc --group General --key "$1")" != "$2" ]; then
+    kwriteconfig6 --file krdpserverrc --group General --key "$1" "$2"
+    changed=1
+  fi
+}
+set_key Certificate "$crt"
+set_key CertificateKey "$key"
+set_key AutogenerateCertificates false
+
+openssl x509 -in "$crt" -noout -subject -enddate -fingerprint -sha256
+if [ "$changed" = 1 ] && systemctl --user is-enabled -q app-org.kde.krdpserver.service 2>/dev/null; then
+  systemctl --user restart app-org.kde.krdpserver.service
+  echo "KRDP restarted."
+fi
