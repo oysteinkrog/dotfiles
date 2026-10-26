@@ -1,0 +1,511 @@
+#!/usr/bin/env -S python3 -I -S
+"""Print the heavy-build queue, how fast it moves and the machine signals that gate it, as JSON.
+
+    buildqueue-fetch
+
+Feeds the build queue Plasma widget (~/.local/share/plasma/plasmoids/org.oysteinkrog.buildqueue),
+which runs this every few seconds. Read only: it never touches a build or the queue.
+
+Sources:
+  /run/user/<uid>/heavy-build.queue/<job>      one file per waiting job
+  builds.slice/heavy-build-*.scope (cgroupfs)  running builds and their memory
+  ~/.local/state/heavy-build/live.log          every queue decision (read from a saved offset)
+  ~/.local/state/heavy-build/history.tsv       one row per finished build (read from a saved offset)
+  ~/.local/state/pressure/level                the pressure coordinator's level
+  /proc/meminfo, /proc/vmstat, /proc/pressure/memory
+
+A job id is <submit ns>-<pid>-<hash>. The hash is history.tsv column 3, and the pid is in the
+scope name heavy-build-<pid>-<n>, so live.log lines tie waits, starts and finished builds to a
+project. The offsets and the last two hours of starts and finishes are kept in
+~/.cache/buildqueue/state.json, so each run reads only what was appended since the last one.
+"""
+
+import configparser
+import json
+import os
+import pathlib
+import re
+import statistics
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+HOME = pathlib.Path.home()
+UID = os.getuid()
+RUNTIME = pathlib.Path(f"/run/user/{UID}")
+QUEUE = RUNTIME / "heavy-build.queue"
+SLICE = pathlib.Path(
+    f"/sys/fs/cgroup/user.slice/user-{UID}.slice/user@{UID}.service/builds.slice"
+)
+HB_STATE = HOME / ".local/state/heavy-build"
+LIVE = HB_STATE / "live.log"
+HISTORY = HB_STATE / "history.tsv"
+LEVEL = HOME / ".local/state/pressure/level"
+CONF = HOME / ".config/heavy-build.conf"
+CACHE = HOME / ".cache/buildqueue"
+STATE = CACHE / "state.json"
+
+# How far back the first run reads, before there is an offset.
+FIRST_LIVE_BYTES = 6 << 20
+FIRST_HISTORY_BYTES = 256 << 10
+KEEP_S = 2 * 3600
+HOUR = 3600
+SAMPLE_EVERY_S = 30
+TREND_S = 15 * 60
+THEME_EVERY_S = 600
+
+LINE_RE = re.compile(
+    r'^(\S+) mode=\S+ job=(\d+)-(\d+)-([0-9a-f]+) decision=(\S+) reason="([^"]*)"'
+)
+KEYS_RE = re.compile(r" keys=(\S+)")
+PRIO_RE = re.compile(r" prio=(\S+)")
+IDLE_RE = re.compile(r"\s*\(idle, not counted[^)]*\)")
+
+
+def project_of_keys(keys):
+    """The worktree or cargo tree a job's keys name, as its folder name. '' for none."""
+    for k in keys.split(","):
+        kind, _, path = k.partition(":")
+        if kind in ("tree", "cargo") and path:
+            return os.path.basename(path.rstrip("/"))
+    return ""
+
+
+def project_of_dir(path):
+    """The folder name of the git tree that holds path, or of path itself."""
+    p = pathlib.Path(path)
+    if p == HOME:
+        return "~"
+    for d in (p, *p.parents):
+        if d == HOME or d == d.parent:
+            break
+        if (d / ".git").exists():
+            return d.name
+    return p.name
+
+
+def project_of_pid(pid):
+    """The project a running heavy-build process works in, from its working directory."""
+    try:
+        return project_of_dir(os.readlink(f"/proc/{pid}/cwd"))
+    except OSError:
+        return ""
+
+
+def reason_kind(reason):
+    """The cause word a wait reason starts with: memory, cores, behind, starve, pressure, ..."""
+    m = re.match(r"[A-Za-z][\w-]*", reason)
+    return m.group(0) if m else "other"
+
+
+def read_new(path, offset, first_bytes):
+    """Lines appended to path since offset, and the new offset. Starts over when the file shrank."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return [], 0
+    if offset is None or offset > size:
+        offset = max(0, size - first_bytes)
+        skip_partial = offset > 0
+    else:
+        skip_partial = False
+    if offset == size:
+        return [], offset
+    with path.open("rb") as f:
+        f.seek(offset)
+        data = f.read(size - offset)
+    end = data.rfind(b"\n") + 1
+    lines = data[:end].decode("utf-8", "replace").splitlines()
+    if skip_partial and lines:
+        lines = lines[1:]
+    return lines, offset + end
+
+
+def parse_ts(text):
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except ValueError:
+        return None
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, separators=(",", ":")))
+    tmp.replace(STATE)
+
+
+def update_live(st, now):
+    lines, st["liveOffset"] = read_new(LIVE, st.get("liveOffset"), FIRST_LIVE_BYTES)
+    reasons = st.setdefault("waitReason", {})  # job id -> [kind, text]
+    projects = st.setdefault("projectOf", {})  # hash -> [project, seen]
+    starts = st.setdefault("starts", [])  # [ts, job id, wait_s, project, prio]
+    for line in lines:
+        m = LINE_RE.match(line)
+        if not m:
+            continue
+        ts, sub_ns, pid, h, decision, reason = m.groups()
+        job = f"{sub_ns}-{pid}-{h}"
+        km = KEYS_RE.search(line)
+        project = project_of_keys(km.group(1)) if km else ""
+        if not project and decision == "start":
+            project = projects.get(h, [""])[0] or project_of_pid(pid)
+        if project:
+            projects[h] = [project, now]
+        if decision == "wait":
+            reasons[job] = [reason_kind(reason), IDLE_RE.sub("", reason)]
+        elif decision == "start":
+            t = parse_ts(ts)
+            if t is None:
+                continue
+            pm = PRIO_RE.search(line)
+            starts.append(
+                [
+                    t,
+                    job,
+                    max(0.0, t - int(sub_ns) / 1e9),
+                    project,
+                    pm.group(1) if pm else "",
+                ]
+            )
+            reasons.pop(job, None)
+    st["starts"] = [s for s in starts if s[0] > now - KEEP_S]
+    for h in [h for h, (_, seen) in projects.items() if seen < now - 24 * 3600]:
+        del projects[h]
+
+
+def update_history(st, now):
+    lines, st["historyOffset"] = read_new(
+        HISTORY, st.get("historyOffset"), FIRST_HISTORY_BYTES
+    )
+    done = st.setdefault("finished", [])  # [end, class, hash, wall_s, reason]
+    for line in lines:
+        c = line.split("\t")
+        if len(c) < 7:
+            continue
+        try:
+            end = int(c[0])
+        except ValueError:
+            continue
+        reason = c[7] if len(c) > 7 else ("ok" if c[6] == "0" else "fail")
+        done.append([end, c[1], c[2], float(c[3] or 0), reason])
+    st["finished"] = [d for d in done if d[0] > now - KEEP_S]
+
+
+def waiting_jobs(st, now):
+    """[(job id, submit epoch, prio, est_mem_gib, class, project)] for every waiting job."""
+    projects = st["projectOf"]
+    jobs = []
+    names = os.listdir(QUEUE)  # missing folder: an error, so the saved state is kept
+    for name in names:
+        parts = name.split("-")
+        if len(parts) != 3 or not parts[0].isdigit():
+            continue
+        try:
+            with open(QUEUE / name) as f:
+                f.readline()
+                fields = f.readline().split()
+        except OSError:
+            continue  # started or cancelled since the listing
+        prio, mem, cls, keys = "", 0.0, "", "-"
+        if len(fields) >= 6:
+            prio, keys, cls = fields[0], fields[4], fields[5]
+            try:
+                mem = float(fields[1])
+            except ValueError:
+                pass
+        project = project_of_keys(keys)
+        if not project:
+            project = projects.get(parts[2], [""])[0] or project_of_pid(parts[1])
+        if project:
+            projects[parts[2]] = [project, now]
+        jobs.append((name, int(parts[0]) / 1e9, prio, mem, cls, project))
+    return jobs
+
+
+def read_int(path):
+    try:
+        return int(path.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def running_builds(st, now):
+    units = st.setdefault("units", {})  # unit -> {cls, prio, why, since, project}
+    found = []
+    try:
+        names = [n for n in os.listdir(SLICE) if n.startswith("heavy-build-") and n.endswith(".scope")]
+    except OSError:
+        names = []
+    new = [n for n in names if n not in units]
+    if new:
+        try:
+            out = subprocess.run(
+                ["systemctl", "--user", "show", *new, "-p", "Id,Description,ActiveEnterTimestamp", "--timestamp=unix"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for block in out.strip().split("\n\n"):
+            props = dict(l.split("=", 1) for l in block.splitlines() if "=" in l)
+            unit = props.get("Id")
+            if unit not in new:
+                continue
+            desc = props.get("Description", "")
+            words = desc.split()
+            cls = words[1] if len(words) > 1 else ""
+            pm = re.search(r"prio=(\S+)", desc)
+            why = desc.split("reason:", 1)[1].strip() if "reason:" in desc else ""
+            since = props.get("ActiveEnterTimestamp", "").lstrip("@")
+            project = project_of_pid(unit.split("-")[2])
+            units[unit] = {
+                "cls": cls,
+                "prio": pm.group(1) if pm else "",
+                "why": why,
+                "since": int(since) if since.isdigit() else now,
+                "project": project,
+            }
+    for unit in [u for u in units if u not in names]:
+        del units[unit]
+    for n in names:
+        u = units.get(n)
+        if not u:
+            continue
+        found.append(
+            {
+                "cls": u["cls"],
+                "prio": u["prio"],
+                "why": u["why"],
+                "project": u["project"],
+                "runtime": max(0, int(now - u["since"])),
+                "mem": read_int(SLICE / n / "memory.current"),
+            }
+        )
+    found.sort(key=lambda b: -b["runtime"])
+    return found
+
+
+def pct(values, q):
+    if not values:
+        return None
+    v = sorted(values)
+    return v[min(len(v) - 1, int(q * len(v)))]
+
+
+def machine(st, now):
+    info = {}
+    try:
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                info[k] = int(v.split()[0]) * 1024
+    except OSError:
+        pass
+    swapin = None
+    try:
+        vm = dict(l.split() for l in open("/proc/vmstat"))
+        pswpin = int(vm.get("pswpin", 0))
+        prev = st.get("pswpin")
+        if prev and now > prev[0]:
+            swapin = max(0, (pswpin - prev[1]) / (now - prev[0]))
+        st["pswpin"] = [now, pswpin]
+    except (OSError, ValueError):
+        pass
+    psi = {}
+    try:
+        for line in open("/proc/pressure/memory"):
+            w = line.split()
+            psi[w[0]] = float(w[1].split("=")[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    level = {}
+    try:
+        text = LEVEL.read_text()
+        for m in re.finditer(r'(\w+)=("([^"]*)"|\S+)', text):
+            level[m.group(1)] = m.group(3) if m.group(3) is not None else m.group(2)
+    except OSError:
+        pass
+    return {
+        "level": level.get("level", "?"),
+        "levelSince": int(level["since"]) if level.get("since", "").isdigit() else 0,
+        "levelReason": level.get("reason", ""),
+        "memAvail": info.get("MemAvailable", 0),
+        "memTotal": info.get("MemTotal", 0),
+        "swapUsed": info.get("SwapTotal", 0) - info.get("SwapFree", 0),
+        "swapinPs": swapin,
+        "psiSome10": psi.get("some"),
+        "psiFull10": psi.get("full"),
+        "slice": read_int(SLICE / "memory.current"),
+    }
+
+
+def limits():
+    conf = {}
+    try:
+        for line in CONF.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    except OSError:
+        pass
+    parts = []
+    if "HEAVY_BUILD_MAX_JOBS" in conf:
+        parts.append(f"{conf['HEAVY_BUILD_MAX_JOBS']} jobs")
+    if "HEAVY_BUILD_MAX_APP_RUNS" in conf:
+        parts.append(f"{conf['HEAVY_BUILD_MAX_APP_RUNS']} app runs")
+    if conf.get("HEAVY_BUILD_MEM_CONTROLLER") == "1":
+        parts.append(
+            "memory controller: target {} GiB, brake under {} GiB, none under {} GiB".format(
+                conf.get("HEAVY_BUILD_MC_TARGET_GIB", "?"),
+                conf.get("HEAVY_BUILD_MC_BRAKE_GIB", "?"),
+                conf.get("HEAVY_BUILD_MC_HARD_GIB", "?"),
+            )
+        )
+    elif "HEAVY_BUILD_MEM_RESERVE_GIB" in conf:
+        parts.append(f"reserve {conf['HEAVY_BUILD_MEM_RESERVE_GIB']} GiB")
+    return ", ".join(parts)
+
+
+def theme(st, now):
+    """Colours of the current Plasma style (the panels), cached for THEME_EVERY_S."""
+    cached = st.get("theme")
+    if cached and now - cached.get("at", 0) < THEME_EVERY_S:
+        return cached["colours"]
+    colours = {}
+    try:
+        path = subprocess.run(
+            [str(HOME / "bin/plasma-style-colours")],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        cp = configparser.ConfigParser(interpolation=None, strict=False)
+        cp.optionxform = str
+        cp.read(path)
+
+        def hex_of(group, key):
+            r, g, b = (int(x) for x in cp[group][key].split(",")[:3])
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        colours = {
+            "background": hex_of("Colors:Window", "BackgroundNormal"),
+            "alternate": hex_of("Colors:View", "BackgroundNormal"),
+            "text": hex_of("Colors:Window", "ForegroundNormal"),
+            "inactive": hex_of("Colors:Window", "ForegroundInactive"),
+            "negative": hex_of("Colors:Window", "ForegroundNegative"),
+            "neutral": hex_of("Colors:Window", "ForegroundNeutral"),
+            "positive": hex_of("Colors:Window", "ForegroundPositive"),
+            "accent": hex_of("Colors:Selection", "BackgroundNormal"),
+            "accentText": hex_of("Colors:Selection", "ForegroundNormal"),
+        }
+    except (OSError, subprocess.SubprocessError, KeyError, ValueError):
+        pass
+    st["theme"] = {"at": now, "colours": colours}
+    return colours
+
+
+def build(st, now):
+    update_live(st, now)
+    update_history(st, now)
+
+    waiting = waiting_jobs(st, now)
+    ids = {j[0] for j in waiting}
+    reasons = st["waitReason"]
+    for job in [j for j in reasons if j not in ids]:
+        del reasons[job]
+
+    # Wait causes: the last wait line of each waiting job.
+    kinds, example = {}, {}
+    for job, *_ in waiting:
+        kind, text = reasons.get(job, ["not seen yet", ""])
+        kinds[kind] = kinds.get(kind, 0) + 1
+        example.setdefault(kind, text)
+    causes = sorted(
+        ({"kind": k, "count": n, "example": example.get(k, "")[:160]} for k, n in kinds.items()),
+        key=lambda c: -c["count"],
+    )
+
+    # Queue length samples, for the trend.
+    samples = st.setdefault("samples", [])
+    if not samples or now - samples[-1][0] >= SAMPLE_EVERY_S:
+        samples.append([now, len(waiting)])
+    st["samples"] = [s for s in samples if s[0] > now - KEEP_S]
+    past = [s for s in st["samples"] if s[0] <= now - TREND_S]
+    trend = len(waiting) - past[-1][1] if past else None
+
+    hour_starts = [s for s in st["starts"] if s[0] > now - HOUR]
+    hour_done = [d for d in st["finished"] if d[0] > now - HOUR]
+    waits = [s[2] for s in hour_starts]
+    finished = {}
+    for d in hour_done:
+        finished[d[4]] = finished.get(d[4], 0) + 1
+    arrived = {s[1] for s in st["starts"] if int(s[1].split("-")[0]) / 1e9 > now - HOUR}
+    arrived |= {j[0] for j in waiting if j[1] > now - HOUR}
+
+    # Per project: waiting now, started and finished in the last hour.
+    proj = {}
+
+    def row(name):
+        return proj.setdefault(name or "(none)", {"name": name or "(none)", "waiting": 0, "started": 0, "finished": 0, "failed": 0})
+
+    for _, _, _, _, _, p in waiting:
+        row(p)["waiting"] += 1
+    for s in hour_starts:
+        row(s[3])["started"] += 1
+    for d in hour_done:
+        r = row(st["projectOf"].get(d[2], [""])[0])
+        r["finished"] += 1
+        if d[4] == "fail":
+            r["failed"] += 1
+    projects = sorted(proj.values(), key=lambda r: (-r["waiting"], -r["started"] - r["finished"], r["name"]))
+
+    prios = {}
+    for j in waiting:
+        prios[j[2]] = prios.get(j[2], 0) + 1
+
+    return {
+        "updated": int(now * 1000),
+        "error": "",
+        "running": running_builds(st, now),
+        "waiting": {
+            "count": len(waiting),
+            "oldest": int(now - min((j[1] for j in waiting), default=now)),
+            "memGib": round(sum(j[3] for j in waiting), 1),
+            "prios": prios,
+            "causes": causes,
+        },
+        "velocity": {
+            "finished": finished,
+            "started": len(hour_starts),
+            "arrived": len(arrived),
+            "waitMedian": statistics.median(waits) if waits else None,
+            "waitP90": pct(waits, 0.9),
+            "trend": trend,
+            "trendMinutes": TREND_S // 60,
+        },
+        "projects": projects,
+        "machine": machine(st, now),
+        "limits": limits(),
+        "theme": theme(st, now),
+    }
+
+
+def main():
+    now = time.time()
+    st = load_state()
+    try:
+        result = build(st, now)
+        save_state(st)
+    except Exception as exc:  # the widget shows the error and keeps its last data
+        result = {"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}
+    json.dump(result, sys.stdout, separators=(",", ":"))
+
+
+if __name__ == "__main__":
+    main()
