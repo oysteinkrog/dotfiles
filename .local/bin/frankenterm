@@ -1,8 +1,19 @@
 #!/bin/bash
 # Open a Frankenterm window attached to the Frankenterm session server,
 # starting the server first if it is not running.
+# Only one GUI may attach to the server at a time: two GUIs on one server have
+# written conflicting window layouts and split the tabs over several windows.
+# A second launch raises the running GUI instead. The lock is an flock held on
+# an fd the GUI inherits, so the kernel drops it when the GUI exits or crashes.
 # Log: ~/.local/state/frankenterm-gui.log
 systemctl --user start frankenterm-mux.service
 export FRANKENTERM_LUA_CONFIG=1
-mkdir -p "$HOME/.local/state"
+mkdir -p "$HOME/.local/state" "$XDG_RUNTIME_DIR/frankenterm"
+exec 9>>"$XDG_RUNTIME_DIR/frankenterm/gui-unix.lock"
+if ! flock -n 9; then
+  echo "$(date -Is) a GUI is already attached to the unix domain; raising it" >>"$HOME/.local/state/frankenterm-gui.log"
+  w=$(kdotool search --class '^com.dicklesworthstone.frankenterm$' 2>/dev/null | head -n1)
+  [ -n "$w" ] && kdotool windowactivate "$w"
+  exit 0
+fi
 exec /usr/bin/frankenterm-gui connect unix "$@" >>"$HOME/.local/state/frankenterm-gui.log" 2>&1
