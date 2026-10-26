@@ -11,6 +11,7 @@ units=(
   app-org.kde.krdpserver.service           # krdp package
   cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
   claude-tab-watch.service                 # dotfiles: Claude session status in FrankenTerm tabs
+  presence-detect.service                  # dotfiles: here, remote or away (reads local-input-watch, system step)
   shader-wallpaper-theme-sync.path         # dotfiles: Plasma colours into the Star Nest wallpaper
   streamcam-mic-resume.service             # dotfiles: StreamCam mic check at login and wake
 )
@@ -39,6 +40,19 @@ Environment=KRDP_OUTPUT_RESIZE_HOOK=$HOME/bin/krdp-remote-mode"
     info "KRDP streams monitor $HOST_KRDP_MONITOR; restart app-org.kde.krdpserver.service to apply"
   fi
   units+=(krdp-remote-mode.service)
+fi
+
+# presence-detect switches (fooyin_quit, build_boost, chrome_away_min). Built-in defaults
+# apply without a file; a machine profile can ship its own presence.conf.
+if [ -f "$HOST_DIR/presence.conf" ]; then
+  link="$HOME/.config/presence.conf"
+  if [ "$(readlink "$link" 2>/dev/null)" = "$HOST_DIR/presence.conf" ]; then
+    ok "presence.conf from the machine profile"
+  elif [ -e "$link" ] && [ ! -L "$link" ]; then
+    warn "$link is a local file; the profile's presence.conf is not linked"
+  else
+    ln -sfn "$HOST_DIR/presence.conf" "$link"; ok "linked $link to the machine profile"
+  fi
 fi
 
 for u in "${units[@]}"; do
