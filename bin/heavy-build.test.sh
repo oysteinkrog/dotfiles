@@ -31,6 +31,7 @@ teardown() {
 # are extra VAR=value settings for its environment.
 run_hb() {
   (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN \
+    -u HEAVY_BUILD_SESSION -u HEAVY_BUILD_SESSION_PID \
     -u HEAVY_BUILD_RERUN_FAILS -u HEAVY_BUILD_RERUN_SECS \
     XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
     HB_CGROUP="$T/cg" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
@@ -1506,7 +1507,7 @@ teardown2() { rm -rf -- "$T"; }
 hbe() {  # VAR=value... -- args ; runs heavy-build in the sandbox in the background
   local -a ev=()
   while [[ $1 != -- ]]; do ev+=("$1"); shift; done; shift
-  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_TIMEOUT HBT="$T" PATH="$T/bin:$PATH" \
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_TIMEOUT -u HEAVY_BUILD_SESSION -u HEAVY_BUILD_SESSION_PID HBT="$T" PATH="$T/bin:$PATH" \
     XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
     HB_CGROUP="$T/cg" HB_PROC="$T/proc" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
     HEAVY_BUILD_WAIT=100 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none "${ev[@]}" \
@@ -1738,7 +1739,8 @@ run_lp() {
   printf '#!/bin/sh\ncat %q\n' "$T/class" > "$T/ms"; chmod +x "$T/ms"
   run_hb HB_MACHINE_SESSION="$T/ms" MACHINE_SESSION_REGISTRY="$T/none.toml" \
     MACHINE_SESSION_SESSIONS_DIR="$T/sess" MACHINE_SESSION_GROVE_REPOS="$T/repos.json" \
-    CLAUDE_PID= CLAUDE_AGENT_NAME= HEAVY_BUILD_AGENT= CLAUDE_CODE_CHILD_SESSION= "$@"
+    CLAUDE_PID= CLAUDE_AGENT_NAME= HEAVY_BUILD_AGENT= CLAUDE_CODE_CHILD_SESSION= \
+    HEAVY_BUILD_SESSION= HEAVY_BUILD_SESSION_PID= "$@"
 }
 tk() {
   local f
@@ -1779,7 +1781,7 @@ run_lp HB_LANE_IDENT="theme - - $T/work"
 wait_tk 2 '^normal '; got=$(tk 2); l3=$(tk 3)
 wait "$hbpid"
 check "lanes: flag off, rule ignored (got '$got')" '[[ $got == normal\ * ]] && ! lplog | grep -q "event=prio-"'
-check "lanes: flag off, line 3 still names session and agent (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work" ]]'
+check "lanes: flag off, line 3 still names session and agent (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work via=-" ]]'
 teardown
 
 # A lane rule sets the priority, and the ticket and log say so.
@@ -1790,7 +1792,7 @@ run_lp HB_LANE_IDENT="theme - - $T/work"
 wait_tk 2 '^low '; got=$(tk 2); l3=$(tk 3)
 wait "$hbpid"
 check "lanes: theme low matches the lane tag (got '$got')" '[[ $got == low\ * ]]'
-check "lanes: ticket line 3 is the ident (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work" ]]'
+check "lanes: ticket line 3 is the ident (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work via=-" ]]'
 check "lanes: logged once as prio_from=normal prio_to=low with the rule" '(( $(lplog | grep -c "event=prio-change prio_from=normal prio_to=low rule=\"theme low  # 21 of 76 jobs\"") == 1 ))'
 check "lanes: the waiter says its new priority" 'grep -q "heavy-build: priority low (was normal): theme low" "$T/out"'
 teardown
@@ -1922,7 +1924,7 @@ printf 'hotfix-* high\n' > "$T/config/heavy-build.lanes"
 run_lp "$on"
 wait_tk 2 '^high '; got=$(tk 2); l3=$(tk 3)
 wait "$hbpid"
-check "ident: session name from an ancestor's session file (got '$got' '$l3')" '[[ $got == high\ * && $l3 == "session=hotfix-b agent=- lane=- "* ]]'
+check "ident: session name from an ancestor's session file (got '$got' '$l3')" '[[ $got == high\ * && $l3 == "session=hotfix-b agent=- lane=- "* && $l3 == *" via=parent" ]]'
 teardown
 
 # CLAUDE_PID names the session when no ancestor has a session file.
@@ -1933,7 +1935,33 @@ printf '{"pid": %s, "name": "via-env"}\n' "$sp" > "$T/sess/$sp.json"
 run_lp CLAUDE_PID="$sp" CLAUDE_AGENT_NAME="hb lane"
 wait_tk 3 'session=via-env'; l3=$(tk 3)
 wait "$hbpid"; kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
-check "ident: CLAUDE_PID gives the session, CLAUDE_AGENT_NAME the agent (got '$l3')" '[[ $l3 == "session=via-env agent=hb_lane "* ]]'
+check "ident: CLAUDE_PID gives the session, CLAUDE_AGENT_NAME the agent (got '$l3')" '[[ $l3 == "session=via-env agent=hb_lane "* && $l3 == *" via=claude-pid" ]]'
+teardown
+
+# The SessionStart hook's variables: HEAVY_BUILD_SESSION_PID wins when it is
+# a live session; the name counts only when no pid is given; a pid that is
+# gone falls through to the parent processes, never to the name.
+setup
+mkdir -p "$T/sess"
+sleep 300 & sp=$!
+printf '{"pid": %s, "name": "sess-a"}\n' "$sp" > "$T/sess/$sp.json"
+printf '{"pid": %s, "name": "parent-sess"}\n' "$$" > "$T/sess/$$.json"
+run_lp HEAVY_BUILD_SESSION=sess-a
+wait_tk 3 'session=sess-a'; a=$(tk 3); wait "$hbpid"
+run_lp HEAVY_BUILD_SESSION=sess-a-old-name HEAVY_BUILD_SESSION_PID="$sp"
+wait_tk 3 'session=sess-a'; b=$(tk 3); wait "$hbpid"
+run_lp HEAVY_BUILD_SESSION=gone HEAVY_BUILD_SESSION_PID=1
+wait_tk 3 'session=parent-sess'; c=$(tk 3); wait "$hbpid"
+run_lp HEAVY_BUILD_SESSION=sess-a HEAVY_BUILD_SESSION_PID=1
+wait_tk 3 'session=parent-sess'; d=$(tk 3); wait "$hbpid"
+run_lp HEAVY_BUILD_SESSION=parent-sess HEAVY_BUILD_SESSION_PID="$sp"
+wait_tk 3 'session=sess-a'; e=$(tk 3); wait "$hbpid"
+kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+check "ident: HEAVY_BUILD_SESSION alone names a live session, beats the parent (got '$a')" '[[ $a == "session=sess-a "* && $a == *" via=env-name" ]]'
+check "ident: with a gone pid, a name another live session has is not used (got '$d')" '[[ $d == "session=parent-sess "* && $d == *" via=parent" ]]'
+check "ident: a live pid beats a name that another live session has (got '$e')" '[[ $e == "session=sess-a "* && $e == *" via=env-pid" ]]'
+check "ident: a renamed session is found by HEAVY_BUILD_SESSION_PID (got '$b')" '[[ $b == "session=sess-a "* && $b == *" via=env-pid" ]]'
+check "ident: a name and pid with no live session fall through to the parent (got '$c')" '[[ $c == "session=parent-sess "* && $c == *" via=parent" ]]'
 teardown
 
 # Who submitted: every log line and history column 14 name session and agent.
@@ -2029,11 +2057,12 @@ check "prio set: critical is refused with exit 2 (rc $r)" '(( r == 2 )) && ! gre
 hp set "two words" low; r=$?
 check "prio set: a match with a space is refused (rc $r)" '(( r == 2 ))'
 printf '1 2\nnormal 1 1 1 tree:/var/tmp/claude/cass-stream/wt -\n' > "$T/run/heavy-build.queue/1792997206715365108-9-aa"
-printf '1 2\nnormal 1 1 1 - -\nsession=s1 agent=a1 lane=theme owner=- dirs=/w\n' > "$T/run/heavy-build.queue/1792997206715365109-9-ab"
+printf '1 2\nnormal 1 1 1 - -\nsession=s1 agent=a1 lane=theme owner=- dirs=/w via=env-pid\n' > "$T/run/heavy-build.queue/1792997206715365109-9-ab"
 hp list; r=$?
 check "prio list: counts waiting jobs per rule and shows by= (rc $r)" '(( r == 0 )) && grep -q "theme  *normal by=manager  *waiting=1" "$T/hp.out" && grep -q "cass\*  *low  *by=manager  *waiting=1" "$T/hp.out"'
 check "prio list: a ticket from an older heavy-build is matched on its key directories" 'grep -q "1792997206715365108-9-aa normal rule:2 session=? agent=? lane=? owner=? dirs=/var/tmp/claude/cass-stream/wt" "$T/hp.out"'
 check "prio list: shows who submitted each job" 'grep -q "1792997206715365109-9-ab normal rule:1 session=s1 agent=a1 lane=theme" "$T/hp.out"'
+check "prio list: shows how the session was found" 'grep -q "1792997206715365109-9-ab .* via=env-pid$" "$T/hp.out" && grep -q "1792997206715365108-9-aa .* via=?$" "$T/hp.out"'
 hp clear --by oystein theme; r1=$?; hp clear theme; r2=$?
 check "prio clear: logged with by" 'grep -q "action=clear match=theme old=\"theme normal by=manager\" new=\"-\" by=oystein$" "$T/state/heavy-build/lanes.log"'
 check "prio clear: removes the rule, then exit 1 when there is none (rc $r1 $r2)" '(( r1 == 0 && r2 == 1 )) && ! grep -q "^theme" "$T/config/heavy-build.lanes"'
