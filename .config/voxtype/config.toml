@@ -19,10 +19,11 @@ live_typing = false
 # so the next one starts typing about 1.6 s sooner. Costs about 1 GB RAM (no VRAM)
 # during those 5 minutes only. 0 = load fresh every time.
 live_preview_warm_secs = 300
-# Give that 1 GB back early only at the pressure level "pause" (checked every 10 s).
-# At "slow" the worker stays: dictation has priority over builds, and a cold
-# start costs 3 to 4 s before the first words (seen on the office PC, 2026-10-26).
-live_preview_warm_release_command = "grep -q 'level=pause' ~/.local/state/pressure/level"
+# No early release under memory pressure: dictation has priority over builds.
+# Releasing at "pause" made the office PC reload the model for every dictation
+# (5 to 28 s under load, 2026-10-26), because it sat at "pause" for hours.
+# To bring it back:
+# live_preview_warm_release_command = "grep -q 'level=pause' ~/.local/state/pressure/level"
 # Keep every dictation (WAV + JSON with the texts) for review and later
 # fine-tuning on Oystein's voice. About 115 MB per hour of speech.
 live_preview_corpus_dir = "~/.local/share/voxtype/corpus"
@@ -40,7 +41,10 @@ live_preview_min_free_vram_mib = 2662
 key = "RIGHTCTRL"
 modifiers = []
 mode = "toggle"
-cancel_key = "ESC"
+# Double tap Right Alt (AltGr) to discard the recording: nothing is pasted.
+# A single Esc used to do this, but Esc also reaches the app, so pressing it
+# in Claude Code or an editor while talking would throw the dictation away.
+double_tap_cancel_key = "RIGHTALT"
 # Double tap Right Ctrl to start and to stop (patched build). Right Ctrl
 # stays free for shortcuts: a tap only counts if no other key is pressed
 # while it is down, and each tap and the gap between them are under 300 ms.
