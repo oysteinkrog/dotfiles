@@ -541,7 +541,8 @@ class Fooyin:
             )
             log(
                 f"action=fooyin-quit name={name} pid={p['pid']} via=MPRIS-Quit "
-                f'ok={r is not None} reason="{why}"'
+                f"reply={'yes' if r is not None else 'none'} "
+                f'reason="{why}"'
             )
             self.quitting[name] = (p["pid"], now)
 
