@@ -84,7 +84,7 @@ rule_for() {
 }
 
 cmd_list() {
-  local i t name l1 p mem c w k cl l3 kv sess agent lane owner dirs hit r
+  local i t name l1 p mem c w k cl l3 kv sess agent lane owner dirs via hit r
   local -A count=()
   local -a rows=()
   load
@@ -93,11 +93,11 @@ cmd_list() {
     name=${t##*/}
     p= k= l3=
     { read -r l1; read -r p mem c w k cl; read -r l3; } < "$t" 2>/dev/null
-    sess='?' agent='?' lane='?' owner='?' dirs=
+    sess='?' agent='?' lane='?' owner='?' dirs= via='?'
     for kv in $l3; do
       case $kv in
         session=*) sess=${kv#*=} ;; agent=*) agent=${kv#*=} ;;
-        lane=*) lane=${kv#*=} ;; owner=*) owner=${kv#*=} ;; dirs=*) dirs=${kv#*=} ;;
+        lane=*) lane=${kv#*=} ;; owner=*) owner=${kv#*=} ;; dirs=*) dirs=${kv#*=} ;; via=*) via=${kv#*=} ;;
       esac
     done
     # A ticket from an older heavy-build: only directory rules can be checked.
@@ -105,7 +105,7 @@ cmd_list() {
     hit=$(rule_for "$lane $owner $sess ${dirs:--}")
     r=-
     if [[ -n $hit ]]; then count[$hit]=$(( ${count[$hit]:-0} + 1 )) r=${N[hit]}; fi
-    rows+=("$name ${p:-normal} rule:$r session=$sess agent=$agent lane=$lane owner=$owner dirs=${dirs:--}")
+    rows+=("$name ${p:-normal} rule:$r session=$sess agent=$agent lane=$lane owner=$owner dirs=${dirs:--} via=$via")
   done
   echo "rules ($LANES):"
   if (( ${#M[@]} == 0 )); then echo "  (none: heavy-build uses the old priority rules)"; fi
