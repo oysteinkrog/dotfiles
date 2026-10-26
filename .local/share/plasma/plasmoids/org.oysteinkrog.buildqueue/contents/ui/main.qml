@@ -229,6 +229,76 @@ PlasmoidItem {
         opacity: 0.75
     }
 
+    // A row that lights up under the mouse and shows `tip` as a tooltip. `clickable` rows
+    // light up more and show a hand cursor.
+    component HoverRow: Rectangle {
+        id: hoverRow
+        default property alias content: row.data
+        property alias spacing: row.spacing
+        property string tip: ""
+        property bool clickable: false
+        readonly property bool hovered: hover.hovered
+        implicitHeight: row.implicitHeight + 2
+        implicitWidth: row.implicitWidth + 4
+        radius: 3
+        color: hover.hovered ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, clickable ? 0.3 : 0.16) : "transparent"
+        Behavior on color {
+            ColorAnimation {
+                duration: Kirigami.Units.shortDuration
+            }
+        }
+        HoverHandler {
+            id: hover
+            cursorShape: hoverRow.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
+        }
+        RowLayout {
+            id: row
+            anchors.fill: parent
+            anchors.leftMargin: 2
+            anchors.rightMargin: 2
+            spacing: Kirigami.Units.smallSpacing
+        }
+        PlasmaComponents.ToolTip.visible: hover.hovered && tip !== ""
+        PlasmaComponents.ToolTip.text: tip
+        PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+    }
+
+    // A small square button for a lane's priority. It lights up under the mouse even when
+    // it cannot act yet, and its tooltip says why.
+    component PrioButton: Rectangle {
+        id: prioButton
+        property string iconName: ""
+        property string tip: ""
+        property bool active: false
+        signal clicked
+        implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+        implicitHeight: implicitWidth
+        radius: 3
+        color: tap.pressed && active ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.6)
+            : hover.hovered ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, active ? 0.45 : 0.22)
+            : "transparent"
+        border.width: hover.hovered ? 1 : 0
+        border.color: Kirigami.Theme.highlightColor
+        Kirigami.Icon {
+            anchors.centerIn: parent
+            source: prioButton.iconName
+            implicitWidth: Kirigami.Units.iconSizes.small
+            implicitHeight: implicitWidth
+            opacity: prioButton.active ? 1 : 0.45
+        }
+        HoverHandler {
+            id: hover
+            cursorShape: prioButton.active ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+        }
+        TapHandler {
+            id: tap
+            onTapped: if (prioButton.active) prioButton.clicked()
+        }
+        PlasmaComponents.ToolTip.visible: hover.hovered
+        PlasmaComponents.ToolTip.text: tip
+        PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+    }
+
     // A row of cells, `used` of `total` filled: job slots and app-run slots.
     component CellMeter: Row {
         property int total: 0
@@ -322,6 +392,7 @@ PlasmoidItem {
             return Math.max(0, Math.min(1, v));
         }
 
+        readonly property var causeList: (root.waiting.causes || []).slice(0, 4)
         readonly property var causeParts: (root.waiting.causes || []).map((c, i) => [c.count, causePalette[Math.min(i, causePalette.length - 1)]])
         readonly property real runMax: root.running.reduce((a, b) => Math.max(a, b.runtime), 60)
         readonly property real nextMax: root.nextJobs.reduce((a, j) => Math.max(a, j.waited), 60)
@@ -459,12 +530,12 @@ PlasmoidItem {
                         parts: view.causeParts
                     }
                     Repeater {
-                        model: (root.waiting.causes || []).slice(0, 4)
-                        delegate: RowLayout {
-                            required property var modelData
+                        model: view.causeList.length
+                        delegate: HoverRow {
                             required property int index
-                            spacing: Kirigami.Units.smallSpacing
+                            readonly property var modelData: view.causeList[index] || ({})
                             Layout.fillWidth: true
+                            tip: modelData.example || ""
                             Rectangle {
                                 implicitWidth: Kirigami.Units.smallSpacing * 2
                                 implicitHeight: implicitWidth
@@ -481,11 +552,6 @@ PlasmoidItem {
                                 Layout.fillWidth: true
                                 text: root.causeLabel(modelData.kind)
                                 elide: Text.ElideRight
-                                HoverHandler {
-                                    id: causeHover
-                                }
-                                PlasmaComponents.ToolTip.visible: causeHover.hovered && modelData.example !== ""
-                                PlasmaComponents.ToolTip.text: modelData.example
                             }
                         }
                     }
@@ -585,7 +651,8 @@ PlasmoidItem {
                         readonly property color slowBand: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.neutralTextColor, 0.18)
                         readonly property color pauseBand: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.negativeTextColor, 0.22)
                         readonly property color text: Kirigami.Theme.disabledTextColor
-                        onPointsChanged: requestPaint()
+                        readonly property string key: points.length ? points.length + ":" + points[points.length - 1][0] : ""
+                        onKeyChanged: requestPaint()
                         onWidthChanged: requestPaint()
                         onPaint: {
                             const ctx = getContext("2d");
@@ -686,11 +753,12 @@ PlasmoidItem {
                 text: i18n("Running now")
             }
             Repeater {
-                model: root.running
-                delegate: RowLayout {
-                    required property var modelData
+                model: root.running.length
+                delegate: HoverRow {
+                    required property int index
+                    readonly property var modelData: root.running[index] || ({})
                     Layout.fillWidth: true
-                    spacing: Kirigami.Units.smallSpacing
+                    tip: i18n("%1 in %2, %3 priority, running %4", modelData.cls, modelData.project, modelData.prio || "normal", root.dur(modelData.runtime)) + (modelData.why ? "\n" + modelData.why : "")
                     Rectangle {
                         implicitWidth: Kirigami.Units.smallSpacing * 2
                         implicitHeight: implicitWidth
@@ -707,11 +775,6 @@ PlasmoidItem {
                         Layout.preferredWidth: Kirigami.Units.gridUnit * 6
                         elide: Text.ElideRight
                         opacity: 0.8
-                        HoverHandler {
-                            id: runHover
-                        }
-                        PlasmaComponents.ToolTip.visible: runHover.hovered && modelData.why !== ""
-                        PlasmaComponents.ToolTip.text: modelData.why
                     }
                     PlasmaComponents.Label {
                         visible: modelData.prio === "high" || modelData.prio === "critical"
@@ -753,12 +816,12 @@ PlasmoidItem {
                 }
             }
             Repeater {
-                model: root.nextJobs
-                delegate: RowLayout {
-                    required property var modelData
+                model: root.nextJobs.length
+                delegate: HoverRow {
                     required property int index
+                    readonly property var modelData: root.nextJobs[index] || ({})
                     Layout.fillWidth: true
-                    spacing: Kirigami.Units.smallSpacing
+                    tip: i18n("%1 in %2, %3 priority\nWaited %4, %5\nRuns about %6", modelData.cls, modelData.project, modelData.prio, root.dur(modelData.waited), root.causeLabel(modelData.cause), root.dur(modelData.est))
                     Small {
                         text: index + 1
                         Layout.preferredWidth: Kirigami.Units.smallSpacing * 2
@@ -773,11 +836,6 @@ PlasmoidItem {
                         Layout.preferredWidth: Kirigami.Units.gridUnit * 5.5
                         elide: Text.ElideRight
                         opacity: 0.8
-                        HoverHandler {
-                            id: nextHover
-                        }
-                        PlasmaComponents.ToolTip.visible: nextHover.hovered
-                        PlasmaComponents.ToolTip.text: i18n("%1 priority, %2, runs about %3", modelData.prio, root.causeLabel(modelData.cause), root.dur(modelData.est))
                     }
                     ValueBar {
                         Layout.fillWidth: true
@@ -820,20 +878,28 @@ PlasmoidItem {
                 Layout.fillHeight: true
                 Layout.minimumHeight: Kirigami.Units.gridUnit * 4
                 clip: true
-                model: root.projects
+                model: root.projects.length
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: ColumnLayout {
                     id: lane
-                    required property var modelData
                     required property int index
+                    readonly property var modelData: root.projects[index] || ({ name: "", waiting: 0, running: 0, finished: 0, failed: 0, jobs: [], spark: [] })
                     readonly property bool open: root.laneOpen(modelData.name, index)
                     readonly property int step: root.prioStep(modelData.prio)
                     width: ListView.view.width
                     spacing: 0
 
-                    RowLayout {
+                    HoverRow {
                         Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing
+                        // Only the name, bar and sparkline open the lane, so a click on a
+                        // priority button never does.
+                        HoverRow {
+                            Layout.fillWidth: true
+                            clickable: true
+                            tip: i18n("%1: %2 waiting, %3 running, %4 finished and %5 failed in the last hour. Click to %6.", lane.modelData.name, lane.modelData.waiting, lane.modelData.running, lane.modelData.finished, lane.modelData.failed, lane.open ? i18n("close") : i18n("show its jobs"))
+                            TapHandler {
+                                onTapped: root.toggleLane(lane.modelData.name, lane.index)
+                            }
                         Kirigami.Icon {
                             source: lane.open ? "go-down-symbolic" : "go-next-symbolic"
                             implicitWidth: Kirigami.Units.iconSizes.small
@@ -862,7 +928,8 @@ PlasmoidItem {
                             implicitHeight: Kirigami.Units.gridUnit * 0.9
                             readonly property var spark: lane.modelData.spark || []
                             readonly property color line: view.waitColor
-                            onSparkChanged: requestPaint()
+                            readonly property string key: spark.join(",")
+                            onKeyChanged: requestPaint()
                             onPaint: {
                                 const ctx = getContext("2d");
                                 ctx.reset();
@@ -883,14 +950,12 @@ PlasmoidItem {
                                 ctx.stroke();
                             }
                         }
+                        }
                         // Priority: a track with a marker at -1, 0 or +1. The buttons are
                         // off until heavy-build-prio is installed.
-                        PlasmaComponents.ToolButton {
-                            icon.name: "go-down-symbolic"
-                            enabled: false
-                            implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
-                            implicitHeight: implicitWidth
-                            PlasmaComponents.ToolTip.text: i18n("Lower this lane's priority (needs heavy-build-prio)")
+                        PrioButton {
+                            iconName: "go-down-symbolic"
+                            tip: root.q.prioTool ? i18n("Lower this lane's priority") : i18n("Lower this lane's priority. Not available yet: heavy-build-prio is not installed.")
                         }
                         Item {
                             implicitWidth: Kirigami.Units.gridUnit * 2
@@ -915,26 +980,20 @@ PlasmoidItem {
                             PlasmaComponents.ToolTip.visible: prioHover.hovered
                             PlasmaComponents.ToolTip.text: lane.modelData.prio ? i18n("Priority %1 (set by %2, rule %3)", lane.modelData.prio.prio, lane.modelData.prio.by || "?", lane.modelData.prio.rule) : i18n("Normal priority")
                         }
-                        PlasmaComponents.ToolButton {
-                            icon.name: "go-up-symbolic"
-                            enabled: false
-                            implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
-                            implicitHeight: implicitWidth
-                            PlasmaComponents.ToolTip.text: i18n("Raise this lane's priority (needs heavy-build-prio)")
-                        }
-                        TapHandler {
-                            onTapped: root.toggleLane(lane.modelData.name, lane.index)
+                        PrioButton {
+                            iconName: "go-up-symbolic"
+                            tip: root.q.prioTool ? i18n("Raise this lane's priority") : i18n("Raise this lane's priority. Not available yet: heavy-build-prio is not installed.")
                         }
                     }
 
                     // The open lane's sessions, subagents and jobs.
                     Repeater {
                         model: lane.open ? root.laneRows(lane.modelData, 8) : []
-                        delegate: RowLayout {
+                        delegate: HoverRow {
                             required property var modelData
                             Layout.fillWidth: true
                             Layout.leftMargin: Kirigami.Units.gridUnit * (1 + modelData.depth * 0.8)
-                            spacing: Kirigami.Units.smallSpacing
+                            tip: modelData.kind === "job" ? i18n("%1, %2 priority", modelData.job.cls, modelData.job.prio || "normal") + (modelData.job.session ? "\n" + i18n("session %1", modelData.job.session) : "") + (modelData.job.agent ? "\n" + i18n("subagent %1", modelData.job.agent) : "") : ""
                             Rectangle {
                                 visible: modelData.kind === "job"
                                 implicitWidth: Kirigami.Units.smallSpacing * 1.6
