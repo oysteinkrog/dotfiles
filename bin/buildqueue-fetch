@@ -1,5 +1,5 @@
 #!/usr/bin/env -S python3 -I -S
-"""Print the heavy-build queue, how fast it moves and the machine signals that gate it, as JSON.
+"""Print the heavy-build queue, its order, how fast it moves and its gate state, as JSON.
 
     buildqueue-fetch                   print it once
     buildqueue-fetch --serve FILE [S]  rewrite FILE every S seconds (default 5) until the
@@ -16,7 +16,10 @@ Sources:
   ~/.local/state/heavy-build/live.log          every queue decision (read from a saved offset)
   ~/.local/state/heavy-build/history.tsv       one row per finished build (read from a saved offset)
   ~/.local/state/pressure/level                the pressure coordinator's level
-  /proc/meminfo, /proc/vmstat, /proc/pressure/memory
+  ~/.config/heavy-build.lanes                  per-lane priority rules (optional)
+
+Machine resources (memory, swap, CPU) are left out on purpose: Tasklens shows them beside
+this panel.
 
 A job id is <submit ns>-<pid>-<hash>. The hash is history.tsv column 3, and the pid is in the
 scope name heavy-build-<pid>-<n>, so live.log lines tie waits, starts and finished builds to a
@@ -46,6 +49,7 @@ LIVE = HB_STATE / "live.log"
 HISTORY = HB_STATE / "history.tsv"
 LEVEL = HOME / ".local/state/pressure/level"
 CONF = HOME / ".config/heavy-build.conf"
+LANES = HOME / ".config/heavy-build.lanes"
 CACHE = HOME / ".cache/buildqueue"
 STATE = CACHE / "state.json"
 
@@ -55,6 +59,9 @@ FIRST_HISTORY_BYTES = 256 << 10
 KEEP_S = 2 * 3600
 HOUR = 3600
 SAMPLE_EVERY_S = 30
+LANE_SAMPLE_S = 60
+NEXT_SHOWN = 6
+LANE_JOBS = 24
 TREND_S = 15 * 60
 THEME_EVERY_S = 600
 
@@ -63,6 +70,8 @@ LINE_RE = re.compile(
 )
 KEYS_RE = re.compile(r" keys=(\S+)")
 PRIO_RE = re.compile(r" prio=(\S+)")
+RANK_RE = re.compile(r" rank=(\d+)")
+FIELD_RE = re.compile(r"(session|agent)=(\S+)")
 TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-])(\d\d)(\d\d)")
 IDLE_RE = re.compile(r"\s*\(idle, not counted[^)]*\)")
 
@@ -172,7 +181,8 @@ def update_live(st, now):
         if project:
             projects[h] = [project, now]
         if decision == "wait":
-            reasons[job] = [reason_kind(reason), IDLE_RE.sub("", reason)]
+            rm = RANK_RE.search(line)
+            reasons[job] = [reason_kind(reason), IDLE_RE.sub("", reason), int(rm.group(1)) if rm else 0]
         elif decision == "start":
             t = parse_ts(ts)
             if t is None:
@@ -212,7 +222,8 @@ def update_history(st, now):
 
 
 def waiting_jobs(st, now):
-    """[(job id, submit epoch, prio, est_mem_gib, class, project)] for every waiting job."""
+    """[(job id, submit epoch, prio, est_mem_gib, class, project, est_wall_s, session, agent)]
+    for every waiting job. Line 3 of a ticket (session=<name> agent=<name>) is optional."""
     projects = st["projectOf"]
     jobs = []
     names = os.listdir(QUEUE)  # missing folder: an error, so the saved state is kept
@@ -224,13 +235,15 @@ def waiting_jobs(st, now):
             with open(QUEUE / name) as f:
                 f.readline()
                 fields = f.readline().split()
+                extra = dict(FIELD_RE.findall(f.readline()))
         except OSError:
             continue  # started or cancelled since the listing
-        prio, mem, cls, keys = "", 0.0, "", "-"
+        prio, mem, cls, keys, wall = "", 0.0, "", "-", 0
         if len(fields) >= 6:
             prio, keys, cls = fields[0], fields[4], fields[5]
             try:
                 mem = float(fields[1])
+                wall = int(float(fields[3]))
             except ValueError:
                 pass
         project = project_of_keys(keys)
@@ -238,7 +251,11 @@ def waiting_jobs(st, now):
             project = projects.get(parts[2], [""])[0] or project_of_pid(parts[1])
         if project:
             projects[parts[2]] = [project, now]
-        jobs.append((name, int(parts[0]) / 1e9, prio, mem, cls, project))
+        jobs.append((
+            name, int(parts[0]) / 1e9, prio, mem, cls, project, wall,
+            "" if extra.get("session", "-") == "-" else extra["session"],
+            "" if extra.get("agent", "-") == "-" else extra["agent"],
+        ))
     return jobs
 
 
@@ -279,7 +296,10 @@ def running_builds(st, now):
             why = desc.split("reason:", 1)[1].strip() if "reason:" in desc else ""
             since = props.get("ActiveEnterTimestamp", "").lstrip("@")
             project = project_of_pid(unit.split("-")[2])
+            extra = dict(FIELD_RE.findall(desc))
             units[unit] = {
+                "session": "" if extra.get("session", "-") == "-" else extra["session"],
+                "agent": "" if extra.get("agent", "-") == "-" else extra["agent"],
                 "cls": cls,
                 "prio": pm.group(1) if pm else "",
                 "why": why,
@@ -298,6 +318,8 @@ def running_builds(st, now):
                 "prio": u["prio"],
                 "why": u["why"],
                 "project": u["project"],
+                "session": u.get("session", ""),
+                "agent": u.get("agent", ""),
                 "runtime": max(0, int(now - u["since"])),
                 "mem": read_int(SLICE / n / "memory.current"),
             }
@@ -319,32 +341,8 @@ def pct(values, q):
     return v[min(len(v) - 1, int(q * len(v)))]
 
 
-def machine(st, now):
-    info = {}
-    try:
-        for line in open("/proc/meminfo"):
-            k, v = line.split(":", 1)
-            if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
-                info[k] = int(v.split()[0]) * 1024
-    except OSError:
-        pass
-    swapin = None
-    try:
-        vm = dict(l.split() for l in open("/proc/vmstat"))
-        pswpin = int(vm.get("pswpin", 0))
-        prev = st.get("pswpin")
-        if prev and now > prev[0]:
-            swapin = max(0, (pswpin - prev[1]) / (now - prev[0]))
-        st["pswpin"] = [now, pswpin]
-    except (OSError, ValueError):
-        pass
-    psi = {}
-    try:
-        for line in open("/proc/pressure/memory"):
-            w = line.split()
-            psi[w[0]] = float(w[1].split("=")[1])
-    except (OSError, ValueError, IndexError):
-        pass
+def machine_level():
+    """The pressure coordinator's level file: level=normal|slow|pause since= reason=..."""
     level = {}
     try:
         text = LEVEL.read_text()
@@ -352,21 +350,10 @@ def machine(st, now):
             level[m.group(1)] = m.group(3) if m.group(3) is not None else m.group(2)
     except OSError:
         pass
-    return {
-        "level": level.get("level", "?"),
-        "levelSince": int(level["since"]) if level.get("since", "").isdigit() else 0,
-        "levelReason": level.get("reason", ""),
-        "memAvail": info.get("MemAvailable", 0),
-        "memTotal": info.get("MemTotal", 0),
-        "swapUsed": info.get("SwapTotal", 0) - info.get("SwapFree", 0),
-        "swapinPs": swapin,
-        "psiSome10": psi.get("some"),
-        "psiFull10": psi.get("full"),
-        "slice": read_int(SLICE / "memory.current"),
-    }
+    return level
 
 
-def limits():
+def read_conf():
     conf = {}
     try:
         for line in CONF.read_text().splitlines():
@@ -375,6 +362,10 @@ def limits():
                 conf[k.strip()] = v.strip()
     except OSError:
         pass
+    return conf
+
+
+def limits(conf):
     parts = []
     if "HEAVY_BUILD_MAX_JOBS" in conf:
         parts.append(f"{conf['HEAVY_BUILD_MAX_JOBS']} jobs")
@@ -432,6 +423,36 @@ def theme(st, now):
     return colours
 
 
+def lane_rules():
+    """[(match, prio, by)] from ~/.config/heavy-build.lanes, in file order. The file is
+    optional: heavy-build-prio writes it, and a later line wins over an earlier one."""
+    rules = []
+    try:
+        text = LANES.read_text()
+    except OSError:
+        return rules
+    for line in text.splitlines():
+        w = line.split("#", 1)[0].split()
+        if len(w) >= 2:
+            by = next((x[3:] for x in w[2:] if x.startswith("by=")), "")
+            rules.append((w[0], w[1], by))
+    return rules
+
+
+def lane_prio(rules, name):
+    import fnmatch
+
+    found = None
+    for match, prio, by in rules:
+        if match == name or fnmatch.fnmatchcase(name, match):
+            found = {"prio": prio, "by": by, "rule": match}
+    return found
+
+
+def on_path(cmd):
+    return any(os.access(os.path.join(d, cmd), os.X_OK) for d in os.environ.get("PATH", "").split(":") if d) or os.access(HOME / "bin" / cmd, os.X_OK)
+
+
 def build(st, now):
     update_live(st, now)
     update_history(st, now)
@@ -445,7 +466,7 @@ def build(st, now):
     # Wait causes: the last wait line of each waiting job.
     kinds, example = {}, {}
     for job, *_ in waiting:
-        kind, text = reasons.get(job, ["not seen yet", ""])
+        kind, text = reasons.get(job, ["not seen yet", ""])[:2]
         kinds[kind] = kinds.get(kind, 0) + 1
         example.setdefault(kind, text)
     causes = sorted(
@@ -454,9 +475,10 @@ def build(st, now):
     )
 
     # Queue length samples, for the trend.
+    level = machine_level()
     samples = st.setdefault("samples", [])
     if not samples or now - samples[-1][0] >= SAMPLE_EVERY_S:
-        samples.append([now, len(waiting)])
+        samples.append([now, len(waiting), level.get("level", "")])
     st["samples"] = [s for s in samples if s[0] > now - KEEP_S]
     past = [s for s in st["samples"] if s[0] <= now - TREND_S]
     trend = len(waiting) - past[-1][1] if past else None
@@ -470,22 +492,76 @@ def build(st, now):
     arrived = {s[1] for s in st["starts"] if int(s[1].split("-")[0]) / 1e9 > now - HOUR}
     arrived |= {j[0] for j in waiting if j[1] > now - HOUR}
 
-    # Per project: waiting now, started and finished in the last hour.
+    running = running_builds(st, now)
+    conf = read_conf()
+
+    # Queue order: the rank of each job's last wait line, then priority and age as heavy-build
+    # orders them, for jobs it has not ranked yet.
+    prank = {"high": 0, "critical": 1, "normal": 2, "low": 3}
+
+    def order(j):
+        r = reasons.get(j[0], [None, None, 0])
+        rank = r[2] if len(r) > 2 and r[2] else 10**6
+        return (rank, prank.get(j[2], 2), j[1])
+
+    queue = sorted(waiting, key=order)
+    pos = {j[0]: i + 1 for i, j in enumerate(queue)}
+
+    def cause(job):
+        return reasons.get(job, ["not seen yet"])[0]
+
+    # Per project: waiting now, started and finished in the last hour, and its jobs for the tree.
     proj = {}
 
     def row(name):
-        return proj.setdefault(name or "(none)", {"name": name or "(none)", "waiting": 0, "started": 0, "finished": 0, "failed": 0})
+        name = name or "(none)"
+        return proj.setdefault(name, {"name": name, "waiting": 0, "running": 0, "started": 0, "finished": 0, "failed": 0, "jobs": []})
 
-    for _, _, _, _, _, p in waiting:
-        row(p)["waiting"] += 1
+    for b in running:
+        r = row(b["project"])
+        r["running"] += 1
+        r["jobs"].append({"state": "running", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], "session": b["session"], "agent": b["agent"]})
+    for j in queue:
+        r = row(j[5])
+        r["waiting"] += 1
+        if len(r["jobs"]) < LANE_JOBS:
+            r["jobs"].append({"state": "waiting", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "pos": pos[j[0]], "cause": cause(j[0]), "session": j[7], "agent": j[8]})
     for s in hour_starts:
         row(s[3])["started"] += 1
-    for d in hour_done:
+    for d in sorted(hour_done, key=lambda d: -d[0]):
         r = row(st["projectOf"].get(d[2], [""])[0])
         r["finished"] += 1
         if d[4] == "fail":
             r["failed"] += 1
-    projects = sorted(proj.values(), key=lambda r: (-r["waiting"], -r["started"] - r["finished"], r["name"]))
+        if len(r["jobs"]) < LANE_JOBS:
+            r["jobs"].append({"state": "ok" if d[4] == "ok" else "failed", "cls": d[1], "end": d[0], "session": "", "agent": ""})
+
+    # One sample a minute of each lane's waiting count, for its sparkline.
+    lanes = st.setdefault("laneSamples", [])
+    if not lanes or now - lanes[-1][0] >= LANE_SAMPLE_S:
+        lanes.append([now, {n: r["waiting"] for n, r in proj.items() if r["waiting"]}])
+    st["laneSamples"] = lanes = [x for x in lanes if x[0] > now - HOUR]
+    rules = lane_rules()
+    for n, r in proj.items():
+        r["spark"] = [x[1].get(n, 0) for x in lanes]
+        r["prio"] = lane_prio(rules, n)
+    projects = sorted(proj.values(), key=lambda r: (-r["waiting"], -r["running"], -r["started"] - r["finished"], r["name"]))
+
+    nxt = [
+        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0])}
+        for j in queue[:NEXT_SHOWN]
+    ]
+    gate = {
+        "state": {"pause": "paused", "slow": "slowed", "normal": "open"}.get(level.get("level", ""), "unknown"),
+        "since": int(level["since"]) if level.get("since", "").isdigit() else 0,
+        "reason": level.get("reason", ""),
+    }
+
+    def as_int(key):
+        try:
+            return int(conf.get(key, ""))
+        except ValueError:
+            return 0
 
     prios = {}
     for j in waiting:
@@ -494,7 +570,16 @@ def build(st, now):
     return {
         "updated": int(now * 1000),
         "error": "",
-        "running": running_builds(st, now),
+        "running": running,
+        "gate": gate,
+        "slots": {
+            "jobs": as_int("HEAVY_BUILD_MAX_JOBS"),
+            "appRuns": as_int("HEAVY_BUILD_MAX_APP_RUNS"),
+            "appRunsUsed": sum(1 for b in running if b["cls"] == "app-run"),
+        },
+        "next": nxt,
+        "history": [[int(s[0]), s[1], s[2] if len(s) > 2 else ""] for s in st["samples"] if s[0] > now - HOUR],
+        "prioTool": on_path("heavy-build-prio"),
         "waiting": {
             "count": len(waiting),
             "oldest": int(now - min((j[1] for j in waiting), default=now)),
@@ -512,8 +597,7 @@ def build(st, now):
             "trendMinutes": TREND_S // 60,
         },
         "projects": projects,
-        "machine": machine(st, now),
-        "limits": limits(),
+        "limits": limits(conf),
         "theme": theme(st, now),
     }
 
