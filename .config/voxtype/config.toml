@@ -106,8 +106,8 @@ theme = "swiss"
 style = "default"
 layout = "compact"
 # Popup near the middle of the screen (top edge at 45% of the height),
-# 25% wider than the 400 px default, transcript text 17 pt.
-width_px = 500
+# 50% wider than the 400 px default, transcript text 17 pt.
+width_px = 600
 top_margin = 0.45
 preview_font_pt = 17.0
 # Solid background: the see-through panel was hard to read.
