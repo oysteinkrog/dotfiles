@@ -74,6 +74,8 @@ firefox
 claude-desktop      # pulls in qemu for the Cowork VM
 mission-center
 fooyin              # native foobar2000-style player
+spotify-launcher    # official Spotify client, downloads it on first run
+playerctl           # music-control drives Spotify over MPRIS
 
 # Windows compatibility (portable foobar2000 under Wine)
 wine
