@@ -1,0 +1,620 @@
+#!/usr/bin/env python3
+"""presence-detect: is Oystein at the office desktop (here), on it over RDP (remote), or away?
+
+    presence-detect              run for good (presence-detect.service)
+    presence-detect --status     one check, print signals and state, change nothing
+    presence-detect --fooyin-save-state
+                                 set SavePlaybackState=true in every fooyin config
+                                 whose fooyin is not running, then exit
+
+Approved by Oystein on 2026-10-26 (proposal: /var/tmp/claude/presence/PROPOSAL.md).
+Runs as its own user unit, not inside krdp-remote-mode: that one holds the RDP layout,
+and a bug or restart here must not touch a live remote session.
+
+Files (PRESENCE_STATE_DIR, default ~/.local/state/presence):
+  state                 JSON, rewritten every check (about every 5 s): state, since,
+                        updated, reason, and the timers below. Readers trust it only
+                        while updated is recent.
+  log                   one line per state change and per action taken.
+  heavy-build.override  only while the build boost is on (away). heavy-build reads
+                        HEAVY_BUILD_MAX_JOBS and HEAVY_BUILD_CPU_BUDGET from it, and
+                        pressure-coordinator ignores desktop-app pressure for slow.
+                        It holds expires=<epoch>, refreshed every 30 s, so a dead
+                        detector's boost runs out within 2 min.
+
+States:
+  here    a key press or click on the office USB keyboard or mouse in the last 2 min
+          (beats a connected RDP client after 60 s), or the screen is unlocked with no
+          RDP client.
+  remote  a KRDP client is connected and nobody typed at the office in the last minute.
+  away    no RDP and the screen locked 10 min; or the RDP client left over 2 min ago
+          and nobody touched the office keyboard since; or RDP connected but locked
+          30 min; or unlocked, no RDP, no key or click for 3 h.
+  Into here at once, into remote after 10 s of connection, into away only after the
+  away reading held 5 more min.
+
+Actions (each can be turned off in ~/.config/presence.conf, key=value):
+  fooyin_quit=1   after 30 min in away or remote, and fooyin not playing for 30 min,
+                  call fooyin's own MPRIS Quit. Never a signal, never a kill. After it
+                  exits, set SavePlaybackState=true in its config (fooyin saves its
+                  settings on exit, so the file is only edited while it is closed).
+  build_boost=1   while away: builds.slice CPUWeight 20 -> 100 (systemctl --runtime),
+                  and the override file above (jobs 11, CPU budget 32). On here or
+                  remote: CPUWeight back to 20 and the file removed at once. Running
+                  builds are never stopped or frozen.
+  chrome_away_min=60  read by chrome-idle-close, not here.
+
+Signals:
+  /run/local-input/last  mtime = last key press or click on local USB input,
+                         written by local-input-watch.service (root).
+  ss                     established TCP on the KRDP port = an RDP client.
+  ScreenSaver            GetActive and GetActiveTime (KDE returns ms);
+                         loginctl LockedHint as a fallback.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+LOCAL_INPUT = Path(os.environ.get("PRESENCE_LOCAL_INPUT", "/run/local-input/last"))
+STATE_DIR = Path(
+    os.environ.get(
+        "PRESENCE_STATE_DIR",
+        Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "presence",
+    )
+)
+CONF = Path(os.environ.get("PRESENCE_CONF", HOME / ".config/presence.conf"))
+STATE = STATE_DIR / "state"
+LOG = STATE_DIR / "log"
+OVERRIDE = STATE_DIR / "heavy-build.override"
+RDP_PORT = os.environ.get("KRDP_PORT", "3389")
+LOG_MAX = 2 * 1024 * 1024
+
+HERE_INPUT_S = 120  # a key or click this recent always means here
+TAKEOVER_INPUT_S = 60  # a key or click this recent beats a connected RDP client
+RDP_ON_S = 10  # client connected this long before remote
+RDP_OFF_S = 120  # client gone this long before the remote session counts as ended
+LOCK_MIN = 10  # locked this long, no RDP: away
+RDP_LOCKED_MIN = 30  # locked this long with a client connected: away
+NO_KEYS_MIN = 180  # unlocked, no RDP, no key or click this long: away
+AWAY_HOLD_S = 300  # an away reading must hold this long
+
+CHECK_S = 5  # full check interval; the local input file is checked every second
+FOOYIN_MIN = 30  # away or remote this long, and fooyin not playing this long, then quit
+FOOYIN_EXIT_WAIT_S = 120  # how long to wait for fooyin to exit after Quit
+BASE_CPU_WEIGHT = 20
+AWAY_CPU_WEIGHT = 100
+AWAY_MAX_JOBS = 11
+AWAY_CPU_BUDGET = 32
+OVERRIDE_TTL_S = 120
+OVERRIDE_REFRESH_S = 30
+BUILDS_SLICE = "builds.slice"
+
+MPRIS = "org.mpris.MediaPlayer2"
+FOOYIN_CONFIGS = [
+    HOME / ".config/fooyin/fooyin.conf",
+    HOME / ".local/opt/fooyin-experimental/bin/config/fooyin.conf",
+]
+
+
+# ---------------------------------------------------------------- helpers
+
+
+def run(*cmd: str, timeout: float = 5) -> str | None:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def log(line: str) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if LOG.exists() and LOG.stat().st_size > LOG_MAX:
+            LOG.replace(LOG.with_suffix(".1"))
+        with LOG.open("a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {line}\n")
+    except OSError:
+        pass
+    print(line, flush=True)
+
+
+def read_conf() -> dict[str, str]:
+    conf = {"fooyin_quit": "1", "build_boost": "1"}
+    try:
+        for line in CONF.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = (s.strip() for s in line.split("=", 1))
+                conf[k] = v
+    except OSError:
+        pass
+    return conf
+
+
+def on(conf: dict[str, str], key: str) -> bool:
+    return conf.get(key, "1") not in ("0", "off", "no", "false")
+
+
+# ---------------------------------------------------------------- signals
+
+
+def last_local_input() -> float | None:
+    try:
+        return LOCAL_INPUT.stat().st_mtime
+    except OSError:
+        return None
+
+
+def rdp_clients() -> list[str] | None:
+    out = run("ss", "-Htn", "state", "established", f"( sport = :{RDP_PORT} )")
+    if out is None:
+        return None
+    return [line.split()[-1] for line in out.splitlines() if line.strip()]
+
+
+def lock_state() -> tuple[bool, float | None, str]:
+    """(locked, seconds locked or None, source)."""
+    q = ("qdbus6", "org.freedesktop.ScreenSaver", "/ScreenSaver")
+    active = run(*q, "org.freedesktop.ScreenSaver.GetActive")
+    if active in ("true", "false"):
+        if active == "false":
+            return False, 0.0, "ScreenSaver"
+        ms = run(*q, "org.freedesktop.ScreenSaver.GetActiveTime")
+        try:
+            return True, float(ms or "") / 1000, "ScreenSaver"
+        except ValueError:
+            return True, None, "ScreenSaver"
+    for line in (run("loginctl", "list-sessions", "--no-legend") or "").splitlines():
+        f = line.split()
+        if f and "seat0" in f:
+            hint = run("loginctl", "show-session", f[0], "-p", "LockedHint", "--value")
+            return hint == "yes", None, "loginctl"
+    return False, None, "none"
+
+
+def signals(now: float) -> dict:
+    li = last_local_input()
+    locked, locked_s, src = lock_state()
+    return {
+        "local_input_age_s": None if li is None else round(now - li),
+        "rdp_clients": rdp_clients(),
+        "locked": locked,
+        "locked_s": locked_s,
+        "lock_source": src,
+    }
+
+
+# ---------------------------------------------------------------- state model
+
+
+def classify(now: float, sig: dict, prev: dict) -> tuple[str, str]:
+    """Raw reading from this sample: (state, reason)."""
+    li = sig["local_input_age_s"]
+    clients = sig["rdp_clients"] or []
+    locked, locked_s = sig["locked"], sig["locked_s"]
+    if (
+        li is not None
+        and li <= HERE_INPUT_S
+        and (not clients or li <= TAKEOVER_INPUT_S)
+    ):
+        return "here", f"key or click at the office {li:.0f} s ago"
+    if clients:
+        first = prev.get("rdp_first_seen") or now
+        if locked and (locked_s or 0) >= RDP_LOCKED_MIN * 60:
+            return "away", f"RDP connected but locked {(locked_s or 0) / 60:.0f} min"
+        if now - first >= RDP_ON_S or prev.get("state") == "remote" or not prev:
+            return "remote", "RDP client connected"
+        return prev.get("state", "here"), "RDP client just connected, waiting"
+    last_rdp = prev.get("rdp_last_seen")
+    if last_rdp and (li is None or li > now - last_rdp):
+        if now - last_rdp < RDP_OFF_S:
+            return "remote", f"RDP client gone {now - last_rdp:.0f} s, may reconnect"
+        return "away", (
+            f"RDP session ended {(now - last_rdp) / 60:.0f} min ago, no office input since"
+        )
+    if locked:
+        if locked_s is not None and locked_s >= LOCK_MIN * 60:
+            return "away", f"locked {locked_s / 60:.0f} min, no RDP"
+        return prev.get("state", "away"), (
+            f"locked {(locked_s or 0) / 60:.0f} min, under {LOCK_MIN}"
+        )
+    if li is not None and li >= NO_KEYS_MIN * 60:
+        return "away", f"unlocked, but no key or click for {li / 60:.0f} min"
+    return "here", "unlocked, no RDP (KDE locks after 5 min idle)"
+
+
+def step(now: float, sig: dict, prev: dict) -> dict:
+    """The new state record from this sample and the previous record."""
+    raw, reason = classify(now, sig, prev)
+    clients = sig["rdp_clients"] or []
+    new = dict(prev)
+    if clients:
+        new["rdp_first_seen"] = prev.get("rdp_first_seen") or now
+        new["rdp_last_seen"] = now
+    else:
+        new.pop("rdp_first_seen", None)
+    old = prev.get("state")
+    state = old or raw
+    if raw == old or old is None or raw in ("here", "remote"):
+        state = raw
+        new.pop("pending", None)
+    else:  # raw is away, old is here or remote
+        pend = prev.get("pending") or {}
+        if pend.get("state") != "away":
+            pend = {"state": "away", "since": now}
+        new["pending"] = pend
+        if now - pend["since"] >= AWAY_HOLD_S:
+            state = "away"
+            new.pop("pending", None)
+        else:
+            reason += (
+                f" (away in {AWAY_HOLD_S - (now - pend['since']):.0f} s if it holds)"
+            )
+    if state != old:
+        new["since"] = now
+    if state == "here":
+        new.pop("not_here_since", None)
+    elif not new.get("not_here_since"):
+        new["not_here_since"] = now
+    new.update(state=state, reason=reason, raw=raw, updated=now)
+    return new
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(rec: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rec) + "\n")
+    tmp.replace(STATE)
+
+
+# ---------------------------------------------------------------- build boost
+
+
+def cpu_weight() -> str | None:
+    return run(
+        "systemctl", "--user", "show", BUILDS_SLICE, "-p", "CPUWeight", "--value"
+    )
+
+
+def set_cpu_weight(w: int) -> bool:
+    r = run(
+        "systemctl",
+        "--user",
+        "set-property",
+        "--runtime",
+        BUILDS_SLICE,
+        f"CPUWeight={w}",
+    )
+    return r is not None
+
+
+def write_override(now: float) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = OVERRIDE.with_suffix(".tmp")
+    tmp.write_text(
+        "# Written by presence-detect while away. heavy-build and pressure-coordinator\n"
+        "# trust it only until expires=. Removed on return.\n"
+        f"HEAVY_BUILD_MAX_JOBS={AWAY_MAX_JOBS}\n"
+        f"HEAVY_BUILD_CPU_BUDGET={AWAY_CPU_BUDGET}\n"
+        f"expires={int(now + OVERRIDE_TTL_S)}\n"
+    )
+    tmp.replace(OVERRIDE)
+
+
+class Boost:
+    """Owns builds.slice CPUWeight and the heavy-build override file."""
+
+    def __init__(self, rec: dict):
+        self.active = bool(rec.get("boost"))
+        self.written = 0.0
+
+    def apply(self, want: bool, now: float, why: str) -> None:
+        if want:
+            if not self.active:
+                ok = set_cpu_weight(AWAY_CPU_WEIGHT)
+                write_override(now)
+                self.written = now
+                self.active = True
+                log(
+                    f"action=boost-on cpu_weight={AWAY_CPU_WEIGHT} ok={ok} "
+                    f'max_jobs={AWAY_MAX_JOBS} cpu_budget={AWAY_CPU_BUDGET} reason="{why}"'
+                )
+            elif now - self.written >= OVERRIDE_REFRESH_S:
+                write_override(now)
+                self.written = now
+            return
+        if self.active or OVERRIDE.exists():
+            try:
+                OVERRIDE.unlink()
+            except FileNotFoundError:
+                pass
+            ok = set_cpu_weight(BASE_CPU_WEIGHT)
+            self.active = False
+            log(f'action=boost-off cpu_weight={BASE_CPU_WEIGHT} ok={ok} reason="{why}"')
+
+
+# ---------------------------------------------------------------- fooyin
+
+
+def bus_names() -> list[str]:
+    out = run(
+        "busctl",
+        "--user",
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "ListNames",
+    )
+    return re.findall(r'"([^"]+)"', out or "")
+
+
+def fooyin_players() -> dict[str, dict]:
+    """MPRIS name -> {status, pid} for every running fooyin."""
+    found = {}
+    for name in bus_names():
+        if not name.startswith(f"{MPRIS}.fooyin"):
+            continue
+        out = run(
+            "busctl",
+            "--user",
+            "get-property",
+            name,
+            "/org/mpris/MediaPlayer2",
+            f"{MPRIS}.Player",
+            "PlaybackStatus",
+        )
+        status = out.split('"')[1] if out and '"' in out else "unknown"
+        pid_out = run(
+            "busctl",
+            "--user",
+            "call",
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "GetConnectionUnixProcessID",
+            "s",
+            name,
+        )
+        pid = (
+            int(pid_out.split()[-1]) if pid_out and pid_out.split()[-1].isdigit() else 0
+        )
+        found[name] = {"status": status, "pid": pid}
+    return found
+
+
+def fooyin_config_of(pid: int) -> Path | None:
+    """The config file a running fooyin uses: <bin>/config/fooyin.conf in portable
+    mode (a PORTABLE file next to the binary), else ~/.config/fooyin/fooyin.conf."""
+    try:
+        exe = Path(os.readlink(f"/proc/{pid}/exe"))
+    except OSError:
+        return None
+    if (exe.parent / "PORTABLE").exists():
+        return exe.parent / "config/fooyin.conf"
+    return HOME / ".config/fooyin/fooyin.conf"
+
+
+def running_fooyin_configs() -> set[Path]:
+    out = set()
+    for p in Path("/proc").iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            if not os.readlink(p / "exe").rsplit("/", 1)[-1].startswith("fooyin"):
+                continue
+        except OSError:
+            continue
+        c = fooyin_config_of(int(p.name))
+        if c:
+            out.add(c)
+    return out
+
+
+def set_save_playback_state(text: str) -> str:
+    """text with SavePlaybackState=true in [Player]."""
+    lines = text.splitlines()
+    section = None
+    player_at = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            section = s[1:-1]
+            if section == "Player":
+                player_at = i
+            continue
+        if section == "Player" and s.split("=", 1)[0].strip() == "SavePlaybackState":
+            lines[i] = "SavePlaybackState=true"
+            return "\n".join(lines) + "\n"
+    if player_at is None:
+        lines += ["", "[Player]", "SavePlaybackState=true"]
+    else:
+        lines.insert(player_at + 1, "SavePlaybackState=true")
+    return "\n".join(lines) + "\n"
+
+
+def fooyin_save_state(configs: list[Path] | None = None) -> None:
+    """Turn on SavePlaybackState in each config whose fooyin is not running."""
+    busy = running_fooyin_configs()
+    for c in configs or FOOYIN_CONFIGS:
+        try:
+            text = c.read_text()
+        except OSError:
+            continue
+        if c in busy:
+            if "SavePlaybackState=true" not in text:
+                log(
+                    f'action=fooyin-save-state-skip config={c} reason="fooyin is running"'
+                )
+            continue
+        new = set_save_playback_state(text)
+        if new == text or "SavePlaybackState=true" in text:
+            continue
+        tmp = c.with_suffix(".conf.presence-tmp")
+        tmp.write_text(new)
+        os.chmod(tmp, c.stat().st_mode & 0o777)
+        tmp.replace(c)
+        log(f"action=fooyin-save-state config={c} SavePlaybackState=true")
+
+
+class Fooyin:
+    def __init__(self):
+        self.idle_since: dict[str, float] = {}
+        self.quitting: dict[str, tuple[int, float]] = {}  # name -> (pid, quit time)
+        self.noted_playing = False
+
+    def tick(self, now: float, rec: dict, enabled: bool) -> None:
+        players = fooyin_players()
+        for name in list(self.idle_since):
+            if name not in players:
+                del self.idle_since[name]
+        for name, p in players.items():
+            if p["status"] == "Playing":
+                self.idle_since.pop(name, None)
+            else:
+                self.idle_since.setdefault(name, now)
+        self.follow_quits(now)
+        nh = rec.get("not_here_since")
+        if not enabled or rec.get("state") == "here" or nh is None:
+            self.noted_playing = False
+            return
+        if now - nh < FOOYIN_MIN * 60:
+            return
+        for name, p in players.items():
+            if name in self.quitting:
+                continue
+            if p["status"] == "Playing":
+                if not self.noted_playing:
+                    log(f'action=fooyin-keep name={name} reason="playing, left alone"')
+                    self.noted_playing = True
+                continue
+            idle = now - self.idle_since.get(name, now)
+            if idle < FOOYIN_MIN * 60:
+                continue
+            why = (
+                f"{rec['state']} for {(now - nh) / 60:.0f} min, fooyin {p['status']} "
+                f"for {idle / 60:.0f} min"
+            )
+            r = run(
+                "busctl",
+                "--user",
+                "call",
+                name,
+                "/org/mpris/MediaPlayer2",
+                MPRIS,
+                "Quit",
+            )
+            log(
+                f"action=fooyin-quit name={name} pid={p['pid']} via=MPRIS-Quit "
+                f'ok={r is not None} reason="{why}"'
+            )
+            self.quitting[name] = (p["pid"], now)
+
+    def follow_quits(self, now: float) -> None:
+        for name, (pid, t0) in list(self.quitting.items()):
+            alive = pid > 0 and Path(f"/proc/{pid}").exists()
+            if not alive:
+                del self.quitting[name]
+                log(
+                    f"action=fooyin-exited name={name} pid={pid} after_s={now - t0:.0f}"
+                )
+                fooyin_save_state()
+            elif now - t0 > FOOYIN_EXIT_WAIT_S:
+                del self.quitting[name]
+                log(
+                    f"action=fooyin-still-running name={name} pid={pid} "
+                    f'reason="no exit {FOOYIN_EXIT_WAIT_S} s after Quit, left alone"'
+                )
+
+
+# ---------------------------------------------------------------- main loop
+
+
+def describe(rec: dict, sig: dict) -> str:
+    age = lambda s: "unknown" if s is None else f"{s / 60:.1f} min"  # noqa: E731
+    clients = sig["rdp_clients"] or []
+    return "\n".join(
+        [
+            f"state: {rec['state']} (since "
+            f"{time.strftime('%H:%M:%S', time.localtime(rec['since']))})",
+            f"reason: {rec['reason']}",
+            f"last key/click at office: {age(sig['local_input_age_s'])} ago",
+            f"RDP clients: {len(clients)}",
+            f"screen locked: {sig['locked']} ({age(sig['locked_s'])}, via {sig['lock_source']})",
+        ]
+    )
+
+
+def main() -> int:
+    if "--fooyin-save-state" in sys.argv:
+        fooyin_save_state()
+        return 0
+    if "--status" in sys.argv:
+        now = time.time()
+        sig = signals(now)
+        rec = step(now, sig, load_state())
+        print(describe(rec, sig))
+        print(
+            f"build boost: {'on' if OVERRIDE.exists() else 'off'}, "
+            f"builds.slice CPUWeight={cpu_weight()}"
+        )
+        for name, p in fooyin_players().items():
+            print(f"fooyin: {name} {p['status']} pid={p['pid']}")
+        return 0
+
+    rec = load_state()
+    boost = Boost(rec)
+    fy = Fooyin()
+
+    def stop(*_):
+        boost.apply(False, time.time(), "presence-detect stopping")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    log(f"event=start state={rec.get('state', '-')}")
+    last_check = 0.0
+    last_input = last_local_input()
+    while True:
+        now = time.time()
+        li = last_local_input()
+        if now - last_check >= CHECK_S or li != last_input:
+            last_check, last_input = now, li
+            try:
+                conf = read_conf()
+                sig = signals(now)
+                old = rec.get("state")
+                rec = step(now, sig, rec)
+                if rec["state"] != old:
+                    log(
+                        f'event=state from={old or "-"} to={rec["state"]} reason="{rec["reason"]}"'
+                    )
+                want = rec["state"] == "away" and on(conf, "build_boost")
+                boost.apply(want, now, f"state {rec['state']}")
+                rec["boost"] = boost.active
+                save_state(rec)
+                fy.tick(now, rec, on(conf, "fooyin_quit"))
+            except Exception as e:  # keep watching; the next check retries
+                log(f'event=error error="{e}"')
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
