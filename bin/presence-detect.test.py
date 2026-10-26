@@ -157,6 +157,21 @@ class Boost(unittest.TestCase):
         b.apply(False, 1.0, "start, here")
         self.assertEqual(self.calls, [20])
 
+    def test_restart_while_away_sets_weight_again(self):
+        b = pd.Boost({"boost": True})
+        b.apply(True, 1.0, "start, away")
+        self.assertEqual(self.calls, [100])
+
+    def test_failed_weight_change_is_retried(self):
+        results = [False, False, True]
+        pd.set_cpu_weight = lambda w: self.calls.append(w) or results.pop(0)
+        b = pd.Boost({"boost": True})
+        b.apply(False, 1.0, "here")
+        b.apply(False, 6.0, "here")
+        b.apply(False, 11.0, "here")
+        b.apply(False, 16.0, "here")
+        self.assertEqual(self.calls, [20, 20, 20])
+
 
 class FooyinRule(unittest.TestCase):
     def setUp(self):

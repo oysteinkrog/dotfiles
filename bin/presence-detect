@@ -319,35 +319,53 @@ def write_override(now: float) -> None:
 
 
 class Boost:
-    """Owns builds.slice CPUWeight and the heavy-build override file."""
+    """Owns builds.slice CPUWeight and the heavy-build override file.
+
+    A weight change that fails is retried on every check until it works. The
+    first check after a start always sets the boost when away, so a restart
+    while away does not leave the weight at 20.
+    """
 
     def __init__(self, rec: dict):
-        self.active = bool(rec.get("boost"))
+        self.active = bool(rec.get("boost"))  # a boost left by an earlier run
+        self.first = True
+        self.pending: int | None = None  # CPUWeight still to set
+        self.failed_logged = False
         self.written = 0.0
 
     def apply(self, want: bool, now: float, why: str) -> None:
-        if want:
-            if not self.active:
-                ok = set_cpu_weight(AWAY_CPU_WEIGHT)
-                write_override(now)
-                self.written = now
-                self.active = True
-                log(
-                    f"action=boost-on cpu_weight={AWAY_CPU_WEIGHT} ok={ok} "
-                    f'max_jobs={AWAY_MAX_JOBS} cpu_budget={AWAY_CPU_BUDGET} reason="{why}"'
-                )
-            elif now - self.written >= OVERRIDE_REFRESH_S:
-                write_override(now)
-                self.written = now
-            return
-        if self.active or OVERRIDE.exists():
+        if want and (not self.active or self.first):
+            write_override(now)
+            self.written = now
+            self.active = True
+            self.pending = AWAY_CPU_WEIGHT
+            log(
+                f"action=boost-on cpu_weight={AWAY_CPU_WEIGHT} max_jobs={AWAY_MAX_JOBS} "
+                f'cpu_budget={AWAY_CPU_BUDGET} reason="{why}"'
+            )
+        elif want and now - self.written >= OVERRIDE_REFRESH_S:
+            write_override(now)
+            self.written = now
+        elif not want and (self.active or OVERRIDE.exists()):
             try:
                 OVERRIDE.unlink()
             except FileNotFoundError:
                 pass
-            ok = set_cpu_weight(BASE_CPU_WEIGHT)
             self.active = False
-            log(f'action=boost-off cpu_weight={BASE_CPU_WEIGHT} ok={ok} reason="{why}"')
+            self.pending = BASE_CPU_WEIGHT
+            log(f'action=boost-off cpu_weight={BASE_CPU_WEIGHT} reason="{why}"')
+        self.first = False
+        if self.pending is not None:
+            if set_cpu_weight(self.pending):
+                if self.failed_logged:
+                    log(
+                        f"action=cpu-weight-set cpu_weight={self.pending} after retries"
+                    )
+                self.pending = None
+                self.failed_logged = False
+            elif not self.failed_logged:
+                log(f"action=cpu-weight-failed cpu_weight={self.pending} retrying")
+                self.failed_logged = True
 
 
 # ---------------------------------------------------------------- fooyin
@@ -585,10 +603,15 @@ def main() -> int:
 
     def stop(*_):
         boost.apply(False, time.time(), "presence-detect stopping")
+        if boost.pending is not None:
+            boost.apply(False, time.time(), "presence-detect stopping, retry")
+        held["rec"]["boost"] = boost.active
+        save_state(held["rec"])
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    held = {"rec": rec}
     log(f"event=start state={rec.get('state', '-')}")
     last_check = 0.0
     last_input = last_local_input()
@@ -609,6 +632,7 @@ def main() -> int:
                 want = rec["state"] == "away" and on(conf, "build_boost")
                 boost.apply(want, now, f"state {rec['state']}")
                 rec["boost"] = boost.active
+                held["rec"] = rec
                 save_state(rec)
                 fy.tick(now, rec, on(conf, "fooyin_quit"))
             except Exception as e:  # keep watching; the next check retries
