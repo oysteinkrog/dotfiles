@@ -52,6 +52,9 @@ CONF = HOME / ".config/heavy-build.conf"
 LANES = HOME / ".config/heavy-build.lanes"
 CACHE = HOME / ".cache/buildqueue"
 STATE = CACHE / "state.json"
+OWNERS = CACHE / "owners.json"
+SESSIONS = HOME / ".claude/sessions"
+TRANSCRIPTS = HOME / ".claude/projects"
 
 # How far back the first run reads, before there is an offset.
 FIRST_LIVE_BYTES = 6 << 20
@@ -64,6 +67,10 @@ NEXT_SHOWN = 6
 LANE_JOBS = 24
 TREND_S = 15 * 60
 THEME_EVERY_S = 600
+SESSIONS_EVERY_S = 60
+OWNER_READ_BYTES = 24 << 20
+OWNER_FIRST_BYTES = 64 << 20
+QUEUE_SHOWN = 120
 
 LINE_RE = re.compile(
     r'^(\S+) mode=\S+ job=(\d+)-(\d+)-([0-9a-f]+) decision=(\S+) reason="([^"]*)"'
@@ -71,8 +78,11 @@ LINE_RE = re.compile(
 KEYS_RE = re.compile(r" keys=(\S+)")
 PRIO_RE = re.compile(r" prio=(\S+)")
 RANK_RE = re.compile(r" rank=(\d+)")
-FIELD_RE = re.compile(r"(session|agent)=(\S+)")
+FIELD_RE = re.compile(r"(session|agent|owner|lane)=(\S+)")
 TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-])(\d\d)(\d\d)")
+# A worktree named in a transcript: .scratch/<tag>, work/desktop/<tag>, work/<tag>, src/<tag> or
+# /var/tmp/claude[/<task>]/<tag>.
+MENTION_RE = re.compile(rb"(?:\.scratch|work/desktop|work|/var/tmp/claude(?:/[\w.-]+)?)/([A-Za-z0-9][\w.-]{1,60})")
 IDLE_RE = re.compile(r"\s*\(idle, not counted[^)]*\)")
 
 
@@ -222,8 +232,9 @@ def update_history(st, now):
 
 
 def waiting_jobs(st, now):
-    """[(job id, submit epoch, prio, est_mem_gib, class, project, est_wall_s, session, agent)]
-    for every waiting job. Line 3 of a ticket (session=<name> agent=<name>) is optional."""
+    """[(job id, submit epoch, prio, est_mem_gib, class, project, est_wall_s, session, agent,
+    owner)] for every waiting job. Line 3 of a ticket (session= agent= lane= owner= dirs=) is
+    written by heavy-build since 2026-10-26; older tickets have none."""
     projects = st["projectOf"]
     jobs = []
     names = os.listdir(QUEUE)  # missing folder: an error, so the saved state is kept
@@ -255,8 +266,19 @@ def waiting_jobs(st, now):
             name, int(parts[0]) / 1e9, prio, mem, cls, project, wall,
             "" if extra.get("session", "-") == "-" else extra["session"],
             "" if extra.get("agent", "-") == "-" else extra["agent"],
+            recorded_owner(extra),
         ))
     return jobs
+
+
+def recorded_owner(fields):
+    """The session heavy-build recorded for a job: the calling Claude session, else the
+    grove lane's owner. '' when it recorded neither."""
+    for k in ("session", "owner"):
+        v = fields.get(k, "-")
+        if v not in ("-", "?", ""):
+            return v
+    return ""
 
 
 def read_int(path):
@@ -300,6 +322,7 @@ def running_builds(st, now):
             units[unit] = {
                 "session": "" if extra.get("session", "-") == "-" else extra["session"],
                 "agent": "" if extra.get("agent", "-") == "-" else extra["agent"],
+                "owner": recorded_owner(extra),
                 "cls": cls,
                 "prio": pm.group(1) if pm else "",
                 "why": why,
@@ -320,6 +343,7 @@ def running_builds(st, now):
                 "project": u["project"],
                 "session": u.get("session", ""),
                 "agent": u.get("agent", ""),
+                "owner": u.get("owner", ""),
                 "runtime": max(0, int(now - u["since"])),
                 "mem": read_int(SLICE / n / "memory.current"),
             }
@@ -425,7 +449,7 @@ def theme(st, now):
 
 def lane_rules():
     """[(match, prio, by)] from ~/.config/heavy-build.lanes, in file order. The file is
-    optional: heavy-build-prio writes it, and a later line wins over an earlier one."""
+    optional: heavy-build-prio writes it, and the first matching line wins."""
     rules = []
     try:
         text = LANES.read_text()
@@ -439,23 +463,188 @@ def lane_rules():
     return rules
 
 
-def lane_prio(rules, name):
+def lane_prio(rules, *names):
+    """The first rule that matches any of names (a worktree tag, a session name), as heavy-build
+    picks it. Directory rules (/ or ~/) are not matched here."""
     import fnmatch
 
-    found = None
+    names = [n for n in names if n]
     for match, prio, by in rules:
-        if match == name or fnmatch.fnmatchcase(name, match):
-            found = {"prio": prio, "by": by, "rule": match}
-    return found
+        if any(match == n or fnmatch.fnmatchcase(n, match) for n in names):
+            return {"prio": prio, "by": by, "rule": match}
+    return None
+
+
+# Owners. A job belongs to the Claude session that owns its worktree. heavy-build does not
+# record the session yet and detached jobs have lost their parent chain, so the owner is
+# found from the sessions themselves: a live session whose folder is the worktree, or else
+# the session whose transcripts name the worktree far more often than any other.
+
+
+def load_owners():
+    try:
+        return json.loads(OWNERS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_owners(ow):
+    if not ow.pop("dirty", False):
+        return
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = OWNERS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(ow, separators=(",", ":")))
+    tmp.replace(OWNERS)
+
+
+def update_sessions(ow, now):
+    """Refresh the session list (id -> name, folder, live) and each live session's transcript
+    files, once a minute."""
+    if now - ow.get("sessionsAt", 0) < SESSIONS_EVERY_S and "sessions" in ow:
+        return
+    ow["sessionsAt"] = now
+    sessions = ow.setdefault("sessions", {})
+    dirs = ow.setdefault("dirs", {})  # session id -> its transcript folder
+    for s in sessions.values():
+        s["live"] = False
+    try:
+        files = list(SESSIONS.glob("*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        sid = d.get("sessionId")
+        if not sid:
+            continue
+        sessions[sid] = {
+            "name": d.get("name") or os.path.basename(d.get("cwd", "")) or sid[:8],
+            "cwd": d.get("cwd", ""),
+            "live": os.path.exists(f"/proc/{d.get('pid', 0)}"),
+        }
+    missing = [sid for sid, s in sessions.items() if s["live"] and sid not in dirs]
+    if missing:
+        try:
+            for d in TRANSCRIPTS.iterdir():
+                for sid in missing:
+                    if (d / f"{sid}.jsonl").exists():
+                        dirs[sid] = str(d)
+        except OSError:
+            pass
+    # Subagent transcripts number in the thousands, so only those written in the last hour,
+    # or not read yet, are checked for new bytes.
+    offsets = ow.get("offsets", {})
+    paths = []
+    for sid, s in sessions.items():
+        if s["live"] and sid in dirs:
+            d = pathlib.Path(dirs[sid])
+            paths.append([sid, str(d / f"{sid}.jsonl")])
+            for f in (d / sid / "subagents").glob("*.jsonl"):
+                path = str(f)
+                try:
+                    if path not in offsets or f.stat().st_mtime > now - HOUR:
+                        paths.append([sid, path])
+                except OSError:
+                    pass
+    ow["files"] = paths
+    ow["keep"] = [p for p in offsets if p.startswith(tuple(dirs[sid] for sid, s in sessions.items() if s["live"] and sid in dirs))]
+
+
+def update_mentions(ow):
+    """Count worktree names in the new part of each live transcript, OWNER_READ_BYTES per
+    run at most. A transcript seen for the first time is read from its last
+    OWNER_FIRST_BYTES only."""
+    offsets = ow.setdefault("offsets", {})
+    counts = ow.setdefault("counts", {})  # tag -> {session id: mentions}
+    budget = OWNER_READ_BYTES
+    for sid, path in ow.get("files", []):
+        if budget <= 0:
+            break
+        try:
+            size = os.stat(path).st_size
+        except OSError:
+            continue
+        start = offsets.get(path)
+        if start is None:
+            start = max(0, size - OWNER_FIRST_BYTES)
+        if size <= start:
+            offsets[path] = min(start, size)
+            continue
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(min(size - start, budget))
+        end = data.rfind(b"\n") + 1
+        if end == 0:
+            if len(data) < budget:
+                continue
+            end = len(data)
+        budget -= end
+        offsets[path] = start + end
+        for m in MENTION_RE.finditer(data, 0, end):
+            c = counts.setdefault(m.group(1).decode(errors="replace"), {})
+            c[sid] = c.get(sid, 0) + 1
+        ow["dirty"] = True
+    # Forget transcripts of sessions that have ended.
+    keep = set(ow.pop("keep", None) or offsets)
+    for path in [p for p in offsets if p not in keep]:
+        del offsets[path]
+        ow["dirty"] = True
+
+
+def owner_of(ow, tag, recorded=""):
+    """(session name, how, live) for a worktree name. how is recorded (heavy-build wrote it on
+    the ticket), folder, mentions, guess or ''."""
+    sessions = ow.get("sessions", {})
+    if recorded:
+        live = any(s["live"] and s["name"] == recorded for s in sessions.values())
+        return recorded, "recorded", live
+    by_folder = [s for s in sessions.values() if s["live"] and os.path.basename(s["cwd"]) == tag]
+    if len(by_folder) == 1:
+        return by_folder[0]["name"], "folder", True
+    counts = sorted(ow.get("counts", {}).get(tag, {}).items(), key=lambda x: -x[1])
+    counts = [c for c in counts if c[0] in sessions]
+    if not counts:
+        return "", "", False
+    top = counts[0]
+    second = counts[1][1] if len(counts) > 1 else 0
+    s = sessions[top[0]]
+    how = "mentions" if top[1] >= 3 and top[1] >= 2 * second else "guess"
+    return s["name"], how, s["live"]
+
+
+def group_by_owner(projects, rules):
+    """One entry per owning session, holding its worktrees under "lanes". Worktrees with no
+    owner go under one entry with an empty owner."""
+    groups = {}
+    for r in projects:
+        name, live = r["owner"], r["ownerLive"]
+        g = groups.get(name)
+        if not g:
+            g = groups[name] = {"name": name, "owner": name, "ownerLive": live, "lanes": [], "jobs": [], "spark": []}
+        g["lanes"].append(r)
+    out = []
+    for g in groups.values():
+        kids = g["lanes"]
+        for k in ("waiting", "running", "started", "finished", "failed"):
+            g[k] = sum(x[k] for x in kids)
+        g["spark"] = [sum(v) for v in zip(*(x["spark"] for x in kids))]
+        g["guess"] = any(x["ownerHow"] == "guess" for x in kids)
+        g["prio"] = lane_prio(rules, g["name"])
+        out.append(g)
+    return sorted(out, key=lambda r: (r["name"] == "", -r["waiting"], -r["running"], -r["started"] - r["finished"], r["name"]))
 
 
 def on_path(cmd):
     return any(os.access(os.path.join(d, cmd), os.X_OK) for d in os.environ.get("PATH", "").split(":") if d) or os.access(HOME / "bin" / cmd, os.X_OK)
 
 
-def build(st, now):
+def build(st, now, ow):
     update_live(st, now)
     update_history(st, now)
+    update_sessions(ow, now)
+    update_mentions(ow)
 
     waiting = waiting_jobs(st, now)
     ids = {j[0] for j in waiting}
@@ -541,15 +730,51 @@ def build(st, now):
     if not lanes or now - lanes[-1][0] >= LANE_SAMPLE_S:
         lanes.append([now, {n: r["waiting"] for n, r in proj.items() if r["waiting"]}])
     st["laneSamples"] = lanes = [x for x in lanes if x[0] > now - HOUR]
+    # The owner heavy-build recorded for a worktree's jobs, where it recorded one.
+    recorded = {}
+    for b in running:
+        if b["owner"]:
+            recorded.setdefault(b["project"], b["owner"])
+    for j in queue:
+        if j[9]:
+            recorded.setdefault(j[5], j[9])
     rules = lane_rules()
     for n, r in proj.items():
         r["spark"] = [x[1].get(n, 0) for x in lanes]
-        r["prio"] = lane_prio(rules, n)
+        r["owner"], r["ownerHow"], r["ownerLive"] = owner_of(ow, n, recorded.get(n, ""))
+    # A worktree with no clear owner takes the owner of its siblings (ffnew-x for ffnew-*),
+    # when all the siblings with a clear owner agree on one.
+    sure = ("recorded", "folder", "mentions")
+    for n, r in proj.items():
+        if r["ownerHow"] in sure or "-" not in n:
+            continue
+        prefix = n.split("-", 1)[0] + "-"
+        found = {(x["owner"], x["ownerLive"]) for m, x in proj.items() if m != n and m.startswith(prefix) and x["ownerHow"] in sure}
+        if len(found) == 1:
+            (r["owner"], r["ownerLive"]), = found
+            r["ownerHow"] = "siblings"
+    for n, r in proj.items():
+        r["prio"] = lane_prio(rules, n, r["owner"])
     projects = sorted(proj.values(), key=lambda r: (-r["waiting"], -r["running"], -r["started"] - r["finished"], r["name"]))
 
+    def owner(project, rec=""):
+        r = proj.get(project or "(none)")
+        if r and not rec:
+            return {"owner": r["owner"], "ownerHow": r["ownerHow"], "ownerLive": r["ownerLive"]}
+        name, how, live = owner_of(ow, project, rec)
+        return {"owner": name, "ownerHow": how, "ownerLive": live}
+
     nxt = [
-        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0])}
+        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0]), **owner(j[5], j[9])}
         for j in queue[:NEXT_SHOWN]
+    ]
+    # Every job in the order heavy-build runs it: the running ones, then the queue.
+    queue_rows = [
+        {"state": "running", "project": b["project"] or "(none)", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], **owner(b["project"], b["owner"])}
+        for b in running
+    ] + [
+        {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), **owner(j[5], j[9])}
+        for j in queue[:QUEUE_SHOWN]
     ]
     gate = {
         "state": {"pause": "paused", "slow": "slowed", "normal": "open"}.get(level.get("level", ""), "unknown"),
@@ -596,16 +821,17 @@ def build(st, now):
             "trend": trend,
             "trendMinutes": TREND_S // 60,
         },
-        "projects": projects,
+        "projects": group_by_owner(projects, rules),
+        "queue": queue_rows,
         "limits": limits(conf),
         "theme": theme(st, now),
     }
 
 
-def run_once(st):
+def run_once(st, ow):
     now = time.time()
     try:
-        return build(st, now), True
+        return build(st, now, ow), True
     except Exception as exc:  # the widget shows the error and keeps its last data
         return {"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}, False
 
@@ -618,20 +844,23 @@ def serve(path, every):
     tmp = out.with_name(out.name + ".tmp")
     parent = os.getppid()
     st = load_state()
+    ow = load_owners()
     saved = 0.0
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         while os.getppid() == parent:
             start = time.time()
-            result, ok = run_once(st)
+            result, ok = run_once(st, ow)
             tmp.write_text(json.dumps(result, separators=(",", ":")))
             tmp.replace(out)
             if ok and start - saved >= 60:
                 save_state(st)
+                save_owners(ow)
                 saved = start
             time.sleep(max(0.5, every - (time.time() - start)))
     finally:
         save_state(st)
+        save_owners(ow)
 
 
 def main():
@@ -639,9 +868,11 @@ def main():
         serve(sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 5.0)
         return
     st = load_state()
-    result, ok = run_once(st)
+    ow = load_owners()
+    result, ok = run_once(st, ow)
     if ok:
         save_state(st)
+        save_owners(ow)
     json.dump(result, sys.stdout, separators=(",", ":"))
 
 
