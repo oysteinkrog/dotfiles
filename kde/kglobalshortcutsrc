@@ -1,5 +1,6 @@
 # Music keys for the launchers in .local/share/applications/foobar2000-*.desktop. They run
-# ~/.local/bin/music-control, which drives fooyin if it is open and foobar2000 otherwise.
+# ~/.local/bin/music-control, which drives fooyin (or foobar2000) or Spotify. Alt+Z switches
+# between fooyin and Spotify.
 # New keys work after the next login.
 [services][foobar2000-back.desktop]
 _launch=Alt+S
@@ -12,6 +13,9 @@ _launch=Alt+C
 
 [services][foobar2000-random.desktop]
 _launch=Alt+X
+
+[services][foobar2000-switch.desktop]
+_launch=Alt+Z
 
 [plasmashell]
 next activity=Meta+A,none,Walk through activities

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Music: Switch between fooyin and Spotify
+Exec=/home/oystein/.local/bin/music-control switch
+Icon=foobar2000
+NoDisplay=true
+StartupNotify=false
