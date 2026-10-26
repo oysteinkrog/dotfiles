@@ -101,6 +101,15 @@ over quiet_avail_gib, memory full avg10 gives slow only from quiet_mem_full
 more free, from resting sessions faulting pages back, not a shortage. The
 leave test uses quiet_avail_gib itself, not twice it. Pause rules are unchanged.
 
+Fifth change, 2026-10-26 (approved by Oystein, away_ignore_desktop, 0 is
+off): while presence-detect says away it writes
+~/.local/state/presence/heavy-build.override with expires=<epoch>. While that
+file is there and not expired (and expires is at most 10 min ahead), the
+slow test on one scope's some avg10 counts only claude.slice children:
+app.slice and session.slice pressure is the desktop, and nobody is using it.
+Pause rules and every machine-wide signal are unchanged. The file is gone
+within seconds of a return, so the next sample counts the desktop again.
+
 Fourth change, 2026-10-25: pause_leave_secs (0 means leave_secs) sets the
 calm time to go down from pause, so slow to normal can be quicker than pause
 to slow. A pause dropped to slow with 10 to 20 GiB free comes back only under
@@ -150,6 +159,7 @@ DEFAULTS: dict[str, float] = {
     "hold_ttl_secs": 30,
     "sample_log_secs": 60,
     "log_max_bytes": 5_000_000,
+    "away_ignore_desktop": 1,
 }
 LEVELS = ("normal", "slow", "pause")
 SLICES = ("claude.slice", "app.slice", "session.slice")
@@ -253,6 +263,8 @@ class Coordinator:
         self.level_file = state_dir / "level"
         self.log_file = state_dir / "log"
         self.hold_file = run_dir / "heavy-build.hold.pressure"
+        # Written by presence-detect while away (a sibling of the state dir).
+        self.away_file = state_dir.parent / "presence" / "heavy-build.override"
         self.level = 0
         self.since = 0.0
         self.above_since: dict[int, float | None] = {1: None, 2: None}
@@ -293,12 +305,24 @@ class Coordinator:
 
     # ------------------------------------------------------------ sampling
 
-    def scopes(self, mono: float) -> tuple[float, float, str, int, int]:
+    def away(self, now: float) -> bool:
+        """True while presence-detect's away override file is there and its
+        expires= is in the next 10 min."""
+        try:
+            m = re.search(r"^expires=(\d+)", self.away_file.read_text(), re.M)
+        except OSError:
+            return False
+        return bool(m) and now < int(m.group(1)) <= now + 600
+
+    def scopes(self, mono: float) -> tuple[float, float, str, int, int, float, str]:
         """Highest some and full avg10 over children of the session slices that
         are not at their own limit, the name of the top one, and how many are
-        at or over pause_scope_full, and over half of it."""
+        at or over pause_scope_full, and over half of it. Then the highest some
+        avg10 and top name over claude.slice children only."""
         best_some = best_full = 0.0
         top = ""
+        claude_some = 0.0
+        claude_top = ""
         nfull = nhalf = 0
         seen: set[str] = set()
         for sl in SLICES:
@@ -319,6 +343,9 @@ class Coordinator:
                 if mono - rose_at < self.cfg["own_limit_secs"]:
                     continue
                 some, full = psi(kid / "memory.pressure")
+                if sl == "claude.slice" and some > claude_some:
+                    claude_some = some
+                    claude_top = f"{kid.name}:{some:.1f}%"
                 th = self.cfg["pause_scope_full"]
                 if th > 0 and full >= th:
                     nfull += 1
@@ -332,7 +359,7 @@ class Coordinator:
         for key in list(self.events):
             if key not in seen:
                 del self.events[key]
-        return best_some, best_full, top, nfull, nhalf
+        return best_some, best_full, top, nfull, nhalf, claude_some, claude_top
 
     def slice_swap(self) -> tuple[str, float]:
         """The SWAP_SLICES slice whose memory.swap.current is nearest its
@@ -352,7 +379,7 @@ class Coordinator:
                 worst, pct = f"{sl}:{cur / GIB:.1f}/{int(mx) / GIB:.1f}GiB", p
         return worst, pct
 
-    def sample(self, mono: float) -> dict[str, float | str]:
+    def sample(self, mono: float, now: float | None = None) -> dict[str, float | str]:
         cfg = self.cfg
         _, mem_full = psi(self.proc / "pressure/memory")
         _, io_full = psi(self.proc / "pressure/io")
@@ -376,7 +403,10 @@ class Coordinator:
 
         sw_total = mi.get("SwapTotal", 0) * 1024
         sw_used = sw_total - mi.get("SwapFree", 0) * 1024
-        scope_some, scope_full, top, nfull, nhalf = self.scopes(mono)
+        scope_some, scope_full, top, nfull, nhalf, csome, ctop = self.scopes(mono)
+        away = self.cfg["away_ignore_desktop"] > 0 and self.away(
+            time.time() if now is None else now
+        )
         sl_name, sl_pct = self.slice_swap()
         return {
             "mem_full": max(mem_full, 0.0),
@@ -386,6 +416,9 @@ class Coordinator:
             "scope_full_n": nfull,
             "scope_half_n": nhalf,
             "top": top or "-",
+            "away": 1.0 if away else 0.0,
+            "claude_some": csome,
+            "claude_top": ctop or "-",
             "swapin": rate("pswpin"),
             "zswpin": rate("zswpin"),
             "swapout": rate("pswpout"),
@@ -460,7 +493,15 @@ class Coordinator:
                 )
             else:
                 ge("mem_full", "slow_mem_full", "memory full avg10", "%")
-        if lvl == 1:
+        if lvl == 1 and float(s.get("away", 0)):
+            # Away: desktop-app scopes do not count for slow.
+            ge(
+                "claude_some",
+                "slow_scope_some",
+                f"{str(s['claude_top']).split(':')[0]} some avg10 (away)",
+                "%",
+            )
+        elif lvl == 1:
             ge(
                 "scope_some",
                 "slow_scope_some",
@@ -599,7 +640,8 @@ class Coordinator:
             f"majfault_ps={s['majfault']:.0f} zswpwb_ps={s['zswpwb']:.0f} "
             f"mem_avail_gib={s['mem_avail_gib']:.1f} swap_used_gib={s['swap_used_gib']:.1f} "
             f"swap_room_gib={s['swap_room_gib']:.1f} "
-            f"slice_swap={s['slice_swap']}:{float(s['slice_swap_pct']):.0f}%"
+            f"slice_swap={s['slice_swap']}:{float(s['slice_swap_pct']):.0f}% "
+            f"away={int(float(s.get('away', 0)))}"
         )
 
     def log(self, now: float, text: str) -> None:
@@ -630,7 +672,7 @@ class Coordinator:
 
     def tick(self, now: float, mono: float | None = None) -> None:
         mono = now if mono is None else mono
-        s = self.sample(mono)
+        s = self.sample(mono, now)
         old = self.step(mono, s, now)
         self.write_atomic(self.level_file, self.level_line(now, s))
         self.update_hold(now)
@@ -943,6 +985,39 @@ def self_test() -> int:
             co.reason,
         )
 
+        # 6b. Away (presence-detect's override file): desktop-app scopes do
+        # not count for slow; a session scope still does; an expired file or
+        # away_ignore_desktop=0 counts the desktop again.
+        away_file = state.parent / "presence" / "heavy-build.override"
+        away_file.parent.mkdir(parents=True, exist_ok=True)
+        away_file.write_text("HEAVY_BUILD_MAX_JOBS=11\nexpires=3200\n")
+        co = fresh()
+        run_for(co, 3100.0, 25, chrome_full=12)
+        check(
+            "away: Chrome some 12% for 25 s stays normal",
+            lvl(co) == "normal",
+            co.reason,
+        )
+        co = fresh()
+        run_for(co, 3100.0, 25, sess_some=12)
+        check(
+            "away: session some 12% for 25 s still slow",
+            lvl(co) == "slow" and "(away)" in co.reason,
+            co.reason,
+        )
+        co = fresh()
+        co.cfg["away_ignore_desktop"] = 0
+        run_for(co, 3100.0, 25, chrome_full=12)
+        check("away_ignore_desktop=0: Chrome 12% is slow", lvl(co) == "slow", co.reason)
+        co = fresh()
+        run_for(co, 3300.0, 25, chrome_full=12)
+        check("away file expired: Chrome 12% is slow", lvl(co) == "slow", co.reason)
+        away_file.write_text("expires=99999\n")
+        co = fresh()
+        run_for(co, 3300.0, 25, chrome_full=12)
+        check("away file expires too far ahead: ignored", lvl(co) == "slow", co.reason)
+        away_file.unlink()
+
         # 7. Swap room under 12 GiB: pause at once.
         co = fresh()
         run_for(co, 4000.0, 5, swap_total_gib=100, swap_used_gib=80)
@@ -1178,7 +1253,9 @@ def self_test() -> int:
         co = fresh()
         co.cfg["quiet_avail_gib"] = 10
         t = run_for(co, 17000.0, 60, mem_full=12, avail_gib=25)
-        check("quiet: mem full 12%, 25 GiB free: normal", lvl(co) == "normal", co.reason)
+        check(
+            "quiet: mem full 12%, 25 GiB free: normal", lvl(co) == "normal", co.reason
+        )
         t = run_for(co, t, 30, mem_full=25, avail_gib=25)
         check(
             "quiet: mem full 25%, 25 GiB free: slow",
@@ -1186,7 +1263,11 @@ def self_test() -> int:
             co.reason,
         )
         t = run_for(co, t, 60, mem_full=12, avail_gib=25)
-        check("quiet: then 12% (over half of 15): stays slow", lvl(co) == "slow", co.reason)
+        check(
+            "quiet: then 12% (over half of 15): stays slow",
+            lvl(co) == "slow",
+            co.reason,
+        )
         t = run_for(co, t, 65, mem_full=4, avail_gib=25)
         check("quiet: then 4% for 65 s: normal", lvl(co) == "normal", co.reason)
         t = run_for(co, t, 30, mem_full=3, avail_gib=8)
