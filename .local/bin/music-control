@@ -1,75 +1,151 @@
 #!/bin/sh
-# Send a playback command to the active player. Fooyin gets it when it is playing or paused, or when
-# foobar2000 is not running; otherwise foobar2000 gets it.
-# Usage: music-control playpause|next|random|back
+# Send a playback command to the active player. There are two modes, fooyin and Spotify, and
+# `switch` flips between them.
+# Usage: music-control playpause|next|random|back|switch
 #
-# Several fooyin instances can run at once (the main one and fooyin-experimental). Each listens on a socket
-# in its own TMPDIR, so a command goes through that instance's binary with its TMPDIR. The target is the
-# instance that is playing, otherwise the newest one.
+# Which player gets a command: one that is playing right now, otherwise the last mode used. The mode
+# is kept in $XDG_STATE_HOME/music-control/mode, so a paused player stays the target.
+# `switch` pauses the current player, flips the mode and starts the other one (opening it if needed).
+#
+# fooyin mode: fooyin gets the command when it is playing or paused, or when foobar2000 is not running;
+# otherwise foobar2000 gets it. Several fooyin instances can run at once (the main one and
+# fooyin-experimental). Each listens on a socket in its own TMPDIR, so a command goes through that
+# instance's binary with its TMPDIR. The target is the instance that is playing, otherwise the newest one.
+#
+# Spotify mode: the official client, driven over MPRIS with playerctl. Spotify has no "jump to one random
+# track", so `random` skips to the next track (random when shuffle is on in Spotify).
 action="$1"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/music-control"
+mode_file="$state_dir/mode"
+
+spotify_status() { playerctl -p spotify status 2>/dev/null; }
 
 # Playing: the instance has an uncorked audio stream. Works for every instance.
 playing_pids=$(pactl -f json list sink-inputs 2>/dev/null |
     jq -r '.[] | select(.corked == false) | .properties."application.process.id" // empty' 2>/dev/null)
 
-# Paused: only the instance that owns the MPRIS name can tell us; a second instance cannot register it.
-mpris_pid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
-    --method org.freedesktop.DBus.GetConnectionUnixProcessID org.mpris.MediaPlayer2.fooyin 2>/dev/null |
-    sed -E 's/^\(uint32 ([0-9]+),\)$/\1/')
-mpris_status=$(gdbus call --session --dest org.mpris.MediaPlayer2.fooyin --object-path /org/mpris/MediaPlayer2 \
-    --method org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null)
-
-target=""
-active=no
-for pid in $(pgrep -x fooyin); do
-    if echo "$playing_pids" | grep -qx "$pid"; then
-        target=$pid
-        active=yes
-        break
-    fi
-done
-# Nothing playing: the newest instance, which is most likely the one in use. A long-paused older
-# instance must not win over a window that was just opened.
-if [ -z "$target" ]; then
-    target=$(pgrep -n -x fooyin)
-    case "$mpris_status" in
-        *Paused*) [ "$target" = "$mpris_pid" ] && active=yes ;;
-    esac
-fi
-
-use_fooyin=no
-if [ -n "$target" ]; then
-    if [ "$active" = yes ] || ! pgrep -f 'foobar2000\.exe' >/dev/null; then
-        use_fooyin=yes
-    fi
-fi
-
-if [ "$use_fooyin" = yes ]; then
-    # Talk to the target instance: its own binary (a portable copy for the experimental one) and TMPDIR.
-    exe=$(readlink "/proc/$target/exe" | sed 's/ (deleted)$//')
-    tmpdir=$(tr '\0' '\n' <"/proc/$target/environ" | sed -n 's/^TMPDIR=//p')
-    fy() {
-        if [ -n "$tmpdir" ]; then
-            TMPDIR="$tmpdir" "$exe" "$@"
-        else
-            env -u TMPDIR "$exe" "$@"
+fooyin_playing_pid() {
+    for pid in $(pgrep -x fooyin); do
+        if echo "$playing_pids" | grep -qx "$pid"; then
+            echo "$pid"
+            return
         fi
-    }
-    case "$action" in
-        playpause) fy --play-pause; exit ;;
-        next) fy --next; exit ;;
-        # foobar2000's "Random" jumps to one random track; do the same without leaving shuffle on.
-        random) fy --shuffle random && fy --next && fy --shuffle off; exit ;;
-        back) fy --previous; exit ;;
+    done
+}
+
+save_mode() {
+    mkdir -p "$state_dir"
+    echo "$1" >"$mode_file"
+}
+
+notify() { notify-send -a "Music" -i audio-headphones -t 1500 -h string:x-canonical-private-synchronous:music-control "$1"; }
+
+# Run a command in fooyin mode: fooyin if it should get it, otherwise foobar2000.
+fooyin_cmd() {
+    # Paused: only the instance that owns the MPRIS name can tell us; a second instance cannot register it.
+    mpris_pid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.GetConnectionUnixProcessID org.mpris.MediaPlayer2.fooyin 2>/dev/null |
+        sed -E 's/^\(uint32 ([0-9]+),\)$/\1/')
+    mpris_status=$(gdbus call --session --dest org.mpris.MediaPlayer2.fooyin --object-path /org/mpris/MediaPlayer2 \
+        --method org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null)
+
+    target=$(fooyin_playing_pid)
+    active=no
+    [ -n "$target" ] && active=yes
+    # Nothing playing: the newest instance, which is most likely the one in use. A long-paused older
+    # instance must not win over a window that was just opened.
+    if [ -z "$target" ]; then
+        target=$(pgrep -n -x fooyin)
+        case "$mpris_status" in
+            *Paused*) [ "$target" = "$mpris_pid" ] && active=yes ;;
+        esac
+    fi
+
+    use_fooyin=no
+    if [ -n "$target" ]; then
+        if [ "$active" = yes ] || ! pgrep -f 'foobar2000\.exe' >/dev/null; then
+            use_fooyin=yes
+        fi
+    fi
+
+    if [ "$use_fooyin" = yes ]; then
+        # Talk to the target instance: its own binary (a portable copy for the experimental one) and TMPDIR.
+        exe=$(readlink "/proc/$target/exe" | sed 's/ (deleted)$//')
+        tmpdir=$(tr '\0' '\n' <"/proc/$target/environ" | sed -n 's/^TMPDIR=//p')
+        fy() {
+            if [ -n "$tmpdir" ]; then
+                TMPDIR="$tmpdir" "$exe" "$@"
+            else
+                env -u TMPDIR "$exe" "$@"
+            fi
+        }
+        case "$1" in
+            playpause) fy --play-pause ;;
+            play) fy --play ;;
+            pause) fy --pause ;;
+            next) fy --next ;;
+            # foobar2000's "Random" jumps to one random track; do the same without leaving shuffle on.
+            random) fy --shuffle random && fy --next && fy --shuffle off ;;
+            back) fy --previous ;;
+        esac
+    elif pgrep -f 'foobar2000\.exe' >/dev/null; then
+        case "$1" in
+            playpause | play) "$HOME/.local/bin/foobar2000" /playpause ;;
+            pause) "$HOME/.local/bin/foobar2000" /pause ;;
+            next) "$HOME/.local/bin/foobar2000" /next ;;
+            random) "$HOME/.local/bin/foobar2000" /rand ;;
+            back) "$HOME/.local/bin/foobar2000" /command:Back ;;
+        esac
+    else
+        # Nothing open: start fooyin. It cannot take a command until its window is up.
+        case "$1" in
+            playpause | play) setsid -f gtk-launch org.fooyin.fooyin >/dev/null 2>&1 ;;
+        esac
+    fi
+}
+
+spotify_cmd() {
+    if [ -z "$(spotify_status)" ]; then
+        # Not running: open it. It starts paused, so the next press plays.
+        case "$1" in
+            playpause | play) setsid -f spotify-launcher >/dev/null 2>&1 ;;
+        esac
+        return
+    fi
+    case "$1" in
+        playpause) playerctl -p spotify play-pause ;;
+        play) playerctl -p spotify play ;;
+        pause) playerctl -p spotify pause ;;
+        next | random) playerctl -p spotify next ;;
+        back) playerctl -p spotify previous ;;
     esac
+}
+
+# Pick the mode: a player that is playing wins, otherwise the saved mode.
+if [ "$(spotify_status)" = Playing ]; then
+    mode=spotify
+elif [ -n "$(fooyin_playing_pid)" ] || echo "$playing_pids" | grep -qxF "$(pgrep -f 'foobar2000\.exe' | head -1)"; then
+    mode=fooyin
 else
-    case "$action" in
-        playpause) exec "$HOME/.local/bin/foobar2000" /playpause ;;
-        next) exec "$HOME/.local/bin/foobar2000" /next ;;
-        random) exec "$HOME/.local/bin/foobar2000" /rand ;;
-        back) exec "$HOME/.local/bin/foobar2000" /command:Back ;;
-    esac
+    mode=$(cat "$mode_file" 2>/dev/null)
+    [ "$mode" = spotify ] || mode=fooyin
 fi
 
-echo "usage: music-control playpause|next|random|back" >&2
+case "$action" in
+    playpause | next | random | back)
+        save_mode "$mode"
+        "${mode}_cmd" "$action"
+        exit
+        ;;
+    switch)
+        "${mode}_cmd" pause
+        if [ "$mode" = spotify ]; then new=fooyin; label=fooyin; else new=spotify; label=Spotify; fi
+        save_mode "$new"
+        "${new}_cmd" play
+        notify "Music: $label"
+        exit
+        ;;
+esac
+
+echo "usage: music-control playpause|next|random|back|switch" >&2
 exit 1
