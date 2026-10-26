@@ -1729,6 +1729,505 @@ out=$(printf '%s 0 %d 1\n' $(( now - 200 )) $(( 20 * 1048576 )) | mw 0 12 0)
 check "mem_watch: a sample older than the window is dropped (got '$out')" '[[ $out == "-1 0 999999 1" ]]'
 rm -rf -- "$A"
 
+# 12. Lane priority (HEAVY_BUILD_LANE_PRIO=1 and ~/.config/heavy-build.lanes).
+# run_lp runs heavy-build like run_hb, with session, grove and registry files
+# that live in the sandbox. tk prints line N of the waiter's ticket.
+HBP=$(dirname "$HB")/heavy-build-prio
+run_lp() {
+  printf '%s\n' "${LP_CLASS:-}" > "$T/class"
+  printf '#!/bin/sh\ncat %q\n' "$T/class" > "$T/ms"; chmod +x "$T/ms"
+  run_hb HB_MACHINE_SESSION="$T/ms" MACHINE_SESSION_REGISTRY="$T/none.toml" \
+    MACHINE_SESSION_SESSIONS_DIR="$T/sess" MACHINE_SESSION_GROVE_REPOS="$T/repos.json" \
+    CLAUDE_PID= CLAUDE_AGENT_NAME= HEAVY_BUILD_AGENT= CLAUDE_CODE_CHILD_SESSION= "$@"
+}
+tk() {
+  local f
+  f=$(ls "$T/run/heavy-build.queue/" 2>/dev/null | grep -v '^0000' | grep -v '\.tmp$' | head -1)
+  [[ -n $f ]] && sed -n "${1}p" "$T/run/heavy-build.queue/$f"
+}
+# wait_tk N REGEX: waits up to 6 s for ticket line N to match.
+wait_tk() {
+  local i
+  for i in $(seq 1 30); do [[ $(tk "$1") =~ $2 ]] && return 0; sleep 0.2; done
+  return 1
+}
+lplog() { cat "$T/state/heavy-build/shadow.log" 2>/dev/null; }
+on='HEAVY_BUILD_LANE_PRIO=1'
+
+# Missing file, flag on: priority works as today, a caller's high stays high.
+setup
+run_lp "$on" HEAVY_BUILD_PRIORITY=high HEAVY_BUILD_REASON=test HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^high '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: no file, caller high stays high (got '$got')" '[[ $got == high\ * ]]'
+check "lanes: no file, no prio-change line" '! lplog | grep -q "event=prio-"'
+teardown
+
+# Empty file (only a comment): the same.
+setup
+printf '# nothing yet\n\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HEAVY_BUILD_PRIORITY=high HEAVY_BUILD_REASON=test HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^high '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: empty file, caller high stays high (got '$got')" '[[ $got == high\ * ]] && ! lplog | grep -q "event=prio-"'
+teardown
+
+# Flag off: a matching rule changes nothing; the ticket still says who sent it.
+setup
+printf 'theme low\n' > "$T/config/heavy-build.lanes"
+run_lp HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^normal '; got=$(tk 2); l3=$(tk 3)
+wait "$hbpid"
+check "lanes: flag off, rule ignored (got '$got')" '[[ $got == normal\ * ]] && ! lplog | grep -q "event=prio-"'
+check "lanes: flag off, line 3 still names session and agent (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work" ]]'
+teardown
+
+# A lane rule sets the priority, and the ticket and log say so.
+setup
+printf 'other high\ntheme low  # 21 of 76 jobs\n' > "$T/config/heavy-build.lanes"
+printf 'HEAVY_BUILD_LANE_PRIO=1\n' > "$T/config/heavy-build.conf"
+run_lp HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^low '; got=$(tk 2); l3=$(tk 3)
+wait "$hbpid"
+check "lanes: theme low matches the lane tag (got '$got')" '[[ $got == low\ * ]]'
+check "lanes: ticket line 3 is the ident (got '$l3')" '[[ $l3 == "session=- agent=- lane=theme owner=- dirs=$T/work" ]]'
+check "lanes: logged once as prio_from=normal prio_to=low with the rule" '(( $(lplog | grep -c "event=prio-change prio_from=normal prio_to=low rule=\"theme low  # 21 of 76 jobs\"") == 1 ))'
+check "lanes: the waiter says its new priority" 'grep -q "heavy-build: priority low (was normal): theme low" "$T/out"'
+teardown
+
+# Session name and grove owner match too; first matching rule wins.
+setup
+printf 'hotfix-a high\nlane9 low\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HB_LANE_IDENT="lane9 hotfix-a - $T/work"
+wait_tk 2 '^high '; a=$(tk 2); wait "$hbpid"
+teardown
+setup
+printf 'release-* high\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HB_LANE_IDENT="- - release-1 $T/work"
+wait_tk 2 '^high '; b=$(tk 2); wait "$hbpid"
+check "lanes: grove owner matches, first rule wins (got '$a')" '[[ $a == high\ * ]]'
+check "lanes: a glob matches the session name (got '$b')" '[[ $b == high\ * ]]'
+teardown
+
+# Precedence: a critical session beats a low rule and a caller's low.
+setup
+printf 'theme low\n' > "$T/config/heavy-build.lanes"
+LP_CLASS=critical run_lp "$on" HEAVY_BUILD_PRIORITY=low HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^critical '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: critical session beats the rule and the caller (got '$got')" '[[ $got == critical\ * ]]'
+check "lanes: logged as a change to critical" 'lplog | grep -q "event=prio-change prio_from=low prio_to=critical rule=\"critical: this session is critical"'
+teardown
+
+# A rule beats the caller's own priority.
+setup
+printf 'theme normal\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HEAVY_BUILD_PRIORITY=low HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^normal '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: rule normal beats caller low (got '$got')" '[[ $got == normal\ * ]]'
+teardown
+
+# A caller's own high without a matching rule is demoted, said and logged once.
+setup
+printf 'other high\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HEAVY_BUILD_PRIORITY=high HEAVY_BUILD_REASON=test HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^normal '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: self-set high without a rule runs as normal (got '$got')" '[[ $got == normal\ * ]]'
+check "lanes: demotion said once" '(( $(grep -c "priority normal, not high: the manager session owns build priority" "$T/out") == 1 ))'
+check "lanes: demotion logged once" '(( $(lplog | grep -c "event=prio-demoted asked=high reason=\"test\"") == 1 ))'
+check "lanes: and one prio-change line" '(( $(lplog | grep -c "event=prio-change prio_from=high prio_to=normal") == 1 ))'
+teardown
+
+# A caller's high with a matching high rule stays high, with no demotion.
+setup
+printf 'theme high\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HEAVY_BUILD_PRIORITY=high HEAVY_BUILD_REASON=test HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^high '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: caller high with a high rule stays high (got '$got')" '[[ $got == high\ * ]] && ! lplog | grep -q "event=prio-"'
+teardown
+
+# A pausable session stays low unless a rule says otherwise.
+setup
+printf 'other high\n' > "$T/config/heavy-build.lanes"
+LP_CLASS=pausable run_lp "$on" HEAVY_BUILD_PRIORITY= HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^low '; a=$(tk 2); wait "$hbpid"
+teardown
+setup
+printf 'theme high\n' > "$T/config/heavy-build.lanes"
+LP_CLASS=pausable run_lp "$on" HEAVY_BUILD_PRIORITY= HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^high '; b=$(tk 2); wait "$hbpid"
+check "lanes: pausable without a rule stays low (got '$a')" '[[ $a == low\ * ]]'
+check "lanes: pausable with a high rule goes high (got '$b')" '[[ $b == high\ * ]]'
+teardown
+
+# Live re-rank: a waiting build follows set and clear, and only changes once each.
+setup
+printf 'other high\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HEAVY_BUILD_WAIT=60 HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^normal '; a=$(tk 2); l1a=$(tk 1)
+XDG_CONFIG_HOME="$T/config" XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" "$HBP" set theme high "release work" > /dev/null
+wait_tk 2 '^high '; b=$(tk 2); l1b=$(tk 1)
+sleep 2
+XDG_CONFIG_HOME="$T/config" XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" "$HBP" clear theme > /dev/null
+wait_tk 2 '^normal '; c=$(tk 2)
+sleep 2
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+check "re-rank: normal, then high after set, then normal after clear (got '$a' '$b' '$c')" '[[ $a == normal\ * && $b == high\ * && $c == normal\ * ]]'
+check "re-rank: ticket line 1 is kept (got '$l1a' '$l1b')" '[[ -n $l1a && $l1a == "$l1b" ]]'
+check "re-rank: the rest of line 2 is kept" '[[ ${a#normal } == "${b#high }" ]]'
+check "re-rank: two prio-change lines, one per change" '(( $(lplog | grep -c "event=prio-change") == 2 )) && lplog | grep -q "prio_from=normal prio_to=high rule=\"theme high by=manager  # release work\"" && lplog | grep -q "prio_from=high prio_to=normal rule=\"none: lane priority is off or the lanes file has no rules\""'
+teardown
+
+# Bad lines are skipped with a warning; the good line after them still works.
+setup
+printf 'theme critical\njust-one-word\na b c\n/x/* low\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HB_LANE_IDENT="theme - - /x/y"
+wait_tk 2 '^low '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: bad lines skipped, the path rule after them applies (got '$got')" '[[ $got == low\ * ]]'
+check "lanes: one warning per bad line (3)" '(( $(grep -c "warning: .*heavy-build.lanes line [123] skipped" "$T/out") == 3 ))'
+teardown
+
+# The real ident: grove lane tag, grove owner and path globs, read from the sandbox.
+setup
+mkdir -p "$T/grove/.grove" "$T/sess"
+printf '{"repos": {"r": {"work_dir": "%s"}}}\n' "$T/grove" > "$T/repos.json"
+printf '{"projects": {"mylane": {"path": "%s", "owner": {"session_name": "ownr"}}}}\n' "$T/work" > "$T/grove/.grove/registry.json"
+printf 'mylane low\n' > "$T/config/heavy-build.lanes"
+run_lp "$on"
+wait_tk 2 '^low '; got=$(tk 2); l3=$(tk 3)
+wait "$hbpid"
+check "ident: grove lane tag found from the directory (got '$got')" '[[ $got == low\ * ]]'
+check "ident: line 3 has lane, owner and the directory (got '$l3')" '[[ $l3 == "session=- agent=- lane=mylane owner=ownr dirs=$T/work"* ]]'
+printf '%s* high\n' "${T%/*}/hb-test" > "$T/config/heavy-build.lanes"
+run_lp "$on"
+wait_tk 2 '^high '; got=$(tk 2)
+wait "$hbpid"
+check "ident: a path glob matches the directory (got '$got')" '[[ $got == high\ * ]]'
+printf '%s high\n' "$T" > "$T/config/heavy-build.lanes"
+run_lp "$on"
+wait_tk 2 '^high '; got=$(tk 2)
+wait "$hbpid"
+check "ident: a plain path matches directories under it (got '$got')" '[[ $got == high\ * ]]'
+teardown
+
+# The real ident: the Claude session is found among heavy-build's ancestors.
+setup
+mkdir -p "$T/sess"
+printf '{"pid": %s, "name": "hotfix-b"}\n' "$$" > "$T/sess/$$.json"
+printf 'hotfix-* high\n' > "$T/config/heavy-build.lanes"
+run_lp "$on"
+wait_tk 2 '^high '; got=$(tk 2); l3=$(tk 3)
+wait "$hbpid"
+check "ident: session name from an ancestor's session file (got '$got' '$l3')" '[[ $got == high\ * && $l3 == "session=hotfix-b agent=- lane=- "* ]]'
+teardown
+
+# CLAUDE_PID names the session when no ancestor has a session file.
+setup
+mkdir -p "$T/sess"
+sleep 300 & sp=$!
+printf '{"pid": %s, "name": "via-env"}\n' "$sp" > "$T/sess/$sp.json"
+run_lp CLAUDE_PID="$sp" CLAUDE_AGENT_NAME="hb lane"
+wait_tk 3 'session=via-env'; l3=$(tk 3)
+wait "$hbpid"; kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+check "ident: CLAUDE_PID gives the session, CLAUDE_AGENT_NAME the agent (got '$l3')" '[[ $l3 == "session=via-env agent=hb_lane "* ]]'
+teardown
+
+# Who submitted: every log line and history column 14 name session and agent.
+setup2
+hbe CLAUDE_AGENT_NAME=lp-agent HB_LANE_IDENT="- - sess1 $T/work" -- true
+wait "$hbpid"; rc=$?
+check "owner: history column 14 is session/agent (rc $rc)" '(( rc == 0 )) && awk -F"\t" '\''$14 == "sess1/lp-agent"'\'' "$T/state/heavy-build/history.tsv" | grep -q .'
+check "owner: every log line ends with session= agent=" 'n=$(cat "$T"/state/heavy-build/*.log | wc -l); (( n > 0 )) && (( $(cat "$T"/state/heavy-build/*.log | grep -c " session=sess1 agent=lp-agent$") == n ))'
+check "owner: decision lines keep job= then decision= (buildqueue-fetch reads them so)" 'grep -qE "^[^ ]+ mode=[^ ]+ job=[^ ]+ decision=" "$T"/state/heavy-build/*.log'
+teardown2
+setup2
+hbe CLAUDE_AGENT_NAME= HEAVY_BUILD_AGENT= CLAUDE_CODE_CHILD_SESSION=1 HB_LANE_IDENT="- - - $T/work" -- true
+wait "$hbpid"
+a=$(awk -F"\t" '{print $14}' "$T/state/heavy-build/history.tsv")
+teardown2
+setup2
+hbe CLAUDE_AGENT_NAME= HEAVY_BUILD_AGENT= CLAUDE_CODE_CHILD_SESSION= HB_LANE_IDENT="- - - $T/work" -- true
+wait "$hbpid"
+b=$(awk -F"\t" '{print $14}' "$T/state/heavy-build/history.tsv")
+check "owner: an unnamed subagent is -/subagent, none is -/- (got '$a' '$b')" '[[ $a == "-/subagent" && $b == "-/-" ]]'
+teardown2
+
+# A rule may name its setter with by=; heavy-build ignores it, a bad by= is skipped.
+setup
+printf 'theme low by=oystein  # panel\nwork high by=bad/name\n' > "$T/config/heavy-build.lanes"
+run_lp "$on" HB_LANE_IDENT="theme - - $T/work"
+wait_tk 2 '^low '; got=$(tk 2)
+wait "$hbpid"
+check "lanes: by= is allowed after the priority (got '$got')" '[[ $got == low\ * ]] && lplog | grep -q "rule=\"theme low by=oystein  # panel\""'
+check "lanes: a bad by= skips the line with a warning" 'grep -q "heavy-build.lanes line 2 skipped" "$T/out"'
+teardown
+
+# Estimate refresh (HEAVY_BUILD_EST_REFRESH=1): a waiter follows a conf change
+# and, every HEAVY_BUILD_EST_REFRESH_SECS, new history. The key's two runs
+# peaked at 16 GiB with 2 GiB non-file, so EST_NONFILE 0 -> 1 lowers it.
+est_hist() {  # PEAK_GIB NONFILE_GIB: one history line for this test's key
+  local h
+  h=$(printf '%s\0' "$T/work" true | md5sum | cut -c1-8)
+  mkdir -p "$T/state/heavy-build"
+  printf '%s\tother\t%s\t30\t10\t%s\t0\tok\tNA\tNA\t-\t-\t%s\n' "$EPOCHSECONDS" "$h" $(( $1 * 1073741824 )) $(( $2 * 1073741824 )) >> "$T/state/heavy-build/history.tsv"
+}
+mem2() { tk 2 | awk '{print $2}'; }
+setup
+est_hist 16 2; est_hist 16 2
+printf 'HEAVY_BUILD_EST_REFRESH=1\nHEAVY_BUILD_EST_NONFILE=0\n' > "$T/config/heavy-build.conf"
+run_lp HEAVY_BUILD_WAIT=60
+wait_tk 2 '^normal '; a=$(mem2)
+printf 'HEAVY_BUILD_EST_REFRESH=1\nHEAVY_BUILD_EST_NONFILE=1\n' > "$T/config/heavy-build.conf"
+for _ in $(seq 1 30); do [[ $(mem2) != "$a" ]] && break; sleep 0.2; done
+b=$(mem2); l1=$(tk 1)
+sleep 2
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+check "est refresh: a conf change re-estimates a waiting build (got '$a' then '$b')" '[[ $a == 16.0 ]] && awk -v b="$b" "BEGIN { exit !(b + 0 > 0 && b + 0 < 16) }"'
+check "est refresh: logged once with est_from and est_to" '(( $(lplog | grep -c "event=est-change est_from=16.0G/") == 1 )) && lplog | grep -q "est_to=${b}G/"'
+check "est refresh: ticket line 1 kept (got '$l1')" '[[ $l1 =~ ^[0-9]+\ [0-9]+$ ]]'
+teardown
+setup
+est_hist 16 2; est_hist 16 2
+printf 'HEAVY_BUILD_EST_REFRESH=1\nHEAVY_BUILD_EST_REFRESH_SECS=2\n' > "$T/config/heavy-build.conf"
+run_lp HEAVY_BUILD_WAIT=60
+wait_tk 2 '^normal '; a=$(mem2)
+est_hist 16 12
+for _ in $(seq 1 30); do [[ $(mem2) != "$a" ]] && break; sleep 0.2; done
+b=$(mem2)
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+check "est refresh: new history is picked up on the timer (got '$a' then '$b')" '[[ $a != "$b" ]] && awk -v a="$a" -v b="$b" "BEGIN { exit !(b + 0 > a + 0) }"'
+teardown
+setup
+est_hist 16 2; est_hist 16 2
+printf 'HEAVY_BUILD_EST_NONFILE=0\n' > "$T/config/heavy-build.conf"
+run_lp HEAVY_BUILD_WAIT=60
+wait_tk 2 '^normal '; a=$(mem2)
+printf 'HEAVY_BUILD_EST_NONFILE=1\n' > "$T/config/heavy-build.conf"
+sleep 3; b=$(mem2)
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+check "est refresh: off by default, the estimate stays (got '$a' then '$b')" '[[ $a == 16.0 && $b == 16.0 ]] && ! lplog | grep -q "event=est-change"'
+teardown
+
+# heavy-build-prio: set replaces in place, clear removes, writes atomically.
+setup
+hp() { XDG_CONFIG_HOME="$T/config" XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" "$HBP" "$@" > "$T/hp.out" 2>&1; }
+hp set theme low "21 of 76"; r1=$?
+hp set '/var/tmp/claude/cass*' low; hp set theme normal; r2=$?
+check "prio set: replaces the theme rule in place, by=manager by default (rc $r1 $r2)" '(( r1 == 0 && r2 == 0 )) && [[ $(cat "$T/config/heavy-build.lanes") == $'\''theme normal by=manager\n/var/tmp/claude/cass* low by=manager'\'' ]]'
+hp set --by oystein theme high "from the panel"; r=$?
+check "prio set: --by oystein overwrites the manager's rule (rc $r)" '(( r == 0 )) && grep -qx "theme high by=oystein  # from the panel" "$T/config/heavy-build.lanes"'
+check "prio set: lanes.log has time, old, new and by" 'grep -qE "^[0-9T:+-]+ action=set match=theme old=\"theme normal by=manager\" new=\"theme high by=oystein  # from the panel\" by=oystein$" "$T/state/heavy-build/lanes.log"'
+hp set theme normal; r=$?
+hp set --by "bad name" theme low; rb=$?
+check "prio set: a --by with a space is refused (rc $rb)" '(( r == 0 && rb == 2 ))'
+hp set x critical; r=$?
+check "prio set: critical is refused with exit 2 (rc $r)" '(( r == 2 )) && ! grep -q "^x " "$T/config/heavy-build.lanes"'
+hp set "two words" low; r=$?
+check "prio set: a match with a space is refused (rc $r)" '(( r == 2 ))'
+printf '1 2\nnormal 1 1 1 tree:/var/tmp/claude/cass-stream/wt -\n' > "$T/run/heavy-build.queue/1792997206715365108-9-aa"
+printf '1 2\nnormal 1 1 1 - -\nsession=s1 agent=a1 lane=theme owner=- dirs=/w\n' > "$T/run/heavy-build.queue/1792997206715365109-9-ab"
+hp list; r=$?
+check "prio list: counts waiting jobs per rule and shows by= (rc $r)" '(( r == 0 )) && grep -q "theme  *normal by=manager  *waiting=1" "$T/hp.out" && grep -q "cass\*  *low  *by=manager  *waiting=1" "$T/hp.out"'
+check "prio list: a ticket from an older heavy-build is matched on its key directories" 'grep -q "1792997206715365108-9-aa normal rule:2 session=? agent=? lane=? owner=? dirs=/var/tmp/claude/cass-stream/wt" "$T/hp.out"'
+check "prio list: shows who submitted each job" 'grep -q "1792997206715365109-9-ab normal rule:1 session=s1 agent=a1 lane=theme" "$T/hp.out"'
+hp clear --by oystein theme; r1=$?; hp clear theme; r2=$?
+check "prio clear: logged with by" 'grep -q "action=clear match=theme old=\"theme normal by=manager\" new=\"-\" by=oystein$" "$T/state/heavy-build/lanes.log"'
+check "prio clear: removes the rule, then exit 1 when there is none (rc $r1 $r2)" '(( r1 == 0 && r2 == 1 )) && ! grep -q "^theme" "$T/config/heavy-build.lanes"'
+hp clear '/var/tmp/claude/cass*'
+check "prio clear: the last rule leaves an empty file and no temp file" '[[ -e $T/config/heavy-build.lanes && ! -s $T/config/heavy-build.lanes ]] && ! ls "$T/config" | grep -q "\.tmp"'
+teardown
+
+# 13. Re-exec (HEAVY_BUILD_REEXEC=1): a waiter whose script is replaced goes on
+# with the new code, as the same process, with the same ticket and arguments.
+# The waiter runs a copy at $T/hb, which the test replaces with mv as an
+# install does. setup2 stubs systemd-run, so once the blocker is gone the
+# build really runs here.
+re_blocker() {
+  sleep 600 & blocker=$!
+  local st
+  st=$(awk '{sub(/.*\) /, ""); split($0, a, " "); print a[20]}' "/proc/$blocker/stat")
+  printf '%s %s\nnormal 1 1 1 -\n' "$blocker" "$st" > "$T/run/heavy-build.queue/0000000000000000001-$blocker-blocker"
+}
+re_install() {  # replaces $T/hb by a new file (new inode), from $1 or the candidate
+  cp -- "${1:-$HBREAL}" "$T/hb.new" && chmod +x "$T/hb.new" && mv -f -- "$T/hb.new" "$T/hb"
+}
+re_tk() { ls "$T/run/heavy-build.queue/" | grep -v '^0000' | grep -v '\.tmp$'; }
+re_wait_log() {  # PATTERN [N]: waits up to 8 s for N (default 1) log lines matching
+  local i
+  for i in $(seq 1 40); do (( $(cat "$T/state/heavy-build/shadow.log" 2>/dev/null | grep -c -- "$1") >= ${2:-1} )) && return 0; sleep 0.2; done
+  return 1
+}
+HBREAL=$HB
+
+setup2
+re_blocker
+printf 'HEAVY_BUILD_REEXEC=1\n' > "$T/config/heavy-build.conf"
+re_install
+# A later waiter (a live process) behind ours, to show the place is kept.
+HB=$T/hb hbe -- bash -c 'printf "%s|" "$@" > "$0"; env > "$0.env"' "$T/ran" "a b" c
+for _ in $(seq 1 40); do [[ -n $(re_tk) ]] && break; sleep 0.2; done
+sleep 120 & later=$!
+lst=$(awk '{sub(/.*\) /, ""); split($0, a, " "); print a[20]}' "/proc/$later/stat")
+printf '%s %s\nnormal 1 1 1 -\n' "$later" "$lst" > "$T/run/heavy-build.queue/9999999999999999999-$later-later"
+re_wait_log 'decision=wait'
+t1=$(re_tk | grep -v later); l1=$(head -1 "$T/run/heavy-build.queue/$t1")
+re_install
+re_wait_log 'event=reexec from='; r=$?
+re_wait_log 'event=reexec-adopted'
+sleep 2
+t2=$(re_tk | grep -v later); l2=$(head -1 "$T/run/heavy-build.queue/$t2" 2>/dev/null)
+alive=0; kill -0 "$hbpid" 2>/dev/null && alive=1
+check "reexec: logged once when the script is replaced (r $r)" '(( r == 0 )) && (( $(grep -c "event=reexec from=" "$T/state/heavy-build/shadow.log") == 1 ))'
+check "reexec: same process, same ticket file and line 1 (got '$t1' '$t2')" '(( alive )) && [[ -n $t1 && $t1 == "$t2" && $l1 == "$l2" ]] && [[ $l1 == "$hbpid "* ]]'
+check "reexec: the new code adopted the ticket, still position 2 of 3" 'grep -q "event=reexec-adopted ticket=$t1" "$T/state/heavy-build/shadow.log" && tail -n 3 "$T/out" | grep -q "position 2 of 3"'
+check "reexec: only one ticket for this build" '(( $(re_tk | grep -c -- "-$hbpid-") == 1 ))'
+kill "$blocker"; wait "$blocker" 2>/dev/null
+wait "$hbpid"; rc=$?
+kill "$later" 2>/dev/null; wait "$later" 2>/dev/null
+check "reexec: the build then runs with its original arguments (rc $rc, got '$(cat "$T/ran" 2>/dev/null)')" '(( rc == 0 )) && [[ $(cat "$T/ran") == "a b|c|" ]]'
+check "reexec: the build does not see HB_ADOPT_TICKET" '[[ -s $T/ran.env ]] && ! grep -q "HB_ADOPT\|HB_REEXEC_IDS" "$T/ran.env"'
+teardown2
+
+# A broken new script: skipped once, the waiter stays; a good one after it re-execs.
+setup2
+re_blocker
+printf 'HEAVY_BUILD_REEXEC=1\n' > "$T/config/heavy-build.conf"
+re_install
+HB=$T/hb hbe -- true
+re_wait_log 'decision=wait'
+printf '#!/usr/bin/env bash\n{ if then\n' > "$T/broken"
+re_install "$T/broken"
+re_wait_log 'event=reexec-skip'
+sleep 3
+alive=0; kill -0 "$hbpid" 2>/dev/null && alive=1
+check "reexec: a script that fails bash -n is skipped once and the waiter stays" '(( alive )) && (( $(grep -c "event=reexec-skip.*fails bash -n" "$T/state/heavy-build/shadow.log") == 1 )) && ! grep -q "event=reexec from=" "$T/state/heavy-build/shadow.log"'
+printf '#!/usr/bin/env bash\n{ echo old; }\n' > "$T/noadopt"
+re_install "$T/noadopt"
+re_wait_log 'cannot take back a ticket'; r=$?
+check "reexec: a script without HB_ADOPT_TICKET is skipped (r $r)" '(( r == 0 )) && kill -0 "$hbpid" 2>/dev/null'
+re_install
+re_wait_log 'event=reexec-adopted'; r=$?
+check "reexec: a good script after them still re-execs (r $r)" '(( r == 0 )) && (( $(grep -c "event=reexec from=" "$T/state/heavy-build/shadow.log") == 1 ))'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+check "reexec: TERM after a re-exec still removes the ticket" '[[ -z $(re_tk) ]]'
+teardown2
+
+# Switch off (the default): a replaced script changes nothing.
+setup2
+re_blocker
+re_install
+HB=$T/hb hbe -- true
+re_wait_log 'decision=wait'
+re_install
+sleep 3
+check "reexec: off by default, no re-exec" '! grep -q "event=reexec" "$T/state/heavy-build/shadow.log" && kill -0 "$hbpid" 2>/dev/null'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+HB=$HBREAL
+
+# 13b. Re-exec review fixes (Astra, 2026-10-26).
+# A slow submit: machine-session takes 3 s when HEAVY_BUILD_PRIORITY is unset.
+re_slow() { printf '#!/bin/sh\nsleep 3\necho normal\n' > "$T/slowms"; chmod +x "$T/slowms"; }
+
+# Fix 1: the new file is not executable. The waiter runs it with bash, so it
+# re-execs and stays.
+setup2
+re_blocker
+printf 'HEAVY_BUILD_REEXEC=1\n' > "$T/config/heavy-build.conf"
+re_install
+HB=$T/hb hbe -- true
+re_wait_log 'decision=wait'
+cp -- "$HBREAL" "$T/hb.new" && chmod 644 "$T/hb.new" && mv -f -- "$T/hb.new" "$T/hb"
+re_wait_log 'event=reexec-adopted'; r=$?
+sleep 2
+check "reexec fix 1: a new script without +x still re-execs, the waiter stays (r $r)" '(( r == 0 )) && kill -0 "$hbpid" 2>/dev/null && [[ -n $(re_tk) ]]'
+# The script gone: no re-exec, the waiter stays.
+mv -f -- "$T/hb" "$T/hb.gone"
+sleep 3
+check "reexec fix 1: a removed script is not run, the waiter stays" 'kill -0 "$hbpid" 2>/dev/null && [[ -n $(re_tk) ]] && (( $(grep -c "event=reexec from=" "$T/state/heavy-build/shadow.log") == 1 ))'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+
+# Fix 1: started by a bare name (bash hb, from its own directory).
+setup2
+re_blocker
+printf 'HEAVY_BUILD_REEXEC=1\n' > "$T/config/heavy-build.conf"
+cp -- "$HBREAL" "$T/work/hb"
+HB=bash hbe -- hb true
+re_wait_log 'decision=wait'
+cp -- "$HBREAL" "$T/work/hb.new" && mv -f -- "$T/work/hb.new" "$T/work/hb"
+re_wait_log 'event=reexec-adopted'; r=$?
+sleep 1
+check "reexec fix 1: a waiter started as 'bash hb' re-execs by its absolute path (r $r)" '(( r == 0 )) && kill -0 "$hbpid" 2>/dev/null && [[ -n $(re_tk) ]]'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+
+# Fix 2: a re-exec'd process (simulated: a shell writes a ticket naming
+# itself, then execs heavy-build with HB_ADOPT_TICKET) that gets TERM during
+# its slow setup removes the ticket.
+re_adopted() {  # starts it in the background; sets hbpid and adtk
+  adtk=$T/run/heavy-build.queue/1700000000000000000-ad-$1
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE HBT="$T" PATH="$T/bin:$PATH" \
+    XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
+    HB_CGROUP="$T/cg" HB_PROC="$T/proc" HB_MACHINE_SESSION="$T/slowms" HEAVY_BUILD_PRIORITY= \
+    HEAVY_BUILD_WAIT=100 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none \
+    bash -c 'st=$(awk '\''{sub(/.*\) /, ""); split($0, a, " "); print a[20]}'\'' /proc/$$/stat)
+      printf "%s %s\nnormal 1 1 1 - -\n" $$ "$st" > "$0"
+      exec env HB_ADOPT_TICKET="$0" HB_ADOPT_STATE="$(( EPOCHSECONDS - 50 )) 7 - -" "$1" true' "$adtk" "$HBREAL") > "$T/out" 2>&1 &
+  hbpid=$!
+}
+setup2
+re_blocker; re_slow
+re_adopted x
+sleep 1
+had=0; [[ -e $adtk ]] && had=1
+kill -TERM "$hbpid"; wait "$hbpid"; rc=$?
+check "reexec fix 2: TERM during setup after a re-exec removes the inherited ticket (rc $rc, had $had)" '(( had == 1 && rc == 143 )) && [[ ! -e $adtk ]]'
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+
+# Fix 2: the rerun guard does not refuse an adopted waiter; it does refuse a new one.
+setup2
+re_blocker
+h=$(printf '%s\0' "$T/work" true | md5sum | cut -c1-8)
+mkdir -p "$T/state/heavy-build"
+for i in 1 2; do printf '%s\tother\t%s\t30\t10\t1000\t1\tfail\tNA\tNA\t-\t-\tNA\n' $(( EPOCHSECONDS - 60 )) "$h" >> "$T/state/heavy-build/history.tsv"; done
+printf '#!/bin/sh\necho normal\n' > "$T/slowms"; chmod +x "$T/slowms"
+re_adopted y
+sleep 4
+alive=0; kill -0 "$hbpid" 2>/dev/null && alive=1
+check "reexec fix 2: an adopted waiter skips the rerun guard and keeps waiting" '(( alive )) && [[ -e $adtk ]] && ! grep -q "rerun-refuse" "$T/state/heavy-build/shadow.log" && grep -q "event=reexec-adopted ticket=${adtk##*/}" "$T/state/heavy-build/shadow.log"'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+check "reexec fix 2: its clock came along (queued about 50 s ago)" 'grep -qE "event=reexec-adopted .*queued_s=(5[0-9]|6[0-9]) " "$T/state/heavy-build/shadow.log"'
+hbe HEAVY_BUILD_PRIORITY=normal -- true
+wait "$hbpid"; rc=$?
+check "reexec fix 2: the same command, newly queued, is refused with 76 (rc $rc)" '(( rc == 76 ))'
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+
+# Fix 3: an install during the slow setup still counts as a change.
+setup2
+re_blocker; re_slow
+printf 'HEAVY_BUILD_REEXEC=1\n' > "$T/config/heavy-build.conf"
+re_install
+HB=$T/hb hbe HB_MACHINE_SESSION="$T/slowms" HEAVY_BUILD_PRIORITY= -- true
+sleep 1
+re_install
+re_wait_log 'event=reexec-adopted'; r=$?
+check "reexec fix 3: a script replaced during setup is picked up in the wait loop (r $r)" '(( r == 0 )) && kill -0 "$hbpid" 2>/dev/null'
+kill "$hbpid" 2>/dev/null; wait "$hbpid" 2>/dev/null
+kill "$blocker"; wait "$blocker" 2>/dev/null
+teardown2
+HB=$HBREAL
+
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
 check "help: no cargo build && cargo test example" '! grep -q "heavy-build bash -c .*cargo build && cargo test" <<< "$help"'

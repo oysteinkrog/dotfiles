@@ -154,6 +154,25 @@ Leave `HEAVY_BUILD_PRIORITY` unset.
   - A normal or low build that has waited 60 min (the aging slot) goes ahead of other
     normal builds, but stays behind critical ones.
 
+### Lane priority (the manager decides)
+
+When `HEAVY_BUILD_LANE_PRIO=1` is set in `~/.config/heavy-build.conf`, the manager
+session sets priority per lane in `~/.config/heavy-build.lanes`. A session does not
+have enough information to rank its own build, so:
+
+- A `HEAVY_BUILD_PRIORITY=high` with no rule for your lane runs as normal. heavy-build
+  says so once. If the build must go first, ask the manager session for a rule.
+- A rule matches a grove lane tag, its grove owner, your session name, or a directory
+  glob such as `/var/tmp/claude/cass*`. Critical from `sessions.toml` still beats it.
+- A waiting build picks up a new or removed rule within one poll and moves in line.
+- Rules are set by Oystein (the Build Queue panel), the manager session or a
+  prioritizer agent: `heavy-build-prio list`, `heavy-build-prio set [--by WHO]
+  <match> high|normal|low [note]`, `heavy-build-prio clear <match>`. The last writer
+  wins; `~/.local/state/heavy-build/lanes.log` records each change. Do not set rules
+  for your own builds.
+- Each job records who submitted it (`session=` and `agent=` in live.log, history
+  column 14). Set `HEAVY_BUILD_AGENT=<your name>` so a subagent's builds carry its name.
+
 ## 10. Subagent prompts
 
 A subagent prompt that builds must say "use `heavy-build` and load the `heavy-build`
