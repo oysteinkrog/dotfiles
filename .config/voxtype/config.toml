@@ -19,8 +19,10 @@ live_typing = false
 # so the next one starts typing about 1.6 s sooner. Costs about 1 GB RAM (no VRAM)
 # during those 5 minutes only. 0 = load fresh every time.
 live_preview_warm_secs = 300
-# Give that 1 GB back early when the machine is under memory pressure (checked every 10 s).
-live_preview_warm_release_command = "grep -qE 'level=(slow|pause)' ~/.local/state/pressure/level"
+# Give that 1 GB back early only at the pressure level "pause" (checked every 10 s).
+# At "slow" the worker stays: dictation has priority over builds, and a cold
+# start costs 3 to 4 s before the first words (seen on the office PC, 2026-10-26).
+live_preview_warm_release_command = "grep -q 'level=pause' ~/.local/state/pressure/level"
 # Keep every dictation (WAV + JSON with the texts) for review and later
 # fine-tuning on Oystein's voice. About 115 MB per hour of speech.
 live_preview_corpus_dir = "~/.local/share/voxtype/corpus"
