@@ -20,8 +20,12 @@ os.environ["CHROME_IDLE_PROC"] = f"{_tmp}/proc"
 os.environ["CHROME_IDLE_STATE_DIR"] = f"{_tmp}/state"
 os.environ["CHROME_IDLE_MODE_FILE"] = f"{_tmp}/mode"
 os.environ.pop("CHROME_IDLE_MODE", None)
+os.environ["CHROME_IDLE_HB_QUEUE"] = f"{_tmp}/no-queue"
+os.environ["CHROME_IDLE_HB_LOG"] = f"{_tmp}/no-log"
 
-_path = str(Path(__file__).with_name("chrome-idle-close"))
+_path = os.environ.get("CHROME_IDLE_SCRIPT") or str(
+    Path(__file__).with_name("chrome-idle-close")
+)
 _loader = importlib.machinery.SourceFileLoader("chrome_idle_close", _path)
 _spec = importlib.util.spec_from_loader("chrome_idle_close", _loader)
 assert _spec is not None
@@ -168,6 +172,71 @@ class Memory(unittest.TestCase):
             self._line(now - 10, "c", "wait", "slice-cap"),
         ]
         self.assertEqual(cic.hb_memory_waits(now, "\n".join(lines)), 0)
+
+    def test_shadow_line_counts_with_queue(self):
+        now = 1_800_000_000.0
+        stamp = datetime.fromtimestamp(now - 900).astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        line = (
+            f'{stamp} mode=shadow job=a decision=wait reason="memory: 3.4 GiB '
+            f'available, the first build needs 5" cap=22.0G(high) pressure=normal '
+            f"actual=wait rank=1"
+        )
+        self.assertEqual(cic.hb_memory_waits(now, line, {"a"}), 1)
+        # The shadow decision says wait, but the job really started.
+        late = line.replace("actual=wait", "actual=start")
+        self.assertEqual(cic.hb_memory_waits(now, late, {"a"}), 0)
+        # The shadow decision says start, but the job really still waits.
+        start = self._line(now - 100, "a", "start", "fits") + " actual=wait"
+        self.assertEqual(cic.hb_memory_waits(now, line + "\n" + start, {"a"}), 1)
+
+    def test_single_old_wait_line_counts_while_queued(self):
+        now = 1_800_000_000.0
+        text = self._line(now - 7200, "a", "wait", "memory")
+        self.assertEqual(cic.hb_memory_waits(now, text, {"a", "z"}), 1)
+
+    def test_job_no_longer_queued_does_not_count(self):
+        now = 1_800_000_000.0
+        text = self._line(now - 7200, "a", "wait", "memory")
+        self.assertEqual(cic.hb_memory_waits(now, text, {"z"}), 0)
+        self.assertEqual(cic.hb_memory_waits(now, text, set()), 0)
+
+    def test_started_job_does_not_count_even_if_queued(self):
+        now = 1_800_000_000.0
+        text = "\n".join(
+            [
+                self._line(now - 7200, "a", "wait", "memory"),
+                self._line(now - 3600, "a", "start", "fits"),
+            ]
+        )
+        self.assertEqual(cic.hb_memory_waits(now, text, {"a"}), 0)
+
+    def test_queue_dir_read_from_env(self):
+        q = Path(_tmp) / "queue"
+        q.mkdir()
+        (q / "a").write_text("x")
+        old = cic.HB_QUEUE_ENV
+        cic.HB_QUEUE_ENV = str(q)
+        try:
+            self.assertEqual(cic.hb_queued_jobs(), {"a"})
+        finally:
+            cic.HB_QUEUE_ENV = old
+        self.assertIsNone(cic.hb_queued_jobs())
+
+    def test_log_path_picks_newest(self):
+        d = Path(_tmp) / "hb"
+        d.mkdir()
+        (d / "live.log").write_text("x")
+        (d / "shadow.log").write_text("x")
+        os.utime(d / "live.log", (1, 1))
+        old = (cic.HB_LOG_ENV, cic.HB_LOG_DIR)
+        cic.HB_LOG_ENV, cic.HB_LOG_DIR = None, d
+        try:
+            self.assertEqual(cic.hb_log_path(), d / "shadow.log")
+            os.utime(d / "shadow.log", (1, 1))
+            os.utime(d / "live.log", (5, 5))
+            self.assertEqual(cic.hb_log_path(), d / "live.log")
+        finally:
+            cic.HB_LOG_ENV, cic.HB_LOG_DIR = old
 
 
 class Decide(unittest.TestCase):
