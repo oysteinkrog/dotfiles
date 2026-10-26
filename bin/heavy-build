@@ -328,6 +328,17 @@
 #   backfill rule (on 2026-10-23 it did: one high waiter blocked 37 builds for
 #   40 min while the machine sat idle). A low
 #   build counts as normal after 30 min of waiting. Only live mode uses it.
+#   With HEAVY_BUILD_LOW_NO_STARVE=1 (default 0) a low build stays low: it
+#   gets only what no normal or higher build can use. It is never the head of
+#   the line, so it never starves or limits the backfill of other builds, and
+#   it never takes the aging slot. After HEAVY_BUILD_LOW_AGE_SECS (default
+#   7200) it ranks with normal builds by arrival, so it starts when it fits
+#   and no earlier build does, but it still never holds others back, its
+#   lock keys included. That is best effort: when memory never frees up, it
+#   may never run. HEAVY_BUILD_LOW_HEAD_SECS (default 0, off) gives a bounded
+#   turn: a low build that has waited that long can be the head like a
+#   normal build, with the starve rule and writer preference. Set it at or
+#   above HEAVY_BUILD_LOW_AGE_SECS, so the build also ranks with normal ones.
 #   When HEAVY_BUILD_PRIORITY is unset, the default comes from the sessions in
 #   ~/.config/machine/sessions.toml:
 #   - critical when the calling Claude session is critical (asked with
@@ -738,6 +749,9 @@ read_conf() {
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
+  setting HEAVY_BUILD_LOW_NO_STARVE 0
+  setting HEAVY_BUILD_LOW_AGE_SECS 7200
+  setting HEAVY_BUILD_LOW_HEAD_SECS 0
   setting HEAVY_BUILD_MEM_CONTROLLER 0
   setting HEAVY_BUILD_LANE_PRIO 0
   setting HEAVY_BUILD_EST_REFRESH 0
@@ -2371,8 +2385,17 @@ $1 == "F" {
 }
 $1 == "W" {
   nw++; w_id[nw] = $2; w_arr[nw] = $3; p = $4
-  if (p == "low" && now - $3 >= lowage) p = "normal"
+  # Low no-starve (lownostarve=1): a low build stays low. It moves up to the
+  # rank of normal builds (by arrival) after lowage2 seconds, but never takes
+  # the aging slot and never becomes the head of the line (see the walk).
+  w_low[nw] = (lownostarve && p == "low")
+  # w_lowskip: a low build that holds nothing back: never the head, no starve,
+  # no writer preference. With lowheadsecs > 0 (a bounded turn), one that has
+  # waited that long is the head like a normal build.
+  w_lowskip[nw] = (w_low[nw] && !(lowheadsecs > 0 && now - $3 >= lowheadsecs))
+  if (p == "low" && !lownostarve && now - $3 >= lowage) p = "normal"
   w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "critical") ? 1 : (p == "low") ? 3 : 2
+  if (w_low[nw] && now - $3 >= lowage2) w_rank[nw] = 2
   # An aged critical build (waited critage seconds) goes ahead of high ones.
   w_caged[nw] = (p == "critical" && critage > 0 && now - $3 >= critage)
   if (w_caged[nw]) w_rank[nw] = -1
@@ -2392,7 +2415,7 @@ END {
   # has prio <prio>:aged.
   for (n = ageslots - T_aged; n > 0; n--) {
     a = 0
-    for (i = 1; i <= nw; i++) if (w_rank[i] >= 2 && now - w_arr[i] >= agesecs && (!a || w_id[i] < w_id[a])) a = i
+    for (i = 1; i <= nw; i++) if (w_rank[i] >= 2 && !w_low[i] && now - w_arr[i] >= agesecs && (!a || w_id[i] < w_id[a])) a = i
     if (!a) break
     w_rank[a] = 1.5; w_aged[a] = 1
   }
@@ -2406,11 +2429,13 @@ END {
   # holds that tree. No waiter behind it with a tree:<top>#<suffix> key may
   # start first. Suffixed waiters ahead of it keep their place. A waiter the
   # pressure level holds back takes no writer preference, so it cannot block
-  # a high or critical build behind it.
+  # a high or critical build behind it. Nor does a low build that holds
+  # nothing back (w_lowskip).
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (w_keys[i] == "" || w_keys[i] == "-") continue
     if (pressure_why(i) != "") continue
+    if (w_lowskip[i]) continue
     n = split(w_keys[i], k, ",")
     for (j = 1; j <= n; j++) if (k[j] ~ /^tree:/ && index(k[j], "#") == 0 && !(k[j] in wpref)) { wpref[k[j]] = i; wpos[k[j]] = o }
   }
@@ -2445,11 +2470,17 @@ END {
       # An aged head never starves the queue: high and critical builds that
       # fit pass it, so it holds only the slot it gets next. With the starve
       # fix (starvefix=1) it does, as any other head that waited that long.
-      st = (now - w_arr[i] >= starve && (starvefix || !w_aged[i]))
+      st = (!w_lowskip[i] && now - w_arr[i] >= starve && (starvefix || !w_aged[i]))
       untsolo = (starvefix && st) ? T_unt : 0
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
       if (r == "") r = cf_why(i, T_nc, T_tc, avail)
       if (r == "") { pick(i); why[i] = (untsolo > 0 && T_n - T_unt <= 0) ? "fits: no tracked build runs, and untracked scopes do not hold back a build that has waited this long" : "fits: next in order"; untsolo = 0; continue }
+      # A low build that does not fit is never the head (lownostarve=1): it
+      # sets no starve and no backfill limit, and the next build that does
+      # not fit becomes the head instead. On 2026-10-26 a theme low Wine test
+      # that had aged to normal was the starve head for over 2 h and held
+      # about 100 normal and critical builds.
+      if (w_lowskip[i]) { why[i] = r "; it is low, so it holds back no other build"; untsolo = 0; continue }
       headi = i; why[i] = r; shadow = shadow_time(i); starving = st; untsolo = 0
       # The queue never holds an empty machine: when no tracked build runs
       # and the head still does not fit (pressure level slow or pause, or
@@ -2545,6 +2576,7 @@ decide() {
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v solo="$SOLO_MEM_GIB" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
+    -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
