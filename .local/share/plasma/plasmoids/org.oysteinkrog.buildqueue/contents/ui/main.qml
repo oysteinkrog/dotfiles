@@ -15,6 +15,7 @@ import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.extras as PlasmaExtras
+import org.kde.plasma.plasma5support as P5Support
 import org.kde.kirigami as Kirigami
 
 PlasmoidItem {
@@ -53,6 +54,11 @@ PlasmoidItem {
 
     // Lane name -> true or false, for lanes the owner opened or closed. The top lane starts open.
     property var expanded: ({})
+    // The Sessions list: "session" groups jobs by owning session, "queue" lists them in run order.
+    property string listMode: "session"
+    readonly property var queueRows: q.queue || []
+    // A priority change in flight: the rule name, until the next fetch shows it.
+    property string prioBusy: ""
 
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
@@ -129,6 +135,58 @@ PlasmoidItem {
         expanded = next;
     }
 
+    // Runs heavy-build-prio. Each command runs once and its source is dropped when it ends.
+    P5Support.DataSource {
+        id: shell
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source);
+            root.prioBusy = "";
+            root.load();
+        }
+    }
+
+    function quote(s) {
+        return "'" + String(s).replace(/'/g, "'\\''") + "'";
+    }
+
+    // Moves a session's or worktree's rule one step: low, normal (no rule) or high.
+    function shiftPrio(match, current, delta) {
+        const next = Math.max(-1, Math.min(1, prioStep(current) + delta));
+        if (!match || next === prioStep(current))
+            return;
+        prioBusy = match;
+        if (next === 0)
+            shell.connectSource("heavy-build-prio clear --by oystein " + quote(match));
+        else
+            shell.connectSource("heavy-build-prio set --by oystein " + quote(match) + " " + (next > 0 ? "high" : "low") + " " + quote("Build Queue panel"));
+    }
+
+    function ownerName(o) {
+        return o ? o : i18n("Unknown owner");
+    }
+
+    // How the owner of a worktree is known, for its tooltip.
+    function ownerSource(lane) {
+        switch (lane.ownerHow) {
+        case "recorded":
+            return i18n("heavy-build recorded the session on the job");
+        case "folder":
+            return i18n("the session works in this folder");
+        case "mentions":
+            return i18n("inferred: the session's transcripts name this worktree far more than any other session");
+        case "siblings":
+            return i18n("inferred from its sibling worktrees");
+        case "guess":
+            return i18n("a guess: several sessions name this worktree");
+        }
+        return i18n("no session found");
+    }
+
+    function inferred(lane) {
+        return lane.ownerHow !== "recorded" && lane.ownerHow !== "folder";
+    }
+
     // A lane's priority setting as a step: low -1, normal 0, high +1, critical +2.
     function prioStep(p) {
         if (!p)
@@ -142,9 +200,29 @@ PlasmoidItem {
     }
 
     // The rows of an open lane: sessions and subagents when heavy-build names them, then
-    // their jobs. Jobs without a session come first, as a flat list.
+    // their jobs. Jobs without a session come first, as a flat list. An open group lists its
+    // lanes instead, and each open lane in it adds its own jobs one step in.
     function laneRows(lane, max) {
         const rows = [];
+        if (lane.lanes) {
+            for (const kid of lane.lanes) {
+                const open = laneOpen(kid.name, 1);
+                rows.push({
+                    kind: "lane",
+                    depth: 0,
+                    lane: kid,
+                    open: open
+                });
+                if (open)
+                    jobRows(kid, 1, max, rows);
+            }
+            return rows;
+        }
+        jobRows(lane, 0, max, rows);
+        return rows;
+    }
+
+    function jobRows(lane, base, max, rows) {
         const groups = {};
         const order = [];
         for (const j of lane.jobs || []) {
@@ -160,16 +238,16 @@ PlasmoidItem {
         let shown = 0;
         for (const key of order) {
             const [session, agent] = key.split("\u0000");
-            let depth = 0;
+            let depth = base;
             if (session) {
                 if (session !== lastSession)
                     rows.push({
                         kind: "group",
-                        depth: 0,
+                        depth: base,
                         text: i18n("session %1", session)
                     });
                 lastSession = session;
-                depth = 1;
+                depth += 1;
             }
             if (agent) {
                 rows.push({
@@ -194,10 +272,9 @@ PlasmoidItem {
         if (total > shown)
             rows.push({
                 kind: "more",
-                depth: 0,
+                depth: base,
                 text: i18n("+ %1 more jobs", total - shown)
             });
-        return rows;
     }
 
     Timer {
@@ -857,13 +934,33 @@ PlasmoidItem {
             RowLayout {
                 Layout.fillWidth: true
                 Heading {
-                    text: i18n("Lanes")
+                    text: i18n("Sessions")
+                }
+                Repeater {
+                    model: [["session", i18n("By session"), i18n("Jobs grouped by the session that owns them, then by worktree")], ["queue", i18n("Queue order"), i18n("Every job in the order heavy-build runs it")]]
+                    delegate: HoverRow {
+                        required property var modelData
+                        clickable: root.listMode !== modelData[0]
+                        tip: modelData[2]
+                        color: root.listMode === modelData[0] ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.35) : hovered ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.2) : "transparent"
+                        border.width: 1
+                        border.color: root.listMode === modelData[0] ? Kirigami.Theme.highlightColor : view.faint
+                        TapHandler {
+                            onTapped: root.listMode = modelData[0]
+                        }
+                        Small {
+                            Layout.leftMargin: Kirigami.Units.smallSpacing
+                            Layout.rightMargin: Kirigami.Units.smallSpacing
+                            text: modelData[1]
+                            opacity: root.listMode === modelData[0] ? 1 : 0.75
+                        }
+                    }
                 }
                 Item {
                     Layout.fillWidth: true
                 }
                 Repeater {
-                    model: [[i18n("waiting"), view.waitColor], [i18n("running"), view.runColor], [i18n("ok"), view.okColor], [i18n("failed"), view.failColor]]
+                    model: root.listMode === "session" ? [[i18n("waiting"), view.waitColor], [i18n("running"), view.runColor], [i18n("ok"), view.okColor], [i18n("failed"), view.failColor]] : []
                     delegate: Small {
                         required property var modelData
                         Layout.topMargin: Kirigami.Units.smallSpacing
@@ -874,6 +971,7 @@ PlasmoidItem {
             }
             ListView {
                 id: lanes
+                visible: root.listMode === "session"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: Kirigami.Units.gridUnit * 4
@@ -896,7 +994,7 @@ PlasmoidItem {
                         HoverRow {
                             Layout.fillWidth: true
                             clickable: true
-                            tip: i18n("%1: %2 waiting, %3 running, %4 finished and %5 failed in the last hour. Click to %6.", lane.modelData.name, lane.modelData.waiting, lane.modelData.running, lane.modelData.finished, lane.modelData.failed, lane.open ? i18n("close") : i18n("show its jobs"))
+                            tip: i18n("%1: %2 waiting, %3 running, %4 finished and %5 failed in the last hour, in %6 worktrees. Click to %7.", root.ownerName(lane.modelData.name), lane.modelData.waiting, lane.modelData.running, lane.modelData.finished, lane.modelData.failed, (lane.modelData.lanes || []).length, lane.open ? i18n("close") : i18n("show its worktrees"))
                             TapHandler {
                                 onTapped: root.toggleLane(lane.modelData.name, lane.index)
                             }
@@ -906,8 +1004,9 @@ PlasmoidItem {
                             implicitHeight: implicitWidth
                         }
                         PlasmaComponents.Label {
-                            text: lane.modelData.name
+                            text: root.ownerName(lane.modelData.name) + (lane.modelData.name && !lane.modelData.ownerLive ? " " + i18n("(ended)") : "")
                             font.bold: lane.open
+                            font.italic: !lane.modelData.name
                             Layout.preferredWidth: Kirigami.Units.gridUnit * 6.5
                             elide: Text.ElideRight
                         }
@@ -955,7 +1054,9 @@ PlasmoidItem {
                         // off until heavy-build-prio is installed.
                         PrioButton {
                             iconName: "go-down-symbolic"
-                            tip: root.q.prioTool ? i18n("Lower this lane's priority") : i18n("Lower this lane's priority. Not available yet: heavy-build-prio is not installed.")
+                            active: root.q.prioTool && lane.modelData.name !== "" && lane.step > -1 && root.prioBusy === ""
+                            tip: !lane.modelData.name ? i18n("Jobs with no known owner have no session rule") : !root.q.prioTool ? i18n("heavy-build-prio is not installed") : lane.step <= -1 ? i18n("%1 is at low priority already", lane.modelData.name) : i18n("Lower the priority of every job of %1 to %2", lane.modelData.name, lane.step > 0 ? i18n("normal") : i18n("low"))
+                            onClicked: root.shiftPrio(lane.modelData.name, lane.modelData.prio, -1)
                         }
                         Item {
                             implicitWidth: Kirigami.Units.gridUnit * 2
@@ -978,22 +1079,57 @@ PlasmoidItem {
                                 id: prioHover
                             }
                             PlasmaComponents.ToolTip.visible: prioHover.hovered
-                            PlasmaComponents.ToolTip.text: lane.modelData.prio ? i18n("Priority %1 (set by %2, rule %3)", lane.modelData.prio.prio, lane.modelData.prio.by || "?", lane.modelData.prio.rule) : i18n("Normal priority")
+                            PlasmaComponents.ToolTip.text: root.prioBusy === lane.modelData.name ? i18n("Changing…") : lane.modelData.prio ? i18n("Priority %1 (rule %2, set by %3)", lane.modelData.prio.prio, lane.modelData.prio.rule, lane.modelData.prio.by || "?") : i18n("Normal priority: no rule for this session")
                         }
                         PrioButton {
                             iconName: "go-up-symbolic"
-                            tip: root.q.prioTool ? i18n("Raise this lane's priority") : i18n("Raise this lane's priority. Not available yet: heavy-build-prio is not installed.")
+                            active: root.q.prioTool && lane.modelData.name !== "" && lane.step < 1 && root.prioBusy === ""
+                            tip: !lane.modelData.name ? i18n("Jobs with no known owner have no session rule") : !root.q.prioTool ? i18n("heavy-build-prio is not installed") : lane.step >= 1 ? i18n("%1 is at high priority already", lane.modelData.name) : i18n("Raise the priority of every job of %1 to %2", lane.modelData.name, lane.step < 0 ? i18n("normal") : i18n("high"))
+                            onClicked: root.shiftPrio(lane.modelData.name, lane.modelData.prio, 1)
                         }
                     }
 
-                    // The open lane's sessions, subagents and jobs.
+                    // The open lane's sessions, subagents and jobs, or an open group's lanes.
                     Repeater {
                         model: lane.open ? root.laneRows(lane.modelData, 8) : []
                         delegate: HoverRow {
+                            id: sub
                             required property var modelData
+                            readonly property bool isLane: modelData.kind === "lane"
                             Layout.fillWidth: true
                             Layout.leftMargin: Kirigami.Units.gridUnit * (1 + modelData.depth * 0.8)
-                            tip: modelData.kind === "job" ? i18n("%1, %2 priority", modelData.job.cls, modelData.job.prio || "normal") + (modelData.job.session ? "\n" + i18n("session %1", modelData.job.session) : "") + (modelData.job.agent ? "\n" + i18n("subagent %1", modelData.job.agent) : "") : ""
+                            clickable: isLane
+                            TapHandler {
+                                enabled: sub.isLane
+                                onTapped: root.toggleLane(sub.modelData.lane.name, 1)
+                            }
+                            Kirigami.Icon {
+                                visible: sub.isLane
+                                source: sub.isLane && sub.modelData.open ? "go-down-symbolic" : "go-next-symbolic"
+                                implicitWidth: Kirigami.Units.iconSizes.small * 0.8
+                                implicitHeight: implicitWidth
+                            }
+                            PlasmaComponents.Label {
+                                visible: sub.isLane
+                                text: sub.isLane ? sub.modelData.lane.name + (root.inferred(sub.modelData.lane) ? " ≈" : "") : ""
+                                font: Kirigami.Theme.smallFont
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 7
+                                elide: Text.ElideRight
+                            }
+                            StackBar {
+                                visible: sub.isLane
+                                Layout.fillWidth: true
+                                max: view.laneMax
+                                parts: sub.isLane ? [[sub.modelData.lane.waiting, view.waitColor], [sub.modelData.lane.running, view.runColor], [sub.modelData.lane.finished - sub.modelData.lane.failed, view.okColor], [sub.modelData.lane.failed, view.failColor]] : []
+                            }
+                            Small {
+                                visible: sub.isLane
+                                text: sub.isLane ? sub.modelData.lane.waiting : ""
+                                color: sub.isLane && sub.modelData.lane.waiting > 0 ? view.waitColor : Kirigami.Theme.disabledTextColor
+                                Layout.preferredWidth: Kirigami.Units.gridUnit * 1.4
+                                horizontalAlignment: Text.AlignRight
+                            }
+                            tip: sub.isLane ? i18n("%1: %2 waiting, %3 running, %4 finished and %5 failed in the last hour.\nOwner: %6.\nClick to %7.", modelData.lane.name, modelData.lane.waiting, modelData.lane.running, modelData.lane.finished, modelData.lane.failed, root.ownerSource(modelData.lane), modelData.open ? i18n("close") : i18n("show its jobs")) : modelData.kind === "job" ? i18n("%1, %2 priority", modelData.job.cls, modelData.job.prio || "normal") + (modelData.job.session ? "\n" + i18n("session %1", modelData.job.session) : "") + (modelData.job.agent ? "\n" + i18n("subagent %1", modelData.job.agent) : "") : ""
                             Rectangle {
                                 visible: modelData.kind === "job"
                                 implicitWidth: Kirigami.Units.smallSpacing * 1.6
@@ -1031,6 +1167,60 @@ PlasmoidItem {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Queue order: running jobs, then every waiting job in heavy-build's order, each with
+            // its owning session.
+            ListView {
+                visible: root.listMode === "queue"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: Kirigami.Units.gridUnit * 4
+                clip: true
+                model: root.queueRows.length
+                boundsBehavior: Flickable.StopAtBounds
+                delegate: HoverRow {
+                    id: qrow
+                    required property int index
+                    readonly property var job: root.queueRows[index] || ({ state: "", project: "", cls: "", owner: "", age: 0 })
+                    width: ListView.view.width
+                    tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (job.state === "waiting" ? "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause)) : "\n" + i18n("Running %1", root.dur(job.age)))
+                    Small {
+                        text: qrow.job.state === "running" ? "▶" : qrow.job.pos
+                        color: qrow.job.state === "running" ? view.runColor : Kirigami.Theme.disabledTextColor
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 1.3
+                        horizontalAlignment: Text.AlignRight
+                    }
+                    PlasmaComponents.Label {
+                        text: root.ownerName(qrow.job.owner) + (root.inferred(qrow.job) && qrow.job.owner ? " ≈" : "")
+                        font.pointSize: Kirigami.Theme.smallFont.pointSize
+                        font.italic: !qrow.job.owner
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 6
+                        elide: Text.ElideRight
+                    }
+                    Small {
+                        text: qrow.job.project
+                        opacity: 0.75
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 6
+                        elide: Text.ElideRight
+                    }
+                    Small {
+                        text: qrow.job.cls
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+                    Small {
+                        visible: qrow.job.prio === "high" || qrow.job.prio === "critical" || qrow.job.prio === "low"
+                        text: qrow.job.prio || ""
+                        color: view.prioColor(qrow.job.prio)
+                    }
+                    Small {
+                        text: root.dur(qrow.job.age)
+                        color: qrow.job.state === "running" ? view.runColor : view.waitColor
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 3.2
+                        horizontalAlignment: Text.AlignRight
                     }
                 }
             }
