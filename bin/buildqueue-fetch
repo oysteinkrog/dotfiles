@@ -1,10 +1,14 @@
 #!/usr/bin/env -S python3 -I -S
 """Print the heavy-build queue, how fast it moves and the machine signals that gate it, as JSON.
 
-    buildqueue-fetch
+    buildqueue-fetch                   print it once
+    buildqueue-fetch --serve FILE [S]  rewrite FILE every S seconds (default 5) until the
+                                       parent process exits
 
-Feeds the build queue Plasma widget (~/.local/share/plasma/plasmoids/org.oysteinkrog.buildqueue),
-which runs this every few seconds. Read only: it never touches a build or the queue.
+Feeds the build queue Plasma widget (~/.local/share/plasma/plasmoids/org.oysteinkrog.buildqueue).
+buildqueue-window starts it with --serve, and the widget reads the file. One long-lived
+process costs a few ms a round; a new Python process every 5 s cost about 1% of a core.
+Read only: it never touches a build or the queue.
 
 Sources:
   /run/user/<uid>/heavy-build.queue/<job>      one file per waiting job
@@ -20,16 +24,15 @@ project. The offsets and the last two hours of starts and finishes are kept in
 ~/.cache/buildqueue/state.json, so each run reads only what was appended since the last one.
 """
 
-import configparser
 import json
 import os
 import pathlib
 import re
-import statistics
-import subprocess
 import sys
 import time
-from datetime import datetime
+
+# configparser and subprocess are imported where they are used: most runs need neither,
+# and their imports cost more than the rest of a run.
 
 HOME = pathlib.Path.home()
 UID = os.getuid()
@@ -60,6 +63,7 @@ LINE_RE = re.compile(
 )
 KEYS_RE = re.compile(r" keys=(\S+)")
 PRIO_RE = re.compile(r" prio=(\S+)")
+TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-])(\d\d)(\d\d)")
 IDLE_RE = re.compile(r"\s*\(idle, not counted[^)]*\)")
 
 
@@ -123,10 +127,17 @@ def read_new(path, offset, first_bytes):
 
 
 def parse_ts(text):
-    try:
-        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S%z").timestamp()
-    except ValueError:
+    """Epoch seconds of a live.log time such as 2026-10-26T11:10:03+0100."""
+    m = TS_RE.match(text)
+    if not m:
         return None
+    y, mo, d, h, mi, s, sign, oh, om = (m.group(i) for i in range(1, 10))
+    t = time.mktime((int(y), int(mo), int(d), int(h), int(mi), int(s), 0, 0, 0))
+    # mktime reads the fields as local time with no DST set; move them to UTC from
+    # the line's own offset.
+    local_off = -time.timezone
+    off = (int(oh) * 3600 + int(om) * 60) * (1 if sign == "+" else -1)
+    return t + local_off - off
 
 
 def load_state():
@@ -247,6 +258,8 @@ def running_builds(st, now):
         names = []
     new = [n for n in names if n not in units]
     if new:
+        import subprocess
+
         try:
             out = subprocess.run(
                 ["systemctl", "--user", "show", *new, "-p", "Id,Description,ActiveEnterTimestamp", "--timestamp=unix"],
@@ -291,6 +304,12 @@ def running_builds(st, now):
         )
     found.sort(key=lambda b: -b["runtime"])
     return found
+
+
+def median(values):
+    v = sorted(values)
+    n = len(v)
+    return (v[n // 2] + v[(n - 1) // 2]) / 2
 
 
 def pct(values, q):
@@ -379,6 +398,9 @@ def theme(st, now):
     cached = st.get("theme")
     if cached and now - cached.get("at", 0) < THEME_EVERY_S:
         return cached["colours"]
+    import configparser
+    import subprocess
+
     colours = {}
     try:
         path = subprocess.run(
@@ -484,7 +506,7 @@ def build(st, now):
             "finished": finished,
             "started": len(hour_starts),
             "arrived": len(arrived),
-            "waitMedian": statistics.median(waits) if waits else None,
+            "waitMedian": median(waits) if waits else None,
             "waitP90": pct(waits, 0.9),
             "trend": trend,
             "trendMinutes": TREND_S // 60,
@@ -496,14 +518,46 @@ def build(st, now):
     }
 
 
-def main():
+def run_once(st):
     now = time.time()
-    st = load_state()
     try:
-        result = build(st, now)
-        save_state(st)
+        return build(st, now), True
     except Exception as exc:  # the widget shows the error and keeps its last data
-        result = {"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}
+        return {"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}, False
+
+
+def serve(path, every):
+    """Rewrite path every `every` seconds. Saves the cursors once a minute and on exit."""
+    import signal
+
+    out = pathlib.Path(path)
+    tmp = out.with_name(out.name + ".tmp")
+    parent = os.getppid()
+    st = load_state()
+    saved = 0.0
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        while os.getppid() == parent:
+            start = time.time()
+            result, ok = run_once(st)
+            tmp.write_text(json.dumps(result, separators=(",", ":")))
+            tmp.replace(out)
+            if ok and start - saved >= 60:
+                save_state(st)
+                saved = start
+            time.sleep(max(0.5, every - (time.time() - start)))
+    finally:
+        save_state(st)
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--serve":
+        serve(sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 5.0)
+        return
+    st = load_state()
+    result, ok = run_once(st)
+    if ok:
+        save_state(st)
     json.dump(result, sys.stdout, separators=(",", ":"))
 
 
