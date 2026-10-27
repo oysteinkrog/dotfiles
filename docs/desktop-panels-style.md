@@ -61,10 +61,11 @@ Outer margin `largeSpacing × 1.25`, gap between cards `largeSpacing`, card padd
 
 ## Themes
 
-Both widgets can switch between colour themes. The themes are in `bin/panel-themes.json`
-(`~/bin/panel-themes.json`). The chosen theme is one line in
-`~/.config/desktop-panels/theme`. Switch with `panel-theme NAME`, list with
-`panel-theme --list`, or use the palette button in either widget's header. Each fetch script
+Both widgets follow the desktop theme set with `os-theme`, which other apps such as fooyin
+follow too. The themes are in `~/.config/os-theme/themes.json` (`.config/os-theme/` in this
+repo). The chosen theme is one line in `~/.local/state/os-theme/current`. Switch with
+`os-theme NAME` (`panel-theme` is the old name), list with `os-theme --list`, or use the
+palette button in either widget's header. Each fetch script
 puts the chosen theme in its JSON as `panelTheme` (name, label, tokens and the list of
 names), and both widgets change on their next fetch.
 

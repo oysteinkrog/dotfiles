@@ -450,12 +450,13 @@ def theme(st, now):
     return colours
 
 
-PANEL_THEMES = pathlib.Path(__file__).resolve().parent / "panel-themes.json"
-PANEL_CHOICE = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "desktop-panels" / "theme"
+# The desktop theme picked with os-theme. stat() follows the themes.json link to the repo file.
+PANEL_THEMES = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "os-theme" / "themes.json"
+PANEL_CHOICE = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state")) / "os-theme" / "current"
 
 
 def panel_theme(st):
-    """The panel theme picked with panel-theme, shared with the Agenda widget: its name and
+    """The theme picked with os-theme, shared with the Agenda widget and other apps: its name and
     colour tokens. Read again only when the choice or the theme file changes."""
     try:
         key = (PANEL_CHOICE.stat().st_mtime_ns, PANEL_THEMES.stat().st_mtime_ns)
