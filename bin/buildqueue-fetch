@@ -832,6 +832,28 @@ def worker_toolchains(st):
     return set()
 
 
+# The current marks, rewritten each refresh, for whoever tells the lanes (manager-buildqueue
+# reads it). Format agreed with the job system.
+REMOTE_MARKS = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state")) / "jobd" / "marks.json"
+MARKS_EVERY_S = 60
+
+
+def write_marks(st, marks, now):
+    """Rewrite the marks file when the set of marked jobs changes, else once a minute."""
+    ids = sorted(m["job"] for m in marks)
+    last = st.get("marksWritten", {})
+    if ids == last.get("ids") and now - last.get("at", 0) < MARKS_EVERY_S:
+        return
+    try:
+        REMOTE_MARKS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REMOTE_MARKS.with_name(REMOTE_MARKS.name + ".tmp")
+        tmp.write_text(json.dumps({"t": int(now), "marks": marks}))
+        tmp.replace(REMOTE_MARKS)
+        st["marksWritten"] = {"ids": ids, "at": now}
+    except OSError:
+        pass
+
+
 def remote_ok(st, job, now):
     """Whether a waiting job could go to a remote worker. Checked once per job: its command
     line and working folder do not change while it waits."""
@@ -839,14 +861,16 @@ def remote_ok(st, job, now):
     if cls not in REMOTE_CLASSES or now - submitted < REMOTE_MIN_WAIT_S:
         return False
     seen = st.setdefault("remoteOk", {})
-    if not isinstance(seen.get(name), list):
+    old = seen.get(name)
+    if not (isinstance(old, list) and len(old) == 5 and isinstance(old[2], list) and type(old[4]) is int):
         pid = name.split("-")[1]
-        ok, tool = False, ""
+        ok, tool, cmd, cwd = False, "", [], ""
         try:
             argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
             cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
             i = next(k for k, a in enumerate(argv) if os.path.basename(a) in REMOTE_TOOLS)
             tool = os.path.basename(argv[i])
+            cmd = [a for a in argv[i:] if a]
             # The tool on PATH (cargo also from ~/.cargo/bin), not a copy only this machine has.
             plain = argv[i] == tool or (tool == "cargo" and argv[i] == str(HOME / ".cargo/bin/cargo"))
             ok = (
@@ -859,10 +883,30 @@ def remote_ok(st, job, now):
             )
         except (OSError, StopIteration, ValueError):
             pass
-        seen[name] = [ok, pinned_toolchain(cwd) if ok and tool == "cargo" else ""]
-    ok, pin = seen[name]
+        seen[name] = [ok, pinned_toolchain(cwd) if ok and tool == "cargo" else "", cmd, str(cwd), 0]
+    entry = seen[name]
+    ok, pin = entry[0], entry[1]
     # A pinned toolchain must be installed on the worker; the runner refuses it otherwise.
-    return ok and (pin == "" or pin in worker_toolchains(st))
+    marked = ok and (pin == "" or pin in worker_toolchains(st))
+    if marked and not entry[4]:
+        entry[4] = int(now)
+    return marked
+
+
+def current_marks(st, queue, now):
+    """The marked waiting jobs, in queue order, in the marks file format."""
+    worker = next((w.get("name", "") for w in st.get("remote", {}).get("workers", []) if not w.get("frozen")), "")
+    seen = st.get("remoteOk", {})
+    marks = []
+    for j in queue:
+        entry = seen.get(j[0])
+        if not (isinstance(entry, list) and len(entry) >= 5 and remote_ok(st, j, now)):
+            continue
+        marks.append({
+            "job": j[0], "worker": worker, "class": j[4], "cwd": entry[3], "argv": entry[2],
+            "session": j[7], "lane": j[5], "waited_s": int(now - j[1]), "since": entry[4],
+        })
+    return marks
 
 
 def build(st, now, ow):
@@ -1001,6 +1045,7 @@ def build(st, now, ow):
         {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), **owner(j[5], j[9])}
         for j in queue[:QUEUE_SHOWN]
     ]
+    write_marks(st, current_marks(st, queue, now), now)
     waiting_ids = {j[0] for j in queue}
     for name in [n for n in st.get("remoteOk", {}) if n not in waiting_ids]:
         del st["remoteOk"][name]
