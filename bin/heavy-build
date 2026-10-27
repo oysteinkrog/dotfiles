@@ -27,6 +27,10 @@
 #   (default 12), or HEAVY_BUILD_SOLO_MEM_GIB (default 8) when no build runs.
 #   Outside the monorepo (HEAVY_BUILD_MONOREPO, default ~/work/desktop) that
 #   solo floor is at most the estimate rounded up plus 1 GiB (see solo_need).
+#   Idle start: when no build runs and the pressure level is normal, the
+#   first build may also start under that floor if its estimate is at most
+#   MemAvailable plus the swap headroom (see live mode), once CPU pressure
+#   has settled (builds of 2 cores or more). Logged as event=idle-start.
 # - A build scope left over from a killed heavy-build counts as a used slot.
 # - The budget rule below runs beside it and only logs what it would decide,
 #   to ~/.local/state/heavy-build/shadow.log. One line each time its decision
@@ -68,7 +72,8 @@
 #   (default 25) of SwapFree, at most HEAVY_BUILD_SWAP_HEADROOM_GIB (default
 #   8), counts as available here and in the critical-first check, and the
 #   reason says "+<GiB> swap headroom". It is never added when the pressure is
-#   higher or cannot be read, and not for the first build (the solo rule).
+#   higher or cannot be read, and not for the first build (the solo rule)
+#   except through the idle start below.
 #   The swap room and pressure gates below still apply. On the night to
 #   2026-10-20 builds waited 3004 times for memory with memory pressure near
 #   0 and about 64 GiB of zram swap free. Either setting at 0 turns it off;
@@ -114,7 +119,13 @@
 # (HEAVY_BUILD_MONOREPO) keeps the full HEAVY_BUILD_SOLO_MEM_GIB, since big
 # unseen tests are likely there. At pressure level
 # slow or pause that shortcut is off: the first build needs every test above
-# too. Order is priority, then
+# too. Idle start: when no build runs, the level is normal and MemAvailable
+# is under that floor, a build whose estimate is at most MemAvailable plus
+# the swap headroom may start once CPU pressure has settled (the two CPU
+# pressure checks above, for builds of 2 cores or more); its reason starts
+# "idle-start:". On 2026-10-26 23:27 to 23:38 a 7.8 GiB build waited with
+# 7.0 GiB available and nothing running, and 10 builds waited behind it.
+# Order is priority, then
 # arrival. A build whose lock key is busy is skipped and keeps its place.
 # Writer preference: no build with a tree:<top>#<suffix> key that is behind
 # the first waiter with the plain key tree:<top> in order starts until the
@@ -1952,6 +1963,29 @@ active_build_scopes() {
   echo "$n"
 }
 
+# The idle start for the old rule, as why_not has it for the budget rule: with
+# no build running, at pressure level normal, a build whose estimate is at
+# most MemAvailable plus the swap headroom may start under the solo floor,
+# once CPU pressure has settled (builds of 2 cores or more). The caller checks
+# that no build runs. Sets idle_why and returns 0 when it applies.
+idle_start_ok() {
+  idle_why=
+  pressure_level
+  [[ $plevel == normal ]] || return 1
+  psi_watch
+  if awk -v c="$est_cores" 'BEGIN { exit !(c >= 2) }' && (( cpu_quiet < CPU_PSI_SECS )); then return 1; fi
+  idle_why=$(awk -v m="$est_mem" -v pct="$SWAP_HEADROOM_PCT" -v cap="$SWAP_HEADROOM_GIB" -v psif="$PROC/pressure/memory" '
+    /^MemAvailable:/ { av = $2 / 1048576 } /^SwapFree:/ { sf = $2 / 1048576 }
+    END {
+      a10 = -1; a60 = -1
+      while ((getline l < psif) > 0) if (l ~ /^some /) { split(l, f, " "); split(f[2], b, "="); split(f[3], c, "="); a10 = b[2] + 0; a60 = c[2] + 0 }
+      swx = 0
+      if (pct > 0 && cap > 0 && sf > 0 && a10 >= 0 && a10 < 1.0 && a60 >= 0 && a60 < 1.0) { swx = sf * pct / 100; if (swx > cap) swx = cap }
+      if (m + 0 <= av + swx) printf "idle-start: no builds running, est %.1f <= avail %.1f + swap %.1f", m, av, swx
+    }' "$MEMINFO" 2>/dev/null)
+  [[ -n $idle_why ]]
+}
+
 # Start time of a process (field 22 of /proc/PID/stat), to tell a live waiter
 # from a new process that got the same pid.
 proc_start() {
@@ -2438,7 +2472,17 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh,   sn) {
   # tests below. Idle builds are not counted in nrun, but while one runs the
   # full tests still apply, since it may use CPU again. For a starving head
   # (untsolo set by the walk) running untracked scopes do not count here.
-  sn = solo_of(i)
+  sn = solo_of(i); idlewhy[i] = ""
+  # Idle start: with no build running and pressure level normal, a build
+  # whose estimate is at most MemAvailable plus the swap headroom may start
+  # under the solo floor, once CPU pressure has settled. On 2026-10-26 a
+  # 7.8 GiB head waited 11 min with 7.0 GiB available and nothing running.
+  if (nrun - untsolo <= 0 && T_idle == 0 && av < sn && plevel == "normal" && w_mem[i] <= av + swx) {
+    if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
+    if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
+    idlewhy[i] = sprintf("idle-start: no builds running, est %.1f <= avail %.1f + swap %.1f", w_mem[i], av, swx)
+    return ""
+  }
   if (nrun - untsolo <= 0 && T_idle == 0 && av < sn) return sprintf("memory: %.1f GiB available, the first build needs %d", av, sn)
   if (nrun - untsolo <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
@@ -2665,7 +2709,7 @@ END {
       untsolo = (starvefix && st) ? T_unt : 0
       r = why_not(i, T_n, T_cpu, T_tc, T_held, avail, T_high)
       if (r == "") r = cf_why(i, T_nc, T_tc, avail)
-      if (r == "") { pick(i); why[i] = (untsolo > 0 && T_n - T_unt <= 0) ? "fits: no tracked build runs, and untracked scopes do not hold back a build that has waited this long" : "fits: next in order"; untsolo = 0; continue }
+      if (r == "") { pick(i); why[i] = (idlewhy[i] != "") ? idlewhy[i] : (untsolo > 0 && T_n - T_unt <= 0) ? "fits: no tracked build runs, and untracked scopes do not hold back a build that has waited this long" : "fits: next in order"; untsolo = 0; continue }
       # A low build that does not fit is never the head (lownostarve=1): it
       # sets no starve and no backfill limit, and the next build that does
       # not fit becomes the head instead. On 2026-10-26 a theme low Wine test
@@ -2734,7 +2778,7 @@ END {
     # The pressure level holds this build whatever reason is shown (a swap or
     # interactive gate may come first), so the clock does not run.
     if (!picked[i] && pressure_why(i) != "") ph = 1
-    if (picked[i] && swx > 0) why[i] = why[i] swxnote
+    if (picked[i] && swx > 0 && why[i] !~ /idle-start:/) why[i] = why[i] swxnote
     if (idlerun != "") why[i] = why[i] " (idle, not counted as a job or a high build: " idlerun ")"
     printf "%s\t%d\t%s\t%s\t%d\t%s\n", (picked[i] ? "start" : "wait"), o, why[i], untracked, ph, capinfo
     exit
@@ -3485,9 +3529,10 @@ else
       else
         mem=$(mem_avail_gib)
         room=$(swap_room_gib)
-        need=$MIN_MEM_GIB
-        (( $(active_build_scopes) == 0 )) && need=$solo_need
-        if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )); then
+        need=$MIN_MEM_GIB nscopes=$(active_build_scopes)
+        (( nscopes == 0 )) && need=$solo_need
+        idle_why=
+        if [[ $mem =~ ^[0-9]+$ ]] && (( mem < need )) && ! { (( nscopes == 0 )) && idle_start_ok; }; then
           why="only ${mem} GiB of memory is available; a build starts at ${need} GiB"
         elif [[ $room =~ ^-?[0-9]+$ ]] && (( room < MIN_SWAP_ROOM_GIB )); then
           why="swap is nearly full (${room} GiB left before 90% of swap is used, need ${MIN_SWAP_ROOM_GIB})"
@@ -3507,6 +3552,7 @@ else
       oldwhy=${why:-}
       decide
       if [[ -n $started ]]; then
+        [[ -n $idle_why ]] && log_line "event=idle-start actual=start reason=\"$idle_why\" pressure=$plevel est=${est_mem}G/${est_cores}c prio=$PRIO keys=$keys_csv cmd=\"$cmdline\""
         log_decision start
         break
       fi
