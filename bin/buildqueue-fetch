@@ -680,6 +680,108 @@ def on_path(cmd):
     return any(os.access(os.path.join(d, cmd), os.X_OK) for d in os.environ.get("PATH", "").split(":") if d) or os.access(HOME / "bin" / cmd, os.X_OK)
 
 
+# Remote jobs: builds sent to another machine with `job run --on WORKER` (the job system).
+# heavy-build does not see them, so they come from the job tool's own log and status.
+REMOTE_LOG = HOME / ".local/state/jobd/remote.log"
+REMOTE_EVERY_S = 60
+REMOTE_RE = re.compile(r"(\w+)=(\S+)")
+
+
+def job_tool():
+    import shutil
+
+    found = shutil.which("job")
+    if found:
+        return found
+    path = HOME / "projects/job-system/bin/job"
+    return str(path) if path.exists() else ""
+
+
+def update_remote(st, now):
+    """Read new lines of the remote log: one start and one end line per remote job."""
+    r = st.setdefault("remote", {"offset": 0, "jobs": {}, "workers": [], "at": 0})
+    try:
+        size = REMOTE_LOG.stat().st_size
+    except OSError:
+        return r
+    if size < r["offset"]:
+        r["offset"] = 0
+    if size > r["offset"]:
+        with REMOTE_LOG.open("rb") as f:
+            f.seek(r["offset"])
+            chunk = f.read()
+        end = chunk.rfind(b"\n") + 1
+        r["offset"] += end
+        for line in chunk[:end].decode("utf-8", "replace").splitlines():
+            head, _, rest = line.partition(" ")
+            f = dict(REMOTE_RE.findall(rest))
+            attempt = f.get("attempt")
+            if not attempt:
+                continue
+            try:
+                import datetime
+
+                at = datetime.datetime.strptime(head, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+            except ValueError:
+                at = now
+            job = r["jobs"].setdefault(attempt, {"worker": f.get("worker", "")})
+            if f.get("event") == "start":
+                job.update(start=at, cwd=f.get("cwd", ""), argv0=f.get("argv0", ""))
+            elif f.get("event") == "end":
+                job.update(end=at, exit=int(f.get("exit", "1")) if f.get("exit", "").lstrip("-").isdigit() else 1)
+    for attempt in [a for a, j in r["jobs"].items() if j.get("end", now) < now - HOUR or j.get("start", now) < now - DAY]:
+        del r["jobs"][attempt]
+    if now - r["at"] >= REMOTE_EVERY_S:
+        r["at"] = now
+        r["workers"] = []
+        tool = job_tool()
+        if tool:
+            import subprocess
+
+            try:
+                out = subprocess.run([tool, "status"], capture_output=True, text=True, timeout=8).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            for line in out.splitlines():
+                name, _, body = line.partition(" ")
+                try:
+                    r["workers"].append({"name": name, **json.loads(body)})
+                except ValueError:
+                    pass
+    return r
+
+
+def remote_view(r, now, owner):
+    jobs = sorted(r["jobs"].items(), key=lambda kv: kv[1].get("start", 0))
+    running = [
+        {"worker": j["worker"], "project": os.path.basename(j.get("cwd", "")) or "(none)", "cmd": j.get("argv0", ""),
+         "age": int(now - j.get("start", now)), **owner(os.path.basename(j.get("cwd", "")))}
+        for _, j in jobs if "end" not in j and "start" in j
+    ]
+    done = [j for _, j in jobs if "end" in j and j["end"] > now - HOUR]
+    workers = []
+    for w in r["workers"]:
+        lim = w.get("limits") or {}
+        cpu = str(lim.get("CPUQuota", "")).rstrip("%")
+        workers.append({
+            "name": w.get("name", ""),
+            "memAvailGib": w.get("mem_avail_gib"),
+            "load": w.get("load1"),
+            "cpus": w.get("cpus"),
+            "active": bool(w.get("active")),
+            "frozen": bool(w.get("frozen")),
+            "threads": int(cpu) // 100 if cpu.isdigit() else None,
+            "memHigh": lim.get("MemoryHigh", ""),
+            "running": len(w.get("running") or []),
+        })
+    return {
+        "workers": workers,
+        "running": running,
+        "ok": sum(1 for j in done if j.get("exit") == 0),
+        "failed": sum(1 for j in done if j.get("exit") != 0),
+    }
+
+
 def build(st, now, ow):
     update_live(st, now)
     update_history(st, now)
@@ -866,6 +968,7 @@ def build(st, now, ow):
         "limits": limits(conf),
         "theme": theme(st, now),
         "panelTheme": panel_theme(st),
+        "remote": remote_view(update_remote(st, now), now, owner),
     }
 
 
