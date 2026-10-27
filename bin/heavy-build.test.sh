@@ -785,7 +785,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
       -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v monorepo="${ADM_MONOREPO:-}" -v minswap=10 -v warm="${ADM_WARM:-120}" -v idlesecs="${ADM_IDLESECS:-0}" -v idlemilli="${ADM_IDLEMILLI:-100}" -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
-      -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
+      -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
       -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" "$ADMIT_AWK" \
@@ -1222,7 +1222,7 @@ scpu() {  # usage_usec samples-lines... ; prints "slice_cores slice_win lines-ke
     mkdir -p "$BSLICE" "$CPUDIR"
     printf 'usage_usec %s\nuser_usec 0\n' "$1" > "$BSLICE/cpu.stat"; shift
     if (( $# )); then printf '%s\n' "$@" > "$CPUDIR/builds.slice.samples"; else rm -f "$CPUDIR/builds.slice.samples"; fi
-    eval "$(sed -n '/^now_us()/p;/^slice_cpu()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^now_us()/p;/^cg_cpu()/,/^}/p;/^slice_cpu()/,/^}/p' "$HB")"
     now_us() { echo 1000000000000000; }
     slice_cpu
     printf '%s %s %s' "${slice_cores:--}" "$slice_win" "$(wc -l < "$CPUDIR/builds.slice.samples")"
@@ -1238,7 +1238,91 @@ out=$(scpu 5000000000 "$(( 1000000000000000 - 200000000 )) 1000000000" "$(( 1000
 check "slice cpu: a sample over 120 s old is dropped; 200 s over 40 s is 5 cores (got '$out')" '[[ $out == "5.00 40 2" ]]'
 out=$(scpu 5000000000 "$(( 1000000000000000 - 60000000 )) 6000000000")
 check "slice cpu: a sample with more usage than now (counter reset) is dropped (got '$out')" '[[ $out == "- 0 1" ]]'
-check "slice cpu: the samples file is written with a temp file and mv" 'sed -n "/^slice_cpu()/,/^}/p" "$HB" | grep -q "mv -f \"\$f.\$\$\" \"\$f\""'
+check "slice cpu: the samples file is written with a temp file and mv" 'sed -n "/^cg_cpu()/,/^}/p" "$HB" | grep -q "mv -f \"\$f.\$\$\" \"\$f\""'
+
+# jobs.slice (jobw) CPU counts as outside load in the cores check.
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=4.00 ADM_JOBSCPU=18.00 adm 0000000999000000000-1-n 0 1 12)
+check "jobs cpu: 4 cores in builds.slice plus 18 in jobs.slice leaves no room for 8 (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 in use (builds.slice used 4.0 over the last 30 s, plus 0.0 for builds that started recently, plus 18.0 for jobs.slice)|0" ]]'
+out=$(printf '%s\n' "$RUN_C_OLD" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=4.00 ADM_JOBSCPU=0.00 adm 0000000999000000000-1-n 0 1 12)
+check "jobs cpu: a frozen jobs.slice (0 cores) holds nothing back (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_8C" | ADM_JOBSCPU=20.00 adm 0000000999000000000-1-n 0 1 12)
+check "jobs cpu: without real use, 2 charged plus 20 for jobs.slice holds an 8-core build (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 are charged (20.0 of them jobs.slice)|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_8C" | ADM_JOBSCPU= adm 0000000999000000000-1-n 0 1 12)
+check "jobs cpu: no jobs.slice reading counts 0 (got '$out')" '[[ $out == start\|fits:* ]]'
+
+jn=0
+jcpu() {  # freeze usage_usec samples-lines... ; prints "jobs_cores jobs_win"
+  (
+    USVC=$A/jc$jn; JSLICE=$USVC/jobs.slice; CPUDIR=$A/jc$jn/cpu; JOBS_CPU_SECS=60
+    mkdir -p "$JSLICE" "$CPUDIR"
+    echo "$1" > "$JSLICE/cgroup.freeze"; shift
+    printf 'usage_usec %s\n' "$1" > "$JSLICE/cpu.stat"; shift
+    if (( $# )); then printf '%s\n' "$@" > "$CPUDIR/jobs.slice.samples"; fi
+    eval "$(sed -n '/^now_us()/p;/^cg_cpu()/,/^}/p;/^jobs_cpu()/,/^}/p' "$HB")"
+    now_us() { echo 1000000000000000; }
+    jobs_cpu
+    printf '%s %s' "${jobs_cores:--}" "$jobs_win"
+  )
+}
+jn=1; out=$(jcpu 0 5000000000 "$(( 1000000000000000 - 60000000 )) 4640000000")
+check "jobs cpu: 360 s of CPU over 60 s is 6 cores (got '$out')" '[[ $out == "6.00 60" ]]'
+jn=2; out=$(jcpu 0 5000000000 "$(( 1000000000000000 - 30000000 )) 4640000000")
+check "jobs cpu: a 30 s old sample is under the 60 s window, so no reading (got '$out')" '[[ $out == "- 0" ]]'
+jn=3; out=$(jcpu 1 5000000000 "$(( 1000000000000000 - 60000000 )) 4640000000")
+check "jobs cpu: a frozen slice counts 0 cores (got '$out')" '[[ $out == "0.00 60" ]]'
+out=$(USVC=$A/nousvc; JSLICE=$USVC/jobs.slice; eval "$(sed -n '/^jobs_cpu()/,/^}/p' "$HB")"; jobs_cpu; printf '%s %s' "${jobs_cores:--}" "$jobs_win")
+check "jobs cpu: no jobs.slice gives no reading (got '$out')" '[[ $out == "- 0" ]]'
+
+# jobs_reclaim: a frozen jobs.slice over 1 GiB is moved to swap, at most once
+# per gap. Each case uses its own dir $A/jr<n>.
+jrec() {  # dir freeze memory.current ; runs jobs_reclaim against dir ; prints memory.reclaim
+  (
+    D=$1; shift
+    JSLICE=$D/jobs.slice JRECLAIM=$D/run/heavy-build.jobs-reclaim STATE=$D/state MODE=live jobid=t
+    JOBS_RECLAIM=${JR_ON:-1} JOBS_RECLAIM_GAP_SECS=120 JOBS_RECLAIM_TIMEOUT=${JR_TIMEOUT:-20}
+    mkdir -p "$JSLICE" "$D/run"
+    echo "$1" > "$JSLICE/cgroup.freeze"; echo "$2" > "$JSLICE/memory.current"
+    [[ -e $JSLICE/memory.reclaim ]] || : > "$JSLICE/memory.reclaim"
+    eval "$(sed -n '/^log_line()/,/^}/p;/^jobs_reclaim()/,/^}/p' "$HB")"
+    jobs_reclaim
+    [[ -f $JSLICE/memory.reclaim ]] && cat "$JSLICE/memory.reclaim" 2>/dev/null
+    return 0
+  )
+}
+G4=$(( 4 * 1073741824 )) M512=536870912
+out=$(jrec "$A/jr1" 1 $G4)
+check "jobs reclaim: frozen with 4 GiB asks for 4 GiB minus 512 MiB (got '$out')" '[[ $out == $(( G4 - M512 )) ]]'
+check "jobs reclaim: logs event=jobs-reclaim with before and after" 'grep -q "event=jobs-reclaim before=$G4 after=$G4 requested=$(( G4 - M512 )) result=done rc=0" "$A/jr1/state/live.log"'
+: > "$A/jr1/jobs.slice/memory.reclaim"
+out=$(jrec "$A/jr1" 1 $G4)
+check "jobs reclaim: a second try inside 120 s writes nothing (got '$out')" '[[ -z $out ]] && (( $(grep -c event=jobs-reclaim "$A/jr1/state/live.log") == 1 ))'
+echo $(( EPOCHSECONDS - 121 )) > "$A/jr1/run/heavy-build.jobs-reclaim"
+out=$(jrec "$A/jr1" 1 $(( 3 * 1073741824 )))
+check "jobs reclaim: after 120 s it tries again (got '$out')" '[[ $out == $(( 3 * 1073741824 - M512 )) ]]'
+out=$(jrec "$A/jr2" 0 $G4)
+check "jobs reclaim: a slice that is not frozen is left alone (got '$out')" '[[ -z $out && ! -e $A/jr2/state/live.log ]]'
+out=$(jrec "$A/jr3" 1 1073741824)
+check "jobs reclaim: a frozen slice at 1 GiB or less is left alone (got '$out')" '[[ -z $out && ! -e $A/jr3/state/live.log ]]'
+out=$(JR_ON=0 jrec "$A/jr4" 1 $G4)
+check "jobs reclaim: HEAVY_BUILD_JOBS_RECLAIM=0 turns it off (got '$out')" '[[ -z $out && ! -e $A/jr4/state/live.log ]]'
+out=$( (JSLICE=$A/jr5/none JRECLAIM=$A/jr5/x STATE=$A/jr5/state MODE=live jobid=t JOBS_RECLAIM=1
+  eval "$(sed -n '/^jobs_reclaim()/,/^}/p' "$HB")"; jobs_reclaim; echo "rc=$?") )
+check "jobs reclaim: no jobs.slice is a quiet no-op (got '$out')" '[[ $out == rc=0 && ! -e $A/jr5/state/live.log ]]'
+# A write that blocks (a FIFO with no reader) ends at the timeout and counts as done.
+mkdir -p "$A/jr6/jobs.slice"; mkfifo "$A/jr6/jobs.slice/memory.reclaim"
+t0=$SECONDS
+out=$(JR_TIMEOUT=1 jrec "$A/jr6" 1 $G4)
+took=$(( SECONDS - t0 ))
+check "jobs reclaim: a blocked write ends at the timeout (took ${took}s)" '(( took <= 8 ))'
+check "jobs reclaim: the timeout is logged as result=timeout" 'grep -q "event=jobs-reclaim .*result=timeout rc=124" "$A/jr6/state/live.log"'
+# A write the kernel refuses (as at memory.swap.max) is an error and counts as done.
+mkdir -p "$A/jr7/jobs.slice"; : > "$A/jr7/jobs.slice/memory.reclaim"; chmod 444 "$A/jr7/jobs.slice/memory.reclaim"
+if (( EUID == 0 )); then echo "skip: jobs reclaim write error (running as root)"; else
+  out=$(jrec "$A/jr7" 1 $G4; echo "rc=$?")
+  check "jobs reclaim: a failed write returns 0 and logs result=error (got '$out')" '[[ $out == rc=0 ]] && grep -q "event=jobs-reclaim .*result=error rc=1" "$A/jr7/state/live.log"'
+fi
+chmod 644 "$A/jr7/jobs.slice/memory.reclaim"
+check "jobs reclaim: the main loop calls it after a memory or pressure wait" 'grep -q "^      \[\[ \$dec == wait && ( \$why == memory:\* || \$why == pressure:\* ) \]\] && jobs_reclaim$" "$HB"'
 
 # Settings: defaults, the config file, and the environment over the file.
 rconf() {  # var... ; prints their values after read_conf
@@ -2683,6 +2767,28 @@ mkdir -p "$b"; echo "populated 1" > "$b/cgroup.events"
 hbe HEAVY_BUILD_WAIT=3 -- true
 wait "$hbpid"; rc=$?
 check "old rule idle start: one build running, the old 12 GiB floor is unchanged (rc $rc)" '(( rc == 75 )) && grep -q "only 3 GiB of memory is available; a build starts at 12 GiB" "$T/out" && ! grep -q "event=idle-start" "$T/state/heavy-build/shadow.log"'
+teardown2
+
+# Live mode end to end: a build waiting on memory reclaims a frozen jobs.slice once.
+setup2
+printf 'HEAVY_BUILD_MODE=live\n' > "$T/config/heavy-build.conf"
+printf 'MemTotal: %d kB\nMemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 32 * 1048576 )) $(( 2 * 1048576 )) > "$T/proc/meminfo"
+j=$T/cg/user.slice/user-$UID.slice/user@$UID.service/jobs.slice
+mkdir -p "$j"; echo 1 > "$j/cgroup.freeze"; echo $(( 9 * 1073741824 )) > "$j/memory.current"; : > "$j/memory.reclaim"
+printf 'usage_usec 1000\n' > "$j/cpu.stat"
+hbe HEAVY_BUILD_WAIT=3 -- true
+wait "$hbpid"; rc=$?
+check "live jobs reclaim: waits on memory and gives up with 75 (rc $rc)" '(( rc == 75 )) && grep -q "decision=wait reason=\"memory:" "$T/state/heavy-build/live.log"'
+check "live jobs reclaim: wrote 9 GiB minus 512 MiB to jobs.slice/memory.reclaim" '[[ $(cat "$j/memory.reclaim") == $(( 9 * 1073741824 - 536870912 )) ]]'
+check "live jobs reclaim: logged once in 3 s of waiting" '(( $(grep -c "event=jobs-reclaim before=$(( 9 * 1073741824 ))" "$T/state/heavy-build/live.log") == 1 ))'
+teardown2
+setup2
+printf 'HEAVY_BUILD_MODE=live\n' > "$T/config/heavy-build.conf"
+j=$T/cg/user.slice/user-$UID.slice/user@$UID.service/jobs.slice
+mkdir -p "$j"; echo 1 > "$j/cgroup.freeze"; echo $(( 9 * 1073741824 )) > "$j/memory.current"; : > "$j/memory.reclaim"
+hbe -- true
+wait "$hbpid"; rc=$?
+check "live jobs reclaim: a build with room starts and reclaims nothing (rc $rc)" '(( rc == 0 )) && [[ ! -s $j/memory.reclaim ]] && ! grep -q event=jobs-reclaim "$T/state/heavy-build/live.log"'
 teardown2
 
 # --help: no chained build in an example, no background-shell advice.
