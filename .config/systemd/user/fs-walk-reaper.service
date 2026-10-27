@@ -6,10 +6,10 @@ Documentation=file://%h/bin/fs-walk-reaper
 # Scans /proc every 10 s and stops only search processes that walk /, ~, /home, /var,
 # /var/tmp or /var/tmp/claude and are over 20 s old (SIGTERM, SIGKILL 5 s later).
 # Log: ~/.local/state/fs-walk-reaper/log. Allow list: ~/.config/fs-walk-reaper/allow.
-# Dry run (log only) is DRY_RUN=1 below. Turn off: systemctl --user disable --now fs-walk-reaper.
+# Live. For a dry run (log only) set DRY_RUN=1 below. Turn off: systemctl --user disable --now fs-walk-reaper.
 Slice=background.slice
 Type=simple
-Environment=DRY_RUN=1
+Environment=DRY_RUN=0
 ExecStartPre=/usr/bin/python3 %h/bin/fs-walk-reaper.test.py
 ExecStart=/usr/bin/python3 %h/bin/fs-walk-reaper
 Restart=always
