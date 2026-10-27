@@ -129,6 +129,9 @@ fine.
 - Never let Wine make a fresh prefix. It lacks the `windows.storage.applicationdata`
   override from `setup-prefix.sh`, and every SQLite test then fails in setup.
 - Two lanes never share one prefix.
+- A plain `build.sh build --target wine` takes no Wine lock key, since it only compiles
+  and copies files and never starts Wine. Chain it with anything that runs Wine, or use
+  `build.sh test`, and it waits on the prefix key again.
 
 Headless MotionCatalyst has its own rules for display, prefix and memory: load the
 `headless-app-ui` skill. Start a headless MC through
