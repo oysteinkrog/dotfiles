@@ -9,6 +9,9 @@
 #   heavy-build bash -c 'cd sub && cargo test'
 #   (one heavy command per call: cargo test builds what it needs, so do not
 #   chain `cargo build && cargo test` in one heavy-build call)
+#   A bare status, list, help, queue, ls or cancel is refused with exit 2:
+#   there are no subcommands. See the queue with `heavy-build-prio list` or
+#   ~/.local/state/heavy-build/live.log. `heavy-build -- ls` runs ls.
 #
 # There are two admission rules. ~/.config/heavy-build.conf picks one with the
 # line HEAVY_BUILD_MODE=shadow (the default) or HEAVY_BUILD_MODE=live. Only that
@@ -197,6 +200,12 @@
 # - Pace: one normal or low start per 15 s above 16 GiB free, per 30 s from
 #   10 to 16 GiB, per 60 s under 10 GiB. This takes the place of the slow
 #   level's gap; the pause level still holds normal and low builds.
+#   No pace at all while MemAvailable, minus what young builds are still
+#   expected to take (builds started in the same walk too), is at least
+#   HEAVY_BUILD_MC_TARGET_GIB plus HEAVY_BUILD_MC_FREE_GIB (default 12, so
+#   18 GiB); the memory test, the brake and the fall rule still apply. 0
+#   turns this off. From 01:26 to 08:45 on 2026-10-27 the 15 s pace gave
+#   1,435 waits with 18 GiB or more free, and the queue sat idle.
 # - Samples ("epoch pswpin MemAvailable_kB harm") live in
 #   $XDG_RUNTIME_DIR/heavy-build.cpu/mem.samples, shared by every waiter.
 # Pressure level: pressure-coordinator.service writes
@@ -610,6 +619,7 @@ fi
 CLASS_ARG=${HEAVY_BUILD_CLASS:-}
 READY_FILE=${HEAVY_BUILD_READY_FILE:-}
 WAIT_TIMEOUT=${HEAVY_BUILD_WAIT_TIMEOUT:-}
+dashdash=0
 while (( $# )); do
   case $1 in
     --class) (( $# >= 2 )) || { echo "heavy-build: --class needs a value" >&2; exit 2; }; CLASS_ARG=$2; shift 2 ;;
@@ -618,12 +628,23 @@ while (( $# )); do
     --ready-file=*) READY_FILE=${1#--ready-file=}; shift ;;
     --wait-timeout) (( $# >= 2 )) || { echo "heavy-build: --wait-timeout needs seconds" >&2; exit 2; }; WAIT_TIMEOUT=$2; shift 2 ;;
     --wait-timeout=*) WAIT_TIMEOUT=${1#--wait-timeout=}; shift ;;
-    --) shift; break ;;
+    --) shift; dashdash=1; break ;;
     -*) echo "heavy-build: unknown option '$1'. Put -- before a command that starts with '-'. To see the queue, read ~/.local/state/heavy-build/live.log" >&2; exit 2 ;;
     *) break ;;
   esac
 done
 if (( $# < 1 )); then echo "heavy-build: no command given" >&2; exit 2; fi
+# A bare status, list, help, queue, ls or cancel is a question about the
+# queue, not a build. On 2026-10-27 `heavy-build status` queued a job whose
+# command was just `status`, and it held a slot for 139 min. Refused with
+# exit 2 unless the command comes after --, or has arguments or a path.
+if (( $# == 1 && ! dashdash )); then
+  case $1 in
+    status|list|help|queue|ls|cancel)
+      echo "heavy-build: '$1' is not a build, so nothing was queued. heavy-build only runs commands. For the queue, run heavy-build-prio list or read ~/.local/state/heavy-build/live.log; for the rules, heavy-build --help. To run a program named '$1', use heavy-build -- $1" >&2
+      exit 2 ;;
+  esac
+fi
 if [[ -n $CLASS_ARG && $CLASS_ARG != app-run ]]; then
   echo "heavy-build: --class (HEAVY_BUILD_CLASS) takes only app-run, not '$CLASS_ARG'" >&2
   exit 2
@@ -795,6 +816,7 @@ read_conf() {
   setting HEAVY_BUILD_MC_BRAKE_FULL_PCT 10
   setting HEAVY_BUILD_MC_CALM_SECS 60
   setting HEAVY_BUILD_MC_FALL_GIB 2
+  setting HEAVY_BUILD_MC_FREE_GIB 12
   setting HEAVY_BUILD_AGE_SECS 3600
   setting HEAVY_BUILD_AGE_SLOTS 1
   setting HEAVY_BUILD_CRIT_AGE_SECS 1800
@@ -1273,6 +1295,43 @@ wine_cmd() {
 
 SHARED_WINEPREFIX=$HOME/.local/share/wineprefixes/motioncatalyst
 
+# wine_build_only WORD... -> true when the command is a monorepo
+# `build.sh build ... --target wine` and nothing else that runs Wine. Such a
+# build runs dotnet build for win-x64 and then tools/wine/install-bridges.sh,
+# which sources wine-env.sh and copies bridge files into the build output. It
+# starts no wineserver and does not write the prefix: wine-env.sh only
+# exports WINEPREFIX, and its clone step returns at once for the shared
+# prefix or one that exists (checked in master 6cc95477694, 2026-10-27:
+# tools/BuildCli/Commands/WineBuildCommand.cs, install-bridges.sh,
+# wine-env.sh _mc_clone_prefix). So it needs no wine:<prefix> key. Until
+# 2026-10-27 it took the shared prefix key, and 7 such builds queued behind
+# it overnight. Any other Wine word in the command (wine, wineserver,
+# run-tests.sh, run-mc.sh, a tools/wine/ script), or a second build.sh,
+# keeps the key.
+wine_build_only() {
+  local a w b ws prev= sh= sub= tgt=
+  for a in "$@"; do
+    read -r -d '' -a ws <<< "${a//[;&|()\`]/ }"
+    for w in "${ws[@]}"; do
+      b=${w##*/}
+      # A second build.sh in the command may be a build.sh test: keep the key.
+      if [[ $b == build.sh ]]; then [[ -z $sh ]] || return 1; sh=1
+      elif [[ -n $sh && -z $sub && $w != -* ]]; then sub=$w
+      fi
+      if [[ $w == --target=wine || ( $prev == --target && $w == wine ) ]]; then tgt=1
+      elif [[ $w == wine ]]; then return 1
+      else
+        case ${b,,} in
+          wine|wine64|wineserver|wineboot|winetricks|run-tests.sh|run-mc.sh|headless-mc.sh) return 1 ;;
+        esac
+        [[ $w == tools/wine/* || $w == */tools/wine/* ]] && return 1
+      fi
+      prev=$w
+    done
+  done
+  [[ -n $sh && $sub == build && -n $tgt ]]
+}
+
 # run_tests_prefix TOP WORD...: the prefix a tools/wine/run-tests.sh command
 # will run in, when its script makes its own prefix per worktree (master, and
 # stable/26.1 and 26.2 since PRs #13885/#13886). Prints "own <prefix>" when the
@@ -1317,7 +1376,8 @@ run_tests_prefix() {
 # shares that prefix with another run. The key also turns itself off in a
 # worktree whose wine-env.sh no longer has the shared default, and when a
 # wineserver for the prefix already runs outside builds.slice. It never sets
-# WINEPREFIX.
+# WINEPREFIX. A pure `build.sh build --target wine` gets no key
+# (wine_build_only).
 wine_key() {
   local top=$1 p rt
   shift
@@ -1326,6 +1386,7 @@ wine_key() {
     return 0
   fi
   wine_cmd "$@" || return 0
+  wine_build_only "$@" && return 0
   if rt=$(run_tests_prefix "$top" "$@"); then
     [[ $rt == own\ * ]] && return 0
     p=${rt#set }
@@ -2278,6 +2339,11 @@ function pressure_why(i,   gap) {
       return sprintf("pressure: memory controller brake, %d s ago under %d GiB free with disk swap-in at least %d pages/s or memory full at least %d%%; it waits until %d s calm", mcharmago, mcbrakegib, mcbrakeswapin, mcbrakefull, mccalm)
     if (mcfall > mcfallgib * 1024)
       return sprintf("pressure: memory controller, MemAvailable fell %.1f GiB in the last 15 s, the limit is %d", mcfall / 1024, mcfallgib)
+    # Plenty free: with MemAvailable, minus what young builds (and picks in
+    # this walk) are still expected to take, at least mcfreegib above the
+    # target, there is no gap. The memory test, the brake and the fall rule
+    # still hold.
+    if (mcfreegib > 0 && avail - T_tc >= mctarget + mcfreegib) return ""
     gap = (avail > 16) ? 15 : (avail >= 10) ? 30 : 60
     if (lastnc > 0 && lastnc <= now && now - lastnc < gap)
       return sprintf("pressure: memory controller, %.1f GiB free, one new build per %d s; the last one started %d s ago", avail, gap, now - lastnc)
@@ -2712,7 +2778,7 @@ decide() {
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
     -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
     -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
-    -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcnewfull="$MC_NEW_FULL_SECS" \
+    -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcfreegib="$MC_FREE_GIB" -v mcnewfull="$MC_NEW_FULL_SECS" \
     -v mcbrakegib="$MC_BRAKE_GIB" -v mcbrakeswapin="$MC_BRAKE_SWAPIN" -v mcbrakefull="$MC_BRAKE_FULL_PCT" -v mccalm="$MC_CALM_SECS" -v mcfallgib="$MC_FALL_GIB" \
     -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"

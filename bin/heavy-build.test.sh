@@ -401,7 +401,7 @@ wk() {  # top cmd... ; prints wine_key output; WINEPREFIX etc. come from the cal
     cd "$1" || exit 1
     [[ ${NOPFX:-} == 1 ]] && unset WINEPREFIX
     PROC=$K/proc WINE_TMP=$K/winetmp HOME=$K/home
-    eval "$(sed -n '/^WINE_DEFAULT_LINE=/p;/^SHARED_WINEPREFIX=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_cmd()/,/^}/p;/^run_tests_prefix()/,/^}/p;/^app_prefix()/,/^}/p;/^wine_key()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^WINE_DEFAULT_LINE=/p;/^SHARED_WINEPREFIX=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_cmd()/,/^}/p;/^wine_build_only()/,/^}/p;/^run_tests_prefix()/,/^}/p;/^app_prefix()/,/^}/p;/^wine_key()/,/^}/p' "$HB")"
     wine_key "$@"
   )
 }
@@ -430,6 +430,18 @@ out=$(WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start)
 check "wine key: other Wine commands keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(WINEPREFIX=$SH wk "$K/lane-new" cargo test)
 check "wine key: a non-Wine command gets none (got '$out')" '[[ -z $out ]]'
+out=$(NOPFX=1 wk "$K/lane-old" ./build.sh build --target wine)
+check "wine key: build.sh build --target wine (a compile, no Wine run) gets no wine key (got '$out')" '[[ -z $out ]]'
+out=$(WINEPREFIX=$SH wk "$K/lane-old" bash -c "cd sub && ../build.sh build --config Debug --target=wine")
+check "wine key: same with --target=wine inside bash -c and WINEPREFIX set (got '$out')" '[[ -z $out ]]'
+out=$(NOPFX=1 wk "$K/lane-old" ./build.sh test --target wine)
+check "wine key: build.sh test --target wine keeps the shared default key (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(NOPFX=1 wk "$K/lane-old" bash -c "./build.sh build --target wine && tools/wine/run-mc.sh a")
+check "wine key: a wine build chained with run-mc.sh keeps the key (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(NOPFX=1 wk "$K/lane-old" bash -c "./build.sh build --target wine; wine foo.exe")
+check "wine key: a wine build chained with wine keeps the key (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(NOPFX=1 wk "$K/lane-old" bash -c "./build.sh build --target wine && ./build.sh test --target wine")
+check "wine key: a wine build chained with a second build.sh keeps the key (got '$out')" '[[ $out == "wine:$SH" ]]'
 UI=$K/home/.local/share/wineprefixes/motioncatalyst-ui
 out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" bash -c "tools/wine/headless-mc.sh start hbc --hive /x")
 check "wine key: app run gets its own ui-<name> prefix from headless-mc.sh start, not the shared one (got '$out')" '[[ $out == "wine:$UI-hbc" ]]'
@@ -775,7 +787,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
-      -v memctl="${ADM_MC:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
+      -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
       -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
@@ -1382,6 +1394,12 @@ hbx --ready-file; rc=$?
 check "options: --ready-file needs a path (exit 2, got $rc)" '(( rc == 2 ))'
 hbx --status; rc=$?
 check "options: an unknown option like --status is exit 2, not a queued command (got $rc)" '(( rc == 2 )) && grep -q "unknown option" "$T/out"'
+for word in status list help queue ls cancel; do
+  hbx "$word"; rc=$?
+  check "options: a bare '$word' is exit 2, points to heavy-build-prio list and live.log, queues nothing (got $rc)" '(( rc == 2 )) && grep -q "heavy-build-prio list" "$T/out" && grep -q "live.log" "$T/out" && [[ -z $(ls -A "$T/run/heavy-build.queue" 2>/dev/null) ]]'
+done
+hbx --wait-timeout 5 status; rc=$?
+check "options: a bare status after options is exit 2 too (got $rc)" '(( rc == 2 )) && grep -q "is not a build" "$T/out"'
 rm -rf -- "$T"
 
 # The app-run cap in the admission walk. Running R lines carry the class in
@@ -1701,6 +1719,26 @@ out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999980 ADM_MEMINFO=
 check "memctl on: 13 GiB free, one start per 30 s, the last 20 s ago (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 13.0\ GiB\ free,\ one\ new\ build\ per\ 30\ s* ]]'
 out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999980 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
 check "memctl on: 20 GiB free, one start per 15 s, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+# HEAVY_BUILD_MC_FREE_GIB: no pace while free minus still-to-come >= target + it.
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCFREE=12 ADM_LASTNC=999995 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: 20 GiB free is over 6 + 12, so no pace, the last start 5 s ago (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999995 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: with the setting at 0 the 15 s pace holds it (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 20.0\ GiB\ free,\ one\ new\ build\ per\ 15\ s* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCFREE=12 ADM_LASTNC=999995 ADM_MEMINFO=<(mi 17) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: 17 GiB free is under 18, so the 15 s pace holds (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 17.0\ GiB\ free,\ one\ new\ build\ per\ 15\ s* ]]'
+out=$(printf '%s\n' 'R y1 999970 4 2 1000600 1073741824 - 0 normal -' "$W_1" | ADM_MC=1 ADM_MCFREE=12 ADM_LASTNC=999995 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: 20 free minus 3 still to come for a young build is under 18, so the pace holds (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 20.0\ GiB\ free,\ one\ new\ build\ per\ 15\ s* ]]'
+W2_4='W 0000000999000000000-2-n 999001 normal 4 2 600 -'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_4" "$W2_4" | ADM_MC=1 ADM_MCFREE=12 ADM_MEMINFO=<(mi 30) adm 0000000999000000000-2-n 0 1 12)
+check "memctl free: 30 GiB free, the second of two waiters starts in the same walk (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_4" "$W2_4" | ADM_MC=1 ADM_MCFREE=12 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-2-n 0 1 12)
+check "memctl free: 20 GiB free, the first pick leaves 16, so the second waits for the pace (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 20.0\ GiB\ free,\ one\ new\ build\ per\ 15\ s* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCFREE=12 ADM_MCHARMAGO=30 ADM_MEMINFO=<(mi 30) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: the brake still holds with plenty free (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller\ brake* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_MCFREE=12 ADM_MCFALL=3000 ADM_MEMINFO=<(mi 30) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: the fall rule still holds with plenty free (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ MemAvailable\ fell* ]]'
+out=$(printf '%s\n' "$RUN_OLD4" 'W 0000000999000000000-1-n 999000 normal 50 2 600 -' | ADM_MC=1 ADM_MCFREE=12 ADM_MEMINFO=<(mi 30) adm 0000000999000000000-1-n 0 1 12)
+check "memctl free: the memory test and target still apply (got '$out')" '[[ $out == wait\|memory:\ needs\ 50.0\ GiB* ]]'
 out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_MC=1 ADM_LASTNC=999950 ADM_MEMINFO=<(mi 8) adm 0000000999000000000-1-n 0 1 12)
 check "memctl on: 8 GiB free, one start per 60 s, the last 50 s ago (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller,\ 8.0\ GiB\ free,\ one\ new\ build\ per\ 60\ s* ]]'
 out=$(printf '%s\n' "$RUN_OLD4" "$W_1" | ADM_PLEVEL=slow ADM_LASTNC=999950 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
