@@ -783,7 +783,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v mempsifile="${ADM_MEMPSI:-$A/none}" -v swpct="${ADM_SWPCT:-25}" -v swcap="${ADM_SWCAP:-8}" \
       -v slicemax="${ADM_SLICEMAX:-$A/none}" -v slicehigh="$A/none" -v cpupsifile="${ADM_CPUPSI:-$A/none}" -v claudepsifile="${ADM_CLAUDEPSI:-$A/none}" \
       -v sessionpsifile="${ADM_SESSIONPSI:-$A/none}" -v plevel="${ADM_PLEVEL:-none}" -v preason="${ADM_PREASON:-test reason}" -v lastnc="${ADM_LASTNC:-0}" -v slowgap=120 -v slowfastgap=30 -v slowfastgib=16 -v maxjobs=6 -v cpubudget=28 -v reserve=6 -v maxcpupsi="${ADM_MAXCPUPSI:-75}" -v maxmempsi=5 \
-      -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v monorepo="${ADM_MONOREPO:-}" -v minswap=10 -v warm=120 -v poll=5 -v lowage=1800 -v tcpct=50 \
+      -v starve=1800 -v bfloor="${ADM_BFLOOR:-0}" -v solo=8 -v monorepo="${ADM_MONOREPO:-}" -v minswap=10 -v warm="${ADM_WARM:-120}" -v idlesecs="${ADM_IDLESECS:-0}" -v idlemilli="${ADM_IDLEMILLI:-100}" -v poll=5 -v lowage=1800 -v tcpct=50 \
       -v agesecs=3600 -v ageslots=1 -v critage="${ADM_CRITAGE:-1800}" -v maxapp="${ADM_MAXAPP:-2}" -v cf="$1" -v cfslots="$2" -v cfreserve="$3" \
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
@@ -1105,6 +1105,75 @@ RUN_YCNA='R y1 999995 2 10 1000595 1073741824 - 0 normal -'
 out=$(printf '%s\n' "$RUN_YCNA" "$W_8C" | ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
 check "young cpu: without a 60 s figure the full 10-core estimate counts (12 + 10 + 8 > 28) (got '$out')" '[[ $out == "wait|cores: needs 8.0, 22.0 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 10.0 for builds that started recently)|0" ]]'
 
+# Short warm-up (HEAVY_BUILD_WARMUP_SECS, default 10 since 2026-10-27): a
+# build is charged its full core estimate only for its first warm seconds,
+# then its 60 s average, at least 0.5 cores until it has run 60 s.
+W_16C='W 0000000999000000000-1-n 999000 normal 2 16 600 -'
+RUN_W15='R w1 999985 2 16 1000585 1073741824 2000 0 normal -'
+out=$(printf '%s\n' "$RUN_W15" "$W_16C" | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up 10 s: a 15 s old 16-core build that uses 2 cores is charged 2, so 16 more fit (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_W15" "$W_16C" | ADM_WARM=120 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up 120 s: the same build is charged its full 16 cores (got '$out')" '[[ $out == "wait|cores: needs 16.0, 16.0 of 28 are charged|0" ]]'
+out=$(printf '%s\n' 'R w1 999995 2 16 1000595 1073741824 2000 0 normal -' "$W_16C" | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up 10 s: a 5 s old build is still charged its full 16 cores (got '$out')" '[[ $out == "wait|cores: needs 16.0, 16.0 of 28 are charged|0" ]]'
+out=$(printf '%s\n' 'R w1 999985 2 16 1000585 1073741824 - 0 normal -' "$W_16C" | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up 10 s: a 15 s old build with no 60 s figure is charged its full estimate (got '$out')" '[[ $out == "wait|cores: needs 16.0, 16.0 of 28 are charged|0" ]]'
+RUN_W20LOW='R w1 999980 2 16 1000580 1073741824 100 0 normal -'
+out=$(printf '%s\n' "$RUN_W20LOW" 'W 0000000999000000000-1-n 999000 normal 2 27.5 600 -' | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up floor: a 20 s old build using 0.1 cores is charged 0.5, so 27.5 more fit (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_W20LOW" 'W 0000000999000000000-1-n 999000 normal 2 27.6 600 -' | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up floor: 0.5 + 27.6 is over 28 (got '$out')" '[[ $out == "wait|cores: needs 27.6, 0.5 of 28 are charged|0" ]]'
+out=$(printf '%s\n' 'R w1 999900 2 16 1000500 1073741824 100 0 normal -' 'W 0000000999000000000-1-n 999000 normal 2 27.6 600 -' | ADM_WARM=10 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up floor: after 60 s the floor is 0.25, so 27.6 fits (got '$out')" '[[ $out == start\|fits:* ]]'
+# Real use: a 20 s old build, estimate 16, using 4 cores. Two thirds of the
+# 30 s window are its own, so it adds 4 - 4 * 20 / 30 = 1.3 on top of the 12
+# that builds.slice used.
+RUN_W20='R w1 999980 2 16 1000580 1073741824 4000 0 normal -'
+out=$(printf '%s\n' "$RUN_W20" 'W 0000000999000000000-1-n 999000 normal 2 14 600 -' | ADM_WARM=10 ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up real use: 12 + 1.3 + 14 fits 28 (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_W20" 'W 0000000999000000000-1-n 999000 normal 2 15 600 -' | ADM_WARM=10 ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up real use: 12 + 1.3 + 15 is over 28 (got '$out')" '[[ $out == "wait|cores: needs 15.0, 13.3 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 1.3 for builds that started recently)|0" ]]'
+out=$(printf '%s\n' "$RUN_W20" 'W 0000000999000000000-1-n 999000 normal 2 14 600 -' | ADM_WARM=120 ADM_REALUSE=1 ADM_SLICEAVG=12 adm 0000000999000000000-1-n 0 1 12)
+check "warm-up 120 s real use: the same build adds 16 - 2.7 = 13.3, so 14 waits (got '$out')" '[[ $out == "wait|cores: needs 14.0, 25.3 of 28 in use (builds.slice used 12.0 over the last 30 s, plus 13.3 for builds that started recently)|0" ]]'
+
+# Idle builds (HEAVY_BUILD_IDLE_CPU_SECS, default 60, and
+# HEAVY_BUILD_IDLE_CPU_MILLI, default 100): a build that has run 60 s and
+# used under 0.1 cores over the last 60 s takes no job slot and no cores
+# (a cargo build waiting on "Blocking waiting for file lock"). Its memory
+# still counts.
+idle6() {  # start c60 prio ; prints six R lines
+  local n
+  for n in 1 2 3 4 5 6; do echo "R i$n $1 1 8 1000600 1073741824 $2 0 ${3:-normal} -"; done
+}
+W_2C='W 0000000999000000000-1-n 999000 normal 1 2 600 -'
+out=$( { idle6 999910 50; echo "$W_2C"; } | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: six 90 s old builds using 0.05 cores hold no job slot (got '$out')" '[[ $out == "start|fits: next in order (idle, not counted as a job or a high build: i1,i2,i3,i4,i5,i6)|0" ]]'
+out=$( { idle6 999910 50; echo "$W_2C"; } | ADM_IDLESECS=0 adm 0000000999000000000-1-n 0 1 12)
+check "idle off (0): the same six builds fill the 6 job slots (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$( { idle6 999950 50; echo "$W_2C"; } | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: builds only 50 s old still hold their job slots (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$( { idle6 999910 200; echo "$W_2C"; } | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: builds using 0.2 cores are not idle (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$( { idle6 999910 -; echo "$W_2C"; } | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: builds with no 60 s figure are not idle (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$( { idle6 999910 150; echo "$W_2C"; } | ADM_IDLESECS=60 ADM_IDLEMILLI=200 adm 0000000999000000000-1-n 0 1 12)
+check "idle: HEAVY_BUILD_IDLE_CPU_MILLI=200 counts 0.15 cores as idle (got '$out')" '[[ $out == start\|fits:* ]]'
+RUN_IDLE16='R i1 999910 1 16 1000600 1073741824 50 0 normal -'
+out=$(printf '%s\n' "$RUN_IDLE16" 'W 0000000999000000000-1-n 999000 normal 1 28 600 -' | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: an idle 16-core build is charged no cores, so 28 fit (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_IDLE16" 'W 0000000999000000000-1-n 999000 normal 1 28 600 -' | ADM_WARM=10 ADM_IDLESECS=0 adm 0000000999000000000-1-n 0 1 12)
+check "idle off: the same build is charged 0.25 cores, so 28 wait (got '$out')" '[[ $out == "wait|cores: needs 28.0, 0.2 of 28 are charged|0" ]]'
+out=$(printf '%s\n' "$RUN_IDLE16" 'W 0000000999000000000-1-n 999000 normal 1 28 600 -' | ADM_IDLESECS=60 ADM_REALUSE=1 ADM_SLICEAVG=0.00 adm 0000000999000000000-1-n 0 1 12)
+check "idle real use: an idle build adds nothing for recent starts (got '$out')" '[[ $out == start\|fits:* ]]'
+# Memory: an idle build estimated at 30 GiB that holds 1 GiB is still
+# expected to take 30 * 50% - 1 = 14 GiB more. 40 - 14 - 25 leaves 1 < 6.
+RUN_IDLEMEM='R i1 999910 30 8 1000600 1073741824 50 0 normal -'
+out=$(printf '%s\n' "$RUN_IDLEMEM" 'W 0000000999000000000-1-n 999000 normal 25 2 600 -' | ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "idle: an idle build keeps its memory charge (got '$out')" '[[ $out == "wait|memory: needs 25.0 GiB; 40.0 available, 14.0 still to come for running builds, reserve 6 (idle, not counted as a job or a high build: i1)|0" ]]'
+out=$( { echo 'R h1 999910 1 8 1000600 1073741824 50 0 high -'; echo 'R h2 999910 1 8 1000600 1073741824 50 0 high -'; echo 'W 0000000999000000000-3-h 999000 high 1 2 600 -'; } | ADM_IDLESECS=60 adm 0000000999000000000-3-h 0 1 12)
+check "idle: two idle high builds do not fill the high cap (got '$out')" '[[ $out == start\|fits:* ]]'
+check "idle and warm-up: the settings reach the budget rule" 'grep -qF -- "-v warm=\"\$WARMUP_SECS\" -v idlesecs=\"\$IDLE_CPU_SECS\" -v idlemilli=\"\$IDLE_CPU_MILLI\"" "$HB"'
+
 # Inactive page cache (memory.stat inactive_file) is taken off memory.current
 # when slicestatfile is set (HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE=1).
 mstat() { printf 'anon %d\nfile %d\nactive_file %d\ninactive_file %d\n' 1 2 3 $(( $1 * 1073741824 )) > "$A/$2"; }
@@ -1205,6 +1274,12 @@ check "settings: HEAVY_BUILD_MAX_CPU_PSI in the file still wins over the default
 rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_REAL_USE HEAVY_BUILD_YOUNG_PCT HEAVY_BUILD_YOUNG_MIN_SECS HEAVY_BUILD_SLICE_CPU_SECS; rconf REAL_USE YOUNG_PCT YOUNG_MIN_SECS SLICE_CPU_SECS)
 check "settings: the real-use rule is on by default, young is 70% or 120 s, CPU window 30 s (got '$out')" '[[ $out == "1 70 120 30 " ]]'
+out=$(unset HEAVY_BUILD_WARMUP_SECS HEAVY_BUILD_IDLE_CPU_SECS HEAVY_BUILD_IDLE_CPU_MILLI; rconf WARMUP_SECS IDLE_CPU_SECS IDLE_CPU_MILLI)
+check "settings: warm-up 10 s, idle after 60 s under 100 thousandths of a core by default (got '$out')" '[[ $out == "10 60 100 " ]]'
+printf 'HEAVY_BUILD_WARMUP_SECS=30\nHEAVY_BUILD_IDLE_CPU_SECS=0\n' > "$A/hb.conf"
+out=$(unset HEAVY_BUILD_WARMUP_SECS HEAVY_BUILD_IDLE_CPU_SECS; rconf WARMUP_SECS IDLE_CPU_SECS)
+check "settings: the conf file sets the warm-up and turns idle off (got '$out')" '[[ $out == "30 0 " ]]'
+rm -f "$A/hb.conf"
 out=$(unset HEAVY_BUILD_OWN_EST; rconf OWN_EST)
 check "settings: own-history estimates are on by default (got '$out')" '[[ $out == "1 " ]]'
 out=$(unset HEAVY_BUILD_YOUNG_GROW_PCT; rconf YOUNG_GROW_PCT)
