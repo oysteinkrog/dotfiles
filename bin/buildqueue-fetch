@@ -782,6 +782,42 @@ def remote_view(r, now, owner):
     }
 
 
+# Waiting jobs that could run on a remote worker instead: Linux dotnet builds and tests that
+# use the dotnet on PATH, in a worktree the worker does not have a checkout of. Wine runs, app
+# runs and Windows targets (their output is used here) are never suggested.
+REMOTE_CLASSES = {"dotnet-build", "dotnet-test"}
+REMOTE_MIN_WAIT_S = 10 * 60
+REMOTE_ROOTS = (HOME / "work/desktop", pathlib.Path("/var/tmp/claude"))
+REMOTE_NOT = ("win-x64", "win-x86", "RuntimeIdentifier=win", "wine", "build.sh", "build.cmd")
+
+
+def remote_ok(st, job, now):
+    """Whether a waiting job could go to a remote worker. Checked once per job: its command
+    line and working folder do not change while it waits."""
+    name, submitted, cls = job[0], job[1], job[4]
+    if cls not in REMOTE_CLASSES or now - submitted < REMOTE_MIN_WAIT_S:
+        return False
+    seen = st.setdefault("remoteOk", {})
+    if name not in seen:
+        pid = name.split("-")[1]
+        ok = False
+        try:
+            argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+            cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
+            i = next(k for k, a in enumerate(argv) if os.path.basename(a) == "dotnet")
+            ok = (
+                argv[i] == "dotnet"
+                and argv[i + 1:i + 2] in (["build"], ["test"])
+                and not any(bad in a for a in argv for bad in REMOTE_NOT)
+                and any(cwd.is_relative_to(root) and cwd != root for root in REMOTE_ROOTS)
+                and cwd != HOME / "work/desktop/master"
+            )
+        except (OSError, StopIteration, ValueError):
+            pass
+        seen[name] = ok
+    return seen[name]
+
+
 def build(st, now, ow):
     update_live(st, now)
     update_history(st, now)
@@ -907,7 +943,7 @@ def build(st, now, ow):
         return {"owner": name, "ownerHow": how, "ownerLive": live}
 
     nxt = [
-        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0]), **owner(j[5], j[9])}
+        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), **owner(j[5], j[9])}
         for j in queue[:NEXT_SHOWN]
     ]
     # Every job in the order heavy-build runs it: the running ones, then the queue.
@@ -915,9 +951,12 @@ def build(st, now, ow):
         {"state": "running", "project": b["project"] or "(none)", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], **owner(b["project"], b["owner"])}
         for b in running
     ] + [
-        {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), **owner(j[5], j[9])}
+        {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), **owner(j[5], j[9])}
         for j in queue[:QUEUE_SHOWN]
     ]
+    waiting_ids = {j[0] for j in queue}
+    for name in [n for n in st.get("remoteOk", {}) if n not in waiting_ids]:
+        del st["remoteOk"][name]
     gate = {
         "state": {"pause": "paused", "slow": "slowed", "normal": "open"}.get(level.get("level", ""), "unknown"),
         "since": int(level["since"]) if level.get("since", "").isdigit() else 0,
