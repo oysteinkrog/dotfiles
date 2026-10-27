@@ -14,7 +14,7 @@ Colours: ~/.local/state/os-theme/colors, the theme as a KDE colours file ([Color
          written for "plasma", which means "follow the Plasma style".
 Hooks:   every executable in ~/.config/os-theme/hooks runs after a switch, with the theme name.
 
-For now it also writes ~/.config/desktop-panels/theme, which the panel widgets still read.
+An older choice in ~/.config/desktop-panels/theme is still read when the state file is missing.
 panel-theme is the same command under its old name.
 """
 
@@ -102,7 +102,6 @@ def run_hooks(name):
 
 def switch(name, theme):
     write_atomic(CHOICE, name + "\n")
-    write_atomic(LEGACY_CHOICE, name + "\n")
     if name == "plasma":
         COLOURS.unlink(missing_ok=True)
     else:
