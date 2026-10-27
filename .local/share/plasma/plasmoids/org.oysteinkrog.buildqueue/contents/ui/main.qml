@@ -54,8 +54,8 @@ PlasmoidItem {
     readonly property var remote: q.remote || ({})
     readonly property var remoteRunning: remote.running || []
     readonly property var remoteWorkers: remote.workers || []
-    // The worker to suggest for a job that could run remotely: the first one not frozen.
-    readonly property string remoteTarget: (remoteWorkers.find(w => !w.frozen) || {}).name || ""
+    // The worker to suggest for a job that could run remotely: a Linux worker that is not frozen.
+    readonly property string remoteTarget: remote.target || ""
 
     function remoteHint(job) {
         return remoteTarget !== "" && job.remoteOk === true;
