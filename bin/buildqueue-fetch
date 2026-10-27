@@ -752,7 +752,16 @@ def update_remote(st, now):
 
 
 def remote_view(r, now, owner):
-    jobs = sorted(r["jobs"].items(), key=lambda kv: kv[1].get("start", 0))
+    # A start line with no end line is running, unless the worker's own list says it is not.
+    alive = {
+        (w.get("name", ""), j.get("attempt"))
+        for w in r["workers"] for j in (w.get("running") or []) if isinstance(j, dict) and j.get("alive", True)
+    }
+    asked = {w.get("name", "") for w in r["workers"]}
+    jobs = sorted(
+        ((a, j) for a, j in r["jobs"].items() if j["worker"] not in asked or (j["worker"], a) in alive or "end" in j),
+        key=lambda kv: kv[1].get("start", 0),
+    )
     running = [
         {"worker": j["worker"], "project": os.path.basename(j.get("cwd", "")) or "(none)", "cmd": j.get("argv0", ""),
          "age": int(now - j.get("start", now)), **owner(os.path.basename(j.get("cwd", "")))}
@@ -783,12 +792,23 @@ def remote_view(r, now, owner):
 
 
 # Waiting jobs that could run on a remote worker instead: Linux dotnet builds and tests that
-# use the dotnet on PATH, in a worktree the worker does not have a checkout of. Wine runs, app
-# runs and Windows targets (their output is used here) are never suggested.
-REMOTE_CLASSES = {"dotnet-build", "dotnet-test"}
+# use the dotnet on PATH, and cargo build, check, clippy and test, in a worktree the worker does
+# not have a checkout of. Wine runs, app runs, Windows targets, release builds and installs
+# (their output is used here) are never suggested, nor trees that pin a Rust toolchain.
+REMOTE_CLASSES = {"dotnet-build", "dotnet-test", "cargo-build", "cargo-check", "cargo-clippy", "cargo-test"}
+REMOTE_TOOLS = {"dotnet": ("build", "test"), "cargo": ("build", "check", "clippy", "test")}
 REMOTE_MIN_WAIT_S = 10 * 60
 REMOTE_ROOTS = (HOME / "work/desktop", pathlib.Path("/var/tmp/claude"))
 REMOTE_NOT = ("win-x64", "win-x86", "RuntimeIdentifier=win", "wine", "build.sh", "build.cmd")
+
+
+def pins_toolchain(folder):
+    for d in (folder, *folder.parents):
+        if (d / "rust-toolchain").exists() or (d / "rust-toolchain.toml").exists():
+            return True
+        if (d / ".git").exists():
+            return False
+    return False
 
 
 def remote_ok(st, job, now):
@@ -804,11 +824,16 @@ def remote_ok(st, job, now):
         try:
             argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
             cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
-            i = next(k for k, a in enumerate(argv) if os.path.basename(a) == "dotnet")
+            i = next(k for k, a in enumerate(argv) if os.path.basename(a) in REMOTE_TOOLS)
+            tool = os.path.basename(argv[i])
+            # The tool on PATH (cargo also from ~/.cargo/bin), not a copy only this machine has.
+            plain = argv[i] == tool or (tool == "cargo" and argv[i] == str(HOME / ".cargo/bin/cargo"))
             ok = (
-                argv[i] == "dotnet"
-                and argv[i + 1:i + 2] in (["build"], ["test"])
+                plain
+                and argv[i + 1:i + 2] in [[sub] for sub in REMOTE_TOOLS[tool]]
                 and not any(bad in a for a in argv for bad in REMOTE_NOT)
+                and not (tool == "cargo" and "--release" in argv)
+                and not (tool == "cargo" and pins_toolchain(cwd))
                 and any(cwd.is_relative_to(root) and cwd != root for root in REMOTE_ROOTS)
                 and cwd != HOME / "work/desktop/master"
             )
