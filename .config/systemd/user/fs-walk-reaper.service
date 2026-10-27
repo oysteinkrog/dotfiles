@@ -1,0 +1,22 @@
+[Unit]
+Description=Stop whole-disk search walks (find, bfs, ug, rg, du ...) left running (fs-walk-reaper)
+Documentation=file://%h/bin/fs-walk-reaper
+
+[Service]
+# Scans /proc every 10 s and stops only search processes that walk /, ~, /home, /var,
+# /var/tmp or /var/tmp/claude and are over 20 s old (SIGTERM, SIGKILL 5 s later).
+# Log: ~/.local/state/fs-walk-reaper/log. Allow list: ~/.config/fs-walk-reaper/allow.
+# Dry run (log only) is DRY_RUN=1 below. Turn off: systemctl --user disable --now fs-walk-reaper.
+Slice=background.slice
+Type=simple
+Environment=DRY_RUN=1
+ExecStartPre=/usr/bin/python3 %h/bin/fs-walk-reaper.test.py
+ExecStart=/usr/bin/python3 %h/bin/fs-walk-reaper
+Restart=always
+RestartSec=10
+Nice=10
+MemoryMax=64M
+SyslogIdentifier=fs-walk-reaper
+
+[Install]
+WantedBy=default.target
