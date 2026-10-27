@@ -1,6 +1,7 @@
 // Agenda: the next meeting, today and the coming days from Google Calendar, who is away
 // today, and open Google Tasks. Data comes from ~/bin/agenda-fetch (gog), run every two
-// minutes. Colours come from the Plasma style, so the window matches the panels.
+// minutes. Colours come from the theme picked with os-theme (shared with the Build Queue
+// panel), or from the Plasma style when that theme is "plasma".
 // Run as a window with: plasmawindowed org.oysteinkrog.agenda
 
 import QtQuick
@@ -16,6 +17,14 @@ PlasmoidItem {
     id: root
 
     readonly property string fetchCommand: "$HOME/bin/agenda-fetch"
+    // The picked theme name, a separator line, then the theme file (docs/desktop-panels-style.md).
+    readonly property string themeCommand: "sh -c 'cat \"$HOME/.local/state/os-theme/current\" 2>/dev/null; echo; echo ---; cat \"$HOME/.config/os-theme/themes.json\" 2>/dev/null'"
+    property string themeRaw: ""
+    // {name, label, names: [[name, label], ...], and the colour tokens unless it is "plasma"}.
+    property var panel: ({
+            name: "plasma",
+            names: []
+        })
     property var agenda: ({
             updated: 0,
             error: "",
@@ -45,6 +54,30 @@ PlasmoidItem {
             return;
         fetching = true;
         exec.connectSource(fetchCommand);
+    }
+
+    function readTheme(raw) {
+        if (raw === themeRaw)
+            return;
+        themeRaw = raw;
+        const cut = raw.indexOf("\n---\n");
+        const name = raw.slice(0, Math.max(cut, 0)).trim();
+        let themes = {};
+        try {
+            themes = JSON.parse(raw.slice(cut + 5));
+        } catch (err) {
+            themes = {};
+        }
+        const t = themes[name] || {};
+        panel = Object.assign({}, t, {
+            name: themes[name] ? name : "plasma",
+            names: Object.keys(themes).map(n => [n, themes[n].label || n])
+        });
+    }
+
+    function setTheme(name) {
+        if (/^[A-Za-z0-9_-]+$/.test(name))
+            themeExec.connectSource("$HOME/bin/os-theme " + name);
     }
 
     function dayStart(ms) {
@@ -216,6 +249,27 @@ PlasmoidItem {
         }
     }
 
+    P5Support.DataSource {
+        id: themeExec
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source);
+            if (source === root.themeCommand)
+                root.readTheme(data.stdout);
+            else
+                connectSource(root.themeCommand);
+        }
+    }
+
+    // A theme switch from either panel or the command line shows within a few seconds.
+    Timer {
+        interval: 3000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: themeExec.connectSource(root.themeCommand)
+    }
+
     Timer {
         interval: 120000
         running: true
@@ -240,20 +294,33 @@ PlasmoidItem {
     // the app colour scheme is used.
     readonly property var style: agenda.theme || ({})
     readonly property bool styled: style.background !== undefined
+    // A theme with its own colours. "plasma" has none and keeps the colours derived below.
+    readonly property bool themed: panel.window !== undefined && !panel.mute
+    // Surfaces are tinted from these, not from Kirigami.Theme: the root item does not see the
+    // colours set on the window below.
+    readonly property color baseBg: themed ? panel.card : styled ? style.background : Kirigami.Theme.backgroundColor
+    readonly property color baseText: themed ? panel.text : styled ? style.text : Kirigami.Theme.textColor
     // The style's accent is often too dark for text on its own background, so text uses a
-    // lighter tint of it.
-    readonly property color accent: styled ? style.accent : Kirigami.Theme.highlightColor
-    readonly property color accentText: Kirigami.ColorUtils.tintWithAlpha(accent, "white", 0.35)
+    // lighter tint of it. Themes pick their own.
+    readonly property color accent: themed ? panel.accent : styled ? style.accent : Kirigami.Theme.highlightColor
+    readonly property color accentText: themed ? panel.accent : Kirigami.ColorUtils.tintWithAlpha(accent, "white", 0.35)
+    readonly property color textOnAccent: themed ? panel.onAccent : styled ? style.accentText : Kirigami.Theme.highlightedTextColor
+    readonly property color titleColor: themed ? panel.title : accentText
+    readonly property color windowColor: themed ? panel.window : Kirigami.ColorUtils.tintWithAlpha(baseBg, "black", 0.18)
+    readonly property color cardColor: themed ? panel.card : tint(0.045)
+    readonly property color borderColor: themed ? panel.border : tint(0.11)
+    readonly property color bandColor: themed ? panel.band : tint(0.07)
+    readonly property color lineColor: themed ? panel.line : tint(0.11)
     // Data colours are the Plasma ones, a little less saturated so they sit calmly on the
     // dark cards (the same rule as the Build Queue panel).
     function muted(c) {
         return Qt.hsla(c.hslHue, c.hslSaturation * 0.78, Math.min(c.hslLightness, 0.6), 1);
     }
     function tint(amount) {
-        return Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, amount);
+        return Kirigami.ColorUtils.tintWithAlpha(baseBg, baseText, amount);
     }
-    readonly property color busyColor: muted(Kirigami.Theme.positiveTextColor)
-    readonly property color homeColor: muted(Kirigami.Theme.linkColor)
+    readonly property color busyColor: themed ? panel.positive : muted(Kirigami.Theme.positiveTextColor)
+    readonly property color homeColor: themed ? panel.info : muted(Kirigami.Theme.linkColor)
 
     fullRepresentation: Rectangle {
         Layout.minimumWidth: Kirigami.Units.gridUnit * 18
@@ -261,19 +328,22 @@ PlasmoidItem {
         Layout.preferredWidth: Kirigami.Units.gridUnit * 26
         Layout.preferredHeight: Kirigami.Units.gridUnit * 40
 
-        Kirigami.Theme.inherit: !root.styled
+        Kirigami.Theme.inherit: !root.styled && !root.themed
         Kirigami.Theme.colorSet: Kirigami.Theme.Window
-        Kirigami.Theme.backgroundColor: root.styled ? root.style.background : undefined
-        Kirigami.Theme.alternateBackgroundColor: root.styled ? root.style.alternate : undefined
-        Kirigami.Theme.textColor: root.styled ? root.style.text : undefined
-        Kirigami.Theme.disabledTextColor: root.styled ? root.style.inactive : undefined
-        Kirigami.Theme.negativeTextColor: root.styled ? root.style.negative : undefined
-        Kirigami.Theme.highlightColor: root.styled ? root.style.accent : undefined
-        Kirigami.Theme.highlightedTextColor: root.styled ? root.style.accentText : undefined
-        Kirigami.Theme.hoverColor: root.styled ? root.style.accent : undefined
-        Kirigami.Theme.focusColor: root.styled ? root.style.accent : undefined
+        Kirigami.Theme.backgroundColor: root.themed ? root.panel.card : root.styled ? root.style.background : undefined
+        Kirigami.Theme.alternateBackgroundColor: root.themed ? root.panel.band : root.styled ? root.style.alternate : undefined
+        Kirigami.Theme.textColor: root.themed ? root.panel.text : root.styled ? root.style.text : undefined
+        Kirigami.Theme.disabledTextColor: root.themed ? root.panel.muted : root.styled ? root.style.inactive : undefined
+        Kirigami.Theme.negativeTextColor: root.themed ? root.panel.negative : root.styled ? root.style.negative : undefined
+        Kirigami.Theme.positiveTextColor: root.themed ? root.panel.positive : undefined
+        Kirigami.Theme.neutralTextColor: root.themed ? root.panel.warning : undefined
+        Kirigami.Theme.linkColor: root.themed ? root.panel.info : undefined
+        Kirigami.Theme.highlightColor: root.themed ? root.panel.accent : root.styled ? root.style.accent : undefined
+        Kirigami.Theme.highlightedTextColor: root.themed ? root.panel.onAccent : root.styled ? root.style.accentText : undefined
+        Kirigami.Theme.hoverColor: root.themed ? root.panel.accent : root.styled ? root.style.accent : undefined
+        Kirigami.Theme.focusColor: root.themed ? root.panel.accent : root.styled ? root.style.accent : undefined
         // The window sits a step darker than the cards, so the cards lift off it.
-        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
+        color: root.windowColor
 
         ColumnLayout {
             anchors.fill: parent
@@ -327,6 +397,31 @@ PlasmoidItem {
                     color: root.agenda.error !== "" || root.now - root.agenda.updated > 600000 ? Kirigami.Theme.neutralTextColor : root.busyColor
                 }
                 PlasmaComponents.ToolButton {
+                    id: themeButton
+                    visible: root.panel.names.length > 0
+                    icon.name: "color-management"
+                    display: PlasmaComponents.AbstractButton.IconOnly
+                    text: i18n("Theme")
+                    onClicked: themeMenu.open()
+                    PlasmaComponents.ToolTip.visible: hovered && !themeMenu.visible
+                    PlasmaComponents.ToolTip.text: i18n("Panel theme: %1", root.panel.label || root.panel.name)
+                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    PlasmaComponents.Menu {
+                        id: themeMenu
+                        y: themeButton.height
+                        Repeater {
+                            model: root.panel.names
+                            PlasmaComponents.MenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                checkable: true
+                                checked: modelData[0] === root.panel.name
+                                onTriggered: root.setTheme(modelData[0])
+                            }
+                        }
+                    }
+                }
+                PlasmaComponents.ToolButton {
                     icon.name: "view-refresh"
                     enabled: !root.fetching
                     onClicked: root.fetch()
@@ -347,18 +442,19 @@ PlasmoidItem {
                     : root.whenText(root.focusEvent.start)
                 accent: root.accent
                 accentText: root.accentText
+                textOnAccent: root.textOnAccent
                 textSize: root.textSize
-                cardColor: root.tint(0.045)
-                borderColor: root.tint(0.11)
+                cardColor: root.cardColor
+                borderColor: root.borderColor
             }
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 radius: 6
-                color: root.tint(0.045)
+                color: root.cardColor
                 border.width: 1
-                border.color: root.tint(0.11)
+                border.color: root.borderColor
                 clip: true
 
             PlasmaComponents.ScrollView {
@@ -385,8 +481,8 @@ PlasmoidItem {
                         accentText: root.accentText
                         textSize: root.textSize
                         smallSize: root.smallSize
-                        background: root.tint(0.07)
-                        line: root.tint(0.11)
+                        background: root.bandColor
+                        line: root.lineColor
                     }
 
                     delegate: EventDelegate {
@@ -421,9 +517,9 @@ PlasmoidItem {
                 implicitHeight: bottom.implicitHeight + Kirigami.Units.smallSpacing * 5
                 visible: awayList.visible || tasks.visible
                 radius: 6
-                color: root.tint(0.045)
+                color: root.cardColor
                 border.width: 1
-                border.color: root.tint(0.11)
+                border.color: root.borderColor
 
             RowLayout {
                 id: bottom
@@ -445,7 +541,7 @@ PlasmoidItem {
                         spacing: Kirigami.Units.smallSpacing
                         PlasmaComponents.Label {
                             text: i18n("Away today")
-                            color: root.accentText
+                            color: root.titleColor
                             font.pointSize: root.textSize
                             font.weight: Font.DemiBold
                         }
@@ -484,7 +580,7 @@ PlasmoidItem {
                     Layout.fillHeight: true
                     implicitWidth: 1
                     visible: awayList.visible && tasks.visible
-                    color: root.tint(0.11)
+                    color: root.lineColor
                 }
 
                 // Open Google Tasks, overdue first.
@@ -498,7 +594,7 @@ PlasmoidItem {
 
                     PlasmaComponents.Label {
                         text: i18np("1 open task", "%1 open tasks", root.agenda.tasks.length)
-                        color: root.accentText
+                        color: root.titleColor
                         font.pointSize: root.textSize
                         font.weight: Font.DemiBold
                     }
