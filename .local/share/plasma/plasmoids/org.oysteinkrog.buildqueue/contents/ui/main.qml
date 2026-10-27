@@ -151,6 +151,10 @@ PlasmoidItem {
     }
 
     // Moves a session's or worktree's rule one step: low, normal (no rule) or high.
+    function setTheme(name) {
+        shell.connectSource("panel-theme " + quote(name));
+    }
+
     function shiftPrio(match, current, delta) {
         const next = Math.max(-1, Math.min(1, prioStep(current) + delta));
         if (!match || next === prioStep(current))
@@ -288,6 +292,12 @@ PlasmoidItem {
     // then the app colour scheme is used.
     readonly property var style: q.theme || ({})
     readonly property bool styled: style.background !== undefined
+    // The panel theme picked with panel-theme, shared with the Agenda widget. Its colours
+    // replace the Plasma style ones; "plasma" (no colours) keeps the Plasma style.
+    readonly property var pt: q.panelTheme || ({})
+    readonly property bool themed: pt.window !== undefined
+    readonly property color cardColor: themed ? pt.card : styled ? style.background : Kirigami.Theme.backgroundColor
+    readonly property color inkColor: themed ? pt.text : styled ? style.text : Kirigami.Theme.textColor
 
     // Type scale, from the Plasma font so it follows the owner's font size. Shared with the
     // Agenda widget: docs/desktop-panels-style.md.
@@ -298,18 +308,21 @@ PlasmoidItem {
     // Data colours are the Plasma ones, a little less saturated so they sit calmly on the
     // dark cards. Text and chrome stay neutral: colour is for data only.
     function muted(c) {
+        if (themed && !pt.mute)
+            return c;
         return Qt.hsla(c.hslHue, c.hslSaturation * 0.78, Math.min(c.hslLightness, 0.6), 1);
     }
 
     function tint(amount) {
-        return Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, amount);
+        return Kirigami.ColorUtils.tintWithAlpha(cardColor, inkColor, amount);
     }
 
-    // A section title: body size, semi-bold, in a light tint of the accent.
+    // A section title: body size, semi-bold, in the theme's title colour (a light tint of the
+    // accent with the Plasma style).
     component Heading: PlasmaComponents.Label {
         font.pointSize: root.fs
         font.weight: Font.DemiBold
-        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.highlightColor, "white", 0.35)
+        color: root.themed ? root.pt.title : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.highlightColor, "white", 0.35)
     }
 
     // Muted small text: labels, captions, axis text.
@@ -342,9 +355,9 @@ PlasmoidItem {
         implicitHeight: col.implicitHeight + pad * 2
         implicitWidth: col.implicitWidth + pad * 2
         radius: 6
-        color: root.tint(0.045)
+        color: root.themed ? root.pt.card : root.tint(0.045)
         border.width: 1
-        border.color: root.tint(0.11)
+        border.color: root.themed ? root.pt.border : root.tint(0.11)
         ColumnLayout {
             id: col
             anchors.fill: parent
@@ -633,7 +646,7 @@ PlasmoidItem {
             : root.gate.state === "open" ? Kirigami.Theme.positiveTextColor
             : Kirigami.Theme.disabledTextColor
         readonly property color runColor: root.muted(Kirigami.Theme.linkColor)
-        readonly property color appColor: root.muted(Kirigami.Theme.highlightColor)
+        readonly property color appColor: root.themed ? root.pt.extra : root.muted(Kirigami.Theme.highlightColor)
         readonly property color waitColor: root.muted(Kirigami.Theme.neutralTextColor)
         readonly property color okColor: root.muted(Kirigami.Theme.positiveTextColor)
         readonly property color failColor: root.muted(Kirigami.Theme.negativeTextColor)
@@ -687,17 +700,18 @@ PlasmoidItem {
 
         Kirigami.Theme.inherit: !root.styled
         Kirigami.Theme.colorSet: Kirigami.Theme.Window
-        Kirigami.Theme.backgroundColor: root.styled ? root.style.background : undefined
-        Kirigami.Theme.alternateBackgroundColor: root.styled ? root.style.alternate : undefined
-        Kirigami.Theme.textColor: root.styled ? root.style.text : undefined
-        Kirigami.Theme.disabledTextColor: root.styled ? root.style.inactive : undefined
-        Kirigami.Theme.negativeTextColor: root.styled ? root.style.negative : undefined
-        Kirigami.Theme.neutralTextColor: root.styled ? root.style.neutral : undefined
-        Kirigami.Theme.positiveTextColor: root.styled ? root.style.positive : undefined
-        Kirigami.Theme.highlightColor: root.styled ? root.style.accent : undefined
-        Kirigami.Theme.highlightedTextColor: root.styled ? root.style.accentText : undefined
+        Kirigami.Theme.backgroundColor: root.themed ? root.pt.card : root.styled ? root.style.background : undefined
+        Kirigami.Theme.alternateBackgroundColor: root.themed ? root.pt.band : root.styled ? root.style.alternate : undefined
+        Kirigami.Theme.textColor: root.themed ? root.pt.text : root.styled ? root.style.text : undefined
+        Kirigami.Theme.disabledTextColor: root.themed ? root.pt.muted : root.styled ? root.style.inactive : undefined
+        Kirigami.Theme.negativeTextColor: root.themed ? root.pt.negative : root.styled ? root.style.negative : undefined
+        Kirigami.Theme.neutralTextColor: root.themed ? root.pt.warning : root.styled ? root.style.neutral : undefined
+        Kirigami.Theme.positiveTextColor: root.themed ? root.pt.positive : root.styled ? root.style.positive : undefined
+        Kirigami.Theme.highlightColor: root.themed ? root.pt.accent : root.styled ? root.style.accent : undefined
+        Kirigami.Theme.linkColor: root.themed ? root.pt.info : undefined
+        Kirigami.Theme.highlightedTextColor: root.themed ? root.pt.onAccent : root.styled ? root.style.accentText : undefined
         // The window sits a step darker than the cards, so the cards lift off it.
-        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
+        color: root.themed ? root.pt.window : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
 
         ColumnLayout {
             anchors.fill: parent
@@ -723,6 +737,33 @@ PlasmoidItem {
                 Dot {
                     visible: root.q.updated > 0
                     color: root.stale || root.problem !== "" ? Kirigami.Theme.neutralTextColor : view.okColor
+                }
+                PlasmaComponents.ToolButton {
+                    id: themeButton
+                    visible: (root.pt.names || []).length > 0
+                    icon.name: "color-management"
+                    display: PlasmaComponents.AbstractButton.IconOnly
+                    text: i18n("Theme")
+                    implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+                    implicitHeight: implicitWidth
+                    onClicked: themeMenu.open()
+                    PlasmaComponents.ToolTip.visible: hovered && !themeMenu.visible
+                    PlasmaComponents.ToolTip.text: i18n("Panel theme: %1", root.pt.label || root.pt.name || "")
+                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    PlasmaComponents.Menu {
+                        id: themeMenu
+                        y: themeButton.height
+                        Repeater {
+                            model: root.pt.names || []
+                            PlasmaComponents.MenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                checkable: true
+                                checked: modelData[0] === root.pt.name
+                                onTriggered: root.setTheme(modelData[0])
+                            }
+                        }
+                    }
                 }
                 Kirigami.Icon {
                     visible: root.problem !== ""
