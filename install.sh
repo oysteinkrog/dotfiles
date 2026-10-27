@@ -43,6 +43,7 @@ config_dirs=(
   fisher
   machine
   nvim
+  os-theme
   omf
   rclone
   tridactyl
