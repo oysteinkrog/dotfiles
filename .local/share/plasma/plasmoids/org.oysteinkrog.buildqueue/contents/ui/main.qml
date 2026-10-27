@@ -152,7 +152,7 @@ PlasmoidItem {
 
     // Moves a session's or worktree's rule one step: low, normal (no rule) or high.
     function setTheme(name) {
-        shell.connectSource("panel-theme " + quote(name));
+        shell.connectSource("os-theme " + quote(name));
     }
 
     function shiftPrio(match, current, delta) {
