@@ -50,6 +50,19 @@ PlasmoidItem {
         })
     readonly property var slots: q.slots || ({})
     readonly property var nextJobs: (q.next || []).slice(0, 4)
+    // Builds sent to other machines with the job system (`job run --on WORKER`).
+    readonly property var remote: q.remote || ({})
+    readonly property var remoteRunning: remote.running || []
+    readonly property var remoteWorkers: remote.workers || []
+
+    function workerText(w) {
+        const parts = [w.name, w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
+        if (w.threads)
+            parts.push(i18n("%1 threads, %2", w.threads, w.memHigh));
+        if (w.memAvailGib !== undefined && w.memAvailGib !== null)
+            parts.push(i18n("%1 GiB free", w.memAvailGib));
+        return parts.join(" · ");
+    }
     readonly property var history: q.history || []
 
     // Lane name -> true or false, for lanes the owner opened or closed. The top lane starts open.
@@ -1307,6 +1320,62 @@ PlasmoidItem {
                 Small {
                     visible: root.running.length === 0
                     text: i18n("Nothing running")
+                }
+            }
+
+            // Builds on other machines, from the job system. heavy-build does not see them.
+            Card {
+                Layout.fillWidth: true
+                visible: root.remoteWorkers.length > 0 || root.remoteRunning.length > 0
+                title: i18n("Remote")
+                header: Small {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    text: root.remoteWorkers.map(w => root.workerText(w)).join("   ")
+                }
+                Repeater {
+                    model: root.remoteRunning.length
+                    delegate: HoverRow {
+                        id: remRow
+                        required property int index
+                        readonly property var job: root.remoteRunning[index] || ({})
+                        Layout.fillWidth: true
+                        minHeight: view.rowH
+                        spacing: Kirigami.Units.smallSpacing * 1.5
+                        tip: i18n("%1 in %2 on %3, running %4", job.cmd, job.project, job.worker, root.dur(job.age)) + (job.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(job.owner), root.ownerSource(job)) : "")
+                        Dot {
+                            color: view.runColor
+                        }
+                        Cell {
+                            text: remRow.job.cmd || ""
+                            Layout.preferredWidth: view.gu * 5
+                        }
+                        Cell {
+                            text: remRow.job.project || ""
+                            Layout.fillWidth: true
+                            opacity: 0.85
+                        }
+                        Cell {
+                            text: root.ownerName(remRow.job.owner) + (remRow.job.owner && root.inferred(remRow.job) ? " ≈" : "")
+                            Layout.preferredWidth: view.gu * 5
+                            opacity: remRow.job.owner ? 0.85 : 0.5
+                            font.italic: !remRow.job.owner
+                        }
+                        Cell {
+                            text: remRow.job.worker || ""
+                            Layout.preferredWidth: view.gu * 2.8
+                            font.pointSize: root.fsSmall
+                            opacity: 0.6
+                        }
+                        Cell {
+                            text: root.dur(remRow.job.age)
+                            horizontalAlignment: Text.AlignRight
+                            Layout.preferredWidth: view.gu * 3.5
+                        }
+                    }
+                }
+                Small {
+                    text: (root.remoteRunning.length === 0 ? i18n("Nothing running.") + " " : "") + i18n("Last hour: %1 ok, %2 failed", root.remote.ok || 0, root.remote.failed || 0)
                 }
             }
 
