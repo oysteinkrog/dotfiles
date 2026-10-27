@@ -7,7 +7,7 @@ names, split into dark and light, and the colors the tab bar is built from.
 
 Usage: gen-color-schemes.py [path to scheme_data.rs]
 Without a path it reads frankenterm/config/src/scheme_data.rs from the
-oystein/main branch of ~/src/frankenterm.
+oystein/main branch of ~/projects/frankenterm.
 """
 
 import json
@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent / "color_schemes.lua"
-REPO = Path.home() / "src/frankenterm"
+REPO = Path.home() / "projects/frankenterm"
 SCHEME_DATA = "frankenterm/config/src/scheme_data.rs"
 
 
