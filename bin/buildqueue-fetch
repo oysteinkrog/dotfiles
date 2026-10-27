@@ -802,13 +802,34 @@ REMOTE_ROOTS = (HOME / "work/desktop", pathlib.Path("/var/tmp/claude"))
 REMOTE_NOT = ("win-x64", "win-x86", "RuntimeIdentifier=win", "wine", "build.sh", "build.cmd")
 
 
-def pins_toolchain(folder):
+TRIPLE_RE = re.compile(r"-(?:x86_64|aarch64|i686|armv7)-[\w-]+$")
+
+
+def pinned_toolchain(folder):
+    """The Rust channel a tree pins with rust-toolchain(.toml), up to its git root: "" for
+    none, "?" when the file cannot be read."""
     for d in (folder, *folder.parents):
-        if (d / "rust-toolchain").exists() or (d / "rust-toolchain.toml").exists():
-            return True
+        for name in ("rust-toolchain.toml", "rust-toolchain"):
+            f = d / name
+            if f.exists():
+                try:
+                    text = f.read_text()
+                except OSError:
+                    return "?"
+                m = re.search(r'^\s*channel\s*=\s*"([^"]+)"', text, re.M)
+                line = text.strip().splitlines()[0].strip() if text.strip() else ""
+                return TRIPLE_RE.sub("", m.group(1) if m else line if "=" not in line and "[" not in line else "?")
         if (d / ".git").exists():
-            return False
-    return False
+            return ""
+    return ""
+
+
+def worker_toolchains(st):
+    """Channels of the Rust toolchains on the first worker that is not frozen."""
+    for w in st.get("remote", {}).get("workers", []):
+        if not w.get("frozen"):
+            return {TRIPLE_RE.sub("", t) for t in w.get("rust_toolchains") or []}
+    return set()
 
 
 def remote_ok(st, job, now):
@@ -818,9 +839,9 @@ def remote_ok(st, job, now):
     if cls not in REMOTE_CLASSES or now - submitted < REMOTE_MIN_WAIT_S:
         return False
     seen = st.setdefault("remoteOk", {})
-    if name not in seen:
+    if not isinstance(seen.get(name), list):
         pid = name.split("-")[1]
-        ok = False
+        ok, tool = False, ""
         try:
             argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
             cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
@@ -833,14 +854,15 @@ def remote_ok(st, job, now):
                 and argv[i + 1:i + 2] in [[sub] for sub in REMOTE_TOOLS[tool]]
                 and not any(bad in a for a in argv for bad in REMOTE_NOT)
                 and not (tool == "cargo" and "--release" in argv)
-                and not (tool == "cargo" and pins_toolchain(cwd))
                 and any(cwd.is_relative_to(root) and cwd != root for root in REMOTE_ROOTS)
                 and cwd != HOME / "work/desktop/master"
             )
         except (OSError, StopIteration, ValueError):
             pass
-        seen[name] = ok
-    return seen[name]
+        seen[name] = [ok, pinned_toolchain(cwd) if ok and tool == "cargo" else ""]
+    ok, pin = seen[name]
+    # A pinned toolchain must be installed on the worker; the runner refuses it otherwise.
+    return ok and (pin == "" or pin in worker_toolchains(st))
 
 
 def build(st, now, ow):
