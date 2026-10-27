@@ -96,7 +96,7 @@ def run_hooks(name):
         if result.returncode != 0:
             notes.append(f"  {hook.name}: failed ({result.returncode}) {result.stderr.strip()}")
         elif result.stdout.strip():
-            notes.append(f"  {hook.name}: {result.stdout.strip()}")
+            notes.append(f"  {hook.name}: " + result.stdout.strip().replace("\n", "; "))
     return notes
 
 
