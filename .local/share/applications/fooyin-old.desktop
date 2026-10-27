@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=fooyin (experimental)
+Name=fooyin (old)
 Type=Application
 GenericName=fooyin Music Player
-Comment=Separate fooyin instance for trying new styles
-Exec=/home/oystein/.local/bin/fooyin-experimental %F
+Comment=The original fooyin instance with the DarkOne style
+Exec=/usr/bin/fooyin %F
 Icon=org.fooyin.fooyin
 Terminal=false
 Categories=AudioVideo;Player;Qt;Audio;
