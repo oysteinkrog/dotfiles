@@ -854,6 +854,31 @@ def write_marks(st, marks, now):
         pass
 
 
+def tree_can_move(st, cwd):
+    """`job check`: whether the job system can send this tree (no submodules, no paths
+    outside it). About 0.5 s, so cached per folder and HEAD commit."""
+    import subprocess
+
+    tool = job_tool()
+    if not tool:
+        return False
+    try:
+        head = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    cache = st.setdefault("jobCheck", {})
+    key = f"{cwd}@{head}"
+    if key not in cache:
+        try:
+            ok = subprocess.run([tool, "check", cwd], capture_output=True, timeout=20).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+        cache[key] = [ok, time.time()]
+    for k in [k for k, v in cache.items() if v[1] < time.time() - DAY]:
+        del cache[k]
+    return cache[key][0]
+
+
 def remote_ok(st, job, now):
     """Whether a waiting job could go to a remote worker. Checked once per job: its command
     line and working folder do not change while it waits."""
@@ -862,7 +887,7 @@ def remote_ok(st, job, now):
         return False
     seen = st.setdefault("remoteOk", {})
     old = seen.get(name)
-    if not (isinstance(old, list) and len(old) == 5 and isinstance(old[2], list) and type(old[4]) is int):
+    if not (isinstance(old, list) and len(old) == 6 and isinstance(old[2], list) and type(old[4]) is int):
         pid = name.split("-")[1]
         ok, tool, cmd, cwd = False, "", [], ""
         try:
@@ -883,7 +908,8 @@ def remote_ok(st, job, now):
             )
         except (OSError, StopIteration, ValueError):
             pass
-        seen[name] = [ok, pinned_toolchain(cwd) if ok and tool == "cargo" else "", cmd, str(cwd), 0]
+        ok = ok and tree_can_move(st, str(cwd))
+        seen[name] = [ok, pinned_toolchain(cwd) if ok and tool == "cargo" else "", cmd, str(cwd), 0, "checked"]
     entry = seen[name]
     ok, pin = entry[0], entry[1]
     # A pinned toolchain must be installed on the worker; the runner refuses it otherwise.
@@ -896,12 +922,11 @@ def remote_ok(st, job, now):
 def current_marks(st, queue, now):
     """The marked waiting jobs, in queue order, in the marks file format."""
     worker = next((w.get("name", "") for w in st.get("remote", {}).get("workers", []) if not w.get("frozen")), "")
-    seen = st.get("remoteOk", {})
     marks = []
     for j in queue:
-        entry = seen.get(j[0])
-        if not (isinstance(entry, list) and len(entry) >= 5 and remote_ok(st, j, now)):
+        if not remote_ok(st, j, now):
             continue
+        entry = st["remoteOk"][j[0]]
         marks.append({
             "job": j[0], "worker": worker, "class": j[4], "cwd": entry[3], "argv": entry[2],
             "session": j[7], "lane": j[5], "waited_s": int(now - j[1]), "since": entry[4],
