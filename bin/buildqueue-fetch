@@ -785,6 +785,7 @@ def remote_view(r, now, owner):
         })
     return {
         "workers": workers,
+        "target": (remote_target({"remote": r}) or {}).get("name", ""),
         "running": running,
         "ok": sum(1 for j in done if j.get("exit") == 0),
         "failed": sum(1 for j in done if j.get("exit") != 0),
@@ -824,12 +825,19 @@ def pinned_toolchain(folder):
     return ""
 
 
-def worker_toolchains(st):
-    """Channels of the Rust toolchains on the first worker that is not frozen."""
+def remote_target(st):
+    """The worker to suggest: the first Linux worker whose last status says it is not frozen.
+    None when there is no such worker or the status call failed, so nothing is marked."""
     for w in st.get("remote", {}).get("workers", []):
-        if not w.get("frozen"):
-            return {TRIPLE_RE.sub("", t) for t in w.get("rust_toolchains") or []}
-    return set()
+        if not w.get("frozen", True) and w.get("os", "linux") == "linux":
+            return w
+    return None
+
+
+def worker_toolchains(st):
+    """Channels of the Rust toolchains on the suggested worker."""
+    w = remote_target(st) or {}
+    return {TRIPLE_RE.sub("", t) for t in w.get("rust_toolchains") or []}
 
 
 # The current marks, rewritten each refresh, for whoever tells the lanes (manager-buildqueue
@@ -913,7 +921,7 @@ def remote_ok(st, job, now):
     entry = seen[name]
     ok, pin = entry[0], entry[1]
     # A pinned toolchain must be installed on the worker; the runner refuses it otherwise.
-    marked = ok and (pin == "" or pin in worker_toolchains(st))
+    marked = ok and remote_target(st) is not None and (pin == "" or pin in worker_toolchains(st))
     if marked and not entry[4]:
         entry[4] = int(now)
     return marked
@@ -921,7 +929,7 @@ def remote_ok(st, job, now):
 
 def current_marks(st, queue, now):
     """The marked waiting jobs, in queue order, in the marks file format."""
-    worker = next((w.get("name", "") for w in st.get("remote", {}).get("workers", []) if not w.get("frozen")), "")
+    worker = (remote_target(st) or {}).get("name", "")
     marks = []
     for j in queue:
         if not remote_ok(st, j, now):
