@@ -1,0 +1,3 @@
+#!/bin/sh
+# os-theme hook: recolour the Star Nest wallpaper shader. The plugin reloads the file itself.
+"$HOME/bin/shader-wallpaper-theme-sync" && echo "recoloured"
