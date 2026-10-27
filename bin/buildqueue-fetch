@@ -450,6 +450,33 @@ def theme(st, now):
     return colours
 
 
+PANEL_THEMES = pathlib.Path(__file__).resolve().parent / "panel-themes.json"
+PANEL_CHOICE = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "desktop-panels" / "theme"
+
+
+def panel_theme(st):
+    """The panel theme picked with panel-theme, shared with the Agenda widget: its name and
+    colour tokens. Read again only when the choice or the theme file changes."""
+    try:
+        key = (PANEL_CHOICE.stat().st_mtime_ns, PANEL_THEMES.stat().st_mtime_ns)
+    except OSError:
+        key = None
+    cached = st.get("panelTheme")
+    if cached and cached["key"] == key:
+        return cached["value"]
+    value = {"name": "plasma"}
+    try:
+        themes = json.loads(PANEL_THEMES.read_text())
+        name = PANEL_CHOICE.read_text().strip()
+        if name in themes:
+            value = {"name": name, **themes[name]}
+        value["names"] = [[n, t.get("label", n)] for n, t in themes.items()]
+    except (OSError, ValueError):
+        pass
+    st["panelTheme"] = {"key": key, "value": value}
+    return value
+
+
 def lane_rules():
     """[(match, prio, by)] from ~/.config/heavy-build.lanes, in file order. The file is
     optional: heavy-build-prio writes it, and the first matching line wins."""
@@ -837,6 +864,7 @@ def build(st, now, ow):
         "queue": queue_rows,
         "limits": limits(conf),
         "theme": theme(st, now),
+        "panelTheme": panel_theme(st),
     }
 
 
