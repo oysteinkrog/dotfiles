@@ -54,6 +54,12 @@ PlasmoidItem {
     readonly property var remote: q.remote || ({})
     readonly property var remoteRunning: remote.running || []
     readonly property var remoteWorkers: remote.workers || []
+    // The worker to suggest for a job that could run remotely: the first one not frozen.
+    readonly property string remoteTarget: (remoteWorkers.find(w => !w.frozen) || {}).name || ""
+
+    function remoteHint(job) {
+        return remoteTarget !== "" && job.remoteOk === true;
+    }
 
     function workerText(w) {
         const parts = [w.name, w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
@@ -1423,7 +1429,7 @@ PlasmoidItem {
                         Layout.fillWidth: true
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est))
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est)) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: nextRow.index + 1
                             Layout.preferredWidth: view.gu * 0.9
@@ -1447,10 +1453,20 @@ PlasmoidItem {
                             opacity: 0.85
                         }
                         ValueBar {
+                            visible: !root.remoteHint(nextRow.job)
                             Layout.preferredWidth: view.gu * 2.6
                             value: nextRow.job.waited
                             max: view.nextMax
                             fill: nextRow.urgent ? view.prioColor(nextRow.job.prio) : view.waitColor
+                        }
+                        Small {
+                            // Could run on a remote worker: shown in the bar's place, so columns stay put.
+                            visible: root.remoteHint(nextRow.job)
+                            text: "→ " + root.remoteTarget
+                            color: view.runColor
+                            opacity: 1
+                            elide: Text.ElideRight
+                            Layout.preferredWidth: view.gu * 2.6
                         }
                         Cell {
                             text: root.dur(nextRow.job.waited)
@@ -1758,7 +1774,7 @@ PlasmoidItem {
                         width: ListView.view.width
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause)))
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause))) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: qrow.run ? "▶" : qrow.job.pos
                             color: qrow.run ? view.runColor : Kirigami.Theme.textColor
@@ -1790,10 +1806,20 @@ PlasmoidItem {
                             color: view.prioColor(qrow.job.prio)
                         }
                         ValueBar {
+                            visible: !root.remoteHint(qrow.job)
                             Layout.preferredWidth: view.gu * 2.6
                             value: qrow.job.age
                             max: view.queueMax
                             fill: qrow.run ? view.runColor : view.waitColor
+                        }
+                        Small {
+                            // Could run on a remote worker: shown in the bar's place, so columns stay put.
+                            visible: root.remoteHint(qrow.job)
+                            text: "→ " + root.remoteTarget
+                            color: view.runColor
+                            opacity: 1
+                            elide: Text.ElideRight
+                            Layout.preferredWidth: view.gu * 2.6
                         }
                         Cell {
                             text: root.dur(qrow.job.age)
