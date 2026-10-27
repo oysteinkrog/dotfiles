@@ -306,6 +306,10 @@
           },
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/fs-walk-guard.sh"
+          },
+          {
+            "type": "command",
             "command": "bash ~/.claude/hooks/grove-worktree-guard.sh"
           },
           {
@@ -333,6 +337,15 @@
             "type": "command",
             "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/fs-walk-guard.sh"
           }
         ]
       },
