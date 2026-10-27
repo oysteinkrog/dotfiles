@@ -948,6 +948,39 @@ W_C_MONO='W 0000000999000000000-2-c 999000 critical 4 2 600 tree:/mono/master'
 out=$(printf '%s\n' "$W_C_MONO" | ADM_MEMINFO=$A/meminfo6 ADM_MONOREPO=/mono adm 0000000999000000000-2-c 0 1 12)
 check "first build, level none: in the monorepo under the solo 8 GiB it still waits (got '$out')" '[[ $out == "wait|memory: 6.0 GiB available, the first build needs 8|0" ]]'
 
+# Idle start: with no build running and level normal, a build whose estimate
+# is at most MemAvailable plus the swap headroom starts under the solo floor.
+# The 2026-10-26 case: a 7.8 GiB head, 7.0 GiB available, nothing running.
+printf 'MemAvailable: %d kB\nSwapTotal: %d kB\nSwapFree: %d kB\n' $(( 7 * 1048576 )) $(( 96 * 1048576 )) $(( 64 * 1048576 )) > "$A/meminfo-idle"
+printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1\n' > "$A/mempsi-idle"
+W_78='W 0000000999000000000-1-n 999000 normal 7.8 2 600 -'
+out=$(printf '%s\n' "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal adm 0000000999000000000-1-n 0 1 12)
+check "idle start: none running, 7.8 GiB over 7.0 available but under 7.0 + 8 swap, level normal, so it starts (got '$out')" '[[ $out == "start|idle-start: no builds running, est 7.8 <= avail 7.0 + swap 8.0|0" ]]'
+out=$(printf '%s\n' "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle adm 0000000999000000000-1-n 0 1 12)
+check "idle start: level none (no coordinator) keeps the solo floor (got '$out')" '[[ $out == "wait|memory: 7.0 GiB available, the first build needs 8|0" ]]'
+for lv in slow pause; do
+  out=$(printf '%s\n' "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=$lv adm 0000000999000000000-1-n 0 1 12)
+  check "idle start: level $lv, the same build waits (got '$out')" '[[ $out == wait\|* && $out != *idle-start* ]]'
+done
+out=$(printf '%s\n' "${W_78/ 7.8 / 15.5 }" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal adm 0000000999000000000-1-n 0 1 12)
+check "idle start: 15.5 GiB is over 7.0 + 8, so it waits for memory (got '$out')" '[[ $out == "wait|memory: 7.0 GiB available, the first build needs 8|0" ]]'
+printf 'some avg10=80.00 avg60=80.00 avg300=0 total=1\n' > "$A/cpupsi80"
+out=$(printf '%s\n' "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_CPUPSI=$A/cpupsi80 ADM_PLEVEL=normal adm 0000000999000000000-1-n 0 1 12)
+check "idle start: CPU pressure over the limit still holds it (got '$out')" '[[ $out == "wait|cpu-pressure: 80.0%, the limit is 75%|0" ]]'
+RUN_YOUNG='R u1 999000 8 2 1000600 1073741824 - 0 normal -'
+out=$(printf '%s\n' "$RUN_YOUNG" "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal adm 0000000999000000000-1-n 0 1 12)
+check "idle start: one build running, the old memory rule is unchanged (got '$out')" '[[ $out == "wait|memory: needs 7.8 GiB; 7.0 available (+8.0 swap headroom), 3.0 still to come for running builds, reserve 6|0" ]]'
+out=$(printf '%s\n' "$RUN_N" "$W_78" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal adm 0000000999000000000-1-n 0 1 12)
+check "idle start: one build running with room left, the old rule starts it as before (got '$out')" '[[ $out == "start|fits: next in order (+8.0 swap headroom)|0" ]]'
+# With the starve fix, an untracked scope does not count for a starving head,
+# so idle start applies to it too. Without the starve fix the scope counts.
+F_UNT='F s1.scope 1073741824 0 0 0 -'
+W_78OLD='W 0000000990000000000-1-n 990000 normal 7.8 2 600 -'
+out=$(printf '%s\n' "$F_UNT" "$W_78OLD" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal ADM_STARVEFIX=1 adm 0000000990000000000-1-n 0 1 12)
+check "idle start: starving head, only an untracked scope runs, starve fix on, so it starts (got '$out')" '[[ $out == start\|* && $out == *"(idle-start: no builds running, est 7.8 <= avail 7.0 + swap 8.0)|0" ]]'
+out=$(printf '%s\n' "$F_UNT" "$W_78OLD" | ADM_MEMINFO=$A/meminfo-idle ADM_MEMPSI=$A/mempsi-idle ADM_PLEVEL=normal adm 0000000990000000000-1-n 0 1 12)
+check "idle start: the same with the starve fix off, the untracked scope counts and it waits (got '$out')" '[[ $out == wait\|* && $out != *idle-start* ]]'
+
 # A pressure-held waiter keeps no writer preference.
 W_AGED_T='W 0000000990000000000-1-n 990000 normal 36 2 600 tree:/repo'
 W_C_SUF='W 0000000999000000000-2-c 999000 critical 4 2 600 tree:/repo#s1'
@@ -2545,6 +2578,37 @@ printf 'HEAVY_BUILD_MAX_JOBS=x;y\nexpires=%s\n' "$(( EPOCHSECONDS + 60 ))" > "$P
 out=$(po)
 check "presence: a non-number is ignored (got '$out')" '[[ $out == "9 28 1" ]]'
 rm -r -- "$P"
+
+# Idle start in the old rule (shadow mode, what really runs), end to end.
+# `true` has no history, so its estimate is 8.0G/8.0c and its solo floor 8.
+idle_env() {  # level avail_gib ; a no-blocker sandbox with that level and MemAvailable
+  setup2
+  printf 'MemTotal: %d kB\nMemAvailable: %d kB\nSwapTotal: %d kB\nSwapFree: %d kB\n' $(( 32 * 1048576 )) $(( $2 * 1048576 )) $(( 96 * 1048576 )) $(( 64 * 1048576 )) > "$T/proc/meminfo"
+  mkdir -p "$T/proc/pressure" "$T/state/pressure"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1\n' > "$T/proc/pressure/memory"
+  echo "level=$1 since=1 updated=$EPOCHSECONDS reason=\"test\" top=-" > "$T/state/pressure/level"
+}
+idle_env normal 3
+hbe -- true
+wait "$hbpid"; rc=$?
+check "old rule idle start: none running, est 8 over 3 GiB available but under 3 + 8, level normal, so it runs (rc $rc)" '(( rc == 0 ))'
+check "old rule idle start: logs event=idle-start with its reason" 'grep -q "event=idle-start actual=start reason=\"idle-start: no builds running, est 8.0 <= avail 3.0 + swap 8.0\"" "$T/state/heavy-build/shadow.log"'
+check "old rule idle start: the budget rule says idle-start too" 'grep -q "decision=start reason=\"idle-start: no builds running, est 8.0 <= avail 3.0 + swap 8.0\".* actual=start" "$T/state/heavy-build/shadow.log"'
+teardown2
+for lv in slow pause; do
+  idle_env $lv 3
+  hbe HEAVY_BUILD_WAIT=3 -- true
+  wait "$hbpid"; rc=$?
+  check "old rule idle start: level $lv, it waits and gives up with 75 (rc $rc)" '(( rc == 75 )) && grep -q "only 3 GiB of memory is available; a build starts at 8 GiB" "$T/out" && ! grep -q idle-start "$T/state/heavy-build/shadow.log"'
+  teardown2
+done
+idle_env normal 3
+b=$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice/other.scope
+mkdir -p "$b"; echo "populated 1" > "$b/cgroup.events"
+hbe HEAVY_BUILD_WAIT=3 -- true
+wait "$hbpid"; rc=$?
+check "old rule idle start: one build running, the old 12 GiB floor is unchanged (rc $rc)" '(( rc == 75 )) && grep -q "only 3 GiB of memory is available; a build starts at 12 GiB" "$T/out" && ! grep -q "event=idle-start" "$T/state/heavy-build/shadow.log"'
+teardown2
 
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
