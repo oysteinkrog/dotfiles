@@ -621,6 +621,17 @@
 # outer unit, and writes a --ready-file at once. Under a plain `flock heavy-build.lock` it skips the
 # line, but still makes a scope.
 #
+# jobd: running jobd jobs (builds.slice/job-<x>.service) count as running
+# builds in the budget rule: a job each, their current memory plus 2 GiB
+# still to come, and their average cores. An idle one (under 0.05 cores)
+# only holds its memory. They show in the untracked= field of live.log.
+# HEAVY_BUILD_BACKEND=jobd in the caller's environment (off by default; the
+# conf file cannot set it) hands the command to jobd with `job submit`
+# instead of this queue, with --class, --ready-file and --wait-timeout passed
+# on. A HEAVY_BUILD_* variable jobd does not read is refused with exit 2.
+# When the job client is missing or `job ping` fails, heavy-build says so on
+# one line and uses its own queue. HB_JOB_CMD names another client (tests).
+#
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
 set -uo pipefail
@@ -773,6 +784,48 @@ if grep -qE '/builds\.slice/([^/]+\.scope|job-[^/]+\.service)$' "$PROC/self/cgro
   write_ready "$(grep -oE '[^/]+\.(scope|service)$' "$PROC/self/cgroup" 2>/dev/null | head -1)" "$$"
   exec env -u HEAVY_BUILD_CLASS -u HEAVY_BUILD_READY_FILE -u HEAVY_BUILD_WAIT_TIMEOUT "${build_env[@]}" "$@"
 fi
+
+# HEAVY_BUILD_BACKEND=jobd, from the caller's environment only (never the
+# conf file): hand the command to jobd with `job submit` instead of this
+# queue. Not for a nested call (handled above, or HEAVY_BUILD_ACTIVE set) or
+# a waiter that re-executed itself (HB_ADOPT_TICKET). The job client is
+# HB_JOB_CMD, else `job` on PATH, else ~/projects/job-system/bin/job.
+# - --class, --ready-file and --wait-timeout go to job submit as the same
+#   options. Other HEAVY_BUILD_* variables reach jobd in the environment.
+# - A HEAVY_BUILD_* variable jobd does not read (JOBD_VARS) is refused with
+#   exit 2, so it is never dropped without a word.
+# - When the client is missing or `job ping` fails, one warning line, then
+#   this queue as usual. After the exec there is no way back: job submit
+#   exits 75 both when jobd went away and when a job gave up.
+JOBD_VARS=" ACTIVE AGENT ALLOW_RERUN APP_CPU_QUOTA APP_MEM_HIGH_GIB BACKEND CLASS CPU_BUDGET DOTNET_MAXCPU EST_NONFILE EST_ONE_ROW_GIB KEY LANES LOW_CARGO_JOBS MAX_JOBS MIN_SWAP_ROOM_GIB MODE MONOREPO NONFILE_PAD_PCT OWN_EST POLL PRIORITY READY_FILE REASON SESSION SESSION_PID SOLO_MEM_GIB TIMEOUT WAIT WAIT_TIMEOUT WINE_FALLBACK_PCT "
+case ${HEAVY_BUILD_BACKEND:-} in
+  ''|heavy-build) ;;
+  jobd)
+    if [[ -z ${HEAVY_BUILD_ACTIVE:-} && -z $adopt_t ]]; then
+      bad=
+      for v in ${!HEAVY_BUILD_@}; do
+        [[ $JOBD_VARS == *" ${v#HEAVY_BUILD_} "* ]] || bad+=" $v"
+      done
+      if [[ -n $bad ]]; then
+        say "HEAVY_BUILD_BACKEND=jobd: jobd does not support$bad, so nothing was submitted. Unset$bad, or unset HEAVY_BUILD_BACKEND to use heavy-build's own queue."
+        exit 2
+      fi
+      job_cmd=${HB_JOB_CMD:-$(command -v job 2>/dev/null)}
+      [[ -n $job_cmd ]] || job_cmd=$HOME/projects/job-system/bin/job
+      if [[ ! -x $job_cmd ]]; then
+        say "warning: HEAVY_BUILD_BACKEND=jobd, but the job client ($job_cmd) is missing; using heavy-build's own queue"
+      elif ! timeout 10 "$job_cmd" ping 2>/dev/null; then
+        say "warning: HEAVY_BUILD_BACKEND=jobd, but jobd does not answer (job ping); using heavy-build's own queue"
+      else
+        job_args=(submit)
+        [[ -n $CLASS_ARG ]] && job_args+=(--class "$CLASS_ARG")
+        [[ -n $READY_FILE ]] && job_args+=(--ready-file "$READY_FILE")
+        [[ -n $WAIT_TIMEOUT ]] && job_args+=(--wait-timeout "$WAIT_TIMEOUT")
+        exec "$job_cmd" "${job_args[@]}" -- "$@"
+      fi
+    fi ;;
+  *) say "HEAVY_BUILD_BACKEND must be jobd or heavy-build, not '$HEAVY_BUILD_BACKEND'"; exit 2 ;;
+esac
 
 case $PRIO in
   high|normal|low) ;;
@@ -1989,10 +2042,11 @@ swap_room_gib() {
     END {if (t > 0) print int((0.9 * t - (t - f)) / 1048576)}' "$MEMINFO" 2>/dev/null
 }
 
-# Number of scopes with processes in builds.slice (heavy-build or the old rule).
+# Number of scopes with processes in builds.slice (heavy-build or the old
+# rule), and jobd jobs (job-<x>.service).
 active_build_scopes() {
   local e n=0
-  for e in "$BSLICE"/*.scope/cgroup.events; do
+  for e in "$BSLICE"/*.scope/cgroup.events "$BSLICE"/job-*.service/cgroup.events; do
     [[ -e $e ]] && grep -qx 'populated 1' "$e" 2>/dev/null && n=$(( n + 1 ))
   done
   echo "$n"
@@ -2187,6 +2241,7 @@ sweep_stale() {
   for f in "$CPUDIR"/*; do
     [[ -e $f ]] || continue
     n=${f##*/}; n=${n%.noted}
+    [[ $n == job-*.service ]] && { [[ -d $BSLICE/$n ]] || rm -f -- "$f"; continue; }
     [[ $n == *.* ]] && continue
     [[ -d $BSLICE/$n.scope ]] || rm -f -- "$f"
   done
@@ -2301,6 +2356,9 @@ slice_cpu() {
 # age_s idle keys", where idle is 1 when the scope used under 0.05 cores over
 # the last HB_IDLE_SECS, and keys come from a state file its heavy-build left
 # behind (a SIGKILL skips the cleanup), so its lock keys stay held.
+# jobd jobs (builds.slice/job-<x>.service) come as "J unit cur_bytes cpu_usec
+# age_s idle -", the same fields: jobd runs its own queue, so heavy-build only
+# sees their cgroups.
 # A state file is removed (event=sweep) and charges nothing when its
 # heavy-build is in the queue as a waiter, or when its scope has not run for
 # HB_NO_SCOPE_SECS (60) since the build was let in: such a heavy-build runs no
@@ -2336,7 +2394,7 @@ running_lines() {
     seen+="$u "
     echo "R $u $start $em $ec $(( start + ${ew%.*} )) $cur $c60 $stl $pr ${ks:--} ${cl:--}"
   done
-  for d in "$BSLICE"/*.scope; do
+  for d in "$BSLICE"/*.scope "$BSLICE"/job-*.service; do
     [[ -d $d ]] || continue
     grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null || continue
     u=${d##*/}; u=${u%.scope}
@@ -2349,7 +2407,8 @@ running_lines() {
     r=$(cpu_rate "$u" "$usec")
     idle=0
     [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )) && idle=1
-    echo "F $u $cur $usec $age $idle ${left[$u]:--}"
+    if [[ $u == *.service ]]; then echo "J $u $cur $usec $age $idle -"
+    else echo "F $u $cur $usec $age $idle ${left[$u]:--}"; fi
   done
 }
 
@@ -2659,6 +2718,19 @@ $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
   addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", 2)
   r_unt[nr] = 1; T_unt++
+  untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
+}
+# A jobd job: charged as a scope without a heavy-build (its current memory
+# plus 2 GiB still to come, its average cores), but it is a real build, so
+# it is never left out as untracked. An idle one only holds its memory.
+$1 == "J" && $6 == 1 {
+  T_held += $3 / 1073741824
+  untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:idle", $2, $3 / 1073741824)
+  next
+}
+$1 == "J" {
+  c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
+  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", "-", 100, "-", 2)
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 $1 == "W" {
