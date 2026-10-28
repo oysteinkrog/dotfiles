@@ -397,6 +397,10 @@
 #   - low when the calling session is pausable.
 #   HEAVY_BUILD_PRIORITY=critical cannot be set by hand. With lane priority
 #   on, a matching lanes rule replaces critical (see below).
+# - A low build gets CARGO_BUILD_JOBS=HEAVY_BUILD_LOW_CARGO_JOBS (default 4;
+#   0 turns it off) unless the caller set CARGO_BUILD_JOBS itself. Other
+#   builds get the caller's value or 8. The start line in live.log says
+#   cargo_jobs=N when the cap is applied. The cores estimate does not use it.
 # - Lane priority (HEAVY_BUILD_LANE_PRIO=1 in heavy-build.conf, default 0):
 #   the manager sets priority per lane in ~/.config/heavy-build.lanes, one
 #   rule per line, `<match> <high|normal|low> [by=<who>] [# note]`, first
@@ -732,6 +736,8 @@ BSLICE=$USVC/builds.slice
 MEMINFO=$PROC/meminfo
 WINE_DEFAULT_LINE='${WINEPREFIX:-$HOME/.local/share/wineprefixes/motioncatalyst}'
 
+# 1 when the caller set CARGO_BUILD_JOBS: then the low-build cap leaves it alone.
+CARGO_JOBS_OWN=${CARGO_BUILD_JOBS+1}
 build_env=(
   HEAVY_BUILD_ACTIVE=1
   CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
@@ -854,6 +860,8 @@ read_conf() {
     APP_CPU_QUOTA=0
   fi
   APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
+  setting HEAVY_BUILD_LOW_CARGO_JOBS 4
+  LOW_CARGO_JOBS=$(( 10#$LOW_CARGO_JOBS ))
   presence_override
 }
 
@@ -2933,13 +2941,21 @@ critical_first_on() {
   cf_on=1
 }
 
+# low_cargo_jobs: prints the CARGO_BUILD_JOBS cap for a low build, or nothing
+# when the build is not low, the cap is 0 or the caller set its own value.
+low_cargo_jobs() {
+  [[ $PRIO == low && -z $CARGO_JOBS_OWN ]] && (( LOW_CARGO_JOBS > 0 )) && echo "$LOW_CARGO_JOBS"
+  return 0
+}
+
 # Logs the budget decision when it, its reason kind or the actual outcome
 # changes. $1 is what actually happened: wait or start.
 log_decision() {
-  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}|$plevel" since= appcpu=
+  local k="$dec|${why%%:*}|$1|$MODE|${capinfo:--}|$plevel" since= appcpu= cj
   if [[ ${cls:-} == app-run ]]; then
     if (( APP_CPU_QUOTA > 0 )); then appcpu=" cpu_quota=${APP_CPU_QUOTA}%"; else appcpu=" cpu_quota=none"; fi
   fi
+  [[ $1 == start ]] && cj=$(low_cargo_jobs) && [[ -n $cj ]] && appcpu+=" cargo_jobs=$cj"
   if [[ $dec == start ]]; then
     [[ -n $would_since ]] || would_since=$EPOCHSECONDS
   else
@@ -3616,6 +3632,10 @@ props=(-p MemoryHigh="${cap_high}G" -p MemoryMax="${cap_max}G" -p MemorySwapMax=
 # 0 or empty means none. Builds get no CPUQuota.
 [[ $cls == app-run ]] && (( APP_CPU_QUOTA > 0 )) && props+=(-p CPUQuota="${APP_CPU_QUOTA}%")
 desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REASON}"
+# A low build's cargo gets fewer jobs (HEAVY_BUILD_LOW_CARGO_JOBS). The later
+# CARGO_BUILD_JOBS in build_env wins in env.
+lcj=$(low_cargo_jobs)
+[[ -n $lcj ]] && build_env+=(CARGO_BUILD_JOBS="$lcj")
 
 # The signal traps go in before the scope exists, so no signal can end
 # heavy-build between making the scope and watching it.
