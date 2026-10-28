@@ -319,7 +319,10 @@ def update_jobd(st, now):
 
             try:
                 r = subprocess.run([tool, "queue"], capture_output=True, text=True, timeout=5)
-                live = json.loads(r.stdout)["jobs"] if r.returncode == 0 else []
+                out = json.loads(r.stdout) if r.returncode == 0 else {}
+                live = out.get("jobs", [])
+                # The job limit both queues share: heavy-build's, with the presence file applied.
+                j["maxjobs"] = out.get("maxjobs")
             except (OSError, subprocess.SubprocessError, ValueError, KeyError):
                 live = None
             if live is not None:
@@ -1224,7 +1227,7 @@ def build(st, now, ow):
         "running": running,
         "gate": gate,
         "slots": {
-            "jobs": as_int("HEAVY_BUILD_MAX_JOBS"),
+            "jobs": st["jobd"].get("maxjobs") or as_int("HEAVY_BUILD_MAX_JOBS"),
             "appRuns": as_int("HEAVY_BUILD_MAX_APP_RUNS"),
             "appRunsUsed": sum(1 for b in running if b["cls"] == "app-run"),
         },
