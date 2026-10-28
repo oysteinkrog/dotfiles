@@ -593,6 +593,17 @@
 #   4 h until it has history.
 # - No "it may be hung" warning when it idles; it still stops being charged
 #   cores and expected memory after 10 min idle.
+# - Its memory charge drops to what the scope holds now plus
+#   HEAVY_BUILD_APPRUN_MARGIN_MIB (default 512) while it is idle: under
+#   HEAVY_BUILD_APPRUN_IDLE_MILLICORES (default 100, so 0.1 core) on average
+#   over HEAVY_BUILD_APPRUN_IDLE_MIN minutes (default 30; 0 turns it off). It
+#   still counts as a job and an app run. A minute at
+#   HEAVY_BUILD_APPRUN_BUSY_MILLICORES (default 250) or more brings back the
+#   normal charge. The same lower charge applies at once when the
+#   MotionCatalyst process it ran has exited while the scope stays
+#   (HEAVY_BUILD_APPRUN_EXIT_ACTUAL, default 1). Each switch is logged as
+#   event=charge-actual (reason=idle or app-exit) or event=charge-normal.
+#   Nothing is stopped or frozen.
 # - A run whose command dies from a signal, or that ends because heavy-build
 #   itself got TERM, INT or HUP (headless-mc.sh stop), is logged with reason
 #   stopped, not cancelled, and its peak still counts for the estimate.
@@ -868,6 +879,12 @@ read_conf() {
     APP_CPU_QUOTA=0
   fi
   APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
+  setting HEAVY_BUILD_APPRUN_IDLE_MIN 30
+  APPRUN_IDLE_MIN=$(( 10#$APPRUN_IDLE_MIN ))
+  setting HEAVY_BUILD_APPRUN_IDLE_MILLICORES 100
+  setting HEAVY_BUILD_APPRUN_BUSY_MILLICORES 250
+  setting HEAVY_BUILD_APPRUN_EXIT_ACTUAL 1
+  setting HEAVY_BUILD_APPRUN_MARGIN_MIB 512
   setting HEAVY_BUILD_LOW_CARGO_JOBS 4
   LOW_CARGO_JOBS=$(( 10#$LOW_CARGO_JOBS ))
   setting HEAVY_BUILD_DOTNET_MAXCPU 6
@@ -2449,6 +2466,13 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   # An idle build (no CPU for HB_STALL_SECS) is charged only the memory it
   # holds. It is not counted as a job or a high build until it runs again.
   if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
+  # stalled 2: an app run that is idle (HEAVY_BUILD_APPRUN_IDLE_MIN) or whose
+  # app has exited. It still counts as a job and an app run, but its memory
+  # is what it holds plus appmargin GiB, not its estimate.
+  else if (stalled == 2) {
+    held = cur + appmargin; tc = appmargin; grow = appmargin
+    cc = (c60 == "-") ? cores : max(0.25, c60 / 1000)
+  }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
     # The memory controller: only young builds still take more, a new one its
@@ -2607,6 +2631,7 @@ BEGIN {
     mcharmago += 0; mcfall += 0
   }
   if (growpct == "") growpct = 100
+  if (appmargin == "") appmargin = 0.5
   sliceavg += 0
   # Swap headroom: while system memory pressure (some avg10 and avg60) is
   # under 1.0%, swpct percent of SwapFree, at most swcap GiB, counts as
@@ -2842,7 +2867,7 @@ decide() {
     -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
     -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcfreegib="$MC_FREE_GIB" -v mcnewfull="$MC_NEW_FULL_SECS" \
     -v mcbrakegib="$MC_BRAKE_GIB" -v mcbrakeswapin="$MC_BRAKE_SWAPIN" -v mcbrakefull="$MC_BRAKE_FULL_PCT" -v mccalm="$MC_CALM_SECS" -v mcfallgib="$MC_FALL_GIB" \
-    -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" "$ADMIT_AWK")
+    -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" -v appmargin="$(( APPRUN_MARGIN_MIB * 100 / 1024 ))e-2" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
@@ -3176,8 +3201,60 @@ sample_scope() {
   else
     orphan_seen=0 orphan_since= stalled_wine=0
   fi
-  grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null && write_state "$cur" "$c60" "$(( stalled_cpu || stalled_wine ))"
+  apprun_charge
+  p=$(( stalled_cpu || stalled_wine ))
+  (( ! p && charge_actual )) && p=2
+  grep -qx 'populated 1' "$d/cgroup.events" 2>/dev/null && write_state "$cur" "$c60" "$p"
   psi_watch
+}
+
+# apprun_charge: for an app run, sets charge_actual to 1 while the run is
+# charged its current memory plus HEAVY_BUILD_APPRUN_MARGIN_MIB instead of its
+# estimate (state file column 10 is then 2), and logs each switch. Two causes:
+# - idle: under HEAVY_BUILD_APPRUN_IDLE_MILLICORES (100) on average over the
+#   last HEAVY_BUILD_APPRUN_IDLE_MIN minutes (30; 0 turns it off). A minute at
+#   HEAVY_BUILD_APPRUN_BUSY_MILLICORES (250) or more ends it and starts the
+#   window again.
+# - app-exit: a MotionCatalyst process was seen in the scope and has been gone
+#   for two samples in a row, while the scope stays (a lane that keeps its
+#   slot between MC starts). A new MotionCatalyst process ends it.
+#   HEAVY_BUILD_APPRUN_EXIT_ACTUAL=0 turns it off.
+# Uses sample_scope's d, cur, now, u, n, c60 and S_t/S_u.
+apprun_charge() {
+  [[ $cls == app-run ]] || return 0
+  local want=0 why= avg=- p comm has=0 win
+  if (( APPRUN_EXIT_ACTUAL )); then
+    while read -r p; do
+      read -r comm 2>/dev/null < "$PROC/$p/comm" || continue
+      [[ $comm == MotionCatalyst* ]] && { has=1; break; }
+    done 2>/dev/null < "$d/cgroup.procs"
+    if (( has )); then
+      # A new MC start: its idle window starts now.
+      (( app_gone >= 2 )) && ai_lo=$(( n - 1 ))
+      app_seen=1 app_gone=0
+    elif (( app_seen )); then
+      app_gone=$(( app_gone + 1 ))
+      (( app_gone >= 2 )) && want=1 why=app-exit
+    fi
+  fi
+  if (( APPRUN_IDLE_MIN > 0 && ! want )); then
+    win=$(( APPRUN_IDLE_MIN * 60000000 ))
+    [[ $c60 != - ]] && (( c60 >= APPRUN_BUSY_MILLICORES )) && ai_lo=$(( n - 1 ))
+    while (( ai_lo + 1 < n )) && (( now - S_t[ai_lo + 1] >= win )); do ai_lo=$(( ai_lo + 1 )); done
+    if (( now - S_t[ai_lo] >= win )); then
+      avg=$(( (u - S_u[ai_lo]) * 1000 / (now - S_t[ai_lo]) ))
+      (( avg < APPRUN_IDLE_MILLICORES )) && want=1 why=idle
+    fi
+  fi
+  (( want == charge_actual )) && return 0
+  charge_actual=$want
+  local mem
+  printf -v mem '%d.%d' $(( cur / 1073741824 )) $(( cur % 1073741824 * 10 / 1073741824 ))
+  if (( want )); then
+    log_line "event=charge-actual unit=$unit reason=$why mem=${mem}G margin_mib=$APPRUN_MARGIN_MIB est=${est_mem}G avg_millicores=$avg cmd=\"$cmdline\""
+  else
+    log_line "event=charge-normal unit=$unit mem=${mem}G est=${est_mem}G c60_millicores=$c60 cmd=\"$cmdline\""
+  fi
 }
 
 # ---------------------------------------------------------------- CPU guard
@@ -3690,6 +3767,7 @@ write_ready "$unit.scope" "$child"
 
 S_t=() S_u=() s_lo=0 peak=0 peak_nf=0 nf_n=0 usec_last= last_active=$(now_us)
 hung_high_logged=
+ai_lo=0 charge_actual=0 app_seen=0 app_gone=0
 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since= orphan_warned= orphan_stopped= orph_unknown_logged=
 orph_other_logged= wine_idle_logged=
 rc= gone_since=
