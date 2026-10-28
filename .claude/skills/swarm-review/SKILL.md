@@ -1,12 +1,12 @@
 ---
 name: swarm-review
-description: Run 6 parallel review agents by default, each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
+description: Run 6 parallel review lanes by default (bounded GPT-6 Astra runs), each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
 argument-hint: "<target: plan file, bead list, or code path> [--lenses L1,L2,...] [--team-size N]"
 ---
 
 # Multi-Lens Review
 
-Spawn N parallel agents (default 6), each assigned a distinct review lens, to independently review a target artifact. Compile findings into a single issues list with severity and actionable fixes.
+Run N parallel review lanes (default 6), each assigned a distinct review lens, to independently review a target artifact. Compile findings into a single issues list with severity and actionable fixes.
 
 ## When to Use
 
@@ -20,7 +20,7 @@ Spawn N parallel agents (default 6), each assigned a distinct review lens, to in
 
 Full set of 10 lenses. The default team of 6 runs lenses 1, 2, 3, 6, 9 and 10 (correctness, safety, performance, testability, security, feasibility). Override with `--lenses` to select a subset or customize.
 
-**Model per lane:** use `sonnet` for every lane. Use `opus` only for the correctness and security lenses (1 and 9), where a missed flaw costs the most. Pass `model:` on every spawn.
+**Model per lane (2026-10-28):** every lane is one bounded GPT-6 Astra run at effort `medium` (see `/consult-oracles`, Bounded Astra run). At most 4 run at once, so a team of 6 goes in two waves. If Codex fails, run that lane as a Fable subagent, then Opus, and say so. Add a Fable run beside Astra for the security lens (9) only when the change is high-stakes.
 
 | # | Lens | Focus | Key Questions |
 |---|------|-------|---------------|
@@ -57,18 +57,19 @@ Determine what is being reviewed:
 
 ### Step 2: Prepare Shared Context
 
-Create a context summary that all agents receive:
+Build the shared context every lane receives, with the content pasted in (Astra cannot
+read the tree). Keep each lane's whole prompt under about 60k tokens:
 
 ```
 REVIEW TARGET: <what is being reviewed>
 TARGET TYPE: <plan | beads | code | architecture>
-CONTEXT FILES: <list of files agents should read>
+CONTENT: <the diff, plan text or `br show` output, plus the needed file excerpts with paths and line numbers>
 CONSTRAINTS: <any known constraints or requirements>
 ```
 
-### Step 3: Spawn Review Agents
+### Step 3: Run Review Lanes
 
-For each lens, spawn an agent with this prompt template:
+For each lens, write one prompt file from this template:
 
 ```
 You are a review agent with the **{LENS_NAME}** lens.
@@ -83,7 +84,7 @@ You are a review agent with the **{LENS_NAME}** lens.
 {SHARED_CONTEXT}
 
 ## Instructions
-1. Read all target files and context
+1. Read all the pasted content
 2. Review ONLY through your assigned lens — do not duplicate other lenses
 3. For each issue found, report:
    - **Severity:** CRITICAL | HIGH | MEDIUM | LOW
@@ -108,13 +109,13 @@ Return a JSON array:
 ]
 ```
 
-Spawn the N reviewers with one leader message containing N `Agent` tool calls
-(`subagent_type: "general-purpose"`, `run_in_background: true`, distinct `name`,
-shared `team_name`) so they run concurrently.
+Run each prompt file as a bounded Astra run with `-o <scratchpad>/review-<lens>.md`,
+up to 4 per leader message with `run_in_background: true`. An empty output file after
+exit 0 means that lane failed: rerun it on the fallback.
 
 ### Step 4: Compile Findings
 
-After all agents complete:
+After all lanes complete:
 
 1. **Collect** all issue arrays into one list
 2. **Deduplicate** — merge issues found by multiple lenses (note: multi-lens agreement raises confidence)
@@ -139,7 +140,7 @@ Review is complete when:
 - No two lenses have unresolved contradictions
 - Fixes have not introduced new CRITICAL/HIGH issues (spot-check)
 
-If fixes are extensive, consider running a second pass (reduced team: 4-6 agents, focused on lenses that found the most issues).
+If fixes are extensive, consider running a second pass (reduced team: 4-6 lanes, focused on lenses that found the most issues).
 
 ## Team Size Guidance
 
@@ -147,7 +148,7 @@ If fixes are extensive, consider running a second pass (reduced team: 4-6 agents
 |-------------|-----------------|-----------|
 | 1-5 beads or small plan | 6 agents | Full coverage overkill for small targets |
 | 6-20 beads or medium plan | 6 agents (default) | Standard coverage |
-| 20+ beads or large plan | 10 + second pass (Sonnet lanes, Opus for correctness and security) | First pass finds bulk, second pass catches interactions |
+| 20+ beads or large plan | 10 + second pass (Astra lanes, split the content so each prompt stays under about 60k tokens) | First pass finds bulk, second pass catches interactions |
 | Code review (<500 LOC) | 6 agents | Focus on correctness, safety, perf, tests |
 | Code review (>500 LOC) | 10 agents | Full lens set |
 

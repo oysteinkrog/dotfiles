@@ -242,6 +242,8 @@ Do not restrict yourself to the latest commits, cast a wider net and go super de
 - Missing null checks, forgotten awaits, swallowed errors
 - Fresh perspective catches what the writing agent missed
 
+If you hand this review to another agent instead of doing it yourself, make it a bounded Astra run with the diff pasted in (see `/consult-oracles`; Fable if Codex fails, then Opus). The agent that applies the fixes stays on Claude.
+
 ---
 
 ## Tool Integration

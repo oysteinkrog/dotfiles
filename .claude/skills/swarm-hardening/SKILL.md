@@ -8,6 +8,8 @@ argument-hint: "<target: beads, plan file, or code path> [--max-rounds N] [--ski
 
 Orchestrate the full review-fix-validate-verify loop that takes artifacts from "draft" to "implementation-ready." Combines `/swarm-review` and `/swarm-oracle` into an iterative pipeline with convergence tracking.
 
+**Models (2026-10-28):** every review round and every verifier is a bounded GPT-6 Astra run at effort `medium` (one prompt of about 60k tokens with the excerpts pasted in, run from an empty directory with the shell tools off, at most 4 at once; see `/consult-oracles`, Bounded Astra run). If Codex fails, use Fable, then Opus, and say so. Fable also cross-checks a security lens on a high-stakes change. Agents that apply fixes stay on Claude (Sonnet, Opus for hard fixes).
+
 ## When to Use
 
 - After creating beads from a plan (the full hardening treatment)
@@ -21,16 +23,16 @@ Orchestrate the full review-fix-validate-verify loop that takes artifacts from "
 Draft Artifact
      |
      v
-[Round 1] Multi-Lens Review (6 agents, Sonnet lanes; Opus for correctness and security) --> Fix issues
+[Round 1] Multi-Lens Review (6 Astra runs) --> Fix issues
      |
      v
-[Round 2] Oracle Consensus (2x Fable) --> Fix corrections
+[Round 2] Oracle Consensus (2x Astra) --> Fix corrections
      |
      v
-[Round 3] Fresh-Eyes Hardening (8 agents) --> Fix + embed cross-cutting
+[Round 3] Fresh-Eyes Hardening (8 Sonnet agents) --> Fix + embed cross-cutting
      |
      v
-[Round 4] Final Correctness Pass (4 Sonnet verifiers + 1 Fable oracle) --> Verify all fixes
+[Round 4] Final Correctness Pass (4 Astra verifier runs + 1 Astra oracle) --> Verify all fixes
      |
      v
 Hardened Artifact (ready for implementation)
@@ -69,7 +71,7 @@ Run `/swarm-review` on the target. Use the full 10-lens set for first pass.
 **Input:** Draft artifact
 **Output:** `{artifact_dir}/round1-findings.json`
 
-After agents complete:
+After the runs complete:
 1. Compile findings (deduplicated, sorted by severity)
 2. Count: `CRITICAL: N, HIGH: N, MEDIUM: N, LOW: N`
 3. Apply all CRITICAL and HIGH fixes
@@ -99,7 +101,7 @@ After oracles complete:
 
 ### Step 3: Fresh-Eyes Hardening
 
-Spawn 8 agents, each with a different hardening focus. These agents have NOT seen previous round findings — they review with fresh perspective.
+Spawn 8 Sonnet agents (`model: "sonnet"`), each with a different hardening focus. They apply fixes, so they stay on Claude. These agents have NOT seen previous round findings, so they review with fresh perspective.
 
 | # | Focus | Instructions |
 |---|-------|-------------|
@@ -140,9 +142,9 @@ After agents complete:
 
 ### Step 4: Final Correctness Pass
 
-Spawn 4 Sonnet verifiers (`model: "sonnet"`) for a final verification. Each verifier checks a slice of the artifact (e.g., one epic of beads, one section of a plan). Then spawn one fresh Fable oracle (`Agent`, `model: "fable"`, see `/swarm-oracle`) over the whole artifact for the subtle errors the verifiers miss. Add one Astra call (`codex exec`, effort `medium`) only when the artifact is high-stakes or the Fable result looks uncertain.
+Run 4 bounded Astra verifier runs for a final verification. Each verifier checks a slice of the artifact (e.g., one epic of beads, one section of a plan), pasted into its prompt. Astra cannot read the tree, so paste in the facts it must check too: `test -f` results for each path, `br dep cycles` output. Then run one Astra oracle (see `/swarm-oracle`) for the subtle errors the verifiers miss. Add one fresh Fable subagent (`Agent`, `model: "fable"`) only when the call is contested, the Astra result looks wrong, or Codex fails.
 
-Agent prompt template:
+Verifier prompt template:
 
 ```
 You are a final correctness verifier. Your job is to verify, not find new issues.
@@ -226,7 +228,7 @@ Skip stages with flags:
 
 ## Architecture Audit Variant
 
-When the target is existing code (not beads/plans), replace the standard lenses with architecture-focused agents:
+When the target is existing code (not beads/plans), replace the standard lenses with architecture-focused review runs (bounded Astra, the relevant source pasted in):
 
 | # | Agent Focus |
 |---|-------------|

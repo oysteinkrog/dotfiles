@@ -20,15 +20,20 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 # Oracle Review Skill
 
-> **Oracle policy (2026-10-22):** Fable is the primary oracle. By default the
-> FOR/AGAINST sessions below run as two fresh Fable subagents (`Agent` tool,
-> `model: "fable"`), one per stance, and that is enough on its own. GPT-6 Astra
-> (`gpt-6-astra`, via the Codex CLI) is the secondary oracle: add an Astra FOR/AGAINST
-> pair (two `codex exec` calls, effort `medium`) for high-stakes or contested
-> validations, and use it as the whole debate when Fable is unavailable. Opus is the
-> last fallback, only when Fable and Astra both fail. Gemini 4 Argon is currently
-> unavailable (AI Studio credit ran out 2026-10-21). Reason for the order: 16 Claude
-> accounts against 3 OpenAI accounts. See `/consult-oracles`.
+> **Oracle and review policy (2026-10-28):** GPT-6 Astra runs every oracle session
+> and every review lane. Each is one bounded Astra run at effort `medium`: one prompt
+> of about 60k tokens with the diff and needed excerpts pasted in, run from an empty
+> directory with the shell tools off (see `/consult-oracles`, Bounded Astra run). At
+> most 4 Astra runs at once. Fable (fresh `Agent` subagent, `model: "fable"`) is the
+> secondary oracle: add it for a security review or a contested call (Astra looks
+> wrong, or two oracles disagree), and use it in place of Astra when Codex fails
+> (auth error, rate limit, empty output). Opus is the last fallback, only when Astra
+> and Fable both fail. Gemini 4 Argon is currently unavailable (AI Studio credit ran
+> out 2026-10-21). Why: the OpenAI accounts ended last week at about 26% to 31% with
+> reset credits unused, while four Claude accounts hit 100%. If any OpenAI account
+> passes 70% of its week before its reset, go back to Fable first. Use `high` only for
+> one high-stakes question, and say why. Lesson from 2026-10-22: high-effort Astra
+> reviews on whole repos used up all three OpenAI accounts in about 90 minutes.
 
 Two-part process: (1) oracle consensus validation with FOR/AGAINST stances,
 then (2) iterative hardening loop until findings converge to near-zero.
@@ -44,7 +49,7 @@ then (2) iterative hardening loop until findings converge to near-zero.
 ## When NOT to Use
 
 - Quick questions or second opinions (use `/consult-oracles`)
-- Code review (use `/swarm-agents type=review`)
+- Code review (use `/swarm-review`)
 - Simple validation that doesn't need adversarial challenge
 
 ## Part 1: Oracle Consensus Validation
@@ -52,8 +57,8 @@ then (2) iterative hardening loop until findings converge to near-zero.
 ### Setup
 
 Run 2 concurrent oracle sessions:
-- **Default tier:** two fresh Fable subagents (`Agent`, `model: "fable"`), one FOR stance, one AGAINST stance, both spawned in a single message with a short self-contained brief and a bounded file list. See `/swarm-oracle` Step 2 for the exact prompts
-- **Cross-provider check / Fable fallback:** two `codex exec` calls on `gpt-6-astra` (`-c model_reasoning_effort=medium`, `< /dev/null`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR, one AGAINST, made in a single message. Use `high` only for a high-stakes validation with a bounded file list. Opus subagents only when Fable and Astra both fail
+- **Default tier:** two bounded Astra runs (`codex exec -m gpt-6-astra`, effort `medium`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, made in a single message. See `/swarm-oracle` Step 2 for the exact command and prompts
+- **Cross-provider check / Codex fallback:** two fresh Fable subagents (`Agent`, `model: "fable"`), one FOR, one AGAINST, spawned in a single message. Use them for security reviews or contested calls, and as the whole debate when Codex fails. Opus subagents only when Astra and Fable both fail
 - **Alternate route:** PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST) when the structured consensus flow is wanted
 - **Cost rules:** give the oracles the change delta, not the whole artifact history, and validate each change once
 
@@ -111,19 +116,20 @@ After oracle validation, run hardening rounds until convergence.
 
 Each round has 3 steps:
 
-**Step A: Review** (6 agents via `/swarm-agents type=review`, Sonnet lanes; Opus for correctness and security)
-- Each agent reviews with a different lens
+**Step A: Review** (6 lenses via `/swarm-review`, each one bounded Astra run, at most 4 at once)
+- Each run reviews with a different lens, given the artifact or diff pasted in
 - Finds issues, inconsistencies, gaps
-- Output: list of findings per agent
+- Output: list of findings per lens
+- Add a Fable run for the security lens only when the change is high-stakes
 
 **Step B: Fix**
 - Compile all findings
-- Apply fixes (6-8 Sonnet agents for large artifacts)
+- Apply fixes (6-8 Sonnet agents for large artifacts; fix lanes stay on Claude)
 - Each fix validated against the original plan/design
 
 **Step C: Validate Fixes**
 - Oracle round on the fixed artifact
-- OR agent review of just the changes
+- OR one bounded Astra review of just the changes
 - Confirm fixes don't introduce new issues
 
 ### Convergence Signal
@@ -186,15 +192,15 @@ performance impact, data integrity, rollback strategy.
 ## Full Hardening Pipeline Example
 
 ```
-Phase 1: Oracle (2x Fable FOR/AGAINST; add 2x Astra if high-stakes or contested)
+Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Fable if security or contested)
   -> Fix CRITICAL/HIGH findings
-Phase 2: Agent Review (6 agents, multi-lens, mostly Sonnet)
+Phase 2: Lens Review (6 bounded Astra runs, multi-lens)
   -> Fix all findings
-Phase 3: Oracle (2x Fable FOR/AGAINST) on fixes
+Phase 3: Oracle (2x Astra FOR/AGAINST) on fixes
   -> Verify fixes, find remaining issues
 Phase 4: Agent Hardening (8 Sonnet, fresh eyes)
   -> Embed cross-cutting, convert ACs, split oversized
-Phase 5: Final Correctness (4 Sonnet verifiers + 1 Fable oracle)
+Phase 5: Final Correctness (4 Astra verifier runs, then 1 Astra oracle)
   -> Verify everything, fix last issues
   -> If <= 2 issues: DONE
   -> If > 2 issues: repeat from Phase 3
@@ -207,4 +213,4 @@ Phase 5: Final Correctness (4 Sonnet verifiers + 1 Fable oracle)
 3. **Track convergence** — if issues aren't decreasing, the artifact needs redesign, not more rounds
 4. **Validate fixes against plan** — hardening must not drift from the original design intent
 5. **Oracle before agents, agents before oracle** — alternate perspectives for best coverage
-6. **Check the oracle route before launching.** Fable subagents need only the `Agent` tool. For the Astra check, `codex` on PATH and the repo root trusted in `~/.codex/config.toml`. For the PAL route, PAL MCP running (agents silently fall back to self-analysis without it)
+6. **Check the oracle route before launching.** For Astra, `codex` on PATH and logged in. Fable subagents need only the `Agent` tool. For the PAL route, PAL MCP running (agents silently fall back to self-analysis without it)
