@@ -61,7 +61,7 @@ fake_proc(
 fake_proc(
     200,
     f"/opt/google/chrome/chrome\0--user-data-dir={HOME}/.config/google-chrome\0"
-    "--profile-directory=Default\0--class=chrome-work\0".encode(),
+    "--profile-directory=Profile 1\0--class=chrome-work\0".encode(),
     SCOPE + "app-com.google.Chrome-200.scope\n",
 )
 # A terminal.

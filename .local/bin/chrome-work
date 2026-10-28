@@ -1,8 +1,9 @@
 #!/bin/sh
-# Work Chrome profile (the default data folder), with its own Wayland app_id
-# (chrome-work) so it gets a taskbar icon separate from chrome-personal.
+# Work Chrome profile: "Profile 1" (oystein@initialforce.com) in the default data
+# folder, with its own Wayland app_id (chrome-work) so it gets a taskbar icon
+# separate from chrome-personal. "Default" is an empty, signed-out profile.
 exec /usr/bin/google-chrome-stable \
   --user-data-dir="$HOME/.config/google-chrome" \
-  --profile-directory="Default" \
+  --profile-directory="Profile 1" \
   --class=chrome-work \
   "$@"
