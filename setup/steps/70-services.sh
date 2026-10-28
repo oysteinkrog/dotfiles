@@ -17,6 +17,7 @@ units=(
   # Machine health and memory
   pressure-coordinator.service             # dotfiles: memory pressure level for heavy-build
   machine-monitor.service                  # dotfiles: reports machine health problems
+  fs-walk-reaper.service                  # dotfiles: stops whole-disk search walks (find, ug, du) over 20 s old
   ui-slice.service                         # dotfiles: short EEVDF slice for desktop UI threads
   disk-guard.timer                         # dotfiles: free disk and btrfs metadata check
   build-sweep.timer                        # dotfiles: stale build output report

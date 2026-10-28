@@ -5,8 +5,17 @@
 # Plasma styles such as Sweet ship a KDE colours file ([Colors:View], [Colors:Selection], ...).
 # Styles without one (Breeze, "default") follow the app colour scheme, so this prints
 # ~/.config/kdeglobals for them.
+#
+# When an os-theme theme is set (anything but "plasma"), it prints that theme's colours file instead,
+# so everything that follows the Plasma style follows the chosen theme.
 
 set -euo pipefail
+
+os_theme="${XDG_STATE_HOME:-$HOME/.local/state}/os-theme"
+if [ "$(cat "$os_theme/current" 2>/dev/null || echo plasma)" != plasma ] && [ -s "$os_theme/colors" ]; then
+    echo "$os_theme/colors"
+    exit 0
+fi
 
 name=$(kreadconfig6 --file plasmarc --group Theme --key name --default default)
 for dir in "$HOME/.local/share/plasma/desktoptheme" /usr/share/plasma/desktoptheme; do
