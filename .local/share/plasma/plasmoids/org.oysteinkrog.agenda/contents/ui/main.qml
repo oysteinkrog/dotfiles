@@ -1,6 +1,6 @@
 // Agenda: the next meeting, today and the coming days from Google Calendar, who is away
-// today, and open Google Tasks. Data comes from ~/bin/agenda-fetch (gog), run every two
-// minutes. Colours come from the theme picked with os-theme (shared with the Build Queue
+// today, and open Google Tasks. Data comes from ~/bin/agenda-fetch (gog), run every
+// minute so the away list stays current. Colours come from the theme picked with os-theme (shared with the Build Queue
 // panel), or from the Plasma style when that theme is "plasma".
 // Run as a window with: plasmawindowed org.oysteinkrog.agenda
 
@@ -271,7 +271,7 @@ PlasmoidItem {
     }
 
     Timer {
-        interval: 120000
+        interval: 60000
         running: true
         repeat: true
         triggeredOnStart: true
@@ -511,11 +511,13 @@ PlasmoidItem {
             }
             }
 
-            // Bottom: who is away today, and open Google Tasks beside it, on one card.
+            // Bottom: who is away today, and open Google Tasks beside it, on one card. Shown
+            // from the data, not from the children's visible: children of a hidden card
+            // always read as hidden, so the card would never show again.
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: bottom.implicitHeight + Kirigami.Units.smallSpacing * 5
-                visible: awayList.visible || tasks.visible
+                visible: awayList.people.length > 0 || root.agenda.tasks.length > 0
                 radius: 6
                 color: root.cardColor
                 border.width: 1
@@ -579,15 +581,15 @@ PlasmoidItem {
                 Rectangle {
                     Layout.fillHeight: true
                     implicitWidth: 1
-                    visible: awayList.visible && tasks.visible
+                    visible: awayList.people.length > 0 && root.agenda.tasks.length > 0
                     color: root.lineColor
                 }
 
                 // Open Google Tasks, overdue first.
                 ColumnLayout {
                     id: tasks
-                    Layout.preferredWidth: awayList.visible ? Kirigami.Units.gridUnit * 9 : -1
-                    Layout.fillWidth: !awayList.visible
+                    Layout.preferredWidth: awayList.people.length > 0 ? Kirigami.Units.gridUnit * 9 : -1
+                    Layout.fillWidth: awayList.people.length === 0
                     Layout.alignment: Qt.AlignTop
                     visible: root.agenda.tasks.length > 0
                     spacing: Kirigami.Units.smallSpacing
