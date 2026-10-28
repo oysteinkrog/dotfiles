@@ -16,7 +16,7 @@ per machine (panels, monitors, activities, virtual desktops).
   Put a key there only when that machine should differ, with a comment saying why. The
   profiles live in the private Life repo because this repo is public.
 
-Example: the shared `kwinrc` sets `[Xwayland] Scale=1`, and the home desktop's
+Example: the shared `kwinrc` sets `[Xwayland] Scale=1.1`, and the home desktop's
 `kde/kwinrc` sets `Scale=1.25` because its main monitor runs at 125 %.
 
 ## Colour theme
