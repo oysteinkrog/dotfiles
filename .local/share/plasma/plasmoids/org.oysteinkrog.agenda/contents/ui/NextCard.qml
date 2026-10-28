@@ -16,6 +16,7 @@ Rectangle {
     property string whenText
     property color accent
     property color accentText
+    property color textOnAccent
     property real textSize
     property color cardColor
     property color borderColor
@@ -100,6 +101,22 @@ Rectangle {
                 topPadding: Kirigami.Units.smallSpacing * 2
                 bottomPadding: Kirigami.Units.smallSpacing * 2
                 onClicked: Qt.openUrlExternally(card.event.meet)
+                // Text and icon in the theme's colour for text on the accent.
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    Kirigami.Icon {
+                        source: join.icon.name
+                        color: card.textOnAccent
+                        isMask: true
+                        implicitWidth: Kirigami.Units.iconSizes.small
+                        implicitHeight: implicitWidth
+                    }
+                    PlasmaComponents.Label {
+                        text: join.text
+                        color: card.textOnAccent
+                        font.pointSize: card.textSize
+                    }
+                }
                 background: Rectangle {
                     radius: Kirigami.Units.cornerRadius
                     color: join.down ? Qt.darker(card.accent, 1.2) : join.hovered ? Qt.lighter(card.accent, 1.15) : card.accent

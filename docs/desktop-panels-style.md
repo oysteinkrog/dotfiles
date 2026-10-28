@@ -58,3 +58,34 @@ neutral when stale or failing), and a refresh or warning icon.
 
 Outer margin `largeSpacing × 1.25`, gap between cards `largeSpacing`, card padding
 `smallSpacing × 2.5`.
+
+## Themes
+
+Both widgets follow the desktop theme set with `os-theme`, which other apps such as fooyin
+follow too. The themes are in `~/.config/os-theme/themes.json` (`.config/os-theme/` in this
+repo). The chosen theme is one line in `~/.local/state/os-theme/current`. Switch with
+`os-theme NAME` (`panel-theme` is the old name), list with `os-theme --list`, or use the
+palette button in either widget's header. Each fetch script
+puts the chosen theme in its JSON as `panelTheme` (name, label, tokens and the list of
+names), and both widgets change on their next fetch.
+
+`plasma` has no colours: the widget keeps the Plasma style rules above, with `muted()`.
+Every other theme gives these colours, and `muted()` leaves them as they are.
+
+| Token | Use |
+|---|---|
+| window | Window background |
+| card, border | Card fill and its 1 px border |
+| band | Day headers and other bands inside a card |
+| line | Separators |
+| text, muted | Body text and secondary text |
+| title | Section titles |
+| accent, onAccent | Hero bar, Join, a priority stepper with a rule, countdown, now line; text on an accent fill |
+| positive, warning, negative | ok, waiting and failed; the gate's open, slowed and paused; busy time |
+| info | Running jobs, "now" |
+| extra | A fifth data colour (Build Queue app runs) |
+
+Themes: plasma, gruvbox, graphite-teal, warm-amber, nord, oled-blue, navy-coral, mono,
+forest, light-paper, indigo-quiet. Gruvbox follows its mock-up: accent and title #fe8019,
+waiting #fe8019, running #fabd2f, ok #b8bb26, failed #fb4934, app runs #8ec07c, window
+#1d2021, cards #282828.

@@ -121,6 +121,24 @@ Fourth change, 2026-10-25: pause_leave_secs (0 means leave_secs) sets the
 calm time to go down from pause, so slow to normal can be quicker than pause
 to slow. A pause dropped to slow with 10 to 20 GiB free comes back only under
 10 GiB, so pause keeps the longer wait.
+
+Sixth change, 2026-10-27 (own_stall_avail_gib, 0 is off): one session's own
+stall does not pause the build queue. Memory full avg10 is dropped as a pause
+trigger, in the enter test and in the leave test, while all of these hold:
+  - MemAvailable >= own_stall_avail_gib (12 GiB: heavy-build's 6 GiB target
+    plus 6), with no doubling in the leave test;
+  - session.slice (the desktop) memory some avg10 < own_stall_desktop_some
+    (1%), read from the slice's own memory.pressure;
+  - the scope with the highest some avg10 is in claude.slice or app.slice,
+    its some avg10 is at least own_stall_share (0.5) of memory full avg10, and
+    no other scope has more than own_stall_share of its some avg10.
+Memory full then counts only for slow, as with plenty free. Every other pause
+trigger (low MemAvailable, swap room, disk swap-in, two stalled scopes, slice
+swap) is unchanged, and memory full under 10 GiB free still pauses. On
+2026-10-27 the coordinator held pause 13:45 to 15:00 while claude-13166.scope
+faulted its own pages back from swap (majfault 1k to 13k/s) with 12 to 21 GiB
+free and session.slice at 0.00: pausing builds did not help it. Each sample
+log line has desktop_some10= and own_stall= (the scope, or -).
 """
 
 from __future__ import annotations
@@ -170,6 +188,13 @@ DEFAULTS: dict[str, float] = {
     "sample_log_secs": 60,
     "log_max_bytes": 5_000_000,
     "away_ignore_desktop": 1,
+    # One session's own stall (sixth change, 2026-10-27): memory full does not
+    # pause while MemAvailable >= own_stall_avail_gib (0 is off), the desktop
+    # (session.slice some avg10) is under own_stall_desktop_some, and one
+    # non-desktop scope carries the stall (own_stall_share, see the docstring).
+    "own_stall_avail_gib": 12,
+    "own_stall_desktop_some": 1,
+    "own_stall_share": 0.5,
 }
 LEVELS = ("normal", "slow", "pause")
 SLICES = ("claude.slice", "app.slice", "session.slice")
@@ -284,6 +309,7 @@ class Coordinator:
         self.events: dict[str, tuple[int, float]] = {}
         self.last_sample_log = -1e18
         self.reason = ""
+        self.some_rank: tuple[tuple[float, str, str], float] = ((0.0, "", ""), 0.0)
 
     # ------------------------------------------------------------ restart
 
@@ -328,11 +354,15 @@ class Coordinator:
         """Highest some and full avg10 over children of the session slices that
         are not at their own limit, the name of the top one, and how many are
         at or over pause_scope_full, and over half of it. Then the highest some
-        avg10 and top name over claude.slice children only."""
+        avg10 and top name over claude.slice children only. Also sets
+        self.some_rank: the highest some avg10 as (some, slice, name), and the
+        second highest some avg10, for the own-stall rule."""
         best_some = best_full = 0.0
         top = ""
         claude_some = 0.0
         claude_top = ""
+        rank: tuple[float, str, str] = (0.0, "", "")
+        second = 0.0
         nfull = nhalf = 0
         seen: set[str] = set()
         for sl in SLICES:
@@ -350,9 +380,16 @@ class Coordinator:
                 if old is not None and n > old[0]:
                     rose_at = mono
                 self.events[key] = (n, rose_at)
+                some, full = psi(kid / "memory.pressure")
+                # The own-stall ranking counts a scope at its own limit too:
+                # that is the plainest case of a scope stalling on its own.
+                if some > rank[0]:
+                    second = rank[0]
+                    rank = (some, sl, kid.name)
+                elif some > second:
+                    second = some
                 if mono - rose_at < self.cfg["own_limit_secs"]:
                     continue
-                some, full = psi(kid / "memory.pressure")
                 if sl == "claude.slice" and some > claude_some:
                     claude_some = some
                     claude_top = f"{kid.name}:{some:.1f}%"
@@ -369,6 +406,7 @@ class Coordinator:
         for key in list(self.events):
             if key not in seen:
                 del self.events[key]
+        self.some_rank = (rank, second)
         return best_some, best_full, top, nfull, nhalf, claude_some, claude_top
 
     def slice_swap(self) -> tuple[str, float]:
@@ -418,7 +456,15 @@ class Coordinator:
             time.time() if now is None else now
         )
         sl_name, sl_pct = self.slice_swap()
+        desk_some, _ = psi(self.usvc / "session.slice" / "memory.pressure")
+        (r_some, r_slice, r_name), r_second = self.some_rank
         return {
+            # -1 when session.slice's pressure file is unreadable.
+            "desktop_some": desk_some,
+            "rank_some": r_some,
+            "rank_slice": r_slice,
+            "rank_name": r_name or "-",
+            "rank_second": r_second,
             "mem_full": max(mem_full, 0.0),
             "io_full": max(io_full, 0.0),
             "scope_some": scope_some,
@@ -460,6 +506,28 @@ class Coordinator:
             )
         return out
 
+    def own_stall(self, s: dict[str, float | str]) -> str:
+        """The scope whose own stall explains memory full, when the own-stall
+        rule holds for sample s (see the sixth change), else "". The same test
+        serves enter and leave: MemAvailable is not doubled."""
+        c = self.cfg
+        bar = c["own_stall_avail_gib"]
+        if bar <= 0 or float(s.get("mem_avail_gib", 0)) < bar:
+            return ""
+        desk = float(s.get("desktop_some", -1))
+        if desk < 0 or desk >= c["own_stall_desktop_some"]:
+            return ""
+        if s.get("rank_slice") not in ("claude.slice", "app.slice"):
+            return ""
+        top = float(s.get("rank_some", 0))
+        share = c["own_stall_share"]
+        mf = float(s.get("mem_full", 0))
+        if top <= 0 or top < share * mf:
+            return ""
+        if float(s.get("rank_second", 0)) > share * top:
+            return ""
+        return str(s["rank_name"])
+
     def triggers(
         self, s: dict[str, float | str], lvl: int, scale: float = 1.0
     ) -> list[str]:
@@ -485,7 +553,9 @@ class Coordinator:
         cap = c["pause_mem_full_avail_gib"]
         capped = cap > 0 and avail >= cap / scale
         if lvl == 2:
-            if not capped:
+            # One non-desktop session's own stall with plenty free: memory
+            # full counts only for slow (sixth change).
+            if not capped and not self.own_stall(s):
                 ge("mem_full", "pause_mem_full", "memory full avg10", "%")
         else:
             mf = float(s["mem_full"])
@@ -663,7 +733,9 @@ class Coordinator:
             f"mem_avail_gib={s['mem_avail_gib']:.1f} swap_used_gib={s['swap_used_gib']:.1f} "
             f"swap_room_gib={s['swap_room_gib']:.1f} "
             f"slice_swap={s['slice_swap']}:{float(s['slice_swap_pct']):.0f}% "
-            f"away={int(float(s.get('away', 0)))}"
+            f"away={int(float(s.get('away', 0)))} "
+            f"desktop_some10={float(s.get('desktop_some', -1)):.2f} "
+            f"own_stall={self.own_stall(s) or '-'}"
         )
 
     def log(self, now: float, text: str) -> None:
@@ -852,7 +924,14 @@ def self_test() -> int:
             sess_some: float = 0.0,
             sess_full: float = 0.0,
             swapin_add: float = 0,
+            desk_some: float | None = 0.0,
+            sess_high: float = 0,
         ) -> None:
+            dp = usvc / "session.slice/memory.pressure"
+            if desk_some is None:
+                dp.unlink(missing_ok=True)
+            else:
+                setp(dp, desk_some, desk_some)
             setp(proc / "pressure/memory", mem_full, mem_full)
             setp(proc / "pressure/io", 0, 0)
             vm["pswpin"] += int(swapin_add)
@@ -868,7 +947,9 @@ def self_test() -> int:
                 f"low 0\nhigh {int(chrome_high)}\nmax 0\noom 0\n"
             )
             setp(sess / "memory.pressure", sess_some, sess_full)
-            (sess / "memory.events").write_text("low 0\nhigh 0\nmax 0\noom 0\n")
+            (sess / "memory.events").write_text(
+                f"low 0\nhigh {int(sess_high)}\nmax 0\noom 0\n"
+            )
 
         def check(name: str, ok: bool, extra: str = "") -> None:
             nonlocal fails
@@ -1338,6 +1419,77 @@ def self_test() -> int:
             "pause_mem_full_avail_gib=0 turns the cap off: pause at 25 GiB",
             lvl(co) == "pause",
             co.reason,
+        )
+
+        # 21. Own stall (2026-10-27): one non-desktop session stalling on its
+        # own pages with plenty free does not hold pause; low memory, a
+        # desktop stall, a second stalled scope or a spread stall still do.
+        def own_setup(t0: float) -> tuple[Coordinator, float]:
+            co = fresh()
+            t = run_for(co, t0, 20, mem_full=7, avail_gib=8, sess_some=9)
+            return co, t
+
+        co, t = own_setup(18000.0)
+        check(
+            "own stall: mem full 7% with 8 GiB free still pauses",
+            lvl(co) == "pause",
+            co.reason,
+        )
+        t = run_for(co, t, 65, mem_full=6, avail_gib=15, sess_some=8)
+        check(
+            "own stall: 15 GiB free, desktop 0, one session at 8%: down to slow",
+            lvl(co) == "slow",
+            co.reason,
+        )
+        log = (state / "log").read_text()
+        check(
+            "own stall: log has desktop_some10= and own_stall=claude-1.scope",
+            "desktop_some10=0.00" in log and "own_stall=claude-1.scope" in log,
+        )
+        t = run_for(co, t, 20, mem_full=6, avail_gib=9, sess_some=8)
+        check(
+            "own stall: then 9 GiB free for 20 s: pause again",
+            lvl(co) == "pause",
+            co.reason,
+        )
+        for name, extra, kw in (
+            ("own_stall_avail_gib=0", {"own_stall_avail_gib": 0}, {}),
+            ("desktop some 2%", {}, {"desk_some": 2}),
+            ("session.slice pressure unreadable", {}, {"desk_some": None}),
+            ("a second scope at 6% next to 8%", {}, {"chrome_full": 6}),
+            ("session at 2% with memory full 6%", {}, {"sess_some": 2}),
+        ):
+            co, t = own_setup(18500.0)
+            co.cfg.update(extra)
+            w = {"mem_full": 6, "avail_gib": 15, "sess_some": 8, **kw}
+            t = run_for(co, t, 65, **w)
+            check(f"own stall off, {name}: stays pause", lvl(co) == "pause", co.reason)
+        co, t = own_setup(18700.0)
+        for i in range(13):
+            t = run_for(co, t, 5, mem_full=6, avail_gib=15, sess_some=8, sess_high=i)
+        check(
+            "own stall: the session at its own MemoryHigh still counts: slow",
+            lvl(co) == "slow",
+            co.reason,
+        )
+        plasma = usvc / "session.slice/plasma-kwin_wayland.service"
+        plasma.mkdir()
+        setp(plasma / "memory.pressure", 9, 9)
+        (plasma / "memory.events").write_text("low 0\nhigh 0\nmax 0\noom 0\n")
+        co, t = own_setup(19000.0)
+        t = run_for(co, t, 65, mem_full=6, avail_gib=15, sess_some=4, desk_some=0.5)
+        check(
+            "own stall off, top scope is a desktop unit: stays pause",
+            lvl(co) == "pause",
+            co.reason,
+        )
+        shutil.rmtree(plasma)
+        conf.write_text("own_stall_avail_gib=14\nown_stall_share=0.3\n")
+        cfg, errs = read_conf(conf)
+        check(
+            "conf: own_stall keys are read",
+            errs == [] and cfg["own_stall_avail_gib"] == 14,
+            str(errs),
         )
 
         # 12. Never signals anything: no kill calls in this file.

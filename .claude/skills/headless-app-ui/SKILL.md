@@ -39,6 +39,21 @@ screen was locked.
   by the PID you recorded. Never `pkill wine`, `pkill kwin_wayland` or
   `pkill Xvfb`. The real desktop runs `kwin_wayland --socket wayland-0`, and other
   lanes run their own.
+- Every instance runs in its own systemd scope, and the scope is stopped when the run
+  ends. `dbus-run-session` ends its bus on exit, but the helpers it D-Bus-activated
+  (ksecretd, kactivitymanagerd, xdg-desktop-portal-kde) keep running with no bus: 67
+  were left over on 2026-10-28, 937 MB RAM plus 592 MB swap. Wrap the run in
+  `~/.claude/skills/headless-app-ui/headless-scope.sh <tag> -- dbus-run-session -- <cmd>`.
+  Stopping the scope ends everything inside it. Find leftovers (own processes whose
+  `DBUS_SESSION_BUS_ADDRESS` socket is gone):
+
+  ```bash
+  for p in /proc/[0-9]*; do [ -O $p ] || continue
+    s=$(tr '\0' '\n' <$p/environ 2>/dev/null | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=unix:path=\([^,]*\).*/\1/p')
+    [ -n "$s" ] && [ ! -S "$s" ] && echo "${p#/proc/} $(tr '\0' ' ' <$p/cmdline | cut -c1-60)"; done
+  ```
+
+  Do not pipe a run's output through `grep` or `tee`: the helpers keep the pipe open.
 - Do not take screenshots of the real desktop to show Oystein something. He can
   see it. Screenshots from your private display are fine.
 
@@ -149,6 +164,24 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
 - Screenshots show names from the committed test takes. Keep them out of anything
   published.
 - Video decoding and real cameras are not tested headless.
+
+### MoCap needs D3D12 turned off
+
+Headless MoCap stalls on its first frame when D3D12 is available. MC builds its GPU
+preprocessing and preview devices on D3D11On12. Here that is DXVK on vkd3d-proton
+over lavapipe's single VkQueue, and it locks up inside vkd3d with no GPU work in
+flight (bd-qxzj4, 2026-10-28). Real Windows uses Microsoft's own D3D11On12 and is not
+affected, so this is not a product bug.
+
+For any headless run that runs MoCap, set this in the environment of the command that
+starts MC (with `take_driven_rig.py`, export it before `take_driven_rig.py launch`):
+
+    WINEDLLOVERRIDES="d3d12=;d3d12core="
+
+MC then logs "D3D12 device creation failed, falling back to D3D11" and MoCap finishes.
+It is slow on lavapipe: about 57 minutes for one swing with the CPU provider. The
+override turns off D3D12 for the whole process, so do not use it for runs that test
+D3D12 or DirectML paths.
 
 ### Disk and cleanup
 

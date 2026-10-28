@@ -1,6 +1,8 @@
 #!/bin/bash
 # Keep the experimental fooyin's colours in step with Plasma.
 #
+# When an os-theme theme is set (os-theme NAME, anything but "plasma"), fooyin gets a saved theme built from
+# that theme's KDE colours file, so it matches the panels and the other themed apps.
 # When the Plasma style has its own colours (plasma-style-colours, for example Sweet), fooyin gets a saved
 # theme built from them ("fyhelper style"), so it matches the panels even with another app colour scheme.
 # Otherwise it follows the app palette live, as described below.
@@ -28,7 +30,12 @@ if pgrep -f "^$ROOT/bin/fooyin( |$)" >/dev/null; then
     exit 0
 fi
 
-COLOURS=$("$HOME/bin/plasma-style-colours")
+OS_THEME="${XDG_STATE_HOME:-$HOME/.local/state}/os-theme"
+if [ "$(cat "$OS_THEME/current" 2>/dev/null || echo plasma)" != plasma ] && [ -s "$OS_THEME/colors" ]; then
+    COLOURS="$OS_THEME/colors"
+else
+    COLOURS=$("$HOME/bin/plasma-style-colours")
+fi
 
 # Colour from $COLOURS as #rrggbb.
 plasma_colour() {
@@ -55,9 +62,11 @@ if [ ! -x "$HELPER" ] || [ "$SRC/main.cpp" -nt "$HELPER" ]; then
     rebuilt=yes
 fi
 
-# The stamp holds the colours written last time, in the same order as $colours, and the colours file.
+# The stamp holds the colours written last time, in the same order as $colours, and the colours file with
+# a hash of its content (the os-theme file keeps its path when the theme changes).
 previous=$(cat "$STAMP" 2>/dev/null || true)
-if [ "$previous" = "$colours"$'\n'"$COLOURS" ] && [ "$rebuilt" = no ]; then
+source_id="$COLOURS $(sha1sum <"$COLOURS" | cut -c1-12)"
+if [ "$previous" = "$colours"$'\n'"$source_id" ] && [ "$rebuilt" = no ]; then
     exit 0
 fi
 if [ "$COLOURS" = "$HOME/.config/kdeglobals" ]; then
@@ -67,7 +76,7 @@ else
 fi
 
 # The layouts hold the colours too (now-playing text, lyrics). Swap each old value for its new one.
-read -r -a old <<<"$previous"
+read -r -a old <<<"${previous%%$'\n'*}"
 read -r -a new <<<"$colours"
 for layout in "$ROOT"/bin/config/layouts/*.fyl; do
     [ -f "$layout" ] || continue
@@ -77,4 +86,4 @@ for layout in "$ROOT"/bin/config/layouts/*.fyl; do
         fi
     done
 done
-printf '%s\n%s\n' "$colours" "$COLOURS" >"$STAMP"
+printf '%s\n%s\n' "$colours" "$source_id" >"$STAMP"
