@@ -79,7 +79,25 @@ up waiting, or jobd went away while it waited), 76 rerun guard, 77
 | `~/.local/state/jobd/events.log` | Submits, starts, ends, jobd restarts, errors, slow passes |
 | `~/.local/state/jobd/history.tsv` | One row per finished job (heavy-build's 14 columns) |
 
-## 6. Running a job on another machine
+## 6. Jobs jobd sends to the home desktop
+
+Since 2026-10-28 jobd sends some waiting jobs to the home desktop on its own.
+You see the same output and exit code as at the office. A job goes home when
+all of these hold:
+
+- It is a self-contained test run: `cargo test`, `check`, `clippy` or
+  `nextest`, `dotnet test`, or `tools/wine/run-tests.sh` (once home has its
+  Wine test prefix), without `--no-build`. Builds never go: their output would
+  stay on home.
+- Normal priority, not app-run, and it has waited 60 s at the office.
+- Home has 12 GiB or more free and is not frozen, and runs no other routed job.
+- `job check` accepts the tree.
+
+To keep a job at the office, set `JOB_LOCAL=1` in its environment. If home
+cannot take a job, it goes back in line at the office. events.log marks a
+routed start with `worker=home`.
+
+## 7. Running a job on another machine yourself
 
 `job run --on home -- CMD` sends the current git tree to a worker, runs CMD
 there and brings back the log. `job check DIR` says first whether the tree can
@@ -96,7 +114,7 @@ move. Rules, all hard:
   `job status home`). That is normal; do not work around it.
 - Forward environment variables with `-e NAME`, never a secret.
 
-## 7. When something is wrong
+## 8. When something is wrong
 
 - `job ping` exits 69: `systemctl --user status jobd`. It is an enabled user
   unit (`~/.dotfiles/.config/systemd/user/jobd.service`). Restarting it is
