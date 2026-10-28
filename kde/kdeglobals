@@ -1,7 +1,7 @@
 # Shared KDE settings. Format and rules: ~/.dotfiles/kde/README.md
+# The colour scheme is not here: os-theme sets it (kde/_os-theme.txt).
 [General]
 BrowserApplication=chrome-work.desktop
-ColorScheme=BreezeDark
 XftAntialias=true
 XftHintStyle=hintslight
 XftSubPixel=rgb
