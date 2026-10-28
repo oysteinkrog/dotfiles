@@ -2701,6 +2701,83 @@ sa "$(rep 5 i) $(rep 3 x) $(rep 28 i)" > "$X/out"
 check "app exit: a new MC start restarts the idle window (no idle switch 28 min after it)" '(( $(grep -c "reason=idle" "$X/out") == 0 ))'
 rm -rf -- "$X"
 
+# HEAVY_BUILD_BACKEND=jobd (2026-10-28). A fake job client records its calls;
+# `job ping` exits $PING (default 0) and `job submit` exits 42.
+setup2
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$HBT/job.calls"' \
+  'if [[ $1 == ping ]]; then exit "${PING:-0}"; fi' 'env | grep "^HEAVY_BUILD_" | sort >> "$HBT/job.env"; exit 42' > "$T/bin/job"
+chmod +x "$T/bin/job"
+jb() {  # VAR=value... -- args ; runs heavy-build in the sandbox and waits; sets rc
+  local -a ev=()
+  while [[ $1 != -- ]]; do ev+=("$1"); shift; done; shift
+  rm -f "$T/job.calls" "$T/job.env"
+  (cd "$T/work" && exec env $(env | sed -n 's/^\(HEAVY_BUILD_[A-Z0-9_]*\)=.*/-u \1/p') HBT="$T" PATH="$T/bin:$PATH" \
+    XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
+    HB_CGROUP="$T/cg" HB_PROC="$T/proc" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_POLL=1 "${ev[@]}" \
+    "$HB" "$@") > "$T/out" 2>&1
+  rc=$?
+}
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_PRIORITY=low -- --class app-run --ready-file "$T/ready" --wait-timeout 30 -- echo hi
+check "jobd: job ping, then exec job submit with the options and the command (rc $rc)" '(( rc == 42 )) && [[ $(cat "$T/job.calls") == "ping"$'"'"'\n'"'"'"submit --class app-run --ready-file $T/ready --wait-timeout 30 -- echo hi" ]]'
+check "jobd: the environment reaches job submit" 'grep -qx HEAVY_BUILD_PRIORITY=low "$T/job.env"'
+check "jobd: no ticket in heavy-build's own queue" '[[ -z $(ls "$T/run/heavy-build.queue") ]] && [[ ! -e $T/state/heavy-build/history.tsv ]]'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_CLASS=app-run -- true
+check "jobd: the env form of --class is passed on as --class (rc $rc)" '(( rc == 42 )) && grep -qx "submit --class app-run -- true" "$T/job.calls"'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_WINE_ORPHAN=stop HEAVY_BUILD_FORCE=1 -- true
+check "jobd: a variable jobd does not read is refused with exit 2 (rc $rc)" '(( rc == 2 )) && [[ ! -e $T/job.calls ]]'
+check "jobd: and the refusal names each one" 'grep -q "jobd does not support HEAVY_BUILD_FORCE HEAVY_BUILD_WINE_ORPHAN, so nothing was submitted" "$T/out"'
+jb HEAVY_BUILD_BACKEND=jobd PING=69 -- true
+check "jobd: job ping fails, so one warning and heavy-build's own queue runs it (rc $rc)" '(( rc == 0 )) && (( $(grep -c "jobd does not answer (job ping); using heavy-build" "$T/out") == 1 )) && [[ $(cat "$T/job.calls") == ping ]]'
+check "jobd: the fallback build is in heavy-build's history" '[[ -s $T/state/heavy-build/history.tsv ]]'
+jb HEAVY_BUILD_BACKEND=jobd HB_JOB_CMD="$T/nojob" -- true
+check "jobd: no job client, so a warning and heavy-build's own queue (rc $rc)" '(( rc == 0 )) && grep -q "the job client ($T/nojob) is missing; using heavy-build" "$T/out"'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_ACTIVE=1 -- true
+check "jobd: a nested call (HEAVY_BUILD_ACTIVE) does not go to jobd (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/job.calls ]]'
+mkdir -p "$T/proc/self"; echo "0::/user.slice/user-$UID.slice/user@$UID.service/builds.slice/job-7.service" > "$T/proc/self/cgroup"
+jb HEAVY_BUILD_BACKEND=jobd -- true
+check "jobd: inside a jobd job it runs at once, not through jobd (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/job.calls ]]'
+rm -rf -- "$T/proc/self"
+jb HEAVY_BUILD_BACKEND=other -- true
+check "jobd: another backend value is refused with exit 2 (rc $rc)" '(( rc == 2 )) && grep -q "HEAVY_BUILD_BACKEND must be jobd or heavy-build" "$T/out"'
+echo HEAVY_BUILD_BACKEND=jobd >> "$T/config/heavy-build.conf"
+jb -- true
+check "jobd: the conf file cannot turn it on (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/job.calls ]]'
+teardown2
+
+# jobd jobs as load: running_lines lists job-<x>.service units as J lines,
+# and the budget rule charges them as running builds.
+setup2
+B=$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice
+mkdir -p "$B/job-7.service" "$B/job-8.service" "$T/run/heavy-build.jobs"
+for j in 7 8; do echo 'populated 1' > "$B/job-$j.service/cgroup.events"; echo $(( j * 1073741824 )) > "$B/job-$j.service/memory.current"; echo 'usage_usec 5000000' > "$B/job-$j.service/cpu.stat"; done
+echo 'populated 0' > "$B/job-8.service/cgroup.events"
+out=$(cd "$T/work" && QDIR=$T/run/heavy-build.queue JDIR=$T/run/heavy-build.jobs CPUDIR=$T/run/heavy-build.cpu BSLICE=$B IDLE_SECS=120 bash -c "$(sed -n '/^cpu_rate()/,/^}/p;/^running_lines()/,/^}/p' "$HB")"'; running_lines')
+check "jobd load: a populated job unit is a J line (got '$out')" '[[ $out == "J job-7.service 7516192768 5000000 "[0-9]*" 0 -" ]]'
+mkdir -p "$T/run/heavy-build.cpu"; : > "$T/run/heavy-build.cpu/job-9.service"; : > "$T/run/heavy-build.cpu/job-7.service"
+(BSLICE=$B CPUDIR=$T/run/heavy-build.cpu JDIR=$T/run/heavy-build.jobs; eval "$(sed -n '/^sweep_stale()/,/^}/p' "$HB")"; log_line() { :; }; systemctl() { :; }; sweep_stale)
+check "jobd load: CPU samples of a gone job unit are removed, a live one's kept" '[[ ! -e $T/run/heavy-build.cpu/job-9.service && -e $T/run/heavy-build.cpu/job-7.service ]]'
+n=$(BSLICE=$B bash -c "$(sed -n '/^active_build_scopes()/,/^}/p' "$HB")"'; active_build_scopes')
+check "jobd load: the old rule counts a running job unit (got $n)" '(( n == 1 ))'
+teardown2
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo"
+printf '%s\n' $(( 36 * 1073741824 )) > "$A/slicemax36"
+W30='W 0000000999000000000-1-n 999000 normal 30 2 600 -'
+out=$(printf '%s\n' 'J job-7.service 1073741824 0 5 0 -' "$W30" | ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "jobd load: a 1 GiB job is charged 3 GiB, so 30 GiB fits under 36 (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' 'J job-7.service 5368709120 0 5 0 -' "$W30" | ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "jobd load: a 5 GiB job is charged 7 GiB, so 30 GiB waits (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(for i in 1 2 3 4 5 6; do echo "J job-$i.service 1073741824 0 5 0 -"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
+out=$(printf '%s\n' "$out" | adm 0000000999000000000-1-n 0 1 12)
+check "jobd load: each job counts against the job limit (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$(printf '%s\n' 'J job-1.service 1073741824 0 5 0 -' 'W 0000000999000000000-1-n 999000 normal 1 24 600 -' | adm 0000000999000000000-1-n 0 1 12)
+check "jobd load: 8 cores for a young job leave 20 of 28, so 24 waits (got '$out')" '[[ $out == wait\|cores:* ]]'
+out=$(for i in 1 2 3 4 5 6; do echo "J job-$i.service 1073741824 0 5 1 -"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
+out=$(printf '%s\n' "$out" | adm 0000000999000000000-1-n 0 1 12)
+check "jobd load: idle jobs do not count as jobs (got '$out')" '[[ $out == start\|fits:* ]]'
+rm -rf -- "$A"
+
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
 check "help: no cargo build && cargo test example" '! grep -q "heavy-build bash -c .*cargo build && cargo test" <<< "$help"'
