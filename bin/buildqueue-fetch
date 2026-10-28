@@ -331,6 +331,8 @@ def update_jobd(st, now):
                     del reqs[req]
                 for x in live:
                     r = reqs.setdefault(x["id"], {k: x.get(k) or "" for k in ("prio", "session", "agent", "lane", "owner", "cwd", "argv0")})
+                    if isinstance(x.get("argv"), list):
+                        r["argv"] = x["argv"]
                     if x.get("state") == "running" and x.get("attempt"):
                         r["attempt"] = x["attempt"]
                         r.setdefault("started", now)
@@ -1014,12 +1016,19 @@ def remote_ok(st, job, now):
         return False
     seen = st.setdefault("remoteOk", {})
     old = seen.get(name)
-    if not (isinstance(old, list) and len(old) == 6 and isinstance(old[2], list) and type(old[4]) is int):
+    jobd_req = name in st.get("jobd", {}).get("reqs", {})
+    if not (isinstance(old, list) and len(old) == 6 and isinstance(old[2], list) and type(old[4]) is int
+            and (old[2] or not jobd_req)):
         pid = name.split("-")[1]
         ok, tool, cmd, cwd = False, "", [], ""
+        # A jobd job: its command line from jobd, since a detached submit has no process here.
+        jd = st.get("jobd", {}).get("reqs", {}).get(name) or {}
         try:
-            argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
-            cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
+            if isinstance(jd.get("argv"), list) and jd.get("cwd"):
+                argv, cwd = jd["argv"], pathlib.Path(jd["cwd"])
+            else:
+                argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+                cwd = pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
             i = next(k for k, a in enumerate(argv) if os.path.basename(a) in REMOTE_TOOLS)
             tool = os.path.basename(argv[i])
             cmd = [a for a in argv[i:] if a]
@@ -1033,6 +1042,8 @@ def remote_ok(st, job, now):
                 and any(cwd.is_relative_to(root) and cwd != root for root in REMOTE_ROOTS)
                 and cwd != HOME / "work/desktop/master"
             )
+        except FileNotFoundError:
+            return False  # no process and no command line from jobd yet: try again next time
         except (OSError, StopIteration, ValueError):
             pass
         ok = ok and tree_can_move(st, str(cwd))
