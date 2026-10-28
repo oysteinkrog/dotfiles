@@ -1,0 +1,2 @@
+# The os-theme colour theme (os-theme --list). Written by kde-config capture os-theme.
+gruvbox

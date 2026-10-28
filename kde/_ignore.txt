@@ -50,3 +50,8 @@ krdpserverrc:[General]:Certificate*
 krdpserverrc:[General]:AutogenerateCertificates
 konsolerc:[UiSettings]:ColorScheme
 kwinrulesrc:[General]:Order
+
+# Set by os-theme (kde/_os-theme.txt): the generated colour scheme and the Plasma style
+kdeglobals:[General]:ColorScheme
+plasmarc:[Theme]:name
+spectaclerc:[ViewerWindow]*:*
