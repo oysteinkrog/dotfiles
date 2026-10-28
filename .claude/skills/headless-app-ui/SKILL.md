@@ -150,6 +150,24 @@ worked while the screen was locked. Lane report: `/var/tmp/claude/impl-licmock-r
   published.
 - Video decoding and real cameras are not tested headless.
 
+### MoCap needs D3D12 turned off
+
+Headless MoCap stalls on its first frame when D3D12 is available. MC builds its GPU
+preprocessing and preview devices on D3D11On12. Here that is DXVK on vkd3d-proton
+over lavapipe's single VkQueue, and it locks up inside vkd3d with no GPU work in
+flight (bd-qxzj4, 2026-10-28). Real Windows uses Microsoft's own D3D11On12 and is not
+affected, so this is not a product bug.
+
+For any headless run that runs MoCap, set this in the environment of the command that
+starts MC (with `take_driven_rig.py`, export it before `take_driven_rig.py launch`):
+
+    WINEDLLOVERRIDES="d3d12=;d3d12core="
+
+MC then logs "D3D12 device creation failed, falling back to D3D11" and MoCap finishes.
+It is slow on lavapipe: about 57 minutes for one swing with the CPU provider. The
+override turns off D3D12 for the whole process, so do not use it for runs that test
+D3D12 or DirectML paths.
+
 ### Disk and cleanup
 
 Each prefix is a reflink copy, so it starts near 0 B but grows as MC writes to it.
