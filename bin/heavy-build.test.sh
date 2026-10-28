@@ -300,7 +300,8 @@ echo 'populated 1' > "$X/bs/u.scope/cgroup.events"
 ss() {
   (
     PROC=$X/proc WINE_TMP=$X/winetmp HOME=$X/home BSLICE=$X/bs unit=u cmdline=x
-    eval "$(sed -n '/^WINE_LEFTOVERS=/p;/^now_us()/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p;/^sample_scope()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^WINE_LEFTOVERS=/p;/^now_us()/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p;/^sample_scope()/,/^}/p;/^apprun_charge()/,/^}/p' "$HB")"
+    ai_lo=0 charge_actual=0 app_seen=0 app_gone=0 APPRUN_IDLE_MIN=0 APPRUN_EXIT_ACTUAL=0
     say() { echo "say: $*"; }
     log_line() { echo "log: $*"; }
     systemctl() { echo "systemctl $*"; }
@@ -2609,6 +2610,96 @@ hbe HEAVY_BUILD_WAIT=3 -- true
 wait "$hbpid"; rc=$?
 check "old rule idle start: one build running, the old 12 GiB floor is unchanged (rc $rc)" '(( rc == 75 )) && grep -q "only 3 GiB of memory is available; a build starts at 12 GiB" "$T/out" && ! grep -q "event=idle-start" "$T/state/heavy-build/shadow.log"'
 teardown2
+
+# App-run memory charge (2026-10-28). An app run idle for
+# HEAVY_BUILD_APPRUN_IDLE_MIN, or whose MotionCatalyst process has exited, is
+# charged what it holds plus a margin (state column 10 = 2), still as a job.
+A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+T=$A; : > "$T/out"
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo"
+printf '%s\n' $(( 36 * 1073741824 )) > "$A/slicemax36"
+printf '%s\n' $(( 1 * 1073741824 )) > "$A/slicecur1"
+RA='R a1 999000 8 2 1014400 1073741824 - 0 normal - app-run'
+RA2='R a1 999000 8 2 1014400 1073741824 - 2 normal - app-run'
+W30='W 0000000999000000000-1-n 999000 normal 30 2 600 -'
+out=$(printf '%s\n' "$RA" "$W30" | ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: a young app run is charged its 8 GiB estimate, so 30 GiB waits under a 36 GiB cap (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(printf '%s\n' "$RA2" "$W30" | ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: column 10 = 2 charges 1 GiB held + 0.5 margin, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RA" "$W30" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: real use, a young app run still adds its growth, so it waits (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(printf '%s\n' "$RA2" "$W30" | ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: real use, column 10 = 2 adds only the margin, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(for i in 1 2 3 4 5 6; do echo "R a$i 999000 8 2 1014400 1073741824 - 2 normal - app-run"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
+out=$(printf '%s\n' "$out" | ADM_MAXAPP=0 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: a run charged actual memory still counts as a job (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
+out=$(printf '%s\n' "$RA2" 'W 0000000999000000000-1-n 999000 normal 4 2 600 - app-run' | ADM_MAXAPP=1 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: and still counts against the app-run cap (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+rm -rf -- "$A"
+
+# The sampler side: fake clock, one sample per minute. Words: i (75 milli-cores,
+# MC present), b (1 core, MC present), x (75 milli-cores, MC gone).
+X=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+mkdir -p "$X/proc/601" "$X/proc/602" "$X/bs/u.scope"
+echo wineserver > "$X/proc/601/comm"; echo MotionCatalyst. > "$X/proc/602/comm"
+echo $(( 3 * 1073741824 )) > "$X/bs/u.scope/memory.current"
+echo 'populated 1' > "$X/bs/u.scope/cgroup.events"
+sa() {  # PLAN ; settings MIN (idle minutes), EXIT, CLS
+  (
+    PROC=$X/proc WINE_TMP=$X/proc HOME=$X BSLICE=$X/bs unit=u cmdline=x est_mem=8.0
+    eval "$(sed -n '/^WINE_LEFTOVERS=/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p;/^sample_scope()/,/^}/p;/^apprun_charge()/,/^}/p' "$HB")"
+    now_us() { cat "$X/clock"; }
+    say() { :; }
+    log_line() { echo "log: $*"; }
+    write_state() { echo "state $3"; }
+    psi_watch() { :; }
+    S_t=() S_u=() s_lo=0 peak=0 stalled_cpu=0 stalled_wine=0 stall_warned= orphan_seen=0 orphan_since=
+    orphan_warned= orphan_stopped= orph_unknown_logged= orph_other_logged= wine_idle_logged=
+    ai_lo=0 charge_actual=0 app_seen=0 app_gone=0
+    STALL_SECS=600 WINE_IDLE_SECS=900 ORPHAN_STOP_SECS=0 cls=${CLS:-app-run}
+    APPRUN_IDLE_MIN=${MIN:-30} APPRUN_IDLE_MILLICORES=100 APPRUN_BUSY_MILLICORES=250 APPRUN_EXIT_ACTUAL=${EXIT:-1} APPRUN_MARGIN_MIB=512
+    local t=1000000000000 u=1000 w
+    last_active=$t
+    for w in $1; do
+      t=$(( t + 60000000 ))
+      [[ $w == b ]] && u=$(( u + 60000000 )) || u=$(( u + 4500000 ))
+      echo "$t" > "$X/clock"
+      echo "usage_usec $u" > "$X/bs/u.scope/cpu.stat"
+      [[ $w == x ]] && echo 601 > "$X/bs/u.scope/cgroup.procs" || printf '601\n602\n' > "$X/bs/u.scope/cgroup.procs"
+      sample_scope
+    done
+  )
+}
+rep() { local n=$1 w=$2 s=; for (( ; n > 0; n-- )); do s+="$w "; done; echo "$s"; }
+T=$X
+sa "$(rep 32 i)" > "$X/out"
+check "app idle: 0.075 cores for 30 min switches to actual memory, once" '(( $(grep -c "event=charge-actual unit=u reason=idle mem=3.0G margin_mib=512 est=8.0G avg_millicores=7[0-9] " "$X/out") == 1 ))'
+check "app idle: the state column says 2, and 0.075 cores is no stall" '[[ $(tail -1 "$X/out") == "state 2" ]] && ! grep -q "state 1" "$X/out"'
+sa "$(rep 29 i)" > "$X/out"
+check "app idle: not before 30 min" '! grep -q "event=charge" "$X/out" && [[ $(tail -1 "$X/out") == "state 0" ]]'
+sa "$(rep 32 i) b" > "$X/out"
+check "app idle: a busy minute brings back the normal charge" 'grep -q "event=charge-normal unit=u mem=3.0G est=8.0G c60_millicores=[0-9]* " "$X/out" && [[ $(tail -1 "$X/out") == "state 0" ]]'
+sa "$(rep 32 i) b $(rep 10 i)" > "$X/out"
+check "app idle: after a busy minute the 30 min window starts again" '[[ $(tail -1 "$X/out") == "state 0" ]] && (( $(grep -c "event=charge-actual" "$X/out") == 1 ))'
+sa "$(rep 32 i) b $(rep 31 i)" > "$X/out"
+check "app idle: and 30 idle min later it switches again" '(( $(grep -c "event=charge-actual" "$X/out") == 2 )) && [[ $(tail -1 "$X/out") == "state 2" ]]'
+MIN=0 sa "$(rep 40 i)" > "$X/out"
+check "app idle: HEAVY_BUILD_APPRUN_IDLE_MIN=0 turns it off" '! grep -q "event=charge" "$X/out"'
+CLS=other sa "$(rep 40 i)" > "$X/out"
+check "app idle: only the app-run class" '! grep -q "event=charge" "$X/out"'
+MIN=0 sa "i i x" > "$X/out"
+check "app exit: one sample without MotionCatalyst is not enough" '! grep -q "event=charge" "$X/out"'
+MIN=0 sa "i i x x" > "$X/out"
+check "app exit: two samples without MotionCatalyst switch at once" 'grep -q "event=charge-actual unit=u reason=app-exit mem=3.0G " "$X/out" && [[ $(tail -1 "$X/out") == "state 2" ]]'
+MIN=0 sa "i i x x x i" > "$X/out"
+check "app exit: a new MotionCatalyst brings back the normal charge" 'grep -q "event=charge-normal" "$X/out" && [[ $(tail -1 "$X/out") == "state 0" ]] && (( $(grep -c "event=charge-actual" "$X/out") == 1 ))'
+MIN=0 sa "x x x x" > "$X/out"
+check "app exit: no switch when MotionCatalyst was never seen (not an MC run)" '! grep -q "event=charge" "$X/out"'
+MIN=0 EXIT=0 sa "i i x x x" > "$X/out"
+check "app exit: HEAVY_BUILD_APPRUN_EXIT_ACTUAL=0 turns it off" '! grep -q "event=charge" "$X/out"'
+sa "$(rep 5 i) $(rep 3 x) $(rep 28 i)" > "$X/out"
+check "app exit: a new MC start restarts the idle window (no idle switch 28 min after it)" '(( $(grep -c "reason=idle" "$X/out") == 0 ))'
+rm -rf -- "$X"
 
 # --help: no chained build in an example, no background-shell advice.
 help=$("$HB" --help 2>&1)
