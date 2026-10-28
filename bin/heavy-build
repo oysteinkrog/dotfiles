@@ -604,6 +604,11 @@
 #   (HEAVY_BUILD_APPRUN_EXIT_ACTUAL, default 1). Each switch is logged as
 #   event=charge-actual (reason=idle or app-exit) or event=charge-normal.
 #   Nothing is stopped or frozen.
+# - It counts as young, with memory still to come, only for its first
+#   HEAVY_BUILD_APPRUN_YOUNG_MIN minutes (default 10; 0 turns it off). After
+#   that it is charged what it holds plus the margin too, logged once as
+#   event=charge-actual reason=young-over. An app run reaches most of its
+#   memory in its first minutes and does not grow like a compile.
 # - A run whose command dies from a signal, or that ends because heavy-build
 #   itself got TERM, INT or HUP (headless-mc.sh stop), is logged with reason
 #   stopped, not cancelled, and its peak still counts for the estimate.
@@ -938,6 +943,8 @@ read_conf() {
   setting HEAVY_BUILD_APPRUN_BUSY_MILLICORES 250
   setting HEAVY_BUILD_APPRUN_EXIT_ACTUAL 1
   setting HEAVY_BUILD_APPRUN_MARGIN_MIB 512
+  setting HEAVY_BUILD_APPRUN_YOUNG_MIN 10
+  APPRUN_YOUNG_MIN=$(( 10#$APPRUN_YOUNG_MIN ))
   setting HEAVY_BUILD_LOW_CARGO_JOBS 4
   LOW_CARGO_JOBS=$(( 10#$LOW_CARGO_JOBS ))
   setting HEAVY_BUILD_DOTNET_MAXCPU 6
@@ -2522,12 +2529,15 @@ function writer(keys, o,   n, k, i, b, t) {
 function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy) {
   nr++
   grow = 0; cy = 0
+  # An app run past its first appyoung seconds (HEAVY_BUILD_APPRUN_YOUNG_MIN)
+  # counts as stalled 2, even when its own (older) heavy-build has not written 2.
   # An idle build (no CPU for HB_STALL_SECS) is charged only the memory it
   # holds. It is not counted as a job or a high build until it runs again.
+  # stalled 2: an app run that is idle (HEAVY_BUILD_APPRUN_IDLE_MIN), past its
+  # young window or whose app has exited. It still counts as a job and an app
+  # run, but its memory is what it holds plus appmargin GiB, not its estimate.
+  if (stalled == 0 && cls == "app-run" && appyoung > 0 && start > 0 && now - start >= appyoung) stalled = 2
   if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
-  # stalled 2: an app run that is idle (HEAVY_BUILD_APPRUN_IDLE_MIN) or whose
-  # app has exited. It still counts as a job and an app run, but its memory
-  # is what it holds plus appmargin GiB, not its estimate.
   else if (stalled == 2) {
     held = cur + appmargin; tc = appmargin; grow = appmargin
     cc = (c60 == "-") ? cores : max(0.25, c60 / 1000)
@@ -2939,7 +2949,7 @@ decide() {
     -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
     -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcfreegib="$MC_FREE_GIB" -v mcnewfull="$MC_NEW_FULL_SECS" \
     -v mcbrakegib="$MC_BRAKE_GIB" -v mcbrakeswapin="$MC_BRAKE_SWAPIN" -v mcbrakefull="$MC_BRAKE_FULL_PCT" -v mccalm="$MC_CALM_SECS" -v mcfallgib="$MC_FALL_GIB" \
-    -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" -v appmargin="$(( APPRUN_MARGIN_MIB * 100 / 1024 ))e-2" "$ADMIT_AWK")
+    -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" -v appmargin="$(( APPRUN_MARGIN_MIB * 100 / 1024 ))e-2" -v appyoung="$(( APPRUN_YOUNG_MIN * 60 ))" "$ADMIT_AWK")
   IFS=$'\t' read -r dec rank why untracked prioheld capinfo <<< "$out"
   if [[ -z ${dec:-} ]]; then dec=wait rank=0 why="error: the budget check printed nothing"; fi
   [[ ${prioheld:-} == 1 ]] || prioheld=0
@@ -3291,6 +3301,8 @@ sample_scope() {
 #   for two samples in a row, while the scope stays (a lane that keeps its
 #   slot between MC starts). A new MotionCatalyst process ends it.
 #   HEAVY_BUILD_APPRUN_EXIT_ACTUAL=0 turns it off.
+# - young-over: it has run HEAVY_BUILD_APPRUN_YOUNG_MIN minutes (10; 0 turns
+#   it off), timed from its first sample. It stays on from then.
 # Uses sample_scope's d, cur, now, u, n, c60 and S_t/S_u.
 apprun_charge() {
   [[ $cls == app-run ]] || return 0
@@ -3308,6 +3320,9 @@ apprun_charge() {
       app_gone=$(( app_gone + 1 ))
       (( app_gone >= 2 )) && want=1 why=app-exit
     fi
+  fi
+  if (( APPRUN_YOUNG_MIN > 0 && ! want )) && (( now - S_t[0] >= APPRUN_YOUNG_MIN * 60000000 )); then
+    want=1 why=young-over
   fi
   if (( APPRUN_IDLE_MIN > 0 && ! want )); then
     win=$(( APPRUN_IDLE_MIN * 60000000 ))
