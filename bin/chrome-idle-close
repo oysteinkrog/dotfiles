@@ -96,7 +96,7 @@ PROFILES = {
     },
     "work": {
         "data_dir": str(HOME / ".config/google-chrome"),
-        "profile_dir": "Default",
+        "profile_dir": "Profile 1",
         "class": "chrome-work",
     },
 }
