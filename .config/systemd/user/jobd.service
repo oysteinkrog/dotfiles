@@ -1,0 +1,17 @@
+[Unit]
+Description=jobd: build and test job queue (replaces heavy-build's own queue)
+Documentation=file:///home/oystein/projects/job-system/README.md
+
+[Service]
+WorkingDirectory=%h/projects/job-system
+ExecStart=/usr/bin/python3 -m jobd.daemon
+Slice=jobd.slice
+# Each job runs as its own job-<attempt>.service, so a restart of jobd never
+# stops a job; jobd adopts the running ones when it comes back.
+KillMode=process
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
