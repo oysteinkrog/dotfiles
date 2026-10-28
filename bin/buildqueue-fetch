@@ -48,6 +48,15 @@ HB_STATE = HOME / ".local/state/heavy-build"
 LIVE = HB_STATE / "live.log"
 HISTORY = HB_STATE / "history.tsv"
 LEVEL = HOME / ".local/state/pressure/level"
+# jobd, the job system's queue. It runs beside heavy-build's own queue: sessions that set
+# HEAVY_BUILD_BACKEND=jobd send their builds there. Its live.log and history.tsv use
+# heavy-build's formats; heavy-build's live.log shows jobd jobs only as J lines, which the
+# reader skips, so no job is counted twice.
+JOBD_STATE = HOME / ".local/state/jobd"
+JOBD_LIVE = JOBD_STATE / "live.log"
+JOBD_HISTORY = JOBD_STATE / "history.tsv"
+JOBD_EVENTS = JOBD_STATE / "events.log"
+JOBD_SYNC_S = 60
 CONF = HOME / ".config/heavy-build.conf"
 LANES = HOME / ".config/heavy-build.lanes"
 CACHE = HOME / ".cache/buildqueue"
@@ -176,8 +185,8 @@ def save_state(st):
     tmp.replace(STATE)
 
 
-def update_live(st, now):
-    lines, st["liveOffset"] = read_new(LIVE, st.get("liveOffset"), FIRST_LIVE_BYTES)
+def update_live(st, now, path=LIVE, key="liveOffset"):
+    lines, st[key] = read_new(path, st.get(key), FIRST_LIVE_BYTES)
     reasons = st.setdefault("waitReason", {})  # job id -> [kind, text]
     projects = st.setdefault("projectOf", {})  # hash -> [project, seen]
     starts = st.setdefault("starts", [])  # [ts, job id, wait_s, project, prio]
@@ -216,10 +225,8 @@ def update_live(st, now):
         del projects[h]
 
 
-def update_history(st, now):
-    lines, st["historyOffset"] = read_new(
-        HISTORY, st.get("historyOffset"), FIRST_HISTORY_BYTES
-    )
+def update_history(st, now, path=HISTORY, key="historyOffset"):
+    lines, st[key] = read_new(path, st.get(key), FIRST_HISTORY_BYTES)
     done = st.setdefault("finished", [])  # [end, class, hash, wall_s, reason]
     for line in lines:
         c = line.split("\t")
@@ -272,6 +279,113 @@ def waiting_jobs(st, now):
             recorded_owner(extra),
         ))
     return jobs
+
+
+def jobd_value(v):
+    return "" if v in ("-", "?") else v.replace("%20", " ")
+
+
+def update_jobd(st, now):
+    """jobd's waiting and running jobs, from its events.log (submit, start, end, prio-change),
+    checked against `job queue` once a minute and after jobd restarts."""
+    j = st.setdefault("jobd", {"offset": None, "reqs": {}, "sync": 0})
+    reqs = j["reqs"]  # request id -> fields of its submit line, plus attempt and started
+    lines, j["offset"] = read_new(JOBD_EVENTS, j["offset"], 1 << 20)
+    resync = False
+    for line in lines:
+        head, _, rest = line.partition(" ")
+        f = dict(REMOTE_RE.findall(rest))
+        req, ev = f.get("request"), f.get("event")
+        if ev == "jobd-start":
+            resync = True
+        if not req:
+            continue
+        if ev == "submit":
+            reqs[req] = {k: jobd_value(v) for k, v in f.items() if k not in ("request", "event")}
+        elif ev == "start" and req in reqs:
+            reqs[req]["attempt"] = f.get("attempt", "")
+            reqs[req]["started"] = parse_ts(head) or now
+        elif ev == "start-failed" and req in reqs:
+            reqs[req].pop("attempt", None)
+        elif ev == "prio-change" and req in reqs:
+            reqs[req]["prio"] = f.get("prio_to", reqs[req].get("prio", ""))
+        elif ev == "end":
+            reqs.pop(req, None)
+    if resync or now - j["sync"] >= JOBD_SYNC_S:
+        j["sync"] = now
+        tool = job_tool()
+        if tool:
+            import subprocess
+
+            try:
+                r = subprocess.run([tool, "queue"], capture_output=True, text=True, timeout=5)
+                live = json.loads(r.stdout)["jobs"] if r.returncode == 0 else []
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+                live = None
+            if live is not None:
+                ids = {x.get("id") for x in live}
+                for req in [r for r in reqs if r not in ids]:
+                    del reqs[req]
+                for x in live:
+                    r = reqs.setdefault(x["id"], {k: x.get(k) or "" for k in ("prio", "session", "agent", "lane", "owner", "cwd", "argv0")})
+                    if x.get("state") == "running" and x.get("attempt"):
+                        r["attempt"] = x["attempt"]
+                        r.setdefault("started", now)
+                    elif x.get("state") == "waiting":
+                        r.pop("attempt", None)
+    return reqs
+
+
+def jobd_project(st, req, r, now):
+    projects = st["projectOf"]
+    h = req.split("-")[-1]
+    project = project_of_keys(r.get("keys", "")) or projects.get(h, [""])[0] or project_of_dir(r.get("cwd", ""))
+    if project:
+        projects[h] = [project, now]
+    return project
+
+
+def jobd_waiting(st, reqs, now):
+    """jobd's waiting jobs, in the form waiting_jobs returns, with "jobd" as an 11th item."""
+    jobs = []
+    for req, r in reqs.items():
+        if r.get("attempt"):
+            continue
+        def num(k):
+            try:
+                return float(r.get(k) or 0)
+            except ValueError:
+                return 0.0
+        rec = {"session": r.get("session", ""), "owner": r.get("owner", "")}
+        jobs.append((
+            req, int(req.split("-")[0]) / 1e9, r.get("prio", ""), num("mem"), r.get("class", ""),
+            jobd_project(st, req, r, now), int(num("wall")), r.get("session", ""), r.get("agent", ""),
+            recorded_owner({k: v or "-" for k, v in rec.items()}), "jobd",
+        ))
+    return jobs
+
+
+def jobd_running(st, reqs, now):
+    """jobd's running jobs, in the form running_builds returns. Their units are
+    job-<attempt>.service in builds.slice."""
+    found = []
+    for req, r in reqs.items():
+        if not r.get("attempt"):
+            continue
+        unit = f"job-{r['attempt']}.service"
+        found.append({
+            "cls": r.get("class", ""),
+            "prio": r.get("prio", ""),
+            "why": "",
+            "project": jobd_project(st, req, r, now),
+            "session": r.get("session", ""),
+            "agent": r.get("agent", ""),
+            "owner": recorded_owner({"session": r.get("session") or "-", "owner": r.get("owner") or "-"}),
+            "runtime": max(0, int(now - r.get("started", now))),
+            "mem": read_int(SLICE / unit / "memory.current"),
+            "queue": "jobd",
+        })
+    return found
 
 
 def recorded_owner(fields):
@@ -947,10 +1061,13 @@ def current_marks(st, queue, now):
 def build(st, now, ow):
     update_live(st, now)
     update_history(st, now)
+    update_live(st, now, JOBD_LIVE, "jobdLiveOffset")
+    update_history(st, now, JOBD_HISTORY, "jobdHistoryOffset")
     update_sessions(ow, now)
     update_mentions(ow)
 
-    waiting = waiting_jobs(st, now)
+    jobd = update_jobd(st, now)
+    waiting = [j + ("",) for j in waiting_jobs(st, now)] + jobd_waiting(st, jobd, now)
     ids = {j[0] for j in waiting}
     reasons = st["waitReason"]
     for job in [j for j in reasons if j not in ids]:
@@ -985,7 +1102,8 @@ def build(st, now, ow):
     arrived = {s[1] for s in st["starts"] if int(s[1].split("-")[0]) / 1e9 > now - HOUR}
     arrived |= {j[0] for j in waiting if j[1] > now - HOUR}
 
-    running = running_builds(st, now)
+    running = running_builds(st, now) + jobd_running(st, jobd, now)
+    running.sort(key=lambda b: -b["runtime"])
     conf = read_conf()
 
     # Queue order: the rank of each job's last wait line, then priority and age as heavy-build
@@ -1013,12 +1131,12 @@ def build(st, now, ow):
     for b in running:
         r = row(b["project"])
         r["running"] += 1
-        r["jobs"].append({"state": "running", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], "session": b["session"], "agent": b["agent"]})
+        r["jobs"].append({"state": "running", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], "session": b["session"], "agent": b["agent"], "queue": b.get("queue", "")})
     for j in queue:
         r = row(j[5])
         r["waiting"] += 1
         if len(r["jobs"]) < LANE_JOBS:
-            r["jobs"].append({"state": "waiting", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "pos": pos[j[0]], "cause": cause(j[0]), "session": j[7], "agent": j[8]})
+            r["jobs"].append({"state": "waiting", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "pos": pos[j[0]], "cause": cause(j[0]), "session": j[7], "agent": j[8], "queue": j[10]})
     for s in hour_starts:
         row(s[3])["started"] += 1
     for d in sorted(hour_done, key=lambda d: -d[0]):
@@ -1069,15 +1187,15 @@ def build(st, now, ow):
         return {"owner": name, "ownerHow": how, "ownerLive": live}
 
     nxt = [
-        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), **owner(j[5], j[9])}
+        {"project": j[5] or "(none)", "cls": j[4], "prio": j[2], "waited": int(now - j[1]), "est": j[6], "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), "queue": j[10], **owner(j[5], j[9])}
         for j in queue[:NEXT_SHOWN]
     ]
     # Every job in the order heavy-build runs it: the running ones, then the queue.
     queue_rows = [
-        {"state": "running", "project": b["project"] or "(none)", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], **owner(b["project"], b["owner"])}
+        {"state": "running", "project": b["project"] or "(none)", "cls": b["cls"], "prio": b["prio"], "age": b["runtime"], "queue": b.get("queue", ""), **owner(b["project"], b["owner"])}
         for b in running
     ] + [
-        {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), **owner(j[5], j[9])}
+        {"state": "waiting", "pos": pos[j[0]], "project": j[5] or "(none)", "cls": j[4], "prio": j[2], "age": int(now - j[1]), "cause": cause(j[0]), "remoteOk": remote_ok(st, j, now), "queue": j[10], **owner(j[5], j[9])}
         for j in queue[:QUEUE_SHOWN]
     ]
     write_marks(st, current_marks(st, queue, now), now)
