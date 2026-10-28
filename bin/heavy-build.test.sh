@@ -2816,6 +2816,11 @@ out=$(printf '%s\n' "$out" | ADM_MAXAPP=0 adm 0000000999000000000-1-n 0 1 12)
 check "app charge: a run charged actual memory still counts as a job (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
 out=$(printf '%s\n' "$RA2" 'W 0000000999000000000-1-n 999000 normal 4 2 600 - app-run' | ADM_MAXAPP=1 adm 0000000999000000000-1-n 0 1 12)
 check "app charge: and still counts against the app-run cap (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+# Merge of the app-run charge with the quiet-build rule (2026-10-28): a quiet
+# run charged actual memory is no job, as a quiet run at column 10 = 0.
+out=$(for i in 1 2 3 4 5 6; do echo "R a$i 999000 8 2 1014400 1073741824 50 2 normal - app-run"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
+out=$(printf '%s\n' "$out" | ADM_MAXAPP=0 ADM_IDLESECS=60 adm 0000000999000000000-1-n 0 1 12)
+check "app charge: a quiet run charged actual memory is not a job (got '$out')" '[[ $out == start\|fits:* ]]'
 rm -rf -- "$A"
 
 # The sampler side: fake clock, one sample per minute. Words: i (75 milli-cores,
