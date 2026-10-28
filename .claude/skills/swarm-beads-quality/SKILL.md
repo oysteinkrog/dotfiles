@@ -304,11 +304,14 @@ For large bead sets (>20), parallelize the review:
 
 | Round | Agent Count | Strategy |
 |-------|------------|----------|
-| 1. Review | 10 | One agent per lens across all beads |
-| 2. Oracle | 2 | FOR + AGAINST on full bead set |
-| 3. Harden | 6-8 | One agent per epic |
-| 4. Verify | 10 | One agent per epic + 2 cross-epic |
+| 1. Review | 10 | One bounded Astra run per lens across all beads |
+| 2. Oracle | 2 | FOR + AGAINST on full bead set (Astra, via `/swarm-oracle`) |
+| 3. Harden | 6-8 | One Claude agent per epic (applies fixes) |
+| 4. Verify | 10 | One bounded Astra run per epic + 2 cross-epic |
 
-Orchestrate with parallel `Agent` tool calls from a single leader message (distinct
-`name`, shared `team_name`, `run_in_background: true`). Each teammate commits fixes
-atomically after each bead.
+Review and verify lanes are bounded Astra runs at effort `medium` (see `/consult-oracles`):
+paste the `br show` output, plan excerpts and path-check results into each prompt, keep
+it under about 60k tokens, and run at most 4 at once. If Codex fails, use Fable, then
+Opus, and say so. The leader applies review and verify findings. Harden lanes use
+parallel `Agent` tool calls from a single leader message (distinct `name`, shared
+`team_name`, `run_in_background: true`); each commits fixes atomically after each bead.

@@ -117,6 +117,8 @@ Pass 4 → no meaningful changes → STOP
 
 Never run more than 5 passes.
 
+For an independent read of a large bead set, paste the `br show` output into one bounded Astra run (see `/consult-oracles`) and apply its valid findings yourself with `br`.
+
 ---
 
 ## Step 5: Final Verification
