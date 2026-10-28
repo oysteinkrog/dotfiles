@@ -230,13 +230,13 @@ def away(account, sources, slack=False):
 
 
 OOO_CACHE = HOME / ".cache/agenda/ooo.json"
-OOO_MAX_AGE = 600  # seconds; out-of-office events change rarely
+OOO_MAX_AGE = 120  # seconds; the away list should be close to live
 
 
 def native_ooo(account, emails):
     """Out-of-office events (Google Calendar's own type) in each colleague's calendar.
 
-    One read per person, 8 at a time, cached for OOO_MAX_AGE so the two-minute refresh
+    One read per person, 8 at a time, cached for OOO_MAX_AGE so the one-minute refresh
     does not read every calendar each time. Calendars that cannot be read are skipped.
     """
     from concurrent.futures import ThreadPoolExecutor
