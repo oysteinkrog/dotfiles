@@ -54,6 +54,11 @@ loop. Never cancel a waiting build to resubmit it: it goes to the back of the li
 
 ## 3. Long builds
 
+On the office desktop, heavy-build hands jobs to jobd. There, use
+`job submit --detach -- <cmd>` and `job wait <id>` instead of the wrapper below: the job
+runs in its own unit and survives a dead background shell. The `job-system` skill has the
+details. The wrapper below is for machines without jobd.
+
 Never run heavy-build as a Claude background shell (`run_in_background`) when the build
 can wait in line or take more than 10 minutes. Claude Code kills background shells when
 memory runs low, and the build and its place in line are lost.

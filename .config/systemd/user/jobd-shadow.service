@@ -1,0 +1,14 @@
+[Unit]
+Description=jobd-shadow: runs jobd's admission rules next to heavy-build and compares starts
+Documentation=file:///home/oystein/projects/job-system/README.md
+
+[Service]
+WorkingDirectory=%h/projects/job-system
+ExecStart=/usr/bin/python3 -m jobd.shadow
+Slice=jobd.slice
+MemoryMax=256M
+CPUWeight=10
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
