@@ -319,8 +319,9 @@ def update_jobd(st, now):
 
             try:
                 r = subprocess.run([tool, "queue"], capture_output=True, text=True, timeout=5)
-                # Exit 75: jobd is not running, so it has no jobs. Any other failure: keep what we have.
-                out = json.loads(r.stdout) if r.returncode == 0 else {"jobs": []} if r.returncode == 75 else None
+                # Any failure, including exit 75 (jobd did not answer, as during a restart while
+                # its jobs keep running): keep the last known list.
+                out = json.loads(r.stdout) if r.returncode == 0 else None
                 live = out["jobs"] if out is not None else None
                 # The job limit both queues share: heavy-build's, with the presence file applied.
                 if out is not None:
