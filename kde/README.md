@@ -16,8 +16,17 @@ per machine (panels, monitors, activities, virtual desktops).
   Put a key there only when that machine should differ, with a comment saying why. The
   profiles live in the private Life repo because this repo is public.
 
-Example: the shared `kwinrc` sets `[Xwayland] Scale=1`, and the home desktop's
+Example: the shared `kwinrc` sets `[Xwayland] Scale=1.1`, and the home desktop's
 `kde/kwinrc` sets `Scale=1.25` because its main monitor runs at 125 %.
+
+## Colour theme
+
+The colour theme comes from `os-theme` (`bin/os-theme`, themes in `.config/os-theme/themes.json`).
+Its hooks set the Plasma colour scheme, the Plasma style, fooyin, the panels and the wallpaper
+shader. `kde/_os-theme.txt` holds the theme name both machines use, and a host file of the same
+name overrides it. `kde-config apply` switches to it, `diff` reports a different theme as drift,
+and `kde-config capture os-theme` saves the current one. So the colour scheme and Plasma style
+keys are not in `kdeglobals` or `plasmarc` here.
 
 ## Commands
 
@@ -54,8 +63,8 @@ kde-config apply                 # write it (the desktop step of the bootstrap r
 
 ## What stays in `setup/steps/60-desktop.sh`
 
-Settings that need logic or another tool: the global theme and colour scheme (through the
-`plasma-apply-*` tools, which also write the derived colours), panel and system tray layout
+Settings that need logic or another tool: the global theme (through
+`plasma-apply-lookandfeel`), panel and system tray layout
 (plasmashell scripting, because panel IDs differ per machine), wallpapers,
 default apps in `mimeapps.list`, and the pin-to-monitor window layout from `HOST_WINDOW_LAYOUT`
 in `host.sh`.

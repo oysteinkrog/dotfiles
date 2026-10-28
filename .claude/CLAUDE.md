@@ -317,6 +317,12 @@ home desktop or Hawk (`job run --on`). The home desktop still uses heavy-build's
   not delete other sessions' build output to make room.
 - A subagent prompt that builds must say "use `heavy-build` and load the `heavy-build`
   skill".
+- **Big jobs that are not builds go in `builds.slice` too.** Renders (OpenSCAD,
+  CadQuery, Blender), image, video or ML scripts and big data passes that may use more
+  than 2 GB or more than 4 cores run through `heavy-build`, or as
+  `systemd-run --user --slice=builds.slice --scope nice -n 10 <cmd>`. Run from your own
+  session scope, they skip the memory caps and the pressure pause. On 2026-10-28, two
+  such jobs (4 GB and 11.6 GB) held the home desktop at pause for most of an hour.
 
 The `build-guard` PreToolUse hook blocks a build dir override, `/tmp` builds and clones,
 and monorepo worktrees outside grove. An unwrapped heavy build gets a warning. For a
