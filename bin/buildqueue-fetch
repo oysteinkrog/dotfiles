@@ -757,7 +757,8 @@ def remote_view(r, now, owner):
         (w.get("name", ""), j.get("attempt"))
         for w in r["workers"] for j in (w.get("running") or []) if isinstance(j, dict) and j.get("alive", True)
     }
-    asked = {w.get("name", "") for w in r["workers"]}
+    # A booked worker (Laben booked on the lab PC) is not contacted, so its list says nothing.
+    asked = {w.get("name", "") for w in r["workers"] if "booked" not in w}
     jobs = sorted(
         ((a, j) for a, j in r["jobs"].items() if j["worker"] not in asked or (j["worker"], a) in alive or "end" in j),
         key=lambda kv: kv[1].get("start", 0),
@@ -779,6 +780,7 @@ def remote_view(r, now, owner):
             "cpus": w.get("cpus"),
             "active": bool(w.get("active")),
             "frozen": bool(w.get("frozen")),
+            "booked": "booked" in w,
             "threads": int(cpu) // 100 if cpu.isdigit() else None,
             "memHigh": lim.get("MemoryHigh", ""),
             "running": len(w.get("running") or []),
@@ -826,10 +828,10 @@ def pinned_toolchain(folder):
 
 
 def remote_target(st):
-    """The worker to suggest: the first Linux worker whose last status says it is not frozen.
-    None when there is no such worker or the status call failed, so nothing is marked."""
+    """The worker to suggest: the first Linux worker whose last status says it is not frozen
+    or booked. None when there is no such worker or the status call failed, so nothing is marked."""
     for w in st.get("remote", {}).get("workers", []):
-        if not w.get("frozen", True) and w.get("os", "linux") == "linux":
+        if not w.get("frozen", True) and "booked" not in w and w.get("os", "linux") == "linux":
             return w
     return None
 

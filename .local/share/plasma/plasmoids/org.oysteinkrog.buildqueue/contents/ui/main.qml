@@ -62,7 +62,7 @@ PlasmoidItem {
     }
 
     function workerText(w) {
-        const parts = [w.name, w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
+        const parts = [w.name, w.booked ? i18n("booked") : w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
         if (w.threads)
             parts.push(i18n("%1 threads, %2", w.threads, w.memHigh));
         if (w.memAvailGib !== undefined && w.memAvailGib !== null)
