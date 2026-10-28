@@ -319,10 +319,12 @@ def update_jobd(st, now):
 
             try:
                 r = subprocess.run([tool, "queue"], capture_output=True, text=True, timeout=5)
-                out = json.loads(r.stdout) if r.returncode == 0 else {}
-                live = out.get("jobs", [])
+                # Exit 75: jobd is not running, so it has no jobs. Any other failure: keep what we have.
+                out = json.loads(r.stdout) if r.returncode == 0 else {"jobs": []} if r.returncode == 75 else None
+                live = out["jobs"] if out is not None else None
                 # The job limit both queues share: heavy-build's, with the presence file applied.
-                j["maxjobs"] = out.get("maxjobs")
+                if out is not None:
+                    j["maxjobs"] = out.get("maxjobs")
             except (OSError, subprocess.SubprocessError, ValueError, KeyError):
                 live = None
             if live is not None:
