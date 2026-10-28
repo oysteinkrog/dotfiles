@@ -61,6 +61,11 @@ PlasmoidItem {
         return remoteTarget !== "" && job.remoteOk === true;
     }
 
+    // Which queue holds a job: jobd, or heavy-build's own queue.
+    function queueName(job) {
+        return job.queue === "jobd" ? "jobd" : "hb";
+    }
+
     function workerText(w) {
         const parts = [w.name, w.booked ? i18n("booked") : w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
         if (w.threads)
@@ -1257,6 +1262,10 @@ PlasmoidItem {
                         Layout.preferredWidth: view.gu * 5
                     }
                     Head {
+                        text: i18n("Queue")
+                        Layout.preferredWidth: view.gu * 2.2
+                    }
+                    Head {
                         text: i18n("Worktree")
                         Layout.fillWidth: true
                     }
@@ -1284,13 +1293,19 @@ PlasmoidItem {
                         Layout.fillWidth: true
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority, running %4", job.cls, job.project, job.prio || "normal", root.dur(job.runtime)) + (own.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(own.owner), root.ownerSource(own)) : "") + (job.why ? "\n" + job.why : "")
+                        tip: i18n("%1 in %2, %3 priority, running %4", job.cls, job.project, job.prio || "normal", root.dur(job.runtime)) + (own.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(own.owner), root.ownerSource(own)) : "") + (job.why ? "\n" + job.why : "") + "\n" + i18n("Queue: %1", job.queue === "jobd" ? "jobd" : "heavy-build")
                         Dot {
                             color: root.isAppRun(runRow.job) ? view.appColor : view.runColor
                         }
                         Cell {
                             text: runRow.job.cls || ""
                             Layout.preferredWidth: view.gu * 5
+                        }
+                        Cell {
+                            text: root.queueName(runRow.job)
+                            font.pointSize: root.fsSmall
+                            opacity: runRow.job.queue === "jobd" ? 0.85 : 0.55
+                            Layout.preferredWidth: view.gu * 2.2
                         }
                         Cell {
                             text: runRow.job.project || ""
@@ -1414,6 +1429,10 @@ PlasmoidItem {
                         Layout.preferredWidth: view.gu * 5
                     }
                     Head {
+                        text: i18n("Queue")
+                        Layout.preferredWidth: view.gu * 2.2
+                    }
+                    Head {
                         text: i18n("Waited")
                         Layout.preferredWidth: view.gu * 6.4
                         horizontalAlignment: Text.AlignRight
@@ -1429,7 +1448,7 @@ PlasmoidItem {
                         Layout.fillWidth: true
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est)) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est)) + "\n" + i18n("Queue: %1", job.queue === "jobd" ? "jobd" : "heavy-build") + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: nextRow.index + 1
                             Layout.preferredWidth: view.gu * 0.9
@@ -1451,6 +1470,12 @@ PlasmoidItem {
                             text: nextRow.job.cls || ""
                             Layout.preferredWidth: view.gu * 5
                             opacity: 0.85
+                        }
+                        Cell {
+                            text: root.queueName(nextRow.job)
+                            font.pointSize: root.fsSmall
+                            opacity: nextRow.job.queue === "jobd" ? 0.85 : 0.55
+                            Layout.preferredWidth: view.gu * 2.2
                         }
                         ValueBar {
                             visible: !root.remoteHint(nextRow.job)
@@ -1749,6 +1774,10 @@ PlasmoidItem {
                         Layout.preferredWidth: view.gu * 5.6
                     }
                     Head {
+                        text: i18n("Queue")
+                        Layout.preferredWidth: view.gu * 2.2
+                    }
+                    Head {
                         text: i18n("Class")
                         Layout.fillWidth: true
                     }
@@ -1774,7 +1803,7 @@ PlasmoidItem {
                         width: ListView.view.width
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause))) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause))) + "\n" + i18n("Queue: %1", job.queue === "jobd" ? "jobd" : "heavy-build") + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: qrow.run ? "▶" : qrow.job.pos
                             color: qrow.run ? view.runColor : Kirigami.Theme.textColor
@@ -1793,6 +1822,12 @@ PlasmoidItem {
                             text: qrow.job.project
                             opacity: 0.85
                             Layout.preferredWidth: view.gu * 5.6
+                        }
+                        Cell {
+                            text: root.queueName(qrow.job)
+                            font.pointSize: root.fsSmall
+                            opacity: qrow.job.queue === "jobd" ? 0.85 : 0.55
+                            Layout.preferredWidth: view.gu * 2.2
                         }
                         Cell {
                             text: qrow.job.cls
