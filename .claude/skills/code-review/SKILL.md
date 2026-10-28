@@ -199,4 +199,6 @@ Review: $ARGUMENTS
 
 If no arguments given, review `git diff --staged` or `git diff` (unstaged changes).
 
+For a second read not anchored on yours, or when the diff is too large to review well yourself, send the diff and these rules to one bounded Astra run (see `/consult-oracles`); Fable only if Codex fails.
+
 For each issue found, cite the file and line number. Group by category. End with a clean/not-clean verdict.

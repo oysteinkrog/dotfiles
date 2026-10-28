@@ -1,36 +1,46 @@
 ---
 name: swarm-oracle
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two Fable subagents (one per stance, short self-contained brief); add two GPT-6 Astra sessions via Codex CLI as a cross-provider check for high-stakes or contested validations, and use them as the fallback when Fable is unavailable. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra runs via Codex CLI (one per stance, one bounded prompt each); add two Fable subagents only for security-sensitive or contested validations, and use them as the fallback when Codex fails. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
 
 # Oracle Consensus
 
-> **Oracle policy (2026-10-22):** Fable is the primary oracle. The default FOR/AGAINST
-> debate runs as two fresh Fable subagents (`Agent` tool, `model: "fable"`), one per
-> stance. Fable alone is the normal shape of a validation; no pairing is required.
-> GPT-6 Astra (`gpt-6-astra`, via the Codex CLI) is the **secondary oracle**: add an
-> Astra FOR/AGAINST pair (two `codex exec` calls) when the validation is high-stakes,
-> when the two Fable stances leave the call contested or look uncertain, or when the
-> user asks for a cross-provider opinion. See `/consult-oracles`.
+> **Oracle policy (2026-10-24, all reviews since 2026-10-28):** GPT-6 Astra is the
+> primary oracle. The default FOR/AGAINST debate runs as two bounded Astra runs at
+> effort `medium`, one per stance: one prompt of about 60k tokens each, with the diff
+> and the needed excerpts pasted in, run from an empty directory with the shell tools
+> off (see `/consult-oracles`, Bounded Astra run). Astra alone is the normal shape of
+> a validation; no pairing is required.
+> Fable is the **secondary oracle** (fresh `Agent` subagent, `model: "fable"`). Add a
+> Fable FOR/AGAINST pair only when the validation is a security review, when the two
+> Astra stances leave the call contested or one looks wrong, or when the user asks
+> for a cross-provider opinion.
 >
-> Why: 16 Claude subscription accounts against 3 OpenAI accounts, so Claude has far
-> more weekly room. On 2026-10-22 high-effort Astra reviews nearly used up all three
-> OpenAI accounts until 10-26 to 10-28.
+> Why: the three OpenAI accounts ended last week at about 26% to 31% with reset
+> credits unused, while four Claude accounts hit 100%. If any OpenAI account passes
+> 70% of its week before its reset, go back to Fable first.
 >
-> **Availability fallback:** if the Fable spawns fail, run the same FOR/AGAINST debate
-> as two Astra calls and state the substitution in the verdict. If Codex also fails,
-> use Opus subagents (`model: "opus"`) and say so. Do not silently downgrade.
+> Effort stays `medium`. Use `high` only for one high-stakes question, and say why.
+> Lesson from 2026-10-22: high-effort Astra reviews on whole repos used up all three
+> OpenAI accounts in about 90 minutes. That is why the bounded prompt and medium
+> effort are required. At most 4 Astra runs at once.
+>
+> **Availability fallback:** if Codex fails (auth error, rate limit, empty output), run
+> the same FOR/AGAINST debate as two Fable subagents and state the substitution in the
+> verdict. If Fable also fails, use Opus subagents (`model: "opus"`) and say so. Do not
+> silently downgrade.
 >
 > **Gemini 4 Argon** (via PAL) is the optional third oracle but is currently
 > unavailable: the AI Studio prepay credit ran out on 2026-10-21 and Oystein chose to
 > leave it off. Do not plan around it.
 >
 > **Sensitive code:** Anthropic, OpenAI and Google are approved providers. Proprietary
-> material can go to Fable, Astra and Gemini 4 Argon without asking first.
+> material can go to Astra, Fable and Gemini 4 Argon without asking first.
 >
-> **Cost rules:** short self-contained briefs, a bounded reading list named by path,
-> the change delta rather than the whole module, and one validation per change.
+> **Cost rules:** short self-contained briefs, the needed excerpts pasted in, the
+> change delta rather than the whole module, and one validation per change.
+
 Run a structured FOR/AGAINST debate between two high-capability oracle sessions on a design decision, plan, or bead set. Produces a scored verdict with specific actionable corrections.
 
 ## When to Use
@@ -43,7 +53,7 @@ Run a structured FOR/AGAINST debate between two high-capability oracle sessions 
 
 ## Prerequisites
 
-The default Fable tier needs nothing beyond the `Agent` tool. The Astra check needs Codex: confirm `codex` is on PATH and the repo root is trusted in `~/.codex/config.toml`. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user, because agents silently fall back to self-analysis without PAL, producing unreliable results.
+The default Astra tier needs Codex: confirm `codex` is on PATH and logged in. The Fable check needs nothing beyond the `Agent` tool. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user, because agents silently fall back to self-analysis without PAL, producing unreliable results.
 
 ## Workflow
 
@@ -70,10 +80,39 @@ The evaluation prompt must be self-contained — models do not share context bet
 
 ### Step 2: Configure Stances
 
-**Default tier (Fable):** spawn two fresh Fable subagents in one message, one FOR and
-one AGAINST. Each prompt is self-contained (evaluation prompt + the file paths to
-read); the two subagents share no context. Name the files; do not ask them to explore
-the repo.
+**Default tier (GPT-6 Astra):** run two bounded `codex exec` runs in a single message,
+one FOR and one AGAINST. Each prompt file is self-contained: the evaluation prompt,
+the stance, and the excerpts it needs pasted in with paths and line numbers (about
+60k tokens at most). The two runs share no context. Astra is not reachable through
+PAL, and the explicit tier ID is required (the bare `gpt-6` alias hangs). See the
+`/codex` skill for prompting and exec pitfalls.
+
+`medium` is the default effort. Use `high` only for one high-stakes question, and say
+why. `xhigh`, `max` and `ultra` only when Oystein asks for them:
+
+```bash
+mkdir -p /var/tmp/claude/<task>/astra-empty && cd /var/tmp/claude/<task>/astra-empty
+codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
+  --disable shell_tool --disable unified_exec --skip-git-repo-check \
+  -o <scratchpad>/oracle-for.md - < <scratchpad>/prompt-for.md 2>/dev/null
+codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
+  --disable shell_tool --disable unified_exec --skip-git-repo-check \
+  -o <scratchpad>/oracle-against.md - < <scratchpad>/prompt-against.md 2>/dev/null
+```
+
+The prompt goes in on stdin (`- < file`); without a stdin source `codex exec` blocks
+forever. The shell tools are off, so Astra answers from the pasted text only. `-o
+<file>` captures the final message; an empty file after exit 0 means the run failed.
+A stance answer that cites none of the pasted excerpts was given too little: add the
+excerpt and rerun.
+
+Then skip to Step 4 and synthesize the two responses yourself.
+
+**Cross-provider check (Fable):** for security reviews, when the two Astra stances
+leave the call contested or one looks wrong, or when Codex fails (auth error, rate
+limit, empty output), spawn two fresh Fable subagents in one message, one FOR and one
+AGAINST. Each prompt is self-contained; the two subagents share no context. Synthesize
+all four responses, or the two Fable responses when Fable replaces a failed Codex run.
 
 ```
 Agent({ subagent_type: "general-purpose", model: "fable",
@@ -82,36 +121,6 @@ Agent({ subagent_type: "general-purpose", model: "fable",
 Agent({ subagent_type: "general-purpose", model: "fable",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
-
-Then skip to Step 4 and synthesize the two responses yourself.
-
-**Cross-provider check (GPT-6 Astra):** for high-stakes validations, or when the two
-Fable stances leave the call contested or uncertain, run an Astra FOR/AGAINST pair as
-two `codex exec` calls in a single message and synthesize all four responses. Same
-shape when Fable is unavailable, in which case the Astra pair is the whole debate.
-Astra is not reachable through PAL, and the explicit tier ID is required (the bare
-`gpt-6` alias hangs). See the `/codex` skill for prompting and exec pitfalls.
-
-`medium` is the default effort. Use `high` only for a high-stakes validation with a
-bounded file list. `xhigh`, `max` and `ultra` only when Oystein asks for them:
-
-```bash
-codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
-  -o <scratchpad>/oracle-for.md "<evaluation prompt>\n\nStance: Advocate..." < /dev/null 2>/dev/null
-codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
-  -o <scratchpad>/oracle-against.md "<evaluation prompt>\n\nStance: Challenge..." < /dev/null 2>/dev/null
-```
-
-`< /dev/null` is required: without a stdin source `codex exec` blocks forever on
-"Reading additional input from stdin" and looks like a slow model. `-o <file>`
-captures the final message; read the file rather than parsing stdout.
-
-Do not pass `--sandbox read-only`. On WSL1 the sandbox cannot start, so Astra cannot
-read any file and answers from the prompt alone, while still exiting 0. The default
-`sandbox_mode` in `~/.codex/config.toml` lets it read the repo. Before the two long
-runs, send one cheap probe: ask Astra for the title and line count of one known file,
-check both, and run `git status` afterwards to confirm it wrote nothing. A stance
-answer that cites no file or line was not read from the repo.
 
 **Gemini 4 Argon (currently unavailable):** when it is back, a Gemini FOR/AGAINST pair
 is two `mcp__pal__chat` calls with `model: "gemini-4-argon"`, `thinking_mode: "max"`
@@ -221,7 +230,8 @@ Oracle 3: Evaluate epics 7-10 (integration + testing)
 Oracle 4: Evaluate cross-cutting concerns (deps, ordering, completeness)
 ```
 
-Each oracle session is independent. Compile all corrections after all complete.
+Each oracle session is independent and gets its own bounded prompt. Run at most 4
+Astra runs at once. Compile all corrections after all complete.
 
 ## Scoring Guide
 
