@@ -401,6 +401,12 @@
 #   0 turns it off) unless the caller set CARGO_BUILD_JOBS itself. Other
 #   builds get the caller's value or 8. The start line in live.log says
 #   cargo_jobs=N when the cap is applied. The cores estimate does not use it.
+# - `dotnet build` and `dotnet test` (dotnet by any path) get -m:N after the
+#   verb, N = HEAVY_BUILD_DOTNET_MAXCPU (default 6; 0 turns it off), unless
+#   the command has its own -m, -m:N, -maxcpucount or -maxcpucount:N. The
+#   start line in live.log says dotnet_m=N when it is added. Other dotnet
+#   verbs, and dotnet inside sh -c or a script, are left alone. Estimates,
+#   history and the rerun guard see the command as given.
 # - Lane priority (HEAVY_BUILD_LANE_PRIO=1 in heavy-build.conf, default 0):
 #   the manager sets priority per lane in ~/.config/heavy-build.lanes, one
 #   rule per line, `<match> <high|normal|low> [by=<who>] [# note]`, first
@@ -862,6 +868,8 @@ read_conf() {
   APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
   setting HEAVY_BUILD_LOW_CARGO_JOBS 4
   LOW_CARGO_JOBS=$(( 10#$LOW_CARGO_JOBS ))
+  setting HEAVY_BUILD_DOTNET_MAXCPU 6
+  DOTNET_MAXCPU=$(( 10#$DOTNET_MAXCPU ))
   presence_override
 }
 
@@ -2948,6 +2956,19 @@ low_cargo_jobs() {
   return 0
 }
 
+# dotnet_m WORD...: prints N (HEAVY_BUILD_DOTNET_MAXCPU) when the command is
+# `dotnet build` or `dotnet test` with no -m or -maxcpucount of its own, and
+# nothing otherwise. The build then gets -m:N after the verb.
+dotnet_m() {
+  local w
+  (( DOTNET_MAXCPU > 0 && $# >= 2 )) || return 0
+  [[ ${1##*/} == dotnet && ( $2 == build || $2 == test ) ]] || return 0
+  for w in "${@:3}"; do
+    [[ ${w,,} =~ ^(-|--|/)(m|maxcpucount)(:.*)?$ ]] && return 0
+  done
+  echo "$DOTNET_MAXCPU"
+}
+
 # Logs the budget decision when it, its reason kind or the actual outcome
 # changes. $1 is what actually happened: wait or start.
 log_decision() {
@@ -2956,6 +2977,7 @@ log_decision() {
     if (( APP_CPU_QUOTA > 0 )); then appcpu=" cpu_quota=${APP_CPU_QUOTA}%"; else appcpu=" cpu_quota=none"; fi
   fi
   [[ $1 == start ]] && cj=$(low_cargo_jobs) && [[ -n $cj ]] && appcpu+=" cargo_jobs=$cj"
+  [[ $1 == start ]] && cj=$(dotnet_m "${cmd_words[@]}") && [[ -n $cj ]] && appcpu+=" dotnet_m=$cj"
   if [[ $dec == start ]]; then
     [[ -n $would_since ]] || would_since=$EPOCHSECONDS
   else
@@ -3366,6 +3388,7 @@ fi
 
 hash=$(printf '%s\0' "$PWD" "$@" | md5sum | cut -c1-8)
 cmdline="$*"
+cmd_words=("$@")
 cmdline=${cmdline//\"/\'}
 (( ${#cmdline} > 160 )) && cmdline="${cmdline:0:157}..."
 cls=$(classify "$@")
@@ -3636,6 +3659,9 @@ desc="heavy-build $cls prio=$PRIO${HEAVY_BUILD_REASON:+ reason: $HEAVY_BUILD_REA
 # CARGO_BUILD_JOBS in build_env wins in env.
 lcj=$(low_cargo_jobs)
 [[ -n $lcj ]] && build_env+=(CARGO_BUILD_JOBS="$lcj")
+# dotnet build and test get -m:N after the verb (HEAVY_BUILD_DOTNET_MAXCPU).
+dm=$(dotnet_m "$@")
+[[ -n $dm ]] && set -- "$1" "$2" "-m:$dm" "${@:3}"
 
 # The signal traps go in before the scope exists, so no signal can end
 # heavy-build between making the scope and watching it.
