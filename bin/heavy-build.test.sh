@@ -301,7 +301,7 @@ ss() {
   (
     PROC=$X/proc WINE_TMP=$X/winetmp HOME=$X/home BSLICE=$X/bs unit=u cmdline=x
     eval "$(sed -n '/^WINE_LEFTOVERS=/p;/^now_us()/p;/^wine_server_dir()/,/^}/p;/^wineservers_for()/,/^}/p;/^wine_orphans()/,/^}/p;/^sample_scope()/,/^}/p;/^apprun_charge()/,/^}/p' "$HB")"
-    ai_lo=0 charge_actual=0 app_seen=0 app_gone=0 APPRUN_IDLE_MIN=0 APPRUN_EXIT_ACTUAL=0
+    ai_lo=0 charge_actual=0 app_seen=0 app_gone=0 APPRUN_IDLE_MIN=0 APPRUN_EXIT_ACTUAL=0 APPRUN_YOUNG_MIN=0
     say() { echo "say: $*"; }
     log_line() { echo "log: $*"; }
     systemctl() { echo "systemctl $*"; }
@@ -789,7 +789,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -2635,6 +2635,24 @@ out=$(printf '%s\n' "$out" | ADM_MAXAPP=0 adm 0000000999000000000-1-n 0 1 12)
 check "app charge: a run charged actual memory still counts as a job (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
 out=$(printf '%s\n' "$RA2" 'W 0000000999000000000-1-n 999000 normal 4 2 600 - app-run' | ADM_MAXAPP=1 adm 0000000999000000000-1-n 0 1 12)
 check "app charge: and still counts against the app-run cap (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+# HEAVY_BUILD_APPRUN_YOUNG_MIN (appyoung seconds): past it an app run is
+# charged as column 10 = 2 even when its heavy-build wrote 0.
+RA5='R a1 999700 8 2 1014400 1073741824 - 0 normal - app-run'
+RA15='R a1 999100 8 2 1014400 1073741824 - 0 normal - app-run'
+RB15='R a1 999100 8 2 1014400 1073741824 - 0 normal - -'
+out=$(printf '%s\n' "$RA5" "$W30" | ADM_APPYOUNG=600 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app young: at 5 min an app run is still young and adds its growth, so it waits (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(printf '%s\n' "$RA15" "$W30" | ADM_APPYOUNG=600 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app young: at 15 min it adds only the margin, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RA15" "$W30" | ADM_APPYOUNG=600 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app young: at 15 min, old rule, 1 GiB held + 0.5 margin, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RA15" "$W30" | ADM_APPYOUNG=0 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app young: HEAVY_BUILD_APPRUN_YOUNG_MIN=0 keeps the old charge, so it waits (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(printf '%s\n' "$RB15" "$W30" | ADM_APPYOUNG=600 ADM_REALUSE=1 ADM_SLICECUR=$A/slicecur1 ADM_SLICEMAX=$A/slicemax36 adm 0000000999000000000-1-n 0 1 12)
+check "app young: another class at 15 min keeps its charge, so it waits (got '$out')" '[[ $out == wait\|slice-cap:* ]]'
+out=$(for i in 1 2 3 4 5 6; do echo "R a$i 999100 8 2 1014400 1073741824 - 0 normal - app-run"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
+out=$(printf '%s\n' "$out" | ADM_APPYOUNG=600 ADM_MAXAPP=0 adm 0000000999000000000-1-n 0 1 12)
+check "app young: past its young window it still counts as a job (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
 rm -rf -- "$A"
 
 # The sampler side: fake clock, one sample per minute. Words: i (75 milli-cores,
@@ -2657,7 +2675,7 @@ sa() {  # PLAN ; settings MIN (idle minutes), EXIT, CLS
     orphan_warned= orphan_stopped= orph_unknown_logged= orph_other_logged= wine_idle_logged=
     ai_lo=0 charge_actual=0 app_seen=0 app_gone=0
     STALL_SECS=600 WINE_IDLE_SECS=900 ORPHAN_STOP_SECS=0 cls=${CLS:-app-run}
-    APPRUN_IDLE_MIN=${MIN:-30} APPRUN_IDLE_MILLICORES=100 APPRUN_BUSY_MILLICORES=250 APPRUN_EXIT_ACTUAL=${EXIT:-1} APPRUN_MARGIN_MIB=512
+    APPRUN_IDLE_MIN=${MIN:-30} APPRUN_IDLE_MILLICORES=100 APPRUN_BUSY_MILLICORES=250 APPRUN_EXIT_ACTUAL=${EXIT:-1} APPRUN_MARGIN_MIB=512 APPRUN_YOUNG_MIN=${YOUNG:-0}
     local t=1000000000000 u=1000 w
     last_active=$t
     for w in $1; do
@@ -2699,6 +2717,16 @@ MIN=0 EXIT=0 sa "i i x x x" > "$X/out"
 check "app exit: HEAVY_BUILD_APPRUN_EXIT_ACTUAL=0 turns it off" '! grep -q "event=charge" "$X/out"'
 sa "$(rep 5 i) $(rep 3 x) $(rep 28 i)" > "$X/out"
 check "app exit: a new MC start restarts the idle window (no idle switch 28 min after it)" '(( $(grep -c "reason=idle" "$X/out") == 0 ))'
+YOUNG=10 MIN=0 EXIT=0 sa "$(rep 5 b)" > "$X/out"
+check "app young: at 5 min a busy app run keeps its normal charge" '! grep -q "event=charge" "$X/out" && [[ $(tail -1 "$X/out") == "state 0" ]]'
+YOUNG=10 MIN=0 EXIT=0 sa "$(rep 16 b)" > "$X/out"
+check "app young: at 15 min it switches to actual memory, logged once" '(( $(grep -c "event=charge-actual unit=u reason=young-over mem=3.0G margin_mib=512 est=8.0G " "$X/out") == 1 )) && [[ $(tail -1 "$X/out") == "state 2" ]]'
+YOUNG=10 MIN=0 EXIT=0 sa "$(rep 30 b)" > "$X/out"
+check "app young: it stays on, busy or not, with one log line" '(( $(grep -c "event=charge" "$X/out") == 1 )) && [[ $(tail -1 "$X/out") == "state 2" ]]'
+YOUNG=0 MIN=0 EXIT=0 sa "$(rep 16 b)" > "$X/out"
+check "app young: HEAVY_BUILD_APPRUN_YOUNG_MIN=0 turns it off" '! grep -q "event=charge" "$X/out" && [[ $(tail -1 "$X/out") == "state 0" ]]'
+YOUNG=10 MIN=0 EXIT=0 CLS=other sa "$(rep 16 b)" > "$X/out"
+check "app young: only the app-run class" '! grep -q "event=charge" "$X/out"'
 rm -rf -- "$X"
 
 # HEAVY_BUILD_BACKEND=jobd (2026-10-28). A fake job client records its calls;
