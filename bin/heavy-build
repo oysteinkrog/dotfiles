@@ -2621,10 +2621,12 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   # stalled 2: an app run that is idle (HEAVY_BUILD_APPRUN_IDLE_MIN) or whose
   # app has exited. It still counts as a job and an app run, but its memory
-  # is what it holds plus appmargin GiB, not its estimate.
+  # is what it holds plus appmargin GiB, not its estimate. A quiet one (idle
+  # above) is charged no cores and no job, as any other quiet build.
   else if (stalled == 2) {
     held = cur + appmargin; tc = appmargin; grow = appmargin
     cc = (c60 == "-") ? cores : max(0.25, c60 / 1000)
+    if (idle) { cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
