@@ -50,6 +50,25 @@ PlasmoidItem {
         })
     readonly property var slots: q.slots || ({})
     readonly property var nextJobs: (q.next || []).slice(0, 4)
+    // Builds sent to other machines with the job system (`job run --on WORKER`).
+    readonly property var remote: q.remote || ({})
+    readonly property var remoteRunning: remote.running || []
+    readonly property var remoteWorkers: remote.workers || []
+    // The worker to suggest for a job that could run remotely: a Linux worker that is not frozen.
+    readonly property string remoteTarget: remote.target || ""
+
+    function remoteHint(job) {
+        return remoteTarget !== "" && job.remoteOk === true;
+    }
+
+    function workerText(w) {
+        const parts = [w.name, w.booked ? i18n("booked") : w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
+        if (w.threads)
+            parts.push(i18n("%1 threads, %2", w.threads, w.memHigh));
+        if (w.memAvailGib !== undefined && w.memAvailGib !== null)
+            parts.push(i18n("%1 GiB free", w.memAvailGib));
+        return parts.join(" · ");
+    }
     readonly property var history: q.history || []
 
     // Lane name -> true or false, for lanes the owner opened or closed. The top lane starts open.
@@ -151,6 +170,10 @@ PlasmoidItem {
     }
 
     // Moves a session's or worktree's rule one step: low, normal (no rule) or high.
+    function setTheme(name) {
+        shell.connectSource("os-theme " + quote(name));
+    }
+
     function shiftPrio(match, current, delta) {
         const next = Math.max(-1, Math.min(1, prioStep(current) + delta));
         if (!match || next === prioStep(current))
@@ -288,6 +311,12 @@ PlasmoidItem {
     // then the app colour scheme is used.
     readonly property var style: q.theme || ({})
     readonly property bool styled: style.background !== undefined
+    // The panel theme picked with panel-theme, shared with the Agenda widget. Its colours
+    // replace the Plasma style ones; "plasma" (no colours) keeps the Plasma style.
+    readonly property var pt: q.panelTheme || ({})
+    readonly property bool themed: pt.window !== undefined
+    readonly property color cardColor: themed ? pt.card : styled ? style.background : Kirigami.Theme.backgroundColor
+    readonly property color inkColor: themed ? pt.text : styled ? style.text : Kirigami.Theme.textColor
 
     // Type scale, from the Plasma font so it follows the owner's font size. Shared with the
     // Agenda widget: docs/desktop-panels-style.md.
@@ -298,18 +327,21 @@ PlasmoidItem {
     // Data colours are the Plasma ones, a little less saturated so they sit calmly on the
     // dark cards. Text and chrome stay neutral: colour is for data only.
     function muted(c) {
+        if (themed && !pt.mute)
+            return c;
         return Qt.hsla(c.hslHue, c.hslSaturation * 0.78, Math.min(c.hslLightness, 0.6), 1);
     }
 
     function tint(amount) {
-        return Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, amount);
+        return Kirigami.ColorUtils.tintWithAlpha(cardColor, inkColor, amount);
     }
 
-    // A section title: body size, semi-bold, in a light tint of the accent.
+    // A section title: body size, semi-bold, in the theme's title colour (a light tint of the
+    // accent with the Plasma style).
     component Heading: PlasmaComponents.Label {
         font.pointSize: root.fs
         font.weight: Font.DemiBold
-        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.highlightColor, "white", 0.35)
+        color: root.themed ? root.pt.title : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.highlightColor, "white", 0.35)
     }
 
     // Muted small text: labels, captions, axis text.
@@ -342,9 +374,9 @@ PlasmoidItem {
         implicitHeight: col.implicitHeight + pad * 2
         implicitWidth: col.implicitWidth + pad * 2
         radius: 6
-        color: root.tint(0.045)
+        color: root.themed ? root.pt.card : root.tint(0.045)
         border.width: 1
-        border.color: root.tint(0.11)
+        border.color: root.themed ? root.pt.border : root.tint(0.11)
         ColumnLayout {
             id: col
             anchors.fill: parent
@@ -633,7 +665,7 @@ PlasmoidItem {
             : root.gate.state === "open" ? Kirigami.Theme.positiveTextColor
             : Kirigami.Theme.disabledTextColor
         readonly property color runColor: root.muted(Kirigami.Theme.linkColor)
-        readonly property color appColor: root.muted(Kirigami.Theme.highlightColor)
+        readonly property color appColor: root.themed ? root.pt.extra : root.muted(Kirigami.Theme.highlightColor)
         readonly property color waitColor: root.muted(Kirigami.Theme.neutralTextColor)
         readonly property color okColor: root.muted(Kirigami.Theme.positiveTextColor)
         readonly property color failColor: root.muted(Kirigami.Theme.negativeTextColor)
@@ -687,17 +719,18 @@ PlasmoidItem {
 
         Kirigami.Theme.inherit: !root.styled
         Kirigami.Theme.colorSet: Kirigami.Theme.Window
-        Kirigami.Theme.backgroundColor: root.styled ? root.style.background : undefined
-        Kirigami.Theme.alternateBackgroundColor: root.styled ? root.style.alternate : undefined
-        Kirigami.Theme.textColor: root.styled ? root.style.text : undefined
-        Kirigami.Theme.disabledTextColor: root.styled ? root.style.inactive : undefined
-        Kirigami.Theme.negativeTextColor: root.styled ? root.style.negative : undefined
-        Kirigami.Theme.neutralTextColor: root.styled ? root.style.neutral : undefined
-        Kirigami.Theme.positiveTextColor: root.styled ? root.style.positive : undefined
-        Kirigami.Theme.highlightColor: root.styled ? root.style.accent : undefined
-        Kirigami.Theme.highlightedTextColor: root.styled ? root.style.accentText : undefined
+        Kirigami.Theme.backgroundColor: root.themed ? root.pt.card : root.styled ? root.style.background : undefined
+        Kirigami.Theme.alternateBackgroundColor: root.themed ? root.pt.band : root.styled ? root.style.alternate : undefined
+        Kirigami.Theme.textColor: root.themed ? root.pt.text : root.styled ? root.style.text : undefined
+        Kirigami.Theme.disabledTextColor: root.themed ? root.pt.muted : root.styled ? root.style.inactive : undefined
+        Kirigami.Theme.negativeTextColor: root.themed ? root.pt.negative : root.styled ? root.style.negative : undefined
+        Kirigami.Theme.neutralTextColor: root.themed ? root.pt.warning : root.styled ? root.style.neutral : undefined
+        Kirigami.Theme.positiveTextColor: root.themed ? root.pt.positive : root.styled ? root.style.positive : undefined
+        Kirigami.Theme.highlightColor: root.themed ? root.pt.accent : root.styled ? root.style.accent : undefined
+        Kirigami.Theme.linkColor: root.themed ? root.pt.info : undefined
+        Kirigami.Theme.highlightedTextColor: root.themed ? root.pt.onAccent : root.styled ? root.style.accentText : undefined
         // The window sits a step darker than the cards, so the cards lift off it.
-        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
+        color: root.themed ? root.pt.window : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
 
         ColumnLayout {
             anchors.fill: parent
@@ -723,6 +756,33 @@ PlasmoidItem {
                 Dot {
                     visible: root.q.updated > 0
                     color: root.stale || root.problem !== "" ? Kirigami.Theme.neutralTextColor : view.okColor
+                }
+                PlasmaComponents.ToolButton {
+                    id: themeButton
+                    visible: (root.pt.names || []).length > 0
+                    icon.name: "color-management"
+                    display: PlasmaComponents.AbstractButton.IconOnly
+                    text: i18n("Theme")
+                    implicitWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+                    implicitHeight: implicitWidth
+                    onClicked: themeMenu.open()
+                    PlasmaComponents.ToolTip.visible: hovered && !themeMenu.visible
+                    PlasmaComponents.ToolTip.text: i18n("Panel theme: %1", root.pt.label || root.pt.name || "")
+                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    PlasmaComponents.Menu {
+                        id: themeMenu
+                        y: themeButton.height
+                        Repeater {
+                            model: root.pt.names || []
+                            PlasmaComponents.MenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                checkable: true
+                                checked: modelData[0] === root.pt.name
+                                onTriggered: root.setTheme(modelData[0])
+                            }
+                        }
+                    }
                 }
                 Kirigami.Icon {
                     visible: root.problem !== ""
@@ -1269,6 +1329,62 @@ PlasmoidItem {
                 }
             }
 
+            // Builds on other machines, from the job system. heavy-build does not see them.
+            Card {
+                Layout.fillWidth: true
+                visible: root.remoteWorkers.length > 0 || root.remoteRunning.length > 0
+                title: i18n("Remote")
+                header: Small {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    text: root.remoteWorkers.map(w => root.workerText(w)).join("   ")
+                }
+                Repeater {
+                    model: root.remoteRunning.length
+                    delegate: HoverRow {
+                        id: remRow
+                        required property int index
+                        readonly property var job: root.remoteRunning[index] || ({})
+                        Layout.fillWidth: true
+                        minHeight: view.rowH
+                        spacing: Kirigami.Units.smallSpacing * 1.5
+                        tip: i18n("%1 in %2 on %3, running %4", job.cmd, job.project, job.worker, root.dur(job.age)) + (job.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(job.owner), root.ownerSource(job)) : "")
+                        Dot {
+                            color: view.runColor
+                        }
+                        Cell {
+                            text: remRow.job.cmd || ""
+                            Layout.preferredWidth: view.gu * 5
+                        }
+                        Cell {
+                            text: remRow.job.project || ""
+                            Layout.fillWidth: true
+                            opacity: 0.85
+                        }
+                        Cell {
+                            text: root.ownerName(remRow.job.owner) + (remRow.job.owner && root.inferred(remRow.job) ? " ≈" : "")
+                            Layout.preferredWidth: view.gu * 5
+                            opacity: remRow.job.owner ? 0.85 : 0.5
+                            font.italic: !remRow.job.owner
+                        }
+                        Cell {
+                            text: remRow.job.worker || ""
+                            Layout.preferredWidth: view.gu * 2.8
+                            font.pointSize: root.fsSmall
+                            opacity: 0.6
+                        }
+                        Cell {
+                            text: root.dur(remRow.job.age)
+                            horizontalAlignment: Text.AlignRight
+                            Layout.preferredWidth: view.gu * 3.5
+                        }
+                    }
+                }
+                Small {
+                    text: (root.remoteRunning.length === 0 ? i18n("Nothing running.") + " " : "") + i18n("Last hour: %1 ok, %2 failed", root.remote.ok || 0, root.remote.failed || 0)
+                }
+            }
+
             // The next jobs in queue order.
             Card {
                 Layout.fillWidth: true
@@ -1313,7 +1429,7 @@ PlasmoidItem {
                         Layout.fillWidth: true
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est))
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5\nWaited %6, %7\nRuns about %8", job.cls, job.project, job.prio, root.ownerName(job.owner), root.ownerSource(job), root.dur(job.waited), root.causeLabel(job.cause), root.dur(job.est)) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: nextRow.index + 1
                             Layout.preferredWidth: view.gu * 0.9
@@ -1337,10 +1453,20 @@ PlasmoidItem {
                             opacity: 0.85
                         }
                         ValueBar {
+                            visible: !root.remoteHint(nextRow.job)
                             Layout.preferredWidth: view.gu * 2.6
                             value: nextRow.job.waited
                             max: view.nextMax
                             fill: nextRow.urgent ? view.prioColor(nextRow.job.prio) : view.waitColor
+                        }
+                        Small {
+                            // Could run on a remote worker: shown in the bar's place, so columns stay put.
+                            visible: root.remoteHint(nextRow.job)
+                            text: "→ " + root.remoteTarget
+                            color: view.runColor
+                            opacity: 1
+                            elide: Text.ElideRight
+                            Layout.preferredWidth: view.gu * 2.6
                         }
                         Cell {
                             text: root.dur(nextRow.job.waited)
@@ -1648,7 +1774,7 @@ PlasmoidItem {
                         width: ListView.view.width
                         minHeight: view.rowH
                         spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause)))
+                        tip: i18n("%1 in %2, %3 priority\nOwner %4: %5", job.cls, job.project, job.prio || "normal", root.ownerName(job.owner), root.ownerSource(job)) + (run ? "\n" + i18n("Running %1", root.dur(job.age)) : "\n" + i18n("Waited %1, %2", root.dur(job.age), root.causeLabel(job.cause))) + (root.remoteHint(job) ? "\n" + i18n("Could run on %1: job run --on %1 -- <command>", root.remoteTarget) : "")
                         Cell {
                             text: qrow.run ? "▶" : qrow.job.pos
                             color: qrow.run ? view.runColor : Kirigami.Theme.textColor
@@ -1680,10 +1806,20 @@ PlasmoidItem {
                             color: view.prioColor(qrow.job.prio)
                         }
                         ValueBar {
+                            visible: !root.remoteHint(qrow.job)
                             Layout.preferredWidth: view.gu * 2.6
                             value: qrow.job.age
                             max: view.queueMax
                             fill: qrow.run ? view.runColor : view.waitColor
+                        }
+                        Small {
+                            // Could run on a remote worker: shown in the bar's place, so columns stay put.
+                            visible: root.remoteHint(qrow.job)
+                            text: "→ " + root.remoteTarget
+                            color: view.runColor
+                            opacity: 1
+                            elide: Text.ElideRight
+                            Layout.preferredWidth: view.gu * 2.6
                         }
                         Cell {
                             text: root.dur(qrow.job.age)

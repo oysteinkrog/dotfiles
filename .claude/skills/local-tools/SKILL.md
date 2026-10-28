@@ -45,6 +45,12 @@ A glob wrapper around `rg --files`.
 rgg VideoDevice               # files with VideoDevice in the name
 ```
 
+Run it inside a project folder. The `fs-walk-guard` hook blocks walks of `/`, `~`, `/home`,
+`/var`, `/var/tmp` and `/var/tmp/claude`, from Bash (find, bfs, fd, rgg, rg, grep -r, ugrep,
+du, tree, `ls -R`) and from the Grep and Glob tools: with about 830 worktrees on disk, one such
+walk on 2026-10-27 filled 6 GiB of kernel inode cache and paused the build queue. Search a
+named folder, or add `-maxdepth 2`.
+
 ## Obsidian CLI
 
 Built into Obsidian 1.12 and later, not an npm package. **Obsidian must be running** or the

@@ -1,0 +1,8 @@
+#!/bin/sh
+# os-theme hook: restyle fooyin. fooyin keeps its colours in memory while it runs, so a running
+# fooyin picks the theme up at its next start (its launcher runs the same sync first).
+if pgrep -f "^$HOME/.local/opt/fooyin-experimental/bin/fooyin( |$)" >/dev/null; then
+    echo "applies when fooyin next starts"
+    exit 0
+fi
+"$HOME/.local/bin/fooyin-theme-sync" && echo "restyled"

@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Stop whole-tree search walks that a Claude session left running.
+
+Every 10 s this scans /proc for find, bfs, fd, fdfind, rg, grep, egrep, fgrep,
+ugrep, ug, du, ncdu, tree and `ls` processes of this user. A process is stopped
+when the detector in ~/.claude/hooks/fs-walk-detect.py (the same one the
+PreToolUse guard uses) says it walks a broad root (/, ~, /home, /var, /var/tmp
+or /var/tmp/claude) and it is at least 20 s old. It gets SIGTERM, and SIGKILL
+5 s later only if it is still alive. Nothing else is ever signalled.
+
+Why: on 2026-10-27 one `bfs /` over about 830 worktrees filled 6 GiB of kernel
+inode cache and paused the build queue. The guard hook stops most of these
+before they start. This service catches the ones that got past it (a walk that
+ran from a script, or from a session without the hook).
+
+Each stop is one line in ~/.local/state/fs-walk-reaper/log. The owning Claude
+session gets a notice through ~/.local/state/fs-walk-reaper/notice/<pid>, which
+the fs-walk-notice.sh hook shows on the session's next Bash call.
+
+Switches (environment): DRY_RUN=1 logs only. FS_WALK_REAPER_INTERVAL, _GRACE
+and _KILL_AFTER override the 10 s, 20 s and 5 s defaults.
+Skips: a command line with `# noqa: fs-walk`, and any command line matching a
+regex in ~/.config/fs-walk-reaper/allow (one per line, `#` comments).
+"""
+
+import importlib.util
+import os
+import re
+import shlex
+import signal
+import sys
+import time
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from types import ModuleType
+
+SEARCH_TOOLS = {
+    "find", "gfind", "bfs", "fd", "fdfind", "rg", "grep", "egrep", "fgrep",
+    "ugrep", "ug", "du", "ncdu", "tree", "ls",
+}  # fmt: skip
+INTERVAL = float(os.environ.get("FS_WALK_REAPER_INTERVAL", "10"))
+GRACE = float(os.environ.get("FS_WALK_REAPER_GRACE", "20"))
+KILL_AFTER = float(os.environ.get("FS_WALK_REAPER_KILL_AFTER", "5"))
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+STATE_DIR = STATE_DIR / "fs-walk-reaper"
+ALLOW_FILE = Path.home() / ".config/fs-walk-reaper/allow"
+CGROUP_RE = re.compile(r"claude-(\d+)\.scope")
+CMD_MAX = 200
+
+
+def load_detector() -> ModuleType:
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here.parent / ".claude/hooks/fs-walk-detect.py",
+        Path.home() / ".claude/hooks/fs-walk-detect.py",
+    ]
+    path = next(p for p in candidates if p.exists())
+    spec = importlib.util.spec_from_file_location("fs_walk_detect", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    setattr(module, "seg_mod", module.load_segmenter())
+    return module
+
+
+def read_cmdline(proc: Path, pid: int) -> list[str]:
+    try:
+        raw = (proc / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return []
+    return [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+
+
+def stat_fields(proc: Path, pid: int) -> list[str]:
+    """Fields of /proc/PID/stat after the comm: state is [0], starttime [19]."""
+    try:
+        text = (proc / str(pid) / "stat").read_text()
+    except OSError:
+        return []
+    # comm may contain spaces and parentheses: split after the last ')'.
+    return text.rsplit(")", 1)[-1].split()
+
+
+def read_start_ticks(proc: Path, pid: int) -> int | None:
+    fields = stat_fields(proc, pid)
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def stat_state(proc: Path, pid: int) -> str:
+    fields = stat_fields(proc, pid)
+    return fields[0] if fields else ""
+
+
+def uptime(proc: Path) -> float:
+    return float((proc / "uptime").read_text().split()[0])
+
+
+def age_seconds(proc: Path, pid: int, clk_tck: int) -> float | None:
+    ticks = read_start_ticks(proc, pid)
+    if ticks is None:
+        return None
+    return uptime(proc) - ticks / clk_tck
+
+
+def readlink(path: Path) -> str | None:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
+def compile_allow(path: Path) -> list[re.Pattern[str]]:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    out = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            out.append(re.compile(line))
+        except re.error:
+            continue
+    return out
+
+
+def classify(
+    detector: ModuleType,
+    argv: list[str],
+    cwd: str | None,
+    piped: bool,
+    allow: list[re.Pattern[str]],
+) -> str | None:
+    """The broad root this search process walks, or None."""
+    if not argv or os.path.basename(argv[0]) not in SEARCH_TOOLS:
+        return None
+    line = " ".join(argv)
+    if "noqa: fs-walk" in line or any(p.search(line) for p in allow):
+        return None
+    if cwd:
+        cwd = os.path.normpath(cwd)
+    try:
+        root = detector.check_command(argv, cwd, piped, 0)
+    except Exception:
+        return None
+    return root if isinstance(root, str) else None
+
+
+def owner_info(proc: Path, pid: int) -> tuple[str, str]:
+    """(claude scope pid or '-', HEAVY_BUILD_SESSION or '-')."""
+    scope = "-"
+    try:
+        for line in (proc / str(pid) / "cgroup").read_text().splitlines():
+            m = CGROUP_RE.search(line)
+            if m:
+                scope = m.group(1)
+                break
+    except OSError:
+        pass
+    hbs = "-"
+    try:
+        for item in (proc / str(pid) / "environ").read_bytes().split(b"\0"):
+            if item.startswith(b"HEAVY_BUILD_SESSION="):
+                hbs = item.split(b"=", 1)[1].decode("utf-8", "replace") or "-"
+                break
+    except OSError:
+        pass
+    return scope, hbs
+
+
+def candidates(
+    proc: Path,
+    detector: ModuleType,
+    allow: list[re.Pattern[str]],
+    uid: int,
+    clk_tck: int,
+    grace: float,
+    self_pid: int,
+) -> list[dict]:
+    """Search processes to stop, with the facts the log line needs."""
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == self_pid:
+            continue
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+        except OSError:
+            continue
+        argv = read_cmdline(proc, pid)
+        if not argv or os.path.basename(argv[0]) not in SEARCH_TOOLS:
+            continue
+        if stat_state(proc, pid) in ("Z", "X", ""):
+            continue
+        cwd = readlink(entry / "cwd")
+        fd0 = readlink(entry / "fd/0") or ""
+        root = classify(detector, argv, cwd, fd0.startswith("pipe:"), allow)
+        if root is None:
+            continue
+        age = age_seconds(proc, pid, clk_tck)
+        if age is None or age < grace:
+            continue
+        scope, hbs = owner_info(proc, pid)
+        found.append(
+            {
+                "pid": pid,
+                "start": read_start_ticks(proc, pid),
+                "age": age,
+                "root": root,
+                "cwd": cwd or "-",
+                "cmd": shlex.join(argv)[:CMD_MAX],
+                "scope": scope,
+                "hbs": hbs,
+            }
+        )
+    return found
+
+
+def log_line(c: dict, action: str, now: datetime | None = None) -> str:
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        f"{stamp} {action} pid={c['pid']} session=claude-{c['scope']} "
+        f"hbs={c['hbs']} age={int(c['age'])}s cwd={c['cwd']} cmd={c['cmd']}"
+    )
+
+
+def notify(state_dir: Path, c: dict, dry_run: bool) -> None:
+    if dry_run or c["scope"] == "-":
+        return
+    shown = "~" if c["root"] == str(Path.home()) else c["root"]
+    msg = (
+        f"Your search over {shown} was stopped by fs-walk-reaper after "
+        f"{int(c['age'])} s: `{c['cmd'][:120]}`. Search a narrower folder, "
+        "such as ~/work/<repo> or /var/tmp/claude/<task>.\n"
+    )
+    folder = state_dir / "notice"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(folder / c["scope"], "a") as f:
+            f.write(msg)
+    except OSError:
+        pass
+
+
+def append_log(state_dir: Path, line: str) -> None:
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with open(state_dir / "log", "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        print(line, flush=True)
+
+
+def stop(
+    proc: Path,
+    c: dict,
+    kill_after: float,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """SIGTERM, then SIGKILL after KILL_AFTER s if the same process lives on."""
+    pid = c["pid"]
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "gone"
+    except PermissionError:
+        return "denied"
+    sleep(kill_after)
+    same = read_start_ticks(proc, pid) == c["start"]
+    if same and stat_state(proc, pid) not in ("Z", "X", ""):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            return "term"
+        return "term+kill"
+    return "term"
+
+
+def scan_once(
+    proc: Path,
+    detector: ModuleType,
+    seen: set[tuple[int, int | None]],
+    dry_run: bool,
+    state_dir: Path = STATE_DIR,
+) -> list[dict]:
+    allow = compile_allow(ALLOW_FILE)
+    uid = os.getuid()
+    clk = os.sysconf("SC_CLK_TCK")
+    handled = []
+    for c in candidates(proc, detector, allow, uid, clk, GRACE, os.getpid()):
+        key = (c["pid"], c["start"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if dry_run:
+            append_log(state_dir, log_line(c, "DRY-RUN would-stop"))
+        else:
+            result = stop(proc, c, KILL_AFTER)
+            append_log(state_dir, log_line(c, f"stopped({result})"))
+        notify(state_dir, c, dry_run)
+        handled.append(c)
+    return handled
+
+
+def main() -> int:
+    dry_run = os.environ.get("DRY_RUN", "") not in ("", "0")
+    detector = load_detector()
+    proc = Path("/proc")
+    seen: set[tuple[int, int | None]] = set()
+    print(f"fs-walk-reaper started, dry_run={dry_run}", flush=True)
+    while True:
+        try:
+            scan_once(proc, detector, seen, dry_run)
+        except Exception as exc:
+            print(f"scan failed: {exc!r}", file=sys.stderr, flush=True)
+        if len(seen) > 5000:
+            seen.clear()
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
