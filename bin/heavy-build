@@ -45,13 +45,42 @@
 #   cores in use is what builds.slice used over the last 30 to 120 s
 #   (HEAVY_BUILD_SLICE_CPU_SECS, default 30, sampled by every waiter into
 #   $XDG_RUNTIME_DIR/heavy-build.cpu/builds.slice.samples) plus, for each
-#   build in its first 2 min, its estimate minus the cores it already used
-#   inside that window (its 60 s average times the share of the window it
-#   has run, floored at 0), so its CPU is not counted twice. A build with no
-#   60 s figure yet adds its full estimate. Until 2026-10-23 every young
-#   build added its full estimate. Until enough samples exist,
-#   and with HEAVY_BUILD_REAL_USE=0, it is the old charge: a running build is
-#   charged its estimate for 2 min, then what it used over the last 60 s;
+#   young build, its charge minus the cores it already used inside that
+#   window (its 60 s average times the share of the window it has run,
+#   floored at 0), so its CPU is not counted twice. A build's charge is its
+#   full core estimate for its first HEAVY_BUILD_WARMUP_SECS (default 10;
+#   120 until 2026-10-27, when 36% of 300 builds ended in under 5 s and
+#   builds waited behind the estimates of builds that had already ended or
+#   used little), then what it used over the last 60 s, at least 0.5 cores
+#   until it has run 60 s and 0.25 after that. A build with no 60 s figure
+#   yet is charged its full estimate. Until 2026-10-23 every young build
+#   added its full estimate. Until enough samples exist, and with
+#   HEAVY_BUILD_REAL_USE=0, only the charges are summed;
+# - jobs.slice (the office job worker jobw, since 2026-10-27) counts as
+#   outside load in the cores in use: what it used over the last 60 to 240 s
+#   (HEAVY_BUILD_JOBS_CPU_SECS, default 60, samples in
+#   $XDG_RUNTIME_DIR/heavy-build.cpu/jobs.slice.samples), or 0 while the
+#   slice is frozen (cgroup.freeze 1). Its memory is already in MemAvailable,
+#   so it is not counted again;
+# - Jobs reclaim: while a build waits on memory (reason memory or pressure),
+#   jobs.slice is frozen and holds over 1 GiB (memory.current), one waiter
+#   writes memory.current minus 512 MiB to jobs.slice/memory.reclaim, with a
+#   HEAVY_BUILD_JOBS_RECLAIM_TIMEOUT (default 20 s) timeout, at most once per
+#   HEAVY_BUILD_JOBS_RECLAIM_GAP_SECS (default 120) across all heavy-builds.
+#   That moves the frozen memory to swap and kills nothing. The write blocks
+#   while it reclaims and fails once memory.swap.max is reached; an error or
+#   a timeout counts as done. Logged as event=jobs-reclaim with the bytes
+#   before and after. On 2026-10-27 a frozen 9 GB job held 13 builds with
+#   none running, and jobw could not thaw it. HEAVY_BUILD_JOBS_RECLAIM=0
+#   turns it off;
+# - Idle builds: a running build that has run HEAVY_BUILD_IDLE_CPU_SECS
+#   (default 60) and used under HEAVY_BUILD_IDLE_CPU_MILLI thousandths of a
+#   core (default 100, so 0.1 cores) over the last 60 s counts as idle: it is
+#   charged no cores and is not counted as a job or a high build until it
+#   uses CPU again. Its memory is charged as before. A cargo build blocked
+#   on "Blocking waiting for file lock" is such a build; before 2026-10-27 it
+#   kept its slot and cores until the 600 s stall test. HEAVY_BUILD_IDLE_CPU_SECS=0
+#   turns this off;
 # - CPU pressure (some avg10) is at most HEAVY_BUILD_MAX_CPU_PSI percent
 #   (default 75), and has stayed at or under it for HEAVY_BUILD_CPU_PSI_SECS
 #   seconds (default 30), as sampled by waiters and running builds. Only
@@ -748,7 +777,6 @@ SAMPLE=${HB_SAMPLE_SECS:-15}
 STALL_SECS=${HB_STALL_SECS:-600}
 WINE_IDLE_SECS=${HB_WINE_IDLE_SECS:-900}
 HUNG_HIGH_SECS=${HB_HUNG_HIGH_SECS:-900}
-WARMUP=${HB_WARMUP_SECS:-120}
 ORPHAN_STOP_SECS=${HB_ORPHAN_STOP_SECS:-120}
 IDLE_SECS=${HB_IDLE_SECS:-120}
 NO_SCOPE_SECS=${HB_NO_SCOPE_SECS:-60}
@@ -767,6 +795,8 @@ SYSCPU=${HB_SYSCPU:-/sys/devices/system/cpu}
 WINE_LEFTOVERS=" winedevice.exe wineserver services.exe plugplay.exe explorer.exe rpcss.exe svchost.exe lsass.exe conhost.exe winemenubuilder wineboot.exe "
 USVC=$CG/user.slice/user-$UID.slice/user@$UID.service
 BSLICE=$USVC/builds.slice
+JSLICE=$USVC/jobs.slice
+JRECLAIM=$RUNDIR/heavy-build.jobs-reclaim
 MEMINFO=$PROC/meminfo
 WINE_DEFAULT_LINE='${WINEPREFIX:-$HOME/.local/share/wineprefixes/motioncatalyst}'
 
@@ -887,7 +917,16 @@ read_conf() {
   setting HEAVY_BUILD_YOUNG_GROW_PCT 50
   (( YOUNG_GROW_PCT >= 0 && YOUNG_GROW_PCT <= 100 )) || YOUNG_GROW_PCT=50
   setting HEAVY_BUILD_SLICE_CPU_SECS 30
+  setting HEAVY_BUILD_WARMUP_SECS 10
+  setting HEAVY_BUILD_IDLE_CPU_SECS 60
+  setting HEAVY_BUILD_IDLE_CPU_MILLI 100
   (( SLICE_CPU_SECS >= 5 )) || SLICE_CPU_SECS=30
+  setting HEAVY_BUILD_JOBS_CPU_SECS 60
+  (( JOBS_CPU_SECS >= 5 )) || JOBS_CPU_SECS=60
+  setting HEAVY_BUILD_JOBS_RECLAIM 1
+  setting HEAVY_BUILD_JOBS_RECLAIM_GAP_SECS 120
+  setting HEAVY_BUILD_JOBS_RECLAIM_TIMEOUT 20
+  (( JOBS_RECLAIM_TIMEOUT >= 1 )) || JOBS_RECLAIM_TIMEOUT=20
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
@@ -2322,36 +2361,87 @@ mem_watch() {
   return 0
 }
 
-# slice_cpu: sets slice_cores (builds.slice CPU use in cores, two decimals,
-# or empty) and slice_win (the seconds it was measured over). Samples
-# ("epoch_us usage_usec", one per line, at least 5 s apart) live in
-# $CPUDIR/builds.slice.samples, shared by every heavy-build, and are kept for
-# 4x HEAVY_BUILD_SLICE_CPU_SECS. The rate is taken from the oldest kept sample
-# that is at least SLICE_CPU_SECS old, so the window runs from SLICE_CPU_SECS
-# to 4x that. Written with a temp file and mv, so a reader never sees half a file.
-slice_cpu() {
-  local f=$CPUDIR/builds.slice.samples k v u= now t0 u0 keep=() base= last=0
-  slice_cores= slice_win=0
-  while read -r k v; do [[ $k == usage_usec ]] && { u=$v; break; }; done 2>/dev/null < "$BSLICE/cpu.stat"
+# cg_cpu DIR SAMPLES SECS: sets cg_cores (the CPU use of cgroup DIR in
+# cores, two decimals, or empty) and cg_win (the seconds it was measured
+# over). Samples ("epoch_us usage_usec", one per line, at least 5 s apart)
+# live in the file SAMPLES, shared by every heavy-build, and are kept for 4x
+# SECS. The rate is taken from the oldest kept sample that is at least SECS
+# old, so the window runs from SECS to 4x that. Written with a temp file and
+# mv, so a reader never sees half a file.
+cg_cpu() {
+  local d=$1 f=$2 secs=$3 k v u= now t0 u0 keep=() base= last=0
+  cg_cores= cg_win=0
+  while read -r k v; do [[ $k == usage_usec ]] && { u=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
   [[ $u =~ ^[0-9]+$ ]] || return 0
   now=$(now_us)
   while read -r t0 u0; do
     [[ $t0 =~ ^[0-9]+$ && $u0 =~ ^[0-9]+$ ]] || continue
-    (( t0 <= now && now - t0 <= SLICE_CPU_SECS * 4000000 && u0 <= u )) || continue
+    (( t0 <= now && now - t0 <= secs * 4000000 && u0 <= u )) || continue
     keep+=("$t0 $u0"); last=$t0
-    if [[ -z $base ]] && (( now - t0 >= SLICE_CPU_SECS * 1000000 )); then base="$t0 $u0"; fi
+    if [[ -z $base ]] && (( now - t0 >= secs * 1000000 )); then base="$t0 $u0"; fi
   done 2>/dev/null < "$f"
   if [[ -n $base ]]; then
     read -r t0 u0 <<< "$base"
-    slice_win=$(( (now - t0) / 1000000 ))
+    cg_win=$(( (now - t0) / 1000000 ))
     v=$(( (u - u0) * 100 / (now - t0) ))
-    printf -v slice_cores '%d.%02d' $(( v / 100 )) $(( v % 100 ))
+    printf -v cg_cores '%d.%02d' $(( v / 100 )) $(( v % 100 ))
   fi
   if (( now - last >= 5000000 )); then
     keep+=("$now $u")
-    mkdir -p "$CPUDIR" 2>/dev/null
+    mkdir -p "${f%/*}" 2>/dev/null
     printf '%s\n' "${keep[@]}" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
   fi
+  return 0
+}
+
+# slice_cpu: sets slice_cores and slice_win for builds.slice (see cg_cpu),
+# over HEAVY_BUILD_SLICE_CPU_SECS.
+slice_cpu() {
+  cg_cpu "$BSLICE" "$CPUDIR/builds.slice.samples" "$SLICE_CPU_SECS"
+  slice_cores=$cg_cores slice_win=$cg_win
+}
+
+# jobs_cpu: sets jobs_cores (jobs.slice CPU use over HEAVY_BUILD_JOBS_CPU_SECS,
+# or empty without a reading) and jobs_win. A frozen slice (cgroup.freeze 1)
+# runs nothing, so it counts 0 cores; its samples are still kept.
+jobs_cpu() {
+  local fz=
+  jobs_cores= jobs_win=0
+  [[ -d $JSLICE ]] || return 0
+  cg_cpu "$JSLICE" "$CPUDIR/jobs.slice.samples" "$JOBS_CPU_SECS"
+  jobs_cores=$cg_cores jobs_win=$cg_win
+  read -r fz 2>/dev/null < "$JSLICE/cgroup.freeze"
+  [[ $fz == 1 ]] && jobs_cores=0.00
+  return 0
+}
+
+# jobs_reclaim: asks the kernel to move a frozen jobs.slice to swap (see the
+# header, "Jobs reclaim"). Called by a waiter outside the admission mutex.
+# Only one heavy-build tries at a time (flock -n on $JRECLAIM.lock), and the
+# time of the last try in $JRECLAIM spaces tries JOBS_RECLAIM_GAP_SECS apart.
+# Never fails the caller.
+jobs_reclaim() {
+  local fz= cur= after= amt last= fd rc res
+  (( JOBS_RECLAIM )) || return 0
+  read -r fz 2>/dev/null < "$JSLICE/cgroup.freeze" || return 0
+  [[ $fz == 1 ]] || return 0
+  read -r cur 2>/dev/null < "$JSLICE/memory.current" || return 0
+  [[ $cur =~ ^[0-9]+$ ]] && (( cur > 1073741824 )) || return 0
+  [[ -e $JSLICE/memory.reclaim ]] || return 0
+  exec {fd}>>"$JRECLAIM.lock" || return 0
+  if ! flock -n "$fd"; then exec {fd}>&-; return 0; fi
+  read -r last 2>/dev/null < "$JRECLAIM"
+  if [[ $last =~ ^[0-9]{1,15}$ ]] && (( last <= EPOCHSECONDS && EPOCHSECONDS - last < JOBS_RECLAIM_GAP_SECS )); then
+    exec {fd}>&-; return 0
+  fi
+  printf '%s\n' "$EPOCHSECONDS" > "$JRECLAIM.$$" 2>/dev/null && mv -f -- "$JRECLAIM.$$" "$JRECLAIM"
+  amt=$(( cur - 536870912 ))
+  timeout -k 5 "$JOBS_RECLAIM_TIMEOUT" bash -c 'printf "%s\n" "$1" > "$2"' _ "$amt" "$JSLICE/memory.reclaim" 2>/dev/null
+  rc=$?
+  case $rc in 0) res=done ;; 124|137) res=timeout ;; *) res=error ;; esac
+  read -r after 2>/dev/null < "$JSLICE/memory.current" || after=-
+  exec {fd}>&-
+  log_line "event=jobs-reclaim before=$cur after=${after:--} requested=$amt result=$res rc=$rc"
   return 0
 }
 
@@ -2521,14 +2611,18 @@ function writer(keys, o,   n, k, i, b, t) {
 # The real-use rule (realuse=1) also sums, per build, the memory still to
 # come while it is young (grow: its estimate minus what it holds now, until it
 # has run youngmin seconds or youngpct percent of its expected wall time,
-# whichever is longer) and the cores of builds in their first warm seconds
-# (cy: the estimate minus what the build already used inside the CPU window,
-# which sliceavg counts). Only growpct percent of grow is charged. Y_held and
+# whichever is longer) and the cores of builds that have not yet run for the
+# whole CPU window (cy: the core charge cc of the build minus what it already used
+# inside that window, which sliceavg counts). Only growpct percent of grow is charged. Y_held and
 # Y_cpu go on top of what builds.slice really uses. fgrow is memory still to
 # come for a scope with no heavy-build.
-function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy) {
+function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, cls, fgrow,   n, k, i, held, tc, cc, grow, cy, age, idle) {
   nr++
-  grow = 0; cy = 0
+  grow = 0; cy = 0; age = now - start
+  # A quiet build (idlemilli thousandths of a core or less over the last 60 s,
+  # after idlesecs of run time; idlesecs 0 is off) charges no cores and no
+  # job, like a stalled one, but its memory is charged as for a running build.
+  idle = (stalled != 1 && idlesecs > 0 && start > 0 && age >= idlesecs && c60 != "-" && c60 < idlemilli)
   # An app run past its first appyoung seconds (HEAVY_BUILD_APPRUN_YOUNG_MIN)
   # counts as stalled 2, even when its own (older) heavy-build has not written 2.
   # An idle build (no CPU for HB_STALL_SECS) is charged only the memory it
@@ -2536,11 +2630,14 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   # stalled 2: an app run that is idle (HEAVY_BUILD_APPRUN_IDLE_MIN), past its
   # young window or whose app has exited. It still counts as a job and an app
   # run, but its memory is what it holds plus appmargin GiB, not its estimate.
-  if (stalled == 0 && cls == "app-run" && appyoung > 0 && start > 0 && now - start >= appyoung) stalled = 2
+  # A quiet one (idle above) is charged no cores and no job, as any other
+  # quiet build.
+  if (stalled == 0 && cls == "app-run" && appyoung > 0 && start > 0 && age >= appyoung) stalled = 2
   if (stalled == 1) { held = cur; tc = 0; cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   else if (stalled == 2) {
     held = cur + appmargin; tc = appmargin; grow = appmargin
     cc = (c60 == "-") ? cores : max(0.25, c60 / 1000)
+    if (idle) { cc = 0; T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   }
   else {
     held = max(cur, mem); tc = max(0, mem * pct / 100 - cur)
@@ -2548,23 +2645,29 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
     # full estimate. Untracked scopes (start 0) keep their charge.
     if (memctl && start > 0) {
       tc = 0
-      if (now - start < max(youngmin, (end - start) * youngpct / 100)) tc = max(0, mem * (now - start < mcnewfull ? 100 : pct) / 100 - cur)
+      if (age < max(youngmin, (end - start) * youngpct / 100)) tc = max(0, mem * (age < mcnewfull ? 100 : pct) / 100 - cur)
     }
-    cc = (c60 == "-" || now - start < warm) ? cores : max(0.25, c60 / 1000)
-    if (start > 0 && now - start < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur) * growpct / 100
+    # Cores: the full estimate for the first warm seconds or with no 60 s
+    # figure, then the 60 s average, at least 0.5 until the build has run
+    # 60 s and 0.25 after. Untracked scopes (start 0) count as old.
+    if (c60 == "-" || (start > 0 && age < warm)) cc = cores
+    else cc = max((start > 0 && age < 60) ? 0.5 : 0.25, c60 / 1000)
+    if (idle) cc = 0
+    if (start > 0 && age < max(youngmin, (end - start) * youngpct / 100)) grow = max(0, mem - cur) * growpct / 100
     # sliceavg already holds the CPU this build used inside its window, so a
-    # young build adds only its estimate minus that share (floored at 0).
-    if (start > 0 && (c60 == "-" || now - start < warm)) {
-      cy = cores
-      if (c60 != "-" && sliceavgwin > 0) cy = max(0, cores - c60 / 1000 * min(1, (now - start) / sliceavgwin))
+    # young build adds only its charge minus that share (floored at 0).
+    if (!idle && start > 0 && (c60 == "-" || age < max(warm, sliceavgwin))) {
+      cy = cc
+      if (c60 != "-" && sliceavgwin > 0) cy = max(0, cc - c60 / 1000 * min(1, age / sliceavgwin))
     }
+    if (idle) { T_idle++; idlerun = idlerun (idlerun == "" ? "" : ",") id }
   }
   grow += fgrow
   Y_held += grow; Y_cpu += cy
   if (realuse && slicecur >= 0) held = cur + grow
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_app[nr] = (cls == "app-run")
-  r_cur[nr] = cur; r_high[nr] = (prio == "high" && stalled != 1); r_job[nr] = (stalled != 1)
+  r_cur[nr] = cur; r_high[nr] = (prio == "high" && stalled != 1 && !idle); r_job[nr] = (stalled != 1 && !idle)
   T_n += r_job[nr]; T_cpu += cc; T_tc += tc; T_held += held; T_high += r_high[nr]; T_aged += (prio ~ /:aged$/)
   T_nc += (prio !~ /^(high|critical)(:aged)?$/)
   T_app += (cls == "app-run")
@@ -2599,8 +2702,8 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh,   sn) {
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
   if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
   if (cpu + w_cores[i] > cpubudget) {
-    if (cpureal) return sprintf("cores: needs %.1f, %.1f of %d in use (builds.slice used %.1f over the last %d s, plus %.1f for builds that started recently)", w_cores[i], cpu, cpubudget, sliceavg, sliceavgwin, cpu - sliceavg)
-    return sprintf("cores: needs %.1f, %.1f of %d are charged", w_cores[i], cpu, cpubudget)
+    if (cpureal) return sprintf("cores: needs %.1f, %.1f of %d in use (builds.slice used %.1f over the last %d s, plus %.1f for builds that started recently%s)", w_cores[i], cpu, cpubudget, sliceavg, sliceavgwin, cpu - sliceavg - jobscpu, jobscpu > 0 ? sprintf(", plus %.1f for jobs.slice", jobscpu) : "")
+    return sprintf("cores: needs %.1f, %.1f of %d are charged%s", w_cores[i], cpu, cpubudget, jobscpu > 0 ? sprintf(" (%.1f of them jobs.slice)", jobscpu) : "")
   }
   if (w_cores[i] >= 2 && cpupsi > maxcpupsi) return sprintf("cpu-pressure: %.1f%%, the limit is %d%%", cpupsi, maxcpupsi)
   if (w_cores[i] >= 2 && cpuquiet < cpuhold) return sprintf("cpu-pressure: %.1f%%, under the %d%% limit for %d s, it must stay under for %d s", cpupsi, maxcpupsi, cpuquiet, cpuhold)
@@ -2769,6 +2872,10 @@ END {
   memreal = (realuse && slicecur >= 0); cpureal = (realuse && sliceavg >= 0)
   if (memreal) T_held = slicecur + Y_held
   if (cpureal) T_cpu = sliceavg + Y_cpu
+  # jobs.slice (jobw) counts as outside load: its CPU use, 0 while frozen.
+  # Its memory is already in MemAvailable.
+  jobscpu += 0; if (jobscpu < 0) jobscpu = 0
+  T_cpu += jobscpu
   # The aging slot: the oldest normal or low waiter that has waited agesecs
   # goes ahead of other normal and low ones but behind critical ones (rank
   # 1.5), while fewer than ageslots builds let in this way run. A running one
@@ -2929,6 +3036,7 @@ decide() {
   psi_watch
   slice_cores= slice_win=0
   (( REAL_USE )) && slice_cpu
+  jobs_cpu
   mc_swapin=-1 mc_fall=0 mc_harm_ago=999999
   (( MEM_CONTROLLER )) && mem_watch
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
@@ -2939,14 +3047,14 @@ decide() {
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
     -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
-    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
+    -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP_SECS" -v idlesecs="$IDLE_CPU_SECS" -v idlemilli="$IDLE_CPU_MILLI" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
     -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
     -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
-    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
+    -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v jobscpu="$jobs_cores" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
     -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcfreegib="$MC_FREE_GIB" -v mcnewfull="$MC_NEW_FULL_SECS" \
     -v mcbrakegib="$MC_BRAKE_GIB" -v mcbrakeswapin="$MC_BRAKE_SWAPIN" -v mcbrakefull="$MC_BRAKE_FULL_PCT" -v mccalm="$MC_CALM_SECS" -v mcfallgib="$MC_FALL_GIB" \
     -v mcharmago="$mc_harm_ago" -v mcfall="$mc_fall" -v appmargin="$(( APPRUN_MARGIN_MIB * 100 / 1024 ))e-2" -v appyoung="$(( APPRUN_YOUNG_MIN * 60 ))" "$ADMIT_AWK")
@@ -3724,6 +3832,7 @@ else
       fi
       exec 8>&-
       log_decision "$dec"
+      [[ $dec == wait && ( $why == memory:* || $why == pressure:* ) ]] && jobs_reclaim
       (( rank > 0 )) && pos=$rank
       [[ -n $started ]] && break
     else

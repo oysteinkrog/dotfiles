@@ -11,18 +11,12 @@ fi
 # values it read at login (notification popups stayed next to the panel).
 kw() { kwriteconfig6 --notify "$@"; }
 
-# Global theme and colour scheme from ~/.dotfiles/kde/kdeglobals. They go through the
-# plasma-apply tools, which also write the derived colours that kde-config leaves alone.
-want() { kreadconfig6 --file "$DOTFILES/kde/kdeglobals" --group "$1" --key "$2"; }
-laf="$(want KDE LookAndFeelPackage)"
+# Global theme from ~/.dotfiles/kde/kdeglobals, through plasma-apply-lookandfeel. The colour
+# scheme and Plasma style come from os-theme, which kde-config apply runs with kde/_os-theme.txt.
+laf="$(kreadconfig6 --file "$DOTFILES/kde/kdeglobals" --group KDE --key LookAndFeelPackage)"
 if [ -n "$laf" ] && [ "$(kreadconfig6 --file kdeglobals --group KDE --key LookAndFeelPackage)" != "$laf" ] &&
   have plasma-apply-lookandfeel; then
   plasma-apply-lookandfeel -a "$laf" >/dev/null 2>&1 || warn "global theme $laf not installed"
-fi
-scheme="$(want General ColorScheme)"
-if [ -n "$scheme" ] && [ "$(kreadconfig6 --file kdeglobals --group General --key ColorScheme)" != "$scheme" ] &&
-  have plasma-apply-colorscheme; then
-  plasma-apply-colorscheme "$scheme" >/dev/null 2>&1 || warn "colour scheme $scheme not installed"
 fi
 
 # Plain settings: the rc keys in ~/.dotfiles/kde, with host overrides from the machine
@@ -59,7 +53,7 @@ else
   kw --file kwinrc --group Plugins --key pin-to-monitorEnabled false
 fi
 
-ok "theme $laf, colours $scheme, settings from ~/.dotfiles/kde"
+ok "global theme $laf, os-theme $("$DOTFILES/bin/os-theme"), settings from ~/.dotfiles/kde"
 
 step "desktop: default apps"
 # Two Chromes, personal and work (work/life docs/computers/linux-setup.md, "Chrome"). Work is the default browser.

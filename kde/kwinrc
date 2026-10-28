@@ -21,8 +21,8 @@ sheetEnabled=true
 ElectricBorderDelay=25
 
 [Xwayland]
-# X11 apps at 100 % (office: 1.1 made FrankenTerm blurry). Home overrides it.
-Scale=1
+# X11 app scale, the office value. Home overrides it for its 125 % monitor.
+Scale=1.1
 XwaylandEisNoPromptApps=python3
 
 [org.kde.kdecoration2]
