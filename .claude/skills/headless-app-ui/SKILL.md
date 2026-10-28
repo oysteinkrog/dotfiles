@@ -39,6 +39,21 @@ screen was locked.
   by the PID you recorded. Never `pkill wine`, `pkill kwin_wayland` or
   `pkill Xvfb`. The real desktop runs `kwin_wayland --socket wayland-0`, and other
   lanes run their own.
+- Every instance runs in its own systemd scope, and the scope is stopped when the run
+  ends. `dbus-run-session` ends its bus on exit, but the helpers it D-Bus-activated
+  (ksecretd, kactivitymanagerd, xdg-desktop-portal-kde) keep running with no bus: 67
+  were left over on 2026-10-28, 937 MB RAM plus 592 MB swap. Wrap the run in
+  `~/.claude/skills/headless-app-ui/headless-scope.sh <tag> -- dbus-run-session -- <cmd>`.
+  Stopping the scope ends everything inside it. Find leftovers (own processes whose
+  `DBUS_SESSION_BUS_ADDRESS` socket is gone):
+
+  ```bash
+  for p in /proc/[0-9]*; do [ -O $p ] || continue
+    s=$(tr '\0' '\n' <$p/environ 2>/dev/null | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=unix:path=\([^,]*\).*/\1/p')
+    [ -n "$s" ] && [ ! -S "$s" ] && echo "${p#/proc/} $(tr '\0' ' ' <$p/cmdline | cut -c1-60)"; done
+  ```
+
+  Do not pipe a run's output through `grep` or `tee`: the helpers keep the pipe open.
 - Do not take screenshots of the real desktop to show Oystein something. He can
   see it. Screenshots from your private display are fine.
 
