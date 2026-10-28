@@ -28,6 +28,7 @@ project. The offsets and the last two hours of starts and finishes are kept in
 """
 
 import json
+import math
 import os
 import pathlib
 import re
@@ -134,12 +135,22 @@ def reason_kind(reason):
     return m.group(0) if m else "other"
 
 
-def read_new(path, offset, first_bytes):
-    """Lines appended to path since offset, and the new offset. Starts over when the file shrank."""
+def read_new(path, saved, first_bytes):
+    """Lines appended to path since the saved [inode, offset], and the new [inode, offset].
+    Starts over when the file was replaced or shrank. A plain offset is from an older state file."""
     try:
-        size = path.stat().st_size
+        info = path.stat()
     except OSError:
-        return [], 0
+        return [], None
+    size = info.st_size
+    ino, offset = saved if isinstance(saved, list) and len(saved) == 2 else (info.st_ino, saved)
+    if ino != info.st_ino or not isinstance(offset, int):
+        offset = None
+    lines, offset = read_from(path, offset, size, first_bytes)
+    return lines, [info.st_ino, offset]
+
+
+def read_from(path, offset, size, first_bytes):
     if offset is None or offset > size:
         offset = max(0, size - first_bytes)
         skip_partial = offset > 0
@@ -178,11 +189,16 @@ def load_state():
         return {}
 
 
+def write_atomic(path, text):
+    """Write path through a temp file of this process's own, so two fetches never share one."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
 def save_state(st):
     CACHE.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, separators=(",", ":")))
-    tmp.replace(STATE)
+    write_atomic(STATE, json.dumps(st, separators=(",", ":")))
 
 
 def update_live(st, now, path=LIVE, key="liveOffset"):
@@ -233,11 +249,11 @@ def update_history(st, now, path=HISTORY, key="historyOffset"):
         if len(c) < 7:
             continue
         try:
-            end = int(c[0])
+            end, wall = int(c[0]), finite(c[3] or 0)
         except ValueError:
-            continue
+            continue  # one bad row; the rest of the batch still counts
         reason = c[7] if len(c) > 7 else ("ok" if c[6] == "0" else "fail")
-        done.append([end, c[1], c[2], float(c[3] or 0), reason])
+        done.append([end, c[1], c[2], wall, reason])
     st["finished"] = [d for d in done if d[0] > now - KEEP_S]
 
 
@@ -247,7 +263,10 @@ def waiting_jobs(st, now):
     written by heavy-build since 2026-10-26; older tickets have none."""
     projects = st["projectOf"]
     jobs = []
-    names = os.listdir(QUEUE)  # missing folder: an error, so the saved state is kept
+    try:
+        names = os.listdir(QUEUE)
+    except FileNotFoundError:
+        names = []  # heavy-build has not queued anything since boot; jobd jobs still show
     for name in names:
         parts = name.split("-")
         if len(parts) != 3 or not parts[0].isdigit():
@@ -263,8 +282,8 @@ def waiting_jobs(st, now):
         if len(fields) >= 6:
             prio, keys, cls = fields[0], fields[4], fields[5]
             try:
-                mem = float(fields[1])
-                wall = int(float(fields[3]))
+                mem = finite(fields[1])
+                wall = int(finite(fields[3]))
             except ValueError:
                 pass
         project = project_of_keys(keys)
@@ -279,6 +298,18 @@ def waiting_jobs(st, now):
             recorded_owner(extra),
         ))
     return jobs
+
+
+def finite(text):
+    """float(text), refusing nan and inf: the widget's JSON.parse rejects them."""
+    v = float(text)
+    if not math.isfinite(v):
+        raise ValueError(f"not a finite number: {text}")
+    return v
+
+
+# A jobd request id: <submit ns>-<pid>-<hash>, like a heavy-build ticket name.
+JOBD_ID_RE = re.compile(r"\d+-\d+-[0-9a-f]+")
 
 
 def jobd_value(v):
@@ -307,6 +338,7 @@ def update_jobd(st, now):
             reqs[req]["started"] = parse_ts(head) or now
         elif ev == "start-failed" and req in reqs:
             reqs[req].pop("attempt", None)
+            reqs[req].pop("started", None)
         elif ev == "prio-change" and req in reqs:
             reqs[req]["prio"] = f.get("prio_to", reqs[req].get("prio", ""))
         elif ev == "end":
@@ -322,25 +354,39 @@ def update_jobd(st, now):
                 # Any failure, including exit 75 (jobd did not answer, as during a restart while
                 # its jobs keep running): keep the last known list.
                 out = json.loads(r.stdout) if r.returncode == 0 else None
-                live = out["jobs"] if out is not None else None
+                live = out["jobs"] if isinstance(out, dict) else None
+                # A reply of the wrong shape is a failure too, found before anything changes.
+                if not (isinstance(live, list) and all(
+                        isinstance(x, dict) and isinstance(x.get("id"), str) and JOBD_ID_RE.fullmatch(x["id"])
+                        for x in live)):
+                    live = None
                 # The job limit both queues share: heavy-build's, with the presence file applied.
-                if out is not None:
-                    j["maxjobs"] = out.get("maxjobs")
+                elif isinstance(out.get("maxjobs"), int):
+                    j["maxjobs"] = out["maxjobs"]
             except (OSError, subprocess.SubprocessError, ValueError, KeyError):
                 live = None
             if live is not None:
-                ids = {x.get("id") for x in live}
+                ids = {x["id"] for x in live}
                 for req in [r for r in reqs if r not in ids]:
                     del reqs[req]
                 for x in live:
-                    r = reqs.setdefault(x["id"], {k: x.get(k) or "" for k in ("prio", "session", "agent", "lane", "owner", "cwd", "argv0")})
+                    r = reqs.setdefault(x["id"], {})
+                    # jobd's own fields win, so a missed prio-change event is put right here.
+                    # class, mem and wall come only from the submit event.
+                    for k in ("prio", "session", "agent", "lane", "owner", "cwd", "argv0"):
+                        if isinstance(x.get(k), str):
+                            r[k] = jobd_value(x[k])
+                        else:
+                            r.setdefault(k, "")
                     if isinstance(x.get("argv"), list):
                         r["argv"] = x["argv"]
                     if x.get("state") == "running" and x.get("attempt"):
-                        r["attempt"] = x["attempt"]
-                        r.setdefault("started", now)
+                        if r.get("attempt") != str(x["attempt"]):
+                            r["started"] = now  # an attempt this log did not show starting
+                        r["attempt"] = str(x["attempt"])
                     elif x.get("state") == "waiting":
                         r.pop("attempt", None)
+                        r.pop("started", None)
     return reqs
 
 
@@ -361,7 +407,7 @@ def jobd_waiting(st, reqs, now):
             continue
         def num(k):
             try:
-                return float(r.get(k) or 0)
+                return finite(r.get(k) or 0)
             except ValueError:
                 return 0.0
         rec = {"session": r.get("session", ""), "owner": r.get("owner", "")}
@@ -645,9 +691,7 @@ def save_owners(ow):
     if not ow.pop("dirty", False):
         return
     CACHE.mkdir(parents=True, exist_ok=True)
-    tmp = OWNERS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(ow, separators=(",", ":")))
-    tmp.replace(OWNERS)
+    write_atomic(OWNERS, json.dumps(ow, separators=(",", ":")))
 
 
 def update_sessions(ow, now):
@@ -923,6 +967,10 @@ def remote_view(r, now, owner):
 REMOTE_CLASSES = {"dotnet-build", "dotnet-test", "cargo-build", "cargo-check", "cargo-clippy", "cargo-test"}
 REMOTE_TOOLS = {"dotnet": ("build", "test"), "cargo": ("build", "check", "clippy", "test")}
 REMOTE_MIN_WAIT_S = 10 * 60
+# New remote checks (git, then `job check`, up to 25 s each) stop for this refresh once it has
+# spent this long on them; the rest wait for the next refresh.
+REMOTE_CHECK_S = 8
+check_until = [0.0]
 REMOTE_ROOTS = (HOME / "work/desktop", pathlib.Path("/var/tmp/claude"))
 REMOTE_NOT = ("win-x64", "win-x86", "RuntimeIdentifier=win", "wine", "build.sh", "build.cmd")
 
@@ -978,9 +1026,7 @@ def write_marks(st, marks, now):
         return
     try:
         REMOTE_MARKS.parent.mkdir(parents=True, exist_ok=True)
-        tmp = REMOTE_MARKS.with_name(REMOTE_MARKS.name + ".tmp")
-        tmp.write_text(json.dumps({"t": int(now), "marks": marks}))
-        tmp.replace(REMOTE_MARKS)
+        write_atomic(REMOTE_MARKS, json.dumps({"t": int(now), "marks": marks}))
         st["marksWritten"] = {"ids": ids, "at": now}
     except OSError:
         pass
@@ -999,6 +1045,8 @@ def tree_can_move(st, cwd):
     except (OSError, subprocess.SubprocessError):
         return False
     cache = st.setdefault("jobCheck", {})
+    for k in [k for k, v in cache.items() if v[1] < time.time() - DAY]:
+        del cache[k]
     key = f"{cwd}@{head}"
     if key not in cache:
         try:
@@ -1006,8 +1054,6 @@ def tree_can_move(st, cwd):
         except (OSError, subprocess.SubprocessError):
             return False
         cache[key] = [ok, time.time()]
-    for k in [k for k, v in cache.items() if v[1] < time.time() - DAY]:
-        del cache[k]
     return cache[key][0]
 
 
@@ -1022,6 +1068,8 @@ def remote_ok(st, job, now):
     jobd_req = name in st.get("jobd", {}).get("reqs", {})
     if not (isinstance(old, list) and len(old) == 6 and isinstance(old[2], list) and type(old[4]) is int
             and (old[2] or not jobd_req)):
+        if remote_target(st) is None or time.time() > check_until[0]:
+            return False  # nowhere to send it, or no check time left: try again next refresh
         pid = name.split("-")[1]
         ok, tool, cmd, cwd = False, "", [], ""
         # A jobd job: its command line from jobd, since a detached submit has no process here.
@@ -1076,6 +1124,7 @@ def current_marks(st, queue, now):
 
 
 def build(st, now, ow):
+    check_until[0] = time.time() + REMOTE_CHECK_S
     update_live(st, now)
     update_history(st, now)
     update_live(st, now, JOBD_LIVE, "jobdLiveOffset")
@@ -1159,7 +1208,7 @@ def build(st, now, ow):
     for d in sorted(hour_done, key=lambda d: -d[0]):
         r = row(st["projectOf"].get(d[2], [""])[0])
         r["finished"] += 1
-        if d[4] == "fail":
+        if d[4] != "ok":
             r["failed"] += 1
         if len(r["jobs"]) < LANE_JOBS:
             r["jobs"].append({"state": "ok" if d[4] == "ok" else "failed", "cls": d[1], "end": d[0], "session": "", "agent": ""})
@@ -1274,11 +1323,12 @@ def build(st, now, ow):
 
 
 def run_once(st, ow):
+    """The queue.json text, and whether it holds data. No NaN: the widget's JSON.parse rejects it."""
     now = time.time()
     try:
-        return build(st, now, ow), True
+        return json.dumps(build(st, now, ow), separators=(",", ":"), allow_nan=False), True
     except Exception as exc:  # the widget shows the error and keeps its last data
-        return {"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}, False
+        return json.dumps({"updated": int(now * 1000), "error": f"{type(exc).__name__}: {exc}"}), False
 
 
 def serve(path, every):
@@ -1286,7 +1336,6 @@ def serve(path, every):
     import signal
 
     out = pathlib.Path(path)
-    tmp = out.with_name(out.name + ".tmp")
     parent = os.getppid()
     st = load_state()
     ow = load_owners()
@@ -1296,8 +1345,7 @@ def serve(path, every):
         while os.getppid() == parent:
             start = time.time()
             result, ok = run_once(st, ow)
-            tmp.write_text(json.dumps(result, separators=(",", ":")))
-            tmp.replace(out)
+            write_atomic(out, result)
             if ok and start - saved >= 60:
                 save_state(st)
                 save_owners(ow)
@@ -1318,7 +1366,7 @@ def main():
     if ok:
         save_state(st)
         save_owners(ow)
-    json.dump(result, sys.stdout, separators=(",", ":"))
+    sys.stdout.write(result)
 
 
 if __name__ == "__main__":
