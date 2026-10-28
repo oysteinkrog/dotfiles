@@ -605,8 +605,9 @@
 # whole scope: every process left in it (wineserver, winedevice.exe, a mock
 # server) ends too, whoever else uses it.
 #
-# Nesting: inside a build scope (heavy-build, or the old flock rule) it runs
-# the command directly, in the outer scope, and writes a --ready-file at once. Under a plain `flock heavy-build.lock` it skips the
+# Nesting: inside a build scope (heavy-build, or the old flock rule) or a
+# jobd job (builds.slice/job-<x>.service) it runs the command directly, in the
+# outer unit, and writes a --ready-file at once. Under a plain `flock heavy-build.lock` it skips the
 # line, but still makes a scope.
 #
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
@@ -754,10 +755,11 @@ build_env=(
 
 say() { echo "heavy-build: $*" >&2; }
 
-# Already inside a build scope: heavy-build in heavy-build, or the old rule.
-if grep -qE '/builds\.slice/[^/]+\.scope$' /proc/self/cgroup 2>/dev/null; then
-  # The command runs in the outer build's scope, so it is let in at once.
-  write_ready "$(grep -oE '[^/]+\.scope$' /proc/self/cgroup 2>/dev/null | head -1)" "$$"
+# Already inside a build scope (heavy-build in heavy-build, or the old rule)
+# or a jobd job (builds.slice/job-<x>.service), whose parent holds the slot.
+if grep -qE '/builds\.slice/([^/]+\.scope|job-[^/]+\.service)$' "$PROC/self/cgroup" 2>/dev/null; then
+  # The command runs in the outer build's unit, so it is let in at once.
+  write_ready "$(grep -oE '[^/]+\.(scope|service)$' "$PROC/self/cgroup" 2>/dev/null | head -1)" "$$"
   exec env -u HEAVY_BUILD_CLASS -u HEAVY_BUILD_READY_FILE -u HEAVY_BUILD_WAIT_TIMEOUT "${build_env[@]}" "$@"
 fi
 
