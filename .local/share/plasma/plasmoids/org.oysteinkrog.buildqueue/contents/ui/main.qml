@@ -28,9 +28,12 @@ PlasmoidItem {
         })
     property string lastText: ""
     property double now: Date.now()
+    // When the fetch last wrote, with data or only an error. q.updated is when the data shown
+    // was made, which an error-only write leaves alone.
+    property double fetched: 0
     // The fetch writes every 5 s, so 30 s without a new file means it has stopped.
-    readonly property bool stale: q.updated > 0 && now - q.updated > 30000
-    readonly property string problem: stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - q.updated) / 1000))
+    readonly property bool stale: fetched > 0 && now - fetched > 30000
+    readonly property string problem: stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - fetched) / 1000))
         : q.updated === 0 && now - startedAt > 15000 ? i18n("No data in %1. Start the window with buildqueue-window.", dataFile)
         : (q.error || "")
     readonly property double startedAt: Date.now()
@@ -99,9 +102,9 @@ PlasmoidItem {
             root.lastText = xhr.responseText;
             try {
                 const next = JSON.parse(xhr.responseText);
-                // On an error the fetch writes only the error, so the last data stays.
+                root.fetched = next.updated || 0;
+                // On an error the fetch writes only the error, so the last data and its time stay.
                 root.q = next.running ? next : Object.assign({}, root.q, {
-                    updated: next.updated,
                     error: next.error
                 });
             } catch (err) {
@@ -233,7 +236,8 @@ PlasmoidItem {
         const rows = [];
         if (lane.lanes) {
             for (const kid of lane.lanes) {
-                const open = laneOpen(kid.name, 1);
+                // Keyed under the session, so a worktree named like its session opens on its own.
+                const open = laneOpen(lane.name + "\u0000" + kid.name, 1);
                 rows.push({
                     kind: "lane",
                     depth: 0,
@@ -264,6 +268,8 @@ PlasmoidItem {
         let lastSession = null;
         let shown = 0;
         for (const key of order) {
+            if (shown >= max)
+                break;
             const [session, agent] = key.split("\u0000");
             let depth = base;
             if (session) {
@@ -756,7 +762,7 @@ PlasmoidItem {
                 }
                 Small {
                     visible: root.q.updated > 0
-                    text: root.stale ? i18n("No update for %1", root.dur((root.now - root.q.updated) / 1000)) : i18n("Updated %1 ago", root.dur(Math.max(0, root.now - root.q.updated) / 1000))
+                    text: root.stale ? i18n("No update for %1", root.dur((root.now - root.fetched) / 1000)) : i18n("Updated %1 ago", root.dur(Math.max(0, root.now - root.q.updated) / 1000))
                 }
                 Dot {
                     visible: root.q.updated > 0
@@ -1668,7 +1674,7 @@ PlasmoidItem {
                                     : isJob ? i18n("%1, %2 priority", modelData.job.cls, modelData.job.prio || "normal") + (modelData.job.agent ? "\n" + i18n("subagent %1", modelData.job.agent) : "") : ""
                                 TapHandler {
                                     enabled: sub.isLane
-                                    onTapped: root.toggleLane(sub.kid.name, 1)
+                                    onTapped: root.toggleLane(lane.modelData.name + "\u0000" + sub.kid.name, 1)
                                 }
                                 // Tree line in the chevron column.
                                 Item {
