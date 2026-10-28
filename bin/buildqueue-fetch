@@ -144,8 +144,10 @@ def read_new(path, saved, first_bytes):
         return [], None
     size = info.st_size
     ino, offset = saved if isinstance(saved, list) and len(saved) == 2 else (info.st_ino, saved)
-    if ino != info.st_ino or not isinstance(offset, int):
-        offset = None
+    if not isinstance(offset, int):
+        offset = None  # first run: only the newest first_bytes
+    elif ino != info.st_ino:
+        offset = 0  # a new file: all of it
     lines, offset = read_from(path, offset, size, first_bytes)
     return lines, [info.st_ino, offset]
 
@@ -375,7 +377,7 @@ def update_jobd(st, now):
                     # class, mem and wall come only from the submit event.
                     for k in ("prio", "session", "agent", "lane", "owner", "cwd", "argv0"):
                         if isinstance(x.get(k), str):
-                            r[k] = jobd_value(x[k])
+                            r[k] = x[k]
                         else:
                             r.setdefault(k, "")
                     if isinstance(x.get("argv"), list):
