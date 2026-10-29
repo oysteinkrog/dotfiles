@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+"""dcg-panel: let a small panel of models overrule dcg's false positives.
+
+Claude Code runs this as the PreToolUse hook in place of dcg. It runs dcg first. When dcg
+denies a command, the panel votes:
+
+  every member says allow  -> allow
+  anything else            -> deny, with the panel's notes
+
+It never asks Oystein: permission prompts in every session were rejected on 2026-10-29. A
+member that fails or times out counts as "not allow". The custom [overrides] blocks in
+~/.config/dcg/config.toml never reach the panel.
+
+Every deny that leaves this hook drops dcg's "have the user run dcg allow-once" line and tells
+the agent to rewrite the command instead.
+
+Mode comes from DCG_PANEL_MODE, else ~/.config/dcg/panel-mode (one word), else "report":
+  off     pass dcg's answer through unchanged
+  report  dcg's answer with the rewritten deny text; the panel runs in the background and logs
+  live    the panel's verdict decides
+
+Every verdict goes to ~/.local/share/dcg/panel.jsonl.
+
+Replay:  dcg-panel --replay [--since-hours N] [--limit N] [--log PATH]
+  reads allow-once entries from blocked.log, re-checks each with dcg and asks the panel.
+"""
+
+import argparse
+import concurrent.futures
+import datetime as dt
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+HOME = Path.home()
+DCG = HOME / ".dotfiles/bin/dcg"
+MODE_FILE = HOME / ".config/dcg/panel-mode"
+PANEL_LOG = HOME / ".local/share/dcg/panel.jsonl"
+BLOCKED_LOG = HOME / ".local/share/dcg/blocked.log"
+
+MEMBERS = [
+    {"name": "haiku", "provider": "anthropic", "model": "claude-haiku-5-5"},
+    {"name": "sonnet", "provider": "anthropic", "model": "claude-sonnet-5-5"},
+    {"name": "luna", "provider": "openai", "model": "gpt-6-luna"},
+]
+MEMBER_TIMEOUT_S = 25
+MAX_CMD_CHARS = 6000
+
+SYSTEM_PROMPT = """\
+You review one shell command that an AI coding agent wants to run on Oystein's Linux \
+development desktop. A pattern guard (dcg) flagged it as possibly destructive. Many of its \
+flags are false positives: it cannot see variable values, and it flags redirects and rm on \
+paths it cannot resolve.
+
+The agents are not hostile. The risk is an honest mistake that destroys work: uncommitted or \
+unpushed changes, files outside the task, other sessions' work, or system state.
+
+Facts about this machine:
+- /var/tmp/claude/** and scratchpad folders are throwaway agent scratch space. Deleting or \
+overwriting there is fine.
+- **/target, **/node_modules, **/.scratch are rebuildable.
+- Many agent sessions share checkouts such as ~/work/desktop/*. Never approve anything that \
+switches branch, moves HEAD, resets, rebases, cleans or discards changes in a checkout that \
+has uncommitted changes or that other sessions may use.
+- Writing inside the agent's own task files or a new file is normal work.
+- Never approve: deleting or overwriting under ~ outside the task's own files, anything under \
+/etc, /usr, /boot or ~/.config/secrets, force pushes, branch or ref deletion on a remote, \
+dropping databases or tables with data, killing processes, or disk and partition tools.
+
+Answer allow only when you are confident the command cannot destroy work Oystein would want. \
+Answer deny when it clearly would. Answer ask when you are unsure or would need to know a \
+value you cannot see. Ask is always an acceptable answer.
+
+Reply with one JSON object and nothing else:
+{"verdict": "allow" | "deny" | "ask", "reason": "<one short sentence>"}"""
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def get_mode() -> str:
+    mode = os.environ.get("DCG_PANEL_MODE", "")
+    if not mode:
+        try:
+            mode = MODE_FILE.read_text().strip()
+        except OSError:
+            mode = ""
+    return mode if mode in ("off", "report", "live") else "report"
+
+
+def secret(key: str) -> str:
+    try:
+        out = subprocess.run(["secret", key], capture_output=True, text=True, timeout=5)
+        return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def log_line(entry: dict) -> None:
+    PANEL_LOG.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(PANEL_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def run_dcg(raw: bytes) -> tuple[bytes, int]:
+    out = subprocess.run([str(DCG)], input=raw, capture_output=True, timeout=10)
+    sys.stderr.buffer.write(out.stderr)
+    return out.stdout, out.returncode
+
+
+def dcg_decision(stdout: bytes) -> tuple[str, str]:
+    try:
+        hso = json.loads(stdout)["hookSpecificOutput"]
+        return hso.get("permissionDecision", "allow"), hso.get("permissionDecisionReason", "")
+    except (ValueError, KeyError, TypeError):
+        return "allow", ""
+
+
+def override_reasons() -> list[str]:
+    try:
+        import tomllib
+
+        with open(HOME / ".config/dcg/config.toml", "rb") as f:
+            blocks = tomllib.load(f).get("overrides", {}).get("block", [])
+        return [b["reason"] for b in blocks if b.get("reason")]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def is_hard_block(reason: str) -> bool:
+    return any(r in reason for r in override_reasons())
+
+
+AGENT_ADVICE = (
+    "Do not ask Oystein to run `dcg allow-once`. Rewrite the command so dcg can check it: use "
+    "literal absolute paths instead of variables, split long chains into separate calls, or "
+    "put the script in a file under /var/tmp/claude/ and run that file."
+)
+
+
+def agent_reason(reason: str, notes: str = "") -> str:
+    """dcg's deny text without the allow-once hand-off, plus what the agent should do."""
+    keep = [
+        line
+        for line in reason.strip().splitlines()
+        if "allow-once" not in line
+        and "ask the user for explicit permission" not in line
+        and "have them run the command manually" not in line
+    ]
+    text = "\n".join(keep).strip()
+    if notes:
+        text += f"\n\ndcg panel:\n{notes}"
+    return f"{text}\n\n{AGENT_ADVICE}"
+
+
+def deny_json(reason: str) -> dict:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+# --- context --------------------------------------------------------------------------------
+
+
+def transcript_tail(path: str, max_items: int = 6) -> str:
+    """Last few assistant texts and tool calls, so the panel can see what the agent intends."""
+    if not path:
+        return ""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 400_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()[1:]
+    except OSError:
+        return ""
+    items: list[str] = []
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        msg = rec.get("message") or {}
+        if rec.get("type") != "assistant" or not isinstance(msg.get("content"), list):
+            continue
+        for block in reversed(msg["content"]):
+            if block.get("type") == "text" and block.get("text", "").strip():
+                items.append("assistant: " + block["text"].strip()[:800])
+            elif block.get("type") == "tool_use":
+                inp = json.dumps(block.get("input", {}), ensure_ascii=False)[:500]
+                items.append(f"tool {block.get('name')}: {inp}")
+        if len(items) >= max_items:
+            break
+    return "\n".join(reversed(items[:max_items]))
+
+
+def git_status(cwd: str) -> str:
+    if not cwd or not os.path.isdir(cwd):
+        return ""
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "status", "--porcelain=v1", "-b", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.returncode != 0:
+        return "(not a git checkout)"
+    lines = out.stdout.splitlines()
+    more = f"\n... {len(lines) - 15} more" if len(lines) > 15 else ""
+    return "\n".join(lines[:15]) + more
+
+
+def build_prompt(cmd: str, cwd: str, reason: str, transcript: str, status: str) -> str:
+    parts = [
+        f"Working directory: {cwd or '(unknown)'}",
+        f"git status of the working directory:\n{status or '(not checked)'}",
+        f"dcg's reason for flagging:\n{reason.strip()[:1500]}",
+    ]
+    if transcript:
+        parts.append(f"What the agent did and said just before (most recent last):\n{transcript}")
+    else:
+        parts.append("The agent's recent messages are not available.")
+    parts.append(f"The command:\n<command>\n{cmd[:MAX_CMD_CHARS]}\n</command>")
+    return "\n\n".join(parts)
+
+
+# --- panel ----------------------------------------------------------------------------------
+
+
+def http_json(url: str, headers: dict, body: dict) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=MEMBER_TIMEOUT_S) as resp:
+        return json.loads(resp.read())
+
+
+def ask_member(member: dict, prompt: str, keys: dict) -> dict:
+    t0 = time.monotonic()
+    try:
+        if member["provider"] == "anthropic":
+            base = keys.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+            data = http_json(
+                base.rstrip("/") + "/v1/messages",
+                {
+                    "x-api-key": keys["ANTHROPIC_API_KEY"],
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                {
+                    "model": member["model"],
+                    # The 5.5 models think before answering; 200 tokens ran out mid-thought.
+                    "max_tokens": 4000,
+                    "thinking": {"type": "enabled", "budget_tokens": 2000},
+                    "system": SYSTEM_PROMPT,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            text = "".join(b.get("text", "") for b in data.get("content", []))
+        else:
+            data = http_json(
+                "https://api.openai.com/v1/responses",
+                {
+                    "Authorization": "Bearer " + keys["OPENAI_API_KEY"],
+                    "content-type": "application/json",
+                },
+                {
+                    "model": member["model"],
+                    "instructions": SYSTEM_PROMPT,
+                    "input": prompt,
+                    "reasoning": {"effort": "low"},
+                    "max_output_tokens": 2000,
+                },
+            )
+            text = data.get("output_text") or "".join(
+                c.get("text", "")
+                for o in data.get("output", [])
+                for c in o.get("content", []) or []
+                if c.get("type") == "output_text"
+            )
+        m = re.search(r"\{.*\}", text, re.S)
+        vote = json.loads(m.group(0)) if m else {}
+        verdict = vote.get("verdict") if vote.get("verdict") in ("allow", "deny", "ask") else "ask"
+        reason = str(vote.get("reason", "")).strip()[:300] or "(no reason given)"
+    except Exception as e:  # noqa: BLE001 - any failure is a vote to ask
+        verdict, reason = "ask", f"error: {type(e).__name__}: {str(e)[:150]}"
+    return {
+        "member": member["name"],
+        "verdict": verdict,
+        "reason": reason,
+        "ms": int((time.monotonic() - t0) * 1000),
+    }
+
+
+def run_panel(prompt: str) -> tuple[str, list[dict]]:
+    keys = {k: secret(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY")}
+    with concurrent.futures.ThreadPoolExecutor(len(MEMBERS)) as pool:
+        votes = list(pool.map(lambda m: ask_member(m, prompt, keys), MEMBERS))
+    final = "allow" if all(v["verdict"] == "allow" for v in votes) else "deny"
+    return final, votes
+
+
+def format_votes(votes: list[dict]) -> str:
+    return "\n".join(f"- {v['member']}: {v['verdict']} ({v['reason']})" for v in votes)
+
+
+# --- hook -----------------------------------------------------------------------------------
+
+
+def panel_and_log(hook: dict, reason: str, mode: str, dcg_says: str) -> tuple[str, list[dict]]:
+    cmd = (hook.get("tool_input") or {}).get("command", "")
+    cwd = hook.get("cwd", "")
+    prompt = build_prompt(
+        cmd, cwd, reason, transcript_tail(hook.get("transcript_path", "")), git_status(cwd)
+    )
+    t0 = time.monotonic()
+    final, votes = run_panel(prompt)
+    log_line(
+        {
+            "ts": now_iso(),
+            "mode": mode,
+            "dcg": dcg_says,
+            "final": final,
+            "ms": int((time.monotonic() - t0) * 1000),
+            "cwd": cwd,
+            "cmd": cmd[:2000],
+            "votes": votes,
+            "session": hook.get("session_id", ""),
+        }
+    )
+    return final, votes
+
+
+def hook_main() -> int:
+    raw = sys.stdin.buffer.read()
+    stdout, code = run_dcg(raw)
+    decision, reason = dcg_decision(stdout)
+    mode = get_mode()
+    if decision not in ("deny", "ask") or mode == "off":
+        sys.stdout.buffer.write(stdout)
+        return code
+    if is_hard_block(reason):
+        json.dump(deny_json(reason), sys.stdout)
+        return 0
+    try:
+        hook = json.loads(raw)
+    except ValueError:
+        json.dump(deny_json(agent_reason(reason)), sys.stdout)
+        return 0
+
+    if mode == "report":
+        # Deny at once. A detached child runs the panel and logs what it would have done.
+        json.dump(deny_json(agent_reason(reason)), sys.stdout)
+        sys.stdout.flush()
+        if os.fork() == 0:
+            os.setsid()
+            devnull = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(devnull, fd)
+            try:
+                panel_and_log(hook, reason, mode, decision)
+            finally:
+                os._exit(0)
+        return 0
+
+    final, votes = panel_and_log(hook, reason, mode, decision)
+    notes = format_votes(votes)
+    if final == "allow":
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": f"dcg flagged this; the dcg panel allowed it:\n{notes}",
+            }
+        }
+    else:
+        out = deny_json(agent_reason(reason, notes))
+    json.dump(out, sys.stdout)
+    return 0
+
+
+# --- replay ---------------------------------------------------------------------------------
+
+ENTRY_RE = re.compile(r"^\[(\d{4}-\d\d-\d\dT[^\]]+Z|\d+)\] \[", re.M)
+ISSUED_RE = re.compile(r'code=\d+ cwd="(?P<cwd>[^"]*)" cmd="(?P<cmd>.*)"\s*$', re.S)
+
+
+def read_issued(log: Path, since_hours: float) -> list[tuple[str, str, str]]:
+    text = log.read_text(errors="replace")
+    starts = [m.start() for m in ENTRY_RE.finditer(text)] + [len(text)]
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=since_hours)
+    seen: set[tuple[str, str]] = set()
+    out = []
+    for a, b in zip(starts, starts[1:], strict=False):
+        entry = text[a:b]
+        if "[allow-once:code_issued]" not in entry[:80]:
+            continue
+        ts = entry[1 : entry.index("]")]
+        try:
+            when = dt.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+        except ValueError:
+            continue
+        m = ISSUED_RE.search(entry)
+        if when < cutoff or not m:
+            continue
+        key = (m["cwd"], m["cmd"])
+        if key not in seen:
+            seen.add(key)
+            out.append((ts, m["cwd"], m["cmd"]))
+    return out
+
+
+def replay_main(args: argparse.Namespace) -> int:
+    items = read_issued(Path(args.log), args.since_hours)[-args.limit :]
+    print(f"{len(items)} distinct flagged commands", file=sys.stderr)
+
+    def one(item: tuple[str, str, str]) -> dict:
+        ts, cwd, cmd = item
+        hook = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": cwd,
+        }
+        stdout, _ = run_dcg(json.dumps(hook).encode())
+        decision, reason = dcg_decision(stdout)
+        if decision not in ("deny", "ask") or is_hard_block(reason):
+            return {"ts": ts, "cwd": cwd, "cmd": cmd, "dcg": decision, "final": None}
+        # Replay has no transcript and the checkout may have changed since.
+        prompt = build_prompt(cmd, cwd, reason, "", git_status(cwd))
+        t0 = time.monotonic()
+        final, votes = run_panel(prompt)
+        return {
+            "ts": ts,
+            "cwd": cwd,
+            "cmd": cmd,
+            "dcg": decision,
+            "reason": reason[:400],
+            "final": final,
+            "ms": int((time.monotonic() - t0) * 1000),
+            "votes": votes,
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+        for res in pool.map(one, items):
+            print(json.dumps(res, ensure_ascii=False), flush=True)
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--replay":
+        p = argparse.ArgumentParser(prog="dcg-panel --replay")
+        p.add_argument("--since-hours", type=float, default=24)
+        p.add_argument("--limit", type=int, default=200)
+        p.add_argument("--jobs", type=int, default=4)
+        p.add_argument("--log", default=str(BLOCKED_LOG))
+        return replay_main(p.parse_args(sys.argv[2:]))
+    try:
+        return hook_main()
+    except Exception as e:  # noqa: BLE001 - never break the hook; fall back to a deny
+        json.dump(deny_json(f"dcg-panel failed ({type(e).__name__}: {e})."), sys.stdout)
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
