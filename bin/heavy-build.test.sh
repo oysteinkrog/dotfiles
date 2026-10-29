@@ -523,6 +523,73 @@ check "own history, one run: 2 x 4 = 8 is above the 6 GiB class figure, so that 
 row wine-run-tests wtwo 2 0 ok
 out=$(est wtwo wine-run-tests)
 check "own history, one run: 2 x 2 = 4 goes under the 6 GiB wine-run-tests floor (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
+# Group estimate (2026-10-29): a key with no own runs falls back to the
+# highest peak of its repo's (column 15) or session's (column 14) runs of the
+# same class: max(2 GiB, 2 x that, 25% of the class figure), when lower.
+grow() {  # class key peak_gib exit session repo [age_days]
+  awk -v c="$1" -v k="$2" -v p="$3" -v e="$4" -v ss="$5" -v r="$6" -v t="$(( EPOCHSECONDS - ${7:-0} * 86400 ))" -v G="$G" 'BEGIN {
+    printf "%d\t%s\t%s\t10\t20\t%d\t%s\tok\t\t\t-\t-\tNA\t%s/a\t%s\n", t, c, k, p * G, e, ss, r }' >> "$E/hist"
+}
+gbase() { : > "$E/hist"; for i in $(seq 1 20); do grow cargo-build "big$i" "$i" 0 big rbig; done; }
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1; done
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: 3 repo runs at 1 GiB give 25% of the 18 GiB class p90, 4.5 (got '$out')" '[[ $out == "4.5 class-history,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=1.0,base=18.0" ]]'
+out=$(GROUP_EST=0 est newkey cargo-build "" 0 r1 s9)
+check "group: HEAVY_BUILD_GROUP_EST=0 keeps the class p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
+out=$(GROUP_EST_CLASS_PCT=0 est newkey cargo-build "" 0 r1 s9)
+check "group: without the 25% bound, 2 x 1 = 2 GiB (got '$out')" '[[ $out == "2.0 class-history,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=1.0,base=18.0" ]]'
+out=$(est newkey cargo-build "" 0 - s1)
+check "group: no repo, the session's 3 runs count (got '$out')" '[[ $out == "4.5 class-history,mem=session-max;grp=session:s1,n=3,age_h=0,max=1.0,base=18.0" ]]'
+out=$(GROUP_EST_SESSION=0 est newkey cargo-build "" 0 - s1)
+check "group: HEAVY_BUILD_GROUP_EST_SESSION=0 ignores the session (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
+out=$(est newkey cargo-build "" 0 - -)
+check "group: session - never counts (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
+out=$(est newkey cargo-test "" 0 r1 s1)
+check "group: runs of another class do not count (got '$out')" '[[ $out == "6.0 class,mem=class;grp=insufficient" ]]'
+out=$(est g1 cargo-build "" 0 r1 s1)
+check "group: a key with its own run keeps the own-history rules (got '$out')" '[[ $out == "2.0 history,mem=key-own-one" ]]'
+gbase; for i in 1 2; do grow cargo-build "g$i" 1 0 s1 r1; done
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: 2 runs are too few (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=insufficient" ]]'
+grow cargo-build g3 1 1 s1 r1
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: a failed run is not one of the 3 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=insufficient" ]]'
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1 10; done
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: no run in the last 7 days is stale (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=stale" ]]'
+grow cargo-build g4 1 0 s1 r1
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: one recent run makes the old ones count again (got '$out')" '[[ $out == "4.5 class-history,mem=repo-max;grp=repo:r1,n=4,age_h=0,max=1.0,base=18.0" ]]'
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1 40; done
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: runs older than 30 days do not count (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=insufficient" ]]'
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1; done; grow cargo-build g4 6 0 s1 r1 20
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: the highest peak in 30 days counts, not the recent ones only, 2 x 6 = 12 (got '$out')" '[[ $out == "12.0 class-history,mem=repo-max;grp=repo:r1,n=4,age_h=0,max=6.0,base=18.0" ]]'
+grow cargo-build g5 2 137 s1 r1
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: an OOM-killed run in the repo stops it (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=pressure" ]]'
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1; done; grow cargo-build h1 2 137 s1 r2
+out=$(est newkey cargo-build "" 0 r1 s1)
+check "group: an OOM-killed run in the session stops it too (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=pressure" ]]'
+gbase; for i in 1 2 3; do grow cargo-build "g$i" 10 0 s1 r1; done
+out=$(est newkey cargo-build "" 0 r1 s9)
+check "group: 2 x 10 = 20 is above the class p90, so it stays (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90;grp=higher" ]]'
+gbase; for i in 1 2 3; do grow wine-run-tests "g$i" 1 0 s1 r1; done
+out=$(est newkey wine-run-tests "" 0 r1 s1)
+check "group: Wine test classes are left out (got '$out')" '[[ $out == "6.0 class,mem=class" ]]'
+: > "$E/hist"; for i in 1 2 3; do grow other "g$i" 0.3 0 s1 r1; done
+out=$(est newkey other "" 0 r1 s1)
+check "group: other with no class history: max(2, 0.6, 25% of 8) = 2 (got '$out')" '[[ $out == "2.0 default,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=0.3,base=8.0" ]]'
+# repo_id: worktrees of one clone share the id; outside git it is "-".
+RT=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
+git -C "$RT" init -q m && git -C "$RT/m" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x && git -C "$RT/m" worktree add -q --detach "$RT/w" 2>/dev/null
+mkdir -p "$RT/n"
+ri() { (cd "$1" && bash -c "$(sed -n '/^repo_id()/,/^}/p' "$HB")"'; repo_id'); }
+r1=$(ri "$RT/m"); r2=$(ri "$RT/w"); r3=$(ri "$RT/n")
+check "repo_id: a worktree has its clone's id, and outside git it is - (got '$r1' '$r2' '$r3')" '[[ $r1 =~ ^[0-9a-f]{8}$ && $r1 == "$r2" && $r3 == - ]]'
+git -C "$RT/m" worktree remove --force "$RT/w"
+rm -rf -- "$RT"
 : > "$E/hist"
 row cargo-check oomkey 3 0 ok
 row cargo-check oomkey 8 137 fail
