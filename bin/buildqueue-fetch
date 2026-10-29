@@ -17,6 +17,7 @@ Sources:
   ~/.local/state/heavy-build/history.tsv       one row per finished build (read from a saved offset)
   ~/.local/state/pressure/level                the pressure coordinator's level
   ~/.config/heavy-build.lanes                  per-lane priority rules (optional)
+  ~/.config/buildqueue/peers                   other machines whose queue.json is read over ssh (optional)
 
 Machine resources (memory, swap, CPU) are left out on purpose: Tasklens shows them beside
 this panel.
@@ -967,6 +968,85 @@ def this_machine(st, now, running, waiting, slots):
     }
 
 
+# Other machines that run this widget: their own queue.json, read over ssh, so each machine
+# shows the others' CPU, memory and jobs. ~/.config/buildqueue/peers holds one ssh host per
+# line (local to each machine, so no host names live in this repo). A thread per peer reads
+# its file every PEER_EVERY_S over one shared ssh connection; a refresh never waits for it.
+PEERS = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "buildqueue" / "peers"
+PEER_EVERY_S = 15
+PEER_STALE_S = 60
+PEER_TIMEOUT_S = 10
+peer_data = {}
+
+
+def peer_hosts():
+    try:
+        lines = PEERS.read_text().splitlines()
+    except OSError:
+        return []
+    return [h for h in (line.split("#", 1)[0].strip() for line in lines) if re.fullmatch(r"[\w.@-]+", h)]
+
+
+def read_peer(host):
+    """One read of a peer's queue.json. Keeps only what the Machines card uses."""
+    import subprocess
+
+    ctl = RUNTIME / "buildqueue"
+    cmd = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        "-o", "ControlMaster=auto", "-o", f"ControlPath={ctl}/ssh-%C", "-o", "ControlPersist=120",
+        host, 'cat "$XDG_RUNTIME_DIR/buildqueue/queue.json"',
+    ]
+    try:
+        ctl.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=PEER_TIMEOUT_S, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            raise ValueError((r.stderr.strip().splitlines() or [f"ssh exit {r.returncode}"])[-1][:120])
+        d = json.loads(r.stdout)
+        m = d.get("machine")
+        if not isinstance(m, dict):
+            raise ValueError(d.get("error") or "no machine data")
+        remote = d.get("remote") if isinstance(d.get("remote"), dict) else {}
+        peer_data[host] = {
+            "at": time.time(), "updated": d.get("updated", 0) / 1000, "error": "",
+            "machine": m, "workers": remote.get("workers") or [], "running": remote.get("running") or [],
+            "target": remote.get("target", ""),
+        }
+    except (OSError, ValueError, AttributeError, TypeError, subprocess.SubprocessError) as exc:
+        old = peer_data.get(host) or {}
+        peer_data[host] = {**old, "error": str(exc) or type(exc).__name__}
+
+
+def watch_peers():
+    import threading
+
+    def loop(host):
+        while True:
+            read_peer(host)
+            time.sleep(PEER_EVERY_S)
+
+    for host in peer_hosts():
+        threading.Thread(target=loop, args=(host,), daemon=True).start()
+
+
+def peers_view(now):
+    out = []
+    for host in peer_hosts():
+        p = peer_data.get(host) or {}
+        age = now - p["updated"] if p.get("updated") else None
+        out.append({
+            "host": host,
+            "fresh": age is not None and age < PEER_STALE_S and not p.get("error"),
+            "age": None if age is None else int(age),
+            "error": p.get("error", "" if p else "not read yet"),
+            "machine": p.get("machine"),
+            "workers": p.get("workers", []),
+            "running": p.get("running", []),
+            "target": p.get("target", ""),
+        })
+    return out
+
+
 def remote_view(r, now, owner):
     # A start line with no end line is running, unless the worker's own list says it is not.
     alive = {
@@ -993,6 +1073,7 @@ def remote_view(r, now, owner):
         mine = [j for j in done if j["worker"] == name]
         workers.append({
             "name": name,
+            "host": w.get("host", ""),  # its own hostname, to match it with a peer
             "os": w.get("os", ""),  # not known while booked
             "memAvailGib": w.get("mem_avail_gib"),
             "memTotalGib": w.get("mem_total_gib"),
@@ -1378,6 +1459,7 @@ def build(st, now, ow):
         "panelTheme": panel_theme(st),
         "remote": remote_view(update_remote(st, now), now, owner),
         "machine": this_machine(st, now, running, len(queue), st["jobd"].get("maxjobs") or as_int("HEAVY_BUILD_MAX_JOBS")),
+        "peers": peers_view(now),
     }
 
 
@@ -1400,6 +1482,7 @@ def serve(path, every):
     ow = load_owners()
     saved = 0.0
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    watch_peers()
     try:
         while os.getppid() == parent:
             start = time.time()
@@ -1421,6 +1504,8 @@ def main():
         return
     st = load_state()
     ow = load_owners()
+    for host in peer_hosts():
+        read_peer(host)
     result, ok = run_once(st, ow)
     if ok:
         save_state(st)
