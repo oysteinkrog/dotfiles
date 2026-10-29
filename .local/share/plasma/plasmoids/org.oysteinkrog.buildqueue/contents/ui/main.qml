@@ -1425,7 +1425,7 @@ PlasmoidItem {
                         id: mach
                         required property int index
                         readonly property var m: root.machines[index] || ({})
-                        readonly property bool away: m.booked || m.frozen
+                        readonly property bool away: !!(m.booked || m.frozen)
                         readonly property var jobs: root.remoteRunning.filter(j => j.worker === m.name)
                         Layout.fillWidth: true
                         Layout.topMargin: index > 0 ? Kirigami.Units.smallSpacing * 1.5 : 0
