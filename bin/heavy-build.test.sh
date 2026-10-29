@@ -489,8 +489,12 @@ check "estimate: with HEAVY_BUILD_OWN_EST=0, key history (max 3) below the class
 out=$(est lowkey cargo-check)
 check "own history: 2 runs, max 3 GiB, gives 1.2 x 3 = 3.6 instead of the class p90 (got '$out')" '[[ $out == "3.6 history,mem=key-own" ]]'
 row cargo-check onekey 2 0 ok
+out=$(OWN_EST_ONE=0 est onekey cargo-check)
+check "own history: with HEAVY_BUILD_OWN_EST_ONE=0 a key with 1 run keeps the class p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
 out=$(est onekey cargo-check)
-check "own history: a key with 1 run keeps the class p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+check "own history, one run: 2 x its 2 GiB peak = 4 instead of the class p90 (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
+out=$(OWN_EST=0 est onekey cargo-check)
+check "own history, one run: HEAVY_BUILD_OWN_EST=0 turns it off too (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
 row cargo-check bigown 15 0 ok
 row cargo-check bigown 16 0 ok
 out=$(est bigown cargo-check)
@@ -499,6 +503,26 @@ row cargo-check tinykey 0 0 ok
 row cargo-check tinykey 0 0 ok
 out=$(est tinykey cargo-check)
 check "own history: never under 1 GiB (got '$out')" '[[ $out == "1.0 history,mem=key-own" ]]'
+: > "$E/hist"
+for i in $(seq 1 20); do row cargo-check "other$i" "$i" 0 ok; done
+printf '1\tcargo-check\tonetiny\t10\t20\t%d\t0\tok\n' $(( G / 2 )) >> "$E/hist"
+out=$(est onetiny cargo-check)
+check "own history, one run: 2 x 0.5 GiB gives the 2 GiB minimum (got '$out')" '[[ $out == "2.0 history,mem=key-own-one" ]]'
+row cargo-check onebig 10 0 ok
+out=$(est onebig cargo-check)
+check "own history, one run: a lone 10 GiB peak counts as the 8 GiB one-row limit, so 2 x 8 = 16 (got '$out')" '[[ $out == "16.0 history,mem=key-own-one" ]]'
+row cargo-check onefail 3 1 fail
+out=$(est onefail cargo-check)
+check "own history, one run: a failed run counts too (got '$out')" '[[ $out == "6.0 history,mem=key-own-one" ]]'
+row cargo-check oneoom 3 137 fail
+out=$(est oneoom cargo-check)
+check "own history, one run: an OOM-killed run counts as 1.25 x its peak, so 2 x 3.75 = 7.5 (got '$out')" '[[ $out == "7.5 class-history,mem=key-own-one" ]]'
+row wine-run-tests wone 4 0 ok
+out=$(est wone wine-run-tests)
+check "own history, one run: 2 x 4 = 8 is above the 6 GiB class figure, so that stays (got '$out')" '[[ $out == "6.0 history,mem=class" ]]'
+row wine-run-tests wtwo 2 0 ok
+out=$(est wtwo wine-run-tests)
+check "own history, one run: 2 x 2 = 4 goes under the 6 GiB wine-run-tests floor (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
 : > "$E/hist"
 row cargo-check oomkey 3 0 ok
 row cargo-check oomkey 8 137 fail
@@ -658,7 +682,7 @@ rm -rf -- "$E"
 # project it is given ends in .dll.
 cls() {
   (
-    eval "$(sed -n '/^wine_tests_prebuilt()/,/^}/p;/^dotnet_sln()/,/^}/p;/^classify()/,/^}/p' "$HB")"
+    eval "$(sed -n '/^wine_tests_prebuilt()/,/^}/p;/^dotnet_sln()/,/^}/p;/^build_sh_cmd()/,/^}/p;/^classify()/,/^}/p' "$HB")"
     classify "$@"
   )
 }
@@ -703,6 +727,28 @@ out=$(cd "$T/p" && cls dotnet build)
 check "classify: 'dotnet build' in a dir with a project file is dotnet-build (got '$out')" '[[ $out == dotnet-build ]]'
 out=$(cd "$T/b" && cls dotnet build)
 check "classify: 'dotnet build' in a dir with both is dotnet-build (got '$out')" '[[ $out == dotnet-build ]]'
+# build-sh (2026-10-29): the monorepo's build.sh build, also through bash, sh
+# or env, but only when tools/BuildCli/BuildCli.csproj is next to the script.
+mkdir -p "$T/m/tools/BuildCli" "$T/o" && : > "$T/m/tools/BuildCli/BuildCli.csproj" && : > "$T/m/build.sh" && : > "$T/o/build.sh"
+for c in \
+  "build-sh|./build.sh build -r win-x64" \
+  "build-sh|bash build.sh build --config Debug" \
+  "build-sh|sh ./build.sh build" \
+  "build-sh|/usr/bin/bash $T/m/build.sh build" \
+  "build-sh|env EnableWindowsTargeting=true AgentOutputSuffix=_x ./build.sh build" \
+  "other|./build.sh test" \
+  "other|bash -c ./build.sh build" \
+  "other|bash ../o/build.sh build" \
+  "cargo-build|sh -c cargo build" ; do
+  want=${c%%|*} cmd=${c#*|}
+  # shellcheck disable=SC2086
+  out=$(cd "$T/m" && cls $cmd)
+  check "classify: '$cmd' in the monorepo is $want (got '$out')" '[[ $out == "$want" ]]'
+done
+out=$(cd "$T/m" && CLASS_BUILD_SH=0 cls bash build.sh build)
+check "classify: HEAVY_BUILD_CLASS_BUILD_SH=0 puts build.sh back in other (got '$out')" '[[ $out == other ]]'
+out=$(cd "$T/o" && cls ./build.sh build)
+check "classify: a build.sh without BuildCli next to it stays other (got '$out')" '[[ $out == other ]]'
 rm -rf -- "$T"
 
 # 7b. Wine test sigs: the same tests from another tree, lane or prefix get the
@@ -2976,13 +3022,37 @@ B=$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice
 mkdir -p "$B/job-7.service" "$B/job-8.service" "$T/run/heavy-build.jobs"
 for j in 7 8; do echo 'populated 1' > "$B/job-$j.service/cgroup.events"; echo $(( j * 1073741824 )) > "$B/job-$j.service/memory.current"; echo 'usage_usec 5000000' > "$B/job-$j.service/cpu.stat"; done
 echo 'populated 0' > "$B/job-8.service/cgroup.events"
-out=$(cd "$T/work" && QDIR=$T/run/heavy-build.queue JDIR=$T/run/heavy-build.jobs CPUDIR=$T/run/heavy-build.cpu BSLICE=$B IDLE_SECS=120 bash -c "$(sed -n '/^cpu_rate()/,/^}/p;/^running_lines()/,/^}/p' "$HB")"'; running_lines')
+RL="$(sed -n '/^proc_start()/,/^}/p;/^cpu_rate()/,/^}/p;/^jobd_tracked_line()/,/^}/p;/^running_lines()/,/^}/p' "$HB")"
+out=$(cd "$T/work" && QDIR=$T/run/heavy-build.queue JDIR=$T/run/heavy-build.jobs CPUDIR=$T/run/heavy-build.cpu BSLICE=$B IDLE_SECS=120 JOBD_JDIR=$T/run/jobd.jobs bash -c "$RL"'; running_lines')
 check "jobd load: a populated job unit is a J line (got '$out')" '[[ $out == "J job-7.service 7516192768 5000000 "[0-9]*" 0 -" ]]'
 mkdir -p "$T/run/heavy-build.cpu"; : > "$T/run/heavy-build.cpu/job-9.service"; : > "$T/run/heavy-build.cpu/job-7.service"
 (BSLICE=$B CPUDIR=$T/run/heavy-build.cpu JDIR=$T/run/heavy-build.jobs; eval "$(sed -n '/^sweep_stale()/,/^}/p' "$HB")"; log_line() { :; }; systemctl() { :; }; sweep_stale)
 check "jobd load: CPU samples of a gone job unit are removed, a live one's kept" '[[ ! -e $T/run/heavy-build.cpu/job-9.service && -e $T/run/heavy-build.cpu/job-7.service ]]'
 n=$(BSLICE=$B bash -c "$(sed -n '/^active_build_scopes()/,/^}/p' "$HB")"'; active_build_scopes')
 check "jobd load: the old rule counts a running job unit (got $n)" '(( n == 1 ))'
+# Tracked jobd jobs (HEAVY_BUILD_JOBD_TRACKED, 2026-10-29): a job with a valid
+# state file in jobd.jobs is an R line with jobd's estimate, priority, keys and
+# class, and the memory its cgroup holds now (not the file's).
+mkdir -p "$T/run/jobd.jobs"
+pst=$(awk '{ sub(/.*\) /, ""); split($0, f, " "); print f[20] }' /proc/$$/stat)
+rlj() { (cd "$T/work" && QDIR=$T/run/heavy-build.queue JDIR=$T/run/heavy-build.jobs CPUDIR=$T/run/heavy-build.cpu BSLICE=$B IDLE_SECS=120 JOBD_JDIR=$T/run/jobd.jobs JOBD_TRACKED=${1:-1} bash -c "$RL"'; running_lines'); }
+echo "job-7 $$ $pst 999000 6.5 4.2 103 1 - 0 critical:aged tree:/w wine-run-tests" > "$T/run/jobd.jobs/job-7"
+out=$(rlj)
+check "jobd tracked: a valid state file gives an R line with jobd's figures and the cgroup's memory (got '$out')" '[[ $out == "R job-7.service 999000 6.5 4.2 999103 7516192768 - 0 critical tree:/w wine-run-tests jobd" ]]'
+out=$(rlj 0)
+check "jobd tracked: HEAVY_BUILD_JOBD_TRACKED=0 keeps the J line (got '$out')" '[[ $out == "J job-7.service 7516192768 "* ]]'
+echo "job-7 $$ $(( pst + 1 )) 999000 6.5 4.2 103 1 - 0 normal - wine-run-tests" > "$T/run/jobd.jobs/job-7"
+out=$(rlj)
+check "jobd tracked: a state file whose process start differs gives the J line (got '$out')" '[[ $out == "J job-7.service "* ]]'
+echo "job-8 $$ $pst 999000 6.5 4.2 103 1 - 0 normal - wine-run-tests" > "$T/run/jobd.jobs/job-7"
+out=$(rlj)
+check "jobd tracked: a state file naming another unit gives the J line (got '$out')" '[[ $out == "J job-7.service "* ]]'
+echo "job-7 $$ $pst 999000 x 4.2 103 1 - 0 normal - wine-run-tests" > "$T/run/jobd.jobs/job-7"
+out=$(rlj)
+check "jobd tracked: a state file with a bad estimate gives the J line (got '$out')" '[[ $out == "J job-7.service "* ]]'
+echo "job-7 $$ $pst 999000 6.5 4.2 103 1 - 0 normal" > "$T/run/jobd.jobs/job-7"
+out=$(rlj)
+check "jobd tracked: a short state file gives the J line (got '$out')" '[[ $out == "J job-7.service "* ]]'
 teardown2
 A=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
 T=$A; : > "$T/out"
@@ -2997,6 +3067,15 @@ out=$(for i in 1 2 3 4 5 6; do echo "J job-$i.service 1073741824 0 5 0 -"; done;
 out=$(printf '%s\n' "$out" | adm 0000000999000000000-1-n 0 1 12)
 check "jobd load: each job counts against the job limit (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6|0" ]]'
 out=$(printf '%s\n' 'J job-1.service 1073741824 0 5 0 -' 'W 0000000999000000000-1-n 999000 normal 1 24 600 -' | adm 0000000999000000000-1-n 0 1 12)
+printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 10 * 1048576 )) > "$A/meminfo10"
+W6='W 0000000999000000000-1-n 999000 normal 6 1 600 -'
+o1=$(printf '%s\n' 'J job-1.service 1073741824 0 5 0 -' "$W6" | ADM_MEMINFO=$A/meminfo10 ADM_MC=1 adm 0000000999000000000-1-n 0 1 12)
+o2=$(printf '%s\n' 'R job-1.service 999000 6 1 999600 1073741824 500 0 normal - wine-run-tests jobd' "$W6" | ADM_MEMINFO=$A/meminfo10 ADM_MC=1 adm 0000000999000000000-1-n 0 1 12)
+check "jobd tracked: an old 1 GiB J job holds 2 GiB to come, so a 6 GiB build waits; as a tracked R line past its young window it fits (got '$o1' and '$o2')" '[[ $o1 == "wait|memory: needs 6.0 GiB, charged 50%; 10.0 available, 2.0 still to come for young builds, target 6|0" && $o2 == start\|fits:* ]]'
+o3=$(printf '%s\n' 'R job-1.service 999990 6 1 1000590 1073741824 - 0 normal - wine-run-tests jobd' "$W6" | ADM_MEMINFO=$A/meminfo10 ADM_MC=1 adm 0000000999000000000-1-n 0 1 12)
+check "jobd tracked: a young tracked job is charged its estimate minus what it holds (got '$o3')" '[[ $o3 == "wait|memory: needs 6.0 GiB, charged 50%; 10.0 available, 5.0 still to come for young builds, target 6|0" ]]'
+o4=$(printf '%s\n' 'R job-1.service 999000 6 1 999600 1073741824 500 0 normal tree:/w wine-run-tests jobd' 'W 0000000999000000000-1-n 999000 normal 1 1 600 tree:/w' | ADM_MEMINFO=$A/meminfo10 ADM_MC=1 adm 0000000999000000000-1-n 0 1 12)
+check "jobd tracked: a tracked job holds its lock keys (got '$o4')" '[[ $o4 == wait\|key:* ]]'
 check "jobd load: 8 cores for a young job leave 20 of 28, so 24 waits (got '$out')" '[[ $out == wait\|cores:* ]]'
 out=$(for i in 1 2 3 4 5 6; do echo "J job-$i.service 1073741824 0 5 1 -"; done; echo 'W 0000000999000000000-1-n 999000 normal 1 1 600 -')
 out=$(printf '%s\n' "$out" | adm 0000000999000000000-1-n 0 1 12)

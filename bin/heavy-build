@@ -336,7 +336,9 @@
 #   and the class p90, class percentile or class floor decided, its estimate
 #   is 1.2 times its own highest peak of the last 10 runs (at least 1 GiB),
 #   if that is lower; live.log shows mem=key-own. Set it to 0 to turn this
-#   off. See estimate(). One-row limit (HEAVY_BUILD_EST_ONE_ROW_GIB,
+#   off. See estimate(). With one run (HEAVY_BUILD_OWN_EST_ONE=1, since
+#   2026-10-29; 0 turns it off): 2 times that peak, at least 2 GiB, if that
+#   is lower (mem=key-own-one). One-row limit (HEAVY_BUILD_EST_ONE_ROW_GIB,
 #   default 8; 0 turns it off; since 2026-10-26): a key's own peak, and a
 #   Wine sig's highest peak, may be above 8 GiB only when a second run
 #   confirms it. Otherwise it counts as the larger of 8 GiB and the second
@@ -656,9 +658,14 @@
 # line, but still makes a scope.
 #
 # jobd: running jobd jobs (builds.slice/job-<x>.service) count as running
-# builds in the budget rule: a job each, their current memory plus 2 GiB
-# still to come, and their average cores. An idle one (under 0.05 cores)
-# only holds its memory. They show in the untracked= field of live.log.
+# builds in the budget rule. With a valid jobd state file
+# ($XDG_RUNTIME_DIR/jobd.jobs/<unit>; HEAVY_BUILD_JOBD_TRACKED=1, the
+# default) a job is charged like one of heavy-build's own builds: its estimate
+# while young, its priority, lock keys and class (untracked= shows
+# <unit>:<GiB>:jobd). Without one, or with HEAVY_BUILD_JOBD_TRACKED=0: a job
+# each, their current memory plus 2 GiB still to come, and their average
+# cores; an idle one (under 0.05 cores) only holds its memory. They show in
+# the untracked= field of live.log.
 # HEAVY_BUILD_BACKEND=jobd in the caller's environment (off by default; the
 # conf file cannot set it) hands the command to jobd with `job submit`
 # instead of this queue, with --class, --ready-file and --wait-timeout passed
@@ -760,6 +767,8 @@ plevel=none preason=
 critf_expired_logged=
 QDIR=$RUNDIR/heavy-build.queue
 JDIR=$RUNDIR/heavy-build.jobs
+# jobd's state files, one per running job, in the format of $JDIR's files.
+JOBD_JDIR=${HB_JOBD_JDIR:-$RUNDIR/jobd.jobs}
 ADMIT=$RUNDIR/heavy-build.admit
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.conf
 LANES=${XDG_CONFIG_HOME:-$HOME/.config}/heavy-build.lanes
@@ -957,6 +966,9 @@ read_conf() {
   setting HEAVY_BUILD_SWAP_HEADROOM_GIB 8
   setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
   setting HEAVY_BUILD_OWN_EST 1
+  setting HEAVY_BUILD_OWN_EST_ONE 1
+  setting HEAVY_BUILD_CLASS_BUILD_SH 1
+  setting HEAVY_BUILD_JOBD_TRACKED 1
   setting HEAVY_BUILD_EST_NONFILE 1
   setting HEAVY_BUILD_EST_ONE_ROW_GIB 8
   setting HEAVY_BUILD_NONFILE_PAD_PCT 125
@@ -1131,10 +1143,35 @@ dotnet_sln() {
   return 1
 }
 
+# build_sh_cmd WORD... -> true for a build of the monorepo's build.sh (the
+# BuildCli wrapper): `[env NAME=VALUE...] [bash|sh] <path>/build.sh build ...`,
+# where the script's directory has tools/BuildCli/BuildCli.csproj (relative
+# paths from the current directory). Shell text (`bash -c '...'`) and other
+# scripts named build.sh do not match. HEAVY_BUILD_CLASS_BUILD_SH=0 turns the
+# build-sh class off (such builds are "other" again). Added 2026-10-29: these
+# builds landed in "other", whose p90 (8.2 to 9.5 GiB) mixes gate scripts,
+# python tools and stress runs.
+build_sh_cmd() {
+  local i=1 w d
+  if [[ ${!i:-} == env || ${!i:-} == */env ]]; then
+    i=$(( i + 1 ))
+    while [[ ${!i:-} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$(( i + 1 )); done
+  fi
+  w=${!i:-}
+  if [[ ${w##*/} == bash || ${w##*/} == sh ]]; then i=$(( i + 1 )); fi
+  w=${!i:-}
+  [[ ${w##*/} == build.sh ]] || return 1
+  i=$(( i + 1 ))
+  [[ ${!i:-} == build ]] || return 1
+  d=$(dirname -- "$w")
+  [[ -f $d/tools/BuildCli/BuildCli.csproj ]]
+}
+
 classify() {
   local c=" $* " words
   local rc='(^|[^[:alnum:]_-])cargo[[:space:]]+(\+[^[:space:]]+[[:space:]]+)?'
   if [[ -n ${CLASS_ARG:-} ]]; then echo "$CLASS_ARG"
+  elif (( ${CLASS_BUILD_SH:-1} )) && build_sh_cmd "$@"; then echo build-sh
   elif [[ $c == *run-tests.sh* ]]; then
     read -ra words <<< "$*"
     if wine_tests_prebuilt "${words[@]}"; then echo wine-run-tests-prebuilt
@@ -1185,6 +1222,9 @@ classify() {
 # The cargo-test default was lowered on 2026-10-25 for oystein-home-primary
 # from 13.3 GiB (floor 6, office data) to 6 GiB (floor 4), because a 3.6 GiB
 # voxtype test waited 27 min.
+# build-sh (the monorepo's build.sh build, see build_sh_cmd) got 12 GiB on
+# 2026-10-29: its keys peaked at 8 to 10.5 GiB before the -m:6 cap. Cores
+# and wall time are guesses; its class history takes over after 5 runs.
 class_table() {
   case $1 in
     cargo-release)  echo "16.3 3.4 4500 0" ;;
@@ -1199,6 +1239,7 @@ class_table() {
     cargo-check)    echo "3.9 1.7 26 0" ;;
     jb-inspectcode) echo "18 2.0 600 18" ;;
     app-run)        echo "8 1.5 14400 6" ;;
+    build-sh)       echo "12 8 600 0" ;;
     *)              echo "8 8 600 0" ;;
   esac
 }
@@ -1225,6 +1266,13 @@ SIG_DAYS=14
 # floor and to filtered Wine runs that fell back to the class percentile. On
 # 2026-10-23 it would have lowered the estimate of 37 of 504 builds below their
 # class p90 or floor. HEAVY_BUILD_OWN_EST=0 turns it off.
+# One own run (HEAVY_BUILD_OWN_EST_ONE=1, the default since 2026-10-29, the
+# same rule and key as jobd): a key with one run with a peak, where the class
+# estimate or floor decided, gets 2 x that peak, at least 2 GiB, when that is
+# lower (mem=key-own-one). One run may have been a quick incremental build,
+# hence the factor 2. On 2026-10-28 a 6 s syncbox cargo build that peaked at
+# 1.8 GiB waited 30+ min on the 18.9 GiB cargo-build p90.
+# HEAVY_BUILD_OWN_EST_ONE=0 turns it off; HEAVY_BUILD_OWN_EST=0 turns both off.
 # A Wine test run with a filter (SIG from wine_sig, FILTERED 1) is estimated
 # from its sig instead (history column 12, runs in the last SIG_DAYS days):
 # with 5 or more such runs, their p90 peak (mem=sig-p90); with fewer, the
@@ -1267,14 +1315,15 @@ SIG_DAYS=14
 # without the 1.2 factor. See the help text for the 2026-10-26 case.
 # source: history, class-history, class or default (where wall and cores
 # came from), then ",mem=" and what set memory: key, key-one, class-p90,
-# class-pNN, sig-p90, sig-max, sig-max-one, class, default, floor, key-own
+# class-pNN, sig-p90, sig-max, sig-max-one, class, default, floor, key-own,
+# key-own-one
 # or cap.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
     -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" \
-    -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" -v onerow="${EST_ONE_ROW_GIB:-8}" '
+    -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" -v onerow="${EST_ONE_ROW_GIB:-8}" -v ownone="${OWN_EST_ONE:-1}" '
     function max2(a, b) { return a > b ? a : b }
     # Highest value in v[lo..hi]. Above onerow GiB, a single row counts only
     # when it is strong (st[i]: OOM-killed or held at its cap); otherwise the
@@ -1324,7 +1373,7 @@ estimate() {
       if (knf >= 1) { n = 0; for (i = 1; i <= kmn; i++) if (kmf[i]) { kmp[++n] = kmp[i]; kms[n] = kms[i] }; kmn = n }
       if (cnf >= 5) { n = 0; for (i = 1; i <= cmn; i++) if (cmf[i]) cmp[++n] = cmp[i]; cmn = n }
       split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]; floor = d[4] + 0
-      src = (c == "other" || c == "cargo-build") ? "default" : "class"
+      src = (c == "other" || c == "cargo-build" || c == "build-sh") ? "default" : "class"
       msrc = src
       if (cn >= 5) {
         n = 0; sc = 0; sw = 0
@@ -1383,6 +1432,15 @@ estimate() {
         if (no >= 2) {
           own = (bounded ? 1 : 1.2) * mx / 1073741824; if (own < 1) own = 1
           if (own < mem) { mem = own; msrc = "key-own" }
+        }
+      }
+      # One own run (HEAVY_BUILD_OWN_EST_ONE=1, as in jobd): 2 x its peak, at
+      # least 2 GiB, when that is below the class estimate or floor.
+      else if (ownest == 1 && ownone == 1 && kmn >= 1 && msrc ~ /^(class|class-p[0-9]+|floor)$/) {
+        mx = top(kmp, kms, (kmn > 10 ? kmn - 9 : 1), kmn)
+        if (mx > 0) {
+          own = 2 * mx / 1073741824; if (own < 2) own = 2
+          if (own < mem) { mem = own; msrc = "key-own-one" }
         }
       }
       if (maxm > 0 && mem > maxm) { mem = maxm; msrc = "cap" }
@@ -2504,9 +2562,35 @@ running_lines() {
     r=$(cpu_rate "$u" "$usec")
     idle=0
     [[ $r =~ ^[0-9]+$ ]] && (( r < 50 )) && idle=1
-    if [[ $u == *.service ]]; then echo "J $u $cur $usec $age $idle -"
+    if [[ $u == *.service ]]; then
+      jobd_tracked_line "$u" "$cur" "$r" || echo "J $u $cur $usec $age $idle -"
     else echo "F $u $cur $usec $age $idle ${left[$u]:--}"; fi
   done
+}
+
+# jobd_tracked_line UNIT CUR_BYTES CPU_MILLI: with HEAVY_BUILD_JOBD_TRACKED=1
+# (the default; 0 turns it off), a jobd job whose state file
+# ($JOBD_JDIR/<unit without .service>: "unit pid pidstart start mem cores
+# wall cur_bytes c60_milli stalled prio keys class", the format of $JDIR's
+# files) names this unit and a live process with that start time comes as an
+# R line with jobd's figures: its estimate while young, its priority, its
+# lock keys and class, and the memory it holds now (CUR_BYTES from its
+# cgroup, not the file). Field 13 is "jobd", so live.log lists it in
+# untracked= as <unit>:<GiB>:jobd. Returns 1 when the file is missing or does
+# not check out; the caller then prints the J line (current memory plus
+# 2 GiB). Added 2026-10-29: every jobd job was charged 2 GiB still to come
+# for its whole run, short ones too.
+jobd_tracked_line() {
+  local f=$JOBD_JDIR/${1%.service} u pid st start em ec ew fcur c60 stl pr ks cl rest
+  (( ${JOBD_TRACKED:-1} )) || return 1
+  [[ -r $f ]] || return 1
+  read -r u pid st start em ec ew fcur c60 stl pr ks cl rest < "$f" 2>/dev/null || return 1
+  [[ $u == "${1%.service}" && $pid =~ ^[0-9]+$ && $st =~ ^[0-9]+$ && $start =~ ^[0-9]+$ ]] || return 1
+  [[ $em =~ ^[0-9]+(\.[0-9]+)?$ && $ec =~ ^[0-9]+(\.[0-9]+)?$ && $ew =~ ^[0-9]+(\.[0-9]+)?$ && $stl =~ ^[012]$ ]] || return 1
+  [[ $pr =~ ^(low|normal|high|critical)(:aged)?$ && -n $cl ]] || return 1
+  [[ $(proc_start "$pid") == "$st" ]] || return 1
+  pr=${pr%:aged}
+  echo "R $1 $start $em $ec $(( start + ${ew%.*} )) $2 ${3:--} $stl $pr ${ks:--} $cl jobd"
 }
 
 # One line per live ticket: "W name arrival_s prio mem cores wall keys class".
@@ -2818,7 +2902,10 @@ BEGIN {
   cpupsi = psi10(cpupsifile); if (cpupsi < 0) cpupsi = 0
   claudepsi = psifull10(claudepsifile); sessionpsi = psifull10(sessionpsifile)
 }
-$1 == "R" { addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct, $12, 0) }
+$1 == "R" {
+  addrun($2, $3, $4, $5, $6, $7 / 1073741824, $8, $9, $10, $11, tcpct, $12, 0)
+  if ($13 == "jobd") untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:jobd", $2, $7 / 1073741824)
+}
 # A scope without a live heavy-build: charged its current memory plus 2 GiB still to come.
 # An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
@@ -3665,6 +3752,9 @@ cmdline="$*"
 cmd_words=("$@")
 cmdline=${cmdline//\"/\'}
 (( ${#cmdline} > 160 )) && cmdline="${cmdline:0:157}..."
+# Settings first, so HEAVY_BUILD_CLASS_BUILD_SH reaches classify() and
+# HEAVY_BUILD_WINE_FALLBACK_PCT reaches estimate().
+read_conf
 cls=$(classify "$@")
 sig=- sig_f=0
 if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
@@ -3672,8 +3762,6 @@ if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
   read -r sig_f sig <<< "$(wine_sig "$cls" "${sig_words[@]}")"
   [[ -n $sig ]] || sig=- sig_f=0
 fi
-# Settings first, so HEAVY_BUILD_WINE_FALLBACK_PCT reaches estimate().
-read_conf
 # Time limit for Wine test runs: HEAVY_BUILD_WINE_TIMEOUT seconds (conf or
 # environment). A caller's own HEAVY_BUILD_TIMEOUT wins. 0 or unset: no limit.
 if [[ -z $TIMEOUT && $cls == wine-run-tests* ]]; then
