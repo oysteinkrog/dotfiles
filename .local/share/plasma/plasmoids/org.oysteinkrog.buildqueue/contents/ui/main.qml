@@ -5,6 +5,9 @@
 // Data comes from $XDG_RUNTIME_DIR/buildqueue/queue.json, which ~/bin/buildqueue-fetch
 // rewrites every five seconds. Colours and fonts come from the Plasma style, so the window
 // matches the panels. The priority steppers run heavy-build-prio; nothing else writes.
+// The server button shows another machine's panel instead (a peer in
+// ~/.config/buildqueue/peers): the fetch copies that machine's queue.json to
+// $XDG_RUNTIME_DIR/buildqueue/servers/<host>.json, and the steppers then run there over ssh.
 // Run as a window with ~/bin/buildqueue-window, which starts the fetch and sets
 // QML_XHR_ALLOW_FILE_READ=1 so the widget may read the file.
 
@@ -21,19 +24,38 @@ import org.kde.kirigami as Kirigami
 PlasmoidItem {
     id: root
 
-    readonly property url dataFile: StandardPaths.writableLocation(StandardPaths.RuntimeLocation) + "/buildqueue/queue.json"
+    readonly property string dataDir: StandardPaths.writableLocation(StandardPaths.RuntimeLocation) + "/buildqueue"
+    readonly property url dataFile: dataDir + "/queue.json"
+    // The machine whose panel is shown: "" for this PC, else a peer's ssh host.
+    property string server: ""
+    readonly property url serverFile: server === "" ? dataFile : dataDir + "/servers/" + server + ".json"
+    // This PC's own data. It holds the peer list and the theme, whichever server is shown.
+    property var localQ: ({})
+    // The data shown: this PC's, or the chosen server's.
     property var q: ({
             updated: 0,
             error: ""
         })
     property string lastText: ""
+    property string lastLocalText: ""
+    // The peers to switch to, with whether their data is fresh.
+    readonly property var servers: localQ.peers || []
+    readonly property var serverPeer: servers.find(p => p.host === server) || null
+
+    Settings {
+        category: "BuildQueue"
+        property alias server: root.server
+    }
     property double now: Date.now()
     // When the fetch last wrote, with data or only an error. q.updated is when the data shown
     // was made, which an error-only write leaves alone.
     property double fetched: 0
     // The fetch writes every 5 s, so 30 s without a new file means it has stopped.
     readonly property bool stale: fetched > 0 && now - fetched > 30000
-    readonly property string problem: stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - fetched) / 1000))
+    readonly property string problem: stale && server !== "" ? i18n("No new data from %1 for %2", server, dur((now - fetched) / 1000)) + (serverPeer && serverPeer.error ? ": " + serverPeer.error : "")
+        : stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - fetched) / 1000))
+        : server !== "" && !serverPeer ? i18n("%1 is no longer in ~/.config/buildqueue/peers", server)
+        : server !== "" && q.updated === 0 ? i18n("No data from %1 yet", server) + (serverPeer.error ? ": " + serverPeer.error : "")
         : q.updated === 0 && now - startedAt > 15000 ? i18n("No data in %1. Start the window with buildqueue-window.", dataFile)
         : (q.error || "")
     readonly property double startedAt: Date.now()
@@ -138,7 +160,7 @@ PlasmoidItem {
     }
 
     function machineTip(m) {
-        const lines = [m.local ? i18n("This PC (%1): jobd and heavy-build run jobs here.", m.name) : m.peer ? i18n("%1 (%2): read from its own Build Queue over ssh.", m.label, m.name) : i18n("Worker %1, from job status.", m.name)];
+        const lines = [m.local ? (server === "" ? i18n("This PC (%1): jobd and heavy-build run jobs here.", m.name) : i18n("%1 (%2), the machine this panel shows: jobd and heavy-build run jobs there.", server, m.name)) : m.peer ? i18n("%1 (%2): read from its own Build Queue over ssh.", m.label, m.name) : i18n("Worker %1, from job status.", m.name)];
         if (m.peer && m.peerError)
             lines.push(i18n("Last read failed: %1", m.peerError));
         if (m.cpus)
@@ -187,31 +209,77 @@ PlasmoidItem {
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
 
-    function load() {
+    // On an error the fetch writes only the error, so the last data and its time stay.
+    function merged(text, prev) {
+        try {
+            const next = JSON.parse(text);
+            return next.running ? next : Object.assign({}, prev, {
+                error: next.error
+            });
+        } catch (err) {
+            return Object.assign({}, prev, {
+                error: String(err)
+            });
+        }
+    }
+
+    function read(file, done) {
         const xhr = new XMLHttpRequest();
         xhr.onreadystatechange = () => {
-            if (xhr.readyState !== XMLHttpRequest.DONE)
-                return;
+            if (xhr.readyState === XMLHttpRequest.DONE)
+                done(xhr.responseText);
+        };
+        xhr.open("GET", file);
+        xhr.send();
+    }
+
+    function load() {
+        const shown = server;
+        read(dataFile, text => {
             root.now = Date.now();
             // An unchanged file means nothing new, so nothing is rebuilt.
-            if (!xhr.responseText || xhr.responseText === root.lastText)
+            if (!text || text === root.lastLocalText)
                 return;
-            root.lastText = xhr.responseText;
-            try {
-                const next = JSON.parse(xhr.responseText);
-                root.fetched = next.updated || 0;
-                // On an error the fetch writes only the error, so the last data and its time stay.
-                root.q = next.running ? next : Object.assign({}, root.q, {
-                    error: next.error
-                });
-            } catch (err) {
-                root.q = Object.assign({}, root.q, {
-                    error: String(err)
-                });
+            root.lastLocalText = text;
+            root.localQ = root.merged(text, root.localQ);
+            if (shown === "" && root.server === "") {
+                root.lastText = text;
+                root.fetched = JSON.parse(text).updated || 0;
+                root.q = root.localQ;
             }
+        });
+        if (shown === "")
+            return;
+        read(serverFile, text => {
+            if (!text || text === root.lastText || root.server !== shown)
+                return;
+            root.lastText = text;
+            try {
+                root.fetched = JSON.parse(text).updated || 0;
+            } catch (err) {}
+            root.q = root.merged(text, root.q);
+        });
+    }
+
+    // Shows another machine's panel, or this PC's for "". The old data goes at once, so one
+    // machine's jobs never show under another's name.
+    function showServer(host) {
+        if (host === server)
+            return;
+        server = host;
+        lastText = "";
+        fetched = 0;
+        q = host === "" ? localQ : {
+            updated: 0,
+            error: ""
         };
-        xhr.open("GET", dataFile);
-        xhr.send();
+        if (host === "")
+            fetched = localQ.updated || 0;
+        load();
+    }
+
+    function serverLabel(host) {
+        return host === "" ? i18n("This PC") : host;
     }
 
     // 45 s, 12 min, 3 h 5 min.
@@ -284,10 +352,10 @@ PlasmoidItem {
         if (!match || next === prioStep(current))
             return;
         prioBusy = match;
-        if (next === 0)
-            shell.connectSource("heavy-build-prio clear --by oystein " + quote(match));
-        else
-            shell.connectSource("heavy-build-prio set --by oystein " + quote(match) + " " + (next > 0 ? "high" : "low") + " " + quote("Build Queue panel"));
+        const cmd = next === 0 ? "heavy-build-prio clear --by oystein " + quote(match)
+            : "heavy-build-prio set --by oystein " + quote(match) + " " + (next > 0 ? "high" : "low") + " " + quote("Build Queue panel");
+        // On another machine's panel the rule goes to that machine's queue.
+        shell.connectSource(server === "" ? cmd : "ssh -o BatchMode=yes -o ConnectTimeout=5 " + quote(server) + " " + quote(cmd));
     }
 
     function ownerName(o) {
@@ -417,11 +485,11 @@ PlasmoidItem {
 
     // Plasma style (panel) colours from buildqueue-fetch. Empty until the first fetch, and
     // then the app colour scheme is used.
-    readonly property var style: q.theme || ({})
+    readonly property var style: localQ.theme || ({})
     readonly property bool styled: style.background !== undefined
     // The panel theme picked with panel-theme, shared with the Agenda widget. Its colours
     // replace the Plasma style ones; "plasma" (no colours) keeps the Plasma style.
-    readonly property var pt: q.panelTheme || ({})
+    readonly property var pt: localQ.panelTheme || ({})
     readonly property bool themed: pt.window !== undefined
     readonly property color cardColor: themed ? pt.card : styled ? style.background : Kirigami.Theme.backgroundColor
     readonly property color inkColor: themed ? pt.text : styled ? style.text : Kirigami.Theme.textColor
@@ -853,6 +921,40 @@ PlasmoidItem {
                     text: i18n("Build Queue")
                     font.pointSize: root.fs * 1.4
                     font.weight: Font.Bold
+                }
+                // Which machine's panel this is. Accent text while it is another machine's.
+                PlasmaComponents.ToolButton {
+                    id: serverButton
+                    visible: root.servers.length > 0 || root.server !== ""
+                    icon.name: "network-server"
+                    text: root.serverLabel(root.server) + " ▾"
+                    font.pointSize: root.fs
+                    font.weight: root.server !== "" ? Font.DemiBold : Font.Normal
+                    palette.buttonText: root.server !== "" ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
+                    onClicked: serverMenu.open()
+                    PlasmaComponents.ToolTip.visible: hovered && !serverMenu.visible
+                    PlasmaComponents.ToolTip.text: root.server === "" ? i18n("This PC's queue. Pick another machine to see its panel.") : i18n("%1's queue, read over ssh. Priority changes go to %1.", root.server)
+                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    PlasmaComponents.Menu {
+                        id: serverMenu
+                        y: serverButton.height
+                        PlasmaComponents.MenuItem {
+                            text: i18n("This PC") + ((root.localQ.machine || {}).name ? " (" + root.localQ.machine.name + ")" : "")
+                            checkable: true
+                            checked: root.server === ""
+                            onTriggered: root.showServer("")
+                        }
+                        Repeater {
+                            model: root.servers
+                            PlasmaComponents.MenuItem {
+                                required property var modelData
+                                text: modelData.host + (modelData.fresh ? "" : " · " + i18n("no data"))
+                                checkable: true
+                                checked: modelData.host === root.server
+                                onTriggered: root.showServer(modelData.host)
+                            }
+                        }
+                    }
                 }
                 Item {
                     Layout.fillWidth: true
@@ -1489,7 +1591,7 @@ PlasmoidItem {
                                 color: mach.away || (mach.m.peer && !mach.m.fresh) ? view.waitColor : (root.measured(mach.m) ? mach.m.running : 0) + mach.jobs.length > 0 ? view.runColor : view.okColor
                             }
                             Cell {
-                                text: mach.m.local ? i18n("this PC") : mach.m.label || mach.m.name
+                                text: mach.m.local ? (root.server === "" ? i18n("this PC") : root.server) : mach.m.label || mach.m.name
                                 font.weight: Font.DemiBold
                             }
                             Small {
