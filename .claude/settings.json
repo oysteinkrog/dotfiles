@@ -294,7 +294,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/oystein/.dotfiles/bin/dcg"
+            "command": "/home/oystein/.dotfiles/bin/dcg-panel",
+            "timeout": 45
           }
         ]
       },
