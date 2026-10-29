@@ -919,6 +919,54 @@ def update_remote(st, now):
     return r
 
 
+def this_machine(st, now, running, waiting, slots):
+    """This PC as one of the machines: cores busy over the last refresh (all, and builds alone),
+    memory in use (all, and builds alone), and its jobs."""
+    try:
+        f = [int(x) for x in pathlib.Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]]
+        busy = (sum(f) - f[3] - f[4]) / os.sysconf("SC_CLK_TCK")  # all but idle and iowait
+    except (OSError, ValueError, IndexError):
+        busy = 0.0
+    try:
+        # cpu.stat's first line is "usage_usec N"; read_int takes the first word.
+        builds = int((SLICE / "cpu.stat").read_text().split()[1]) / 1e6
+    except (OSError, ValueError, IndexError):
+        builds = 0.0
+    # The last readings, [time, busy seconds of the whole machine, of builds.slice], are kept
+    # in the state so a one-shot run also has a previous reading.
+    t, b0, s0 = st.get("cpuPrev") or [0.0, 0.0, 0.0]
+    dt = now - t
+    cores = (busy - b0) / dt if 0 < dt < 600 else None
+    cores_builds = (builds - s0) / dt if 0 < dt < 600 else None
+    st["cpuPrev"] = [now, busy, builds]
+    mem = {}
+    try:
+        for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+            k, _, v = line.partition(":")
+            mem[k] = int(v.split()[0]) / 1024**2
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        load1 = float(pathlib.Path("/proc/loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        load1 = None
+    total = mem.get("MemTotal")
+    return {
+        "name": os.uname().nodename,
+        "local": True,
+        "cpus": os.cpu_count(),
+        "load": load1,
+        "coresBusy": None if cores is None else round(max(0.0, cores), 1),
+        "coresBuilds": None if cores_builds is None else round(max(0.0, cores_builds), 1),
+        "memTotalGib": None if total is None else round(total, 1),
+        "memAvailGib": None if total is None else round(mem.get("MemAvailable", 0), 1),
+        "memBuildsGib": round(read_int(SLICE / "memory.current") / 1024**3, 1),
+        "running": len(running),
+        "waiting": waiting,
+        "slots": slots,
+    }
+
+
 def remote_view(r, now, owner):
     # A start line with no end line is running, unless the worker's own list says it is not.
     alive = {
@@ -941,11 +989,19 @@ def remote_view(r, now, owner):
     for w in r["workers"]:
         lim = w.get("limits") or {}
         cpu = str(lim.get("CPUQuota", "")).rstrip("%")
+        name = w.get("name", "")
+        mine = [j for j in done if j["worker"] == name]
         workers.append({
-            "name": w.get("name", ""),
+            "name": name,
+            "os": w.get("os", ""),  # not known while booked
             "memAvailGib": w.get("mem_avail_gib"),
+            "memTotalGib": w.get("mem_total_gib"),
             "load": w.get("load1"),
             "cpus": w.get("cpus"),
+            "bookedNote": w.get("booked") if isinstance(w.get("booked"), str) else "",
+            "bookedEnd": w.get("end", ""),
+            "ok": sum(1 for j in mine if j.get("exit") == 0),
+            "failed": sum(1 for j in mine if j.get("exit") != 0),
             "active": bool(w.get("active")),
             "frozen": bool(w.get("frozen")),
             "booked": "booked" in w,
@@ -1321,6 +1377,7 @@ def build(st, now, ow):
         "theme": theme(st, now),
         "panelTheme": panel_theme(st),
         "remote": remote_view(update_remote(st, now), now, owner),
+        "machine": this_machine(st, now, running, len(queue), st["jobd"].get("maxjobs") or as_int("HEAVY_BUILD_MAX_JOBS")),
     }
 
 
