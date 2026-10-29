@@ -62,6 +62,7 @@ one. A client stopped with SIGTERM or Ctrl-C cancels its job (exit 130).
 | `job wait ID` | Follow a request and return its exit code |
 | `job cancel ID` | Cancel your own waiting or running request (exit 130) |
 | `job queue` | Waiting and running requests, as JSON |
+| `job estimate ID GIB` | Operator only: set a waiting job's memory estimate when a class estimate blocks the queue. It keeps its place |
 | `job ping` | Exit 0 if jobd answers within 3 s, else 69 |
 | `job report [--hours N]` | Faults, lost jobs and jobs run twice in the last N hours (exit 1 if any) |
 | `job status [home\|hawk]` | A worker's memory, load, frozen state and running jobs |
