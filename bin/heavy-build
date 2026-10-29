@@ -362,6 +362,8 @@
 #   be read). Lines before the non-file change (2026-10-25) have no column 13.
 #   14 who submitted it, as <session>/<agent> ("-" for either one not known;
 #   see "Who submitted a job"). Older lines have no column 14.
+#   15 the repo id (see repo_id; - outside git). Lines before 2026-10-29
+#   afternoon have no column 15.
 #   Lines written before 2026-10-09 have no column 8, lines before
 #   2026-10-16 no column 9, lines before 2026-10-20 no column 10 or 11, and
 #   lines before the sig change (2026-10-20 afternoon) no column 12.
@@ -968,6 +970,14 @@ read_conf() {
   setting HEAVY_BUILD_OWN_EST 1
   setting HEAVY_BUILD_OWN_EST_ONE 1
   setting HEAVY_BUILD_CLASS_BUILD_SH 1
+  setting HEAVY_BUILD_GROUP_EST 1
+  setting HEAVY_BUILD_GROUP_EST_SESSION 1
+  setting HEAVY_BUILD_GROUP_EST_MIN_RUNS 3
+  setting HEAVY_BUILD_GROUP_EST_DAYS 30
+  setting HEAVY_BUILD_GROUP_EST_RECENT_DAYS 7
+  setting HEAVY_BUILD_GROUP_EST_PCT 200
+  setting HEAVY_BUILD_GROUP_EST_MIN_GIB 2
+  setting HEAVY_BUILD_GROUP_EST_CLASS_PCT 25
   setting HEAVY_BUILD_JOBD_TRACKED 1
   setting HEAVY_BUILD_EST_NONFILE 1
   setting HEAVY_BUILD_EST_ONE_ROW_GIB 8
@@ -1316,14 +1326,18 @@ SIG_DAYS=14
 # source: history, class-history, class or default (where wall and cores
 # came from), then ",mem=" and what set memory: key, key-one, class-p90,
 # class-pNN, sig-p90, sig-max, sig-max-one, class, default, floor, key-own,
-# key-own-one
-# or cap.
+# key-own-one, repo-max, session-max or cap.
+# Group estimate (HEAVY_BUILD_GROUP_EST=1, since 2026-10-29): see below the
+# function. REPO and SESSION are the optional 5th and 6th arguments.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
     -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" \
-    -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" -v onerow="${EST_ONE_ROW_GIB:-8}" -v ownone="${OWN_EST_ONE:-1}" '
+    -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" -v onerow="${EST_ONE_ROW_GIB:-8}" -v ownone="${OWN_EST_ONE:-1}" \
+    -v repo="${5:--}" -v sess="${6:--}" -v grpon="${GROUP_EST:-1}" -v grpsess="${GROUP_EST_SESSION:-1}" \
+    -v grpmin="${GROUP_EST_MIN_RUNS:-3}" -v grpwin="$(( ${GROUP_EST_DAYS:-30} * 86400 ))" -v grprecent="$(( ${GROUP_EST_RECENT_DAYS:-7} * 86400 ))" \
+    -v grppct="${GROUP_EST_PCT:-200}" -v grpmingib="${GROUP_EST_MIN_GIB:-2}" -v grpcpct="${GROUP_EST_CLASS_PCT:-25}" '
     function max2(a, b) { return a > b ? a : b }
     # Highest value in v[lo..hi]. Above onerow GiB, a single row counts only
     # when it is strong (st[i]: OOM-killed or held at its cap); otherwise the
@@ -1360,6 +1374,15 @@ estimate() {
       # kmf/cmf: kept when non-file rows replace the others. OOM-killed runs
       # are always kept.
       if ($3 == k) { kmn++; kmp[kmn] = pk; kmf[kmn] = (nf || oom); kms[kmn] = strong; knf += nf }
+      # Group estimate: runs of this class from the same repo (column 15) or
+      # session (column 14 before "/") in the last grpwin seconds. g?max is
+      # the highest peak, g?ok the runs with exit 0, g?new the newest run,
+      # g?veto an OOM-killed run or one held at its cap.
+      if ($2 == c && pk != "NA" && $1 + 0 >= now - grpwin) {
+        if (repo != "-" && repo != "" && $15 == repo) { if (pk + 0 > grmax) grmax = pk + 0; grok += ($7 == 0); if ($1 + 0 > grnew) grnew = $1 + 0; grveto += strong }
+        split($14, gw, "/")
+        if (sess != "-" && sess != "" && gw[1] == sess) { if (pk + 0 > gsmax) gsmax = pk + 0; gsok += ($7 == 0); if ($1 + 0 > gsnew) gsnew = $1 + 0; gsveto += strong }
+      }
       if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cnf += nf }
       if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk; sms[smn] = strong }
       if (oom) next
@@ -1443,12 +1466,68 @@ estimate() {
           if (own < mem) { mem = own; msrc = "key-own-one" }
         }
       }
+      # Group estimate: only for a key with no usable own peak whose memory
+      # comes from the class figure or floor, in the classes below.
+      gnote = ""
+      kno = 0; for (i = 1; i <= kmn; i++) if (kmp[i] != "NA") kno++
+      if (grpon == 1 && !filt && kno == 0 && msrc ~ /^(class|class-p[0-9]+|floor|default)$/ && c ~ /^(cargo-build|cargo-clippy|cargo-test|cargo-release|build-sh|other)$/ && ((repo != "-" && repo != "") || (grpsess == 1 && sess != "-" && sess != ""))) {
+        if (grpsess != 1) { gsok = 0; gsveto = 0 }
+        gm = -1; gsrc = ""
+        if (grveto + gsveto > 0) gnote = "pressure"
+        else if (grok >= grpmin && grnew >= now - grprecent) { gm = grmax; gsrc = "repo-max"; gid = "repo:" repo; gn = grok; gnew = grnew }
+        else if (gsok >= grpmin && gsnew >= now - grprecent) { gm = gsmax; gsrc = "session-max"; gid = "session:" sess; gn = gsok; gnew = gsnew }
+        else gnote = (grok >= grpmin || gsok >= grpmin) ? "stale" : "insufficient"
+        if (gsrc != "") {
+          base = mem; gmg = gm / 1073741824
+          cand = gmg * grppct / 100; if (cand < grpmingib) cand = grpmingib; if (cand < base * grpcpct / 100) cand = base * grpcpct / 100
+          if (cand < base) { mem = cand; msrc = gsrc; gnote = sprintf("%s,n=%d,age_h=%d,max=%.1f,base=%.1f", gid, gn, (now - gnew) / 3600, gmg, base) }
+          else gnote = "higher"
+        }
+      }
       if (maxm > 0 && mem > maxm) { mem = maxm; msrc = "cap" }
       if (mem < 0.1) mem = 0.1
       if (cores < 0.1) cores = 0.1
       if (wall < 1) wall = 1
-      printf "%.1f %.1f %d %s,mem=%s\n", mem, cores, wall, src, msrc
+      printf "%.1f %.1f %d %s,mem=%s%s\n", mem, cores, wall, src, msrc, (gnote == "" ? "" : ";grp=" gnote)
     }' "$h" 2>/dev/null || echo "8.0 8.0 600 default,mem=default"
+}
+
+# Group estimate (HEAVY_BUILD_GROUP_EST=1, the default since 2026-10-29; 0
+# turns it off). Every new lane or worktree is a new key, so a small repo's
+# builds got the class p90: on 2026-10-29 an agent-hub test script (class
+# other, 9.5 GiB; agent-hub's own "other" runs peaked at 1.6 GiB at most) was
+# the starve head for 54 min, and four small cargo builds got the 18.9 GiB
+# cargo-build p90 in 30 h. Rule, decided by Astra
+# (/var/tmp/claude/hb-repo/oracle.md): for a key with no usable own peak,
+# whose memory came from the class figure or floor, in the classes
+# cargo-build, cargo-clippy, cargo-test, cargo-release, build-sh and other:
+# - Group: the same repo (history column 15, see repo_id) when it qualifies,
+#   else the same session (column 14 before "/"; HEAVY_BUILD_GROUP_EST_SESSION=1,
+#   0 turns this half off). Session "-" never counts.
+# - It qualifies with HEAVY_BUILD_GROUP_EST_MIN_RUNS (3) runs of this class
+#   with exit 0 in the last HEAVY_BUILD_GROUP_EST_DAYS (30) days, the newest
+#   in the last HEAVY_BUILD_GROUP_EST_RECENT_DAYS (7).
+# - M is the group's highest peak in that window (peaks counted as for the
+#   key: non-file pad, OOM and cap rules; failed runs count too). The
+#   estimate is max(HEAVY_BUILD_GROUP_EST_MIN_GIB (2), HEAVY_BUILD_GROUP_EST_PCT
+#   (200) % of M, HEAVY_BUILD_GROUP_EST_CLASS_PCT (25) % of the class figure)
+#   when that is lower. It may go below the class floor.
+# - An OOM-killed run or one held at its cap in either group (same class,
+#   same window) stops it.
+# The source shows mem=repo-max or session-max and ";grp=<group>,n=<runs>,
+# age_h=<hours since its newest run>,max=<M>,base=<class figure>". When the
+# rule applied but did not lower it: ";grp=insufficient", "stale",
+# "pressure" or "higher". The scope's MemoryHigh is not lowered with it.
+
+# repo_id [DIR]: 8 hex characters for the git repository DIR (default the
+# current directory) belongs to: the md5 of its common dir's real path, so
+# every worktree of one clone gets the same id. "-" outside git. History
+# column 15.
+repo_id() {
+  local d
+  d=$(git -C "${1:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { echo -; return; }
+  d=$(realpath -e -- "$d" 2>/dev/null) || { echo -; return; }
+  printf '%s' "$d" | md5sum | cut -c1-8
 }
 
 # ---------------------------------------------------------------- lock keys
@@ -2051,7 +2130,7 @@ est_refresh() {
   fi
   est_sig=$CONF_SIG est_ts=$EPOCHSECONDS
   old="$est_mem $est_cores $est_wall"
-  read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
+  read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f" "$repo" "$own_session")"
   app_est_cap
   new="$est_mem $est_cores $est_wall"
   [[ $new == "$old" ]] && return 0
@@ -3725,7 +3804,7 @@ append_history() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     flock 6
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" "$nfb" "${own_session:--}/${own_agent:--}" >&6
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$EPOCHSECONDS" "$cls" "$hash" "$wall" "$cpu" "$pk" "$1" "$2" "$capb" "$highb" "${tstate:--}" "${sig:--}" "$nfb" "${own_session:--}/${own_agent:--}" "${repo:--}" >&6
     local hl=${HISTORY_LINES:-20000}; (( hl >= 100 )) || hl=20000
     # Keep HISTORY_LINES lines (about 2 weeks at 1,300 builds a day); trim at 10% over.
     if (( $(wc -l < "$HIST") > hl + hl / 10 )); then tail -n "$hl" -- "$HIST" > "$HIST.tmp" && mv -f -- "$HIST.tmp" "$HIST"; fi
@@ -3768,7 +3847,7 @@ if [[ -z $TIMEOUT && $cls == wine-run-tests* ]]; then
   setting HEAVY_BUILD_WINE_TIMEOUT 0
   (( WINE_TIMEOUT > 0 )) && TIMEOUT=$WINE_TIMEOUT
 fi
-read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f")"
+repo=$(repo_id)
 keys_out=$(lock_keys "$@")
 keys_note=$(grep '^!' <<< "$keys_out" | sed 's/^!//' | paste -sd' ' -)
 keys_csv=$(grep -v '^!' <<< "$keys_out" | sed 's/ /%20/g' | paste -sd, -)
@@ -3843,6 +3922,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 job_ident
+# After job_ident, so the group estimate knows the session.
+read -r est_mem est_cores est_wall est_src <<< "$(estimate "$hash" "$cls" "${sig#-}" "$sig_f" "$repo" "$own_session")"
 read_conf
 lane_prio_apply
 app_est_cap
