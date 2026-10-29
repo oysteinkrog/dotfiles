@@ -922,37 +922,31 @@ PlasmoidItem {
                     font.pointSize: root.fs * 1.4
                     font.weight: Font.Bold
                 }
-                // Which machine's panel this is. Accent text while it is another machine's.
-                PlasmaComponents.ToolButton {
-                    id: serverButton
+                // One button per machine; a click shows that machine's panel. The shown one is
+                // pressed, in accent text while it is another machine's.
+                RowLayout {
+                    id: serverTabs
                     visible: root.servers.length > 0 || root.server !== ""
-                    icon.name: "network-server"
-                    text: root.serverLabel(root.server) + " ▾"
-                    font.pointSize: root.fs
-                    font.weight: root.server !== "" ? Font.DemiBold : Font.Normal
-                    palette.buttonText: root.server !== "" ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
-                    onClicked: serverMenu.open()
-                    PlasmaComponents.ToolTip.visible: hovered && !serverMenu.visible
-                    PlasmaComponents.ToolTip.text: root.server === "" ? i18n("This PC's queue. Pick another machine to see its panel.") : i18n("%1's queue, read over ssh. Priority changes go to %1.", root.server)
-                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
-                    PlasmaComponents.Menu {
-                        id: serverMenu
-                        y: serverButton.height
-                        PlasmaComponents.MenuItem {
-                            text: i18n("This PC") + ((root.localQ.machine || {}).name ? " (" + root.localQ.machine.name + ")" : "")
-                            checkable: true
-                            checked: root.server === ""
-                            onTriggered: root.showServer("")
-                        }
-                        Repeater {
-                            model: root.servers
-                            PlasmaComponents.MenuItem {
-                                required property var modelData
-                                text: modelData.host + (modelData.fresh ? "" : " · " + i18n("no data"))
-                                checkable: true
-                                checked: modelData.host === root.server
-                                onTriggered: root.showServer(modelData.host)
-                            }
+                    spacing: 0
+                    Repeater {
+                        model: [{
+                                host: "",
+                                fresh: true
+                            }].concat(root.servers)
+                        PlasmaComponents.ToolButton {
+                            required property var modelData
+                            readonly property bool shown: modelData.host === root.server
+                            icon.name: modelData.host === "" ? "computer" : "network-server"
+                            text: root.serverLabel(modelData.host)
+                            font.pointSize: root.fs
+                            font.weight: shown ? Font.DemiBold : Font.Normal
+                            checked: shown
+                            opacity: modelData.fresh || shown ? 1 : 0.55
+                            palette.buttonText: shown && modelData.host !== "" ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
+                            onClicked: root.showServer(modelData.host)
+                            PlasmaComponents.ToolTip.visible: hovered
+                            PlasmaComponents.ToolTip.text: modelData.host === "" ? i18n("This PC's queue%1.", (root.localQ.machine || {}).name ? " (" + root.localQ.machine.name + ")" : "") : (modelData.fresh ? i18n("%1's queue, read over ssh. Priority changes go to %1.", modelData.host) : i18n("No data from %1 yet.", modelData.host))
+                            PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
                         }
                     }
                 }
