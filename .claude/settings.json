@@ -290,12 +290,17 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell|Monitor",
         "hooks": [
           {
             "type": "command",
-            "command": "dcg"
-          },
+            "command": "/home/oystein/.dotfiles/bin/dcg"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/trauma_guard.py"
