@@ -15,6 +15,9 @@ KillMode=process
 Restart=on-failure
 RestartSec=5
 MemoryMax=512M
+# Keep jobd and its database pages out of swap (see jobd.slice.d/50-protect.conf).
+MemoryLow=256M
+MemorySwapMax=0
 
 [Install]
 WantedBy=default.target
