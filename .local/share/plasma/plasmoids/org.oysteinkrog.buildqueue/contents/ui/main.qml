@@ -946,7 +946,7 @@ PlasmoidItem {
                             palette.buttonText: shown && modelData.host !== "" ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
                             onClicked: root.showServer(modelData.host)
                             PlasmaComponents.ToolTip.visible: hovered
-                            PlasmaComponents.ToolTip.text: modelData.host === "" ? i18n("%1's queue. This is the computer you are at.", root.serverLabel("") === (root.localQ.machine || {}).name ? root.serverLabel("") : root.serverLabel("") + " (" + root.localQ.machine.name + ")") : (modelData.fresh ? i18n("%1's queue, read over ssh. Priority changes go to %1.", modelData.host) : i18n("No data from %1 yet.", modelData.host))
+                            PlasmaComponents.ToolTip.text: modelData.host === "" ? i18n("%1's queue. This is the computer you are at.", root.serverLabel("") === (root.localQ.machine || {}).name ? root.serverLabel("") : root.serverLabel("") + " (" + (root.localQ.machine || {}).name + ")") : (modelData.fresh ? i18n("%1's queue, read over ssh. Priority changes go to %1.", modelData.host) : i18n("No data from %1 yet.", modelData.host))
                             PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
                         }
                     }
