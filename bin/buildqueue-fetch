@@ -968,12 +968,15 @@ def this_machine(st, now, running, waiting, slots):
     }
 
 
-# Other machines that run this widget: their own queue.json, read over ssh, so each machine
-# shows the others' CPU, memory and jobs. ~/.config/buildqueue/peers holds one ssh host per
-# line (local to each machine, so no host names live in this repo). A thread per peer reads
-# its file every PEER_EVERY_S over one shared ssh connection; a refresh never waits for it.
+# Other machines that run this widget (servers): their own queue.json, read over ssh.
+# ~/.config/buildqueue/peers holds one ssh host per line (local to each machine, so no host
+# names live in this repo). A thread per peer reads its file every PEER_EVERY_S over one
+# shared ssh connection; a refresh never waits for it. The whole file goes to
+# $XDG_RUNTIME_DIR/buildqueue/servers/<host>.json, so the widget can show that machine's panel,
+# and its machine data goes into this machine's Machines card.
 PEERS = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "buildqueue" / "peers"
-PEER_EVERY_S = 15
+PEER_EVERY_S = 5
+SERVERS = RUNTIME / "buildqueue" / "servers"
 PEER_STALE_S = 60
 PEER_TIMEOUT_S = 10
 peer_data = {}
@@ -1007,6 +1010,9 @@ def read_peer(host):
         if not isinstance(m, dict):
             raise ValueError(d.get("error") or "no machine data")
         remote = d.get("remote") if isinstance(d.get("remote"), dict) else {}
+        if d.get("running") is not None:  # a full panel, not an error-only write
+            SERVERS.mkdir(parents=True, exist_ok=True)
+            write_atomic(SERVERS / f"{host}.json", r.stdout)
         peer_data[host] = {
             "at": time.time(), "updated": d.get("updated", 0) / 1000, "error": "",
             "machine": m, "workers": remote.get("workers") or [], "running": remote.get("running") or [],
