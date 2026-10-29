@@ -638,6 +638,9 @@ def redo(out: Path) -> Path:
     )
     root = config.root()
     q = root / ".redo" / out.name
+    if q.exists():
+        # Left by a redo that failed. It only holds copies of out/'s audio.
+        shutil.rmtree(q)
     q.mkdir(parents=True)
     raw = out / "raw"
     if raw.is_dir() and any(raw.glob("*.flac")):
