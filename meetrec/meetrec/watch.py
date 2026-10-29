@@ -1,8 +1,8 @@
 """Recorder daemon: start recording when Slack or Chrome opens a microphone stream.
 
 Each call gets two tracks. "me" is the microphone source the app reads from,
-"others" is the app's own playback stream. Both are written as raw s16le 16 kHz
-mono. A reader thread pads silence whenever PipeWire stops delivering data, so
+"others" is the app's own playback stream. Both are written as raw s16le 48 kHz
+mono, the rate PipeWire runs at, so nothing is lost before processing. A reader thread pads silence whenever PipeWire stops delivering data, so
 every file stays aligned to the wall clock and the tracks line up later.
 """
 
@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -22,11 +23,12 @@ from . import config
 
 log = logging.getLogger("meetrec.watch")
 
-RATE = 16000
+RATE = 48000
 BYTES_PER_SEC = RATE * 2
 POLL_S = 1.0
 START_AFTER_S = 2.0
 STOP_AFTER_S = 20.0
+MEET_FRESH_S = 10.0  # the extension sends a heartbeat every second
 EVENT_PORT = 47833
 
 # Matched against application.process.binary, then application.name (lowercased).
@@ -61,6 +63,7 @@ class Graph:
     out_streams: dict[str, list[int]] = field(default_factory=dict)
     sources_for: dict[str, set[int]] = field(default_factory=dict)
     serial: dict[int, str] = field(default_factory=dict)
+    props: dict[int, dict] = field(default_factory=dict)
 
 
 def read_graph() -> Graph:
@@ -77,6 +80,7 @@ def read_graph() -> Graph:
             continue
         props = info.get("props") or {}
         g.serial[o["id"]] = str(props.get("object.serial", o["id"]))
+        g.props[o["id"]] = props
         if (
             props.get("application.process.binary") in OWN_BINARIES
             or props.get("application.name") in OWN_BINARIES
@@ -99,14 +103,30 @@ class TrackRecorder:
     """One pw-record process writing a wall-clock aligned raw file."""
 
     def __init__(
-        self, session_dir: Path, role: str, node_id: int, serial: str, t0: float
+        self,
+        session_dir: Path,
+        role: str,
+        node_id: int,
+        serial: str,
+        t0: float,
+        props: dict | None = None,
     ):
         self.node_id = node_id
         start = time.time()
         stem = f"{role}-{node_id}-{int((start - t0) * 1000):09d}"
         self.path = session_dir / f"{stem}.pcm"
         (session_dir / f"{stem}.json").write_text(
-            json.dumps({"role": role, "node": node_id, "offset_s": start - t0})
+            json.dumps(
+                {
+                    "role": role,
+                    "node": node_id,
+                    "offset_s": start - t0,
+                    "rate": RATE,
+                    # Which device or stream this was, for finding problems later.
+                    "props": {k: v for k, v in (props or {}).items() if "." in k},
+                },
+                indent=1,
+            )
         )
         self.proc = subprocess.Popen(
             [
@@ -135,7 +155,7 @@ class TrackRecorder:
         written = 0
         with open(self.path, "wb") as f:
             while True:
-                chunk = self.proc.stdout.read1(3200)
+                chunk = self.proc.stdout.read1(9600)
                 if not chunk:
                     break
                 # Pad the gap if the stream stalled (corked or idle) for more than 300 ms.
@@ -171,6 +191,11 @@ class Session:
         self.meet_events = 0
         self.last_seen = self.t0
         self.write_meta()
+        self.live: subprocess.Popen | None = None
+        if config.load().get("live_transcript", True):
+            self.live = subprocess.Popen(
+                [sys.executable, "-m", "meetrec.cli", "live", str(self.dir)]
+            )
 
     def write_meta(self, **extra) -> None:
         meta = {"app": self.app, "start": self.t0}
@@ -191,14 +216,25 @@ class Session:
             if node in g.serial:
                 log.info("%s: recording %s from node %s", self.app, role, node)
                 self.recorders[(role, node)] = TrackRecorder(
-                    self.dir, role, node, g.serial[node], self.t0
+                    self.dir, role, node, g.serial[node], self.t0, g.props.get(node)
                 )
 
     def stop(self) -> None:
         for rec in self.recorders.values():
             rec.stop()
         self.recorders.clear()
+        if self.live and self.live.poll() is None:
+            self.live.terminate()
         self.write_meta(end=time.time())
+
+    def status(self) -> dict:
+        meta = json.loads((self.dir / "meta.json").read_text())
+        return {
+            "app": self.app,
+            "dir": str(self.dir),
+            "start": self.t0,
+            "title": meta.get("title"),
+        }
 
     def add_event(self, ev: dict) -> None:
         self.meet_events += 1
@@ -216,14 +252,21 @@ class Watcher:
         self.lock = threading.Lock()
         # Meet events that arrive before the mic opens (the roster on the green room page).
         self.early_events: list[dict] = []
+        self.last_meet: tuple = ()
+        self.last_meet_at = 0.0
 
     # Extension events -----------------------------------------------------------
     def on_event(self, ev: dict) -> None:
         with self.lock:
+            self.last_meet_at = time.time()
+            state = (ev.get("code"), ev.get("title"), tuple(ev.get("participants", [])))
+            if state != self.last_meet:
+                self.last_meet = state
+                log.info("meet: extension reports %s %r, participants %s", *state)
             s = self.sessions.get("meet")
             if s:
                 s.add_event(ev)
-                if ev.get("title"):
+                if ev.get("title") and s.meet_events == 1:
                     s.write_meta(title=ev["title"], meet_code=ev.get("code"))
             else:
                 now = time.time() * 1000
@@ -256,24 +299,41 @@ class Watcher:
             except FileNotFoundError:
                 return
             if r.stdout.strip() == "skip":
-                with self.lock:
-                    if self.sessions.get(s.app) is s:
-                        log.info("%s: skipped by user, deleting %s", s.app, s.dir)
-                        s.stop()
-                        s.skipped = True
-                        shutil.rmtree(s.dir, ignore_errors=True)
-                        del self.sessions[s.app]
-                        self.suppressed.add(s.app)
+                self.skip(s.app, s)
 
         threading.Thread(target=run, daemon=True).start()
+
+    def skip(self, app: str, only: Session | None = None) -> bool:
+        """Stop a recording and delete it; it stays off until the app releases the mic."""
+        with self.lock:
+            s = self.sessions.get(app)
+            if not s or (only and s is not only):
+                return False
+            log.info("%s: skipped by user, deleting %s", app, s.dir)
+            s.stop()
+            s.skipped = True
+            shutil.rmtree(s.dir, ignore_errors=True)
+            del self.sessions[app]
+            self.suppressed.add(app)
+            return True
+
+    def status(self) -> dict:
+        with self.lock:
+            recording = [s.status() for s in self.sessions.values()]
+        queue = self.root / ".queue"
+        return {
+            "recording": recording,
+            "queue": sorted(p.name for p in queue.iterdir()) if queue.exists() else [],
+        }
 
     # Main loop ------------------------------------------------------------------
     def finish(self, s: Session) -> None:
         s.stop()
-        # Without the Meet extension, keep any Chrome mic session longer than 2 minutes.
-        if s.app == "meet" and s.meet_events == 0 and time.time() - s.t0 < 120:
+        # Chrome counts only while the meetrec extension reports an open Meet call.
+        # Anything else using the mic (Claude voice chat, a dictation site) is dropped.
+        if s.app == "meet" and s.meet_events == 0:
             log.info(
-                "meet: short Chrome mic use and no Meet call seen, discarding %s",
+                "meet: Chrome used the mic but no Meet call was seen, discarding %s",
                 s.dir,
             )
             shutil.rmtree(s.dir, ignore_errors=True)
@@ -294,8 +354,10 @@ class Watcher:
         g = read_graph()
         now = time.time()
         with self.lock:
+            # Chrome counts as a call only while the extension reports an open Meet call.
+            meet_open = now - self.last_meet_at < MEET_FRESH_S
             for app in APPS:
-                active = bool(g.mic_streams.get(app))
+                active = bool(g.mic_streams.get(app)) and (app != "meet" or meet_open)
                 s = self.sessions.get(app)
                 if not active:
                     self.pending.pop(app, None)
@@ -353,7 +415,35 @@ class Watcher:
 
 def start_event_server(w: Watcher) -> None:
     class Handler(BaseHTTPRequestHandler):
+        def reply(self, code: int, body: dict | None = None) -> None:
+            data = json.dumps(body).encode() if body is not None else b""
+            self.send_response(code)
+            if body is not None:
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the caller gave up waiting (tray or extension poll timed out)
+
+        def do_GET(self) -> None:
+            # Read-only. No CORS headers, so a web page cannot read the answer.
+            if self.path == "/status":
+                self.reply(200, w.status())
+            else:
+                self.reply(404)
+
         def do_POST(self) -> None:
+            if self.path.startswith("/skip/"):
+                # Local tools only: browsers always send Origin on a cross-site POST.
+                if "Origin" in self.headers or self.headers.get("X-Meetrec") != "1":
+                    self.reply(403)
+                else:
+                    self.reply(
+                        200, {"skipped": w.skip(self.path.removeprefix("/skip/"))}
+                    )
+                return
             # Only the extension's service worker may post. Web pages send their own
             # Origin and cannot set the custom header without a CORS preflight we never answer.
             origin = self.headers.get("Origin", "")

@@ -37,6 +37,11 @@ def main() -> None:
     p = sub.add_parser("voices", help="list or remove stored voiceprints")
     p.add_argument("--forget", metavar="NAME", help="delete one person's voiceprints")
     sub.add_parser("status", help="show recordings in progress, queued and failed")
+    sub.add_parser("tray", help="tray icon with recording status and live transcript")
+    p = sub.add_parser(
+        "live", help="live transcript for one recording (the recorder runs this)"
+    )
+    p.add_argument("dir", type=Path)
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -54,6 +59,14 @@ def main() -> None:
         from . import process
 
         print(process.process(args.dir))
+    elif args.cmd == "tray":
+        from . import tray
+
+        tray.main()
+    elif args.cmd == "live":
+        from . import live
+
+        live.run(args.dir)
     elif args.cmd == "redo":
         from . import process
 
@@ -85,3 +98,7 @@ def main() -> None:
                 size = sum(f.stat().st_size for f in i.iterdir()) / 1e6
                 print(f"  {i.name} ({app}, {size:.1f} MB)")
         print(f"disk free: {shutil.disk_usage(root).free / 1e9:.0f} GB")
+
+
+if __name__ == "__main__":
+    main()
