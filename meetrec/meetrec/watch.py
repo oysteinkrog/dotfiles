@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -29,7 +30,36 @@ POLL_S = 1.0
 START_AFTER_S = 2.0
 STOP_AFTER_S = 20.0
 MEET_FRESH_S = 10.0  # the extension sends a heartbeat every second
+# Without the extension, a Meet call counts when Chrome opened a Meet room this recently.
+MEET_HISTORY_S = 30 * 60
+MEET_ROOM_GLOB = (
+    "https://meet.google.com/*[a-z][a-z][a-z]-[a-z][a-z][a-z][a-z]-[a-z][a-z][a-z]*"
+)
+CHROME_DIRS = (".config/google-chrome", ".config/chromium")
 EVENT_PORT = 47833
+
+
+def last_meet_visit() -> float:
+    """Newest visit to a Meet room in any Chrome profile's history, as epoch seconds."""
+    newest = 0.0
+    for d in CHROME_DIRS:
+        for hist in (Path.home() / d).glob("*/History"):
+            try:
+                con = sqlite3.connect(f"file:{hist}?immutable=1", uri=True, timeout=1)
+                try:
+                    row = con.execute(
+                        "SELECT max(last_visit_time) FROM urls WHERE url GLOB ?",
+                        (MEET_ROOM_GLOB,),
+                    ).fetchone()
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                continue
+            if row and row[0]:
+                # Chrome counts microseconds from 1601-01-01.
+                newest = max(newest, row[0] / 1e6 - 11644473600)
+    return newest
+
 
 # Matched against application.process.binary, then application.name (lowercased).
 APPS = {
@@ -189,6 +219,7 @@ class Session:
         self.recorders: dict[tuple[str, int], TrackRecorder] = {}
         self.skipped = False
         self.meet_events = 0
+        self.meet_from_history = False
         self.last_seen = self.t0
         self.write_meta()
         self.live: subprocess.Popen | None = None
@@ -254,6 +285,8 @@ class Watcher:
         self.early_events: list[dict] = []
         self.last_meet: tuple = ()
         self.last_meet_at = 0.0
+        self.meet_visit_at = 0.0
+        self.meet_visit_checked = 0.0
 
     # Extension events -----------------------------------------------------------
     def on_event(self, ev: dict) -> None:
@@ -331,7 +364,7 @@ class Watcher:
         s.stop()
         # Chrome counts only while the meetrec extension reports an open Meet call.
         # Anything else using the mic (Claude voice chat, a dictation site) is dropped.
-        if s.app == "meet" and s.meet_events == 0:
+        if s.app == "meet" and s.meet_events == 0 and not s.meet_from_history:
             log.info(
                 "meet: Chrome used the mic but no Meet call was seen, discarding %s",
                 s.dir,
@@ -354,11 +387,20 @@ class Watcher:
         g = read_graph()
         now = time.time()
         with self.lock:
-            # Chrome counts as a call only while the extension reports an open Meet call.
-            meet_open = now - self.last_meet_at < MEET_FRESH_S
+            # Chrome counts as a call while the extension reports an open Meet call, or,
+            # when the extension is missing, if Chrome opened a Meet room recently.
+            meet_heartbeat = now - self.last_meet_at < MEET_FRESH_S
+            meet_history = False
+            if g.mic_streams.get("meet") and not meet_heartbeat:
+                if now - self.meet_visit_checked > 10:
+                    self.meet_visit_checked = now
+                    self.meet_visit_at = last_meet_visit()
+                meet_history = now - self.meet_visit_at < MEET_HISTORY_S
             for app in APPS:
-                active = bool(g.mic_streams.get(app)) and (app != "meet" or meet_open)
                 s = self.sessions.get(app)
+                active = bool(g.mic_streams.get(app)) and (
+                    app != "meet" or s is not None or meet_heartbeat or meet_history
+                )
                 if not active:
                     self.pending.pop(app, None)
                     self.suppressed.discard(app)
@@ -379,6 +421,11 @@ class Watcher:
                     self.pending.pop(app)
                     s = Session(app, self.root)
                     log.info("%s: mic in use, recording to %s", app, s.dir)
+                    if app == "meet" and not meet_heartbeat:
+                        s.meet_from_history = True
+                        log.info(
+                            "meet: no extension signal, Meet room opened in Chrome recently"
+                        )
                     if app == "meet":
                         for ev in self.early_events:
                             s.add_event(ev)
