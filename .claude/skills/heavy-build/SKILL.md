@@ -67,11 +67,18 @@ memory runs low, and the build and its place in line are lost.
 its own systemd user unit and wait with a `Monitor` until-loop on the exit file:
 
 ```bash
-d=/var/tmp/claude/<task>; mkdir -p "$d"; rm -f "$d/run.exit"
+d=/var/tmp/claude/<task>/run-$(date +%Y%m%d-%H%M%S); mkdir -p "$d"; echo "$d"
 systemd-run --user --unit=hb-<task>-$$ --collect --same-dir --quiet -E PATH -E HOME \
   bash -c 'heavy-build "$@" > "$0.log" 2>&1; echo $? > "$0.exit"' "$d/run" <cmd> <args>
-# then wait until "$d/run.exit" exists; the build log is "$d/run.log"
+# then wait until <printed dir>/run.exit exists; the build log is <printed dir>/run.log
 ```
+
+Each run gets a fresh directory, so there is no old exit file to delete. Do not add
+`rm -f "$d/run.exit"` back: Claude Code's built-in safety check prompts for an `rm` whose
+target is a shell variable, even in bypass mode, and nobody may be there to answer. On
+2026-10-27 to 10-29 that prompt held 12 sessions for 821 session-minutes a day, up to
+515 minutes at a time. Use the literal printed path in later commands, since shell
+variables do not carry over between tool calls.
 
 - Add `-E AgentOutputSuffix` or `-E WINEPREFIX` only when that variable is set. An unset
   one arrives in the unit as an empty string, not as unset.
