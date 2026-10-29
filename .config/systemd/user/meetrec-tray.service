@@ -1,0 +1,14 @@
+[Unit]
+Description=meetrec: tray icon with recording status and live transcript
+After=graphical-session.target meetrec.service
+PartOf=graphical-session.target
+
+[Service]
+# uv exits 143 when systemd stops it with SIGTERM; that is a clean stop.
+SuccessExitStatus=143
+ExecStart=%h/bin/meetrec tray
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

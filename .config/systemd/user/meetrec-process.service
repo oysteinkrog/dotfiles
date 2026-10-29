@@ -2,6 +2,8 @@
 Description=meetrec: transcribe finished call recordings
 
 [Service]
+# uv exits 143 when systemd stops it with SIGTERM; that is a clean stop.
+SuccessExitStatus=143
 Type=oneshot
 ExecStart=%h/bin/meetrec process-queue
 Nice=10

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "meetrec Meet signal",
+  "version": "0.1.0",
+  "description": "Tells the local meetrec recorder when a Google Meet call is open, and who is in it.",
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": ["http://127.0.0.1:47833/*"]
+}
