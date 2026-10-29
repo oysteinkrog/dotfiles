@@ -91,7 +91,7 @@ all of these hold:
   Wine test prefix), without `--no-build`. Builds never go: their output would
   stay on home.
 - Normal priority, not app-run, and it has waited 60 s at the office.
-- Home has 12 GiB or more free and is not frozen, and runs no other routed job.
+- Home has 8 GiB or more free and is not frozen, and runs no other routed job.
 - `job check` accepts the tree.
 
 To keep a job at the office, set `JOB_LOCAL=1` in its environment. If home
