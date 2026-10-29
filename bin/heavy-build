@@ -1468,10 +1468,14 @@ estimate() {
       }
       # Group estimate: only for a key with no usable own peak whose memory
       # comes from the class figure or floor, in the classes below.
+      # The session half leaves out class other: one session runs unrelated
+      # work under that name (2026-10-29 replay: a 2.6 GiB estimate from
+      # the small "other" runs of manager-machine for a run that peaked at 16.4 GiB).
       gnote = ""
       kno = 0; for (i = 1; i <= kmn; i++) if (kmp[i] != "NA") kno++
-      if (grpon == 1 && !filt && kno == 0 && msrc ~ /^(class|class-p[0-9]+|floor|default)$/ && c ~ /^(cargo-build|cargo-clippy|cargo-test|cargo-release|build-sh|other)$/ && ((repo != "-" && repo != "") || (grpsess == 1 && sess != "-" && sess != ""))) {
-        if (grpsess != 1) { gsok = 0; gsveto = 0 }
+      gss = (grpsess == 1 && c != "other")
+      if (grpon == 1 && !filt && kno == 0 && msrc ~ /^(class|class-p[0-9]+|floor|default)$/ && c ~ /^(cargo-build|cargo-clippy|cargo-test|cargo-release|build-sh|other)$/ && ((repo != "-" && repo != "") || (gss && sess != "-" && sess != ""))) {
+        if (!gss) { gsok = 0; gsveto = 0 }
         gm = -1; gsrc = ""
         if (grveto + gsveto > 0) gnote = "pressure"
         else if (grok >= grpmin && grnew >= now - grprecent) { gm = grmax; gsrc = "repo-max"; gid = "repo:" repo; gn = grok; gnew = grnew }
@@ -1503,7 +1507,8 @@ estimate() {
 # cargo-build, cargo-clippy, cargo-test, cargo-release, build-sh and other:
 # - Group: the same repo (history column 15, see repo_id) when it qualifies,
 #   else the same session (column 14 before "/"; HEAVY_BUILD_GROUP_EST_SESSION=1,
-#   0 turns this half off). Session "-" never counts.
+#   0 turns this half off). Session "-" never counts. The session half
+#   leaves out class other, which mixes unrelated work under one session.
 # - It qualifies with HEAVY_BUILD_GROUP_EST_MIN_RUNS (3) runs of this class
 #   with exit 0 in the last HEAVY_BUILD_GROUP_EST_DAYS (30) days, the newest
 #   in the last HEAVY_BUILD_GROUP_EST_RECENT_DAYS (7).

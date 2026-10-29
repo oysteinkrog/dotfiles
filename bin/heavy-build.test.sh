@@ -581,6 +581,13 @@ check "group: Wine test classes are left out (got '$out')" '[[ $out == "6.0 clas
 : > "$E/hist"; for i in 1 2 3; do grow other "g$i" 0.3 0 s1 r1; done
 out=$(est newkey other "" 0 r1 s1)
 check "group: other with no class history: max(2, 0.6, 25% of 8) = 2 (got '$out')" '[[ $out == "2.0 default,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=0.3,base=8.0" ]]'
+out=$(est newkey other "" 0 - s1)
+check "group: the session half leaves out class other (got '$out')" '[[ $out == "8.0 default,mem=default" ]]'
+out=$(est newkey other "" 0 r9 s1)
+check "group: class other with a repo that has no runs is insufficient, the session does not count (got '$out')" '[[ $out == "8.0 default,mem=default;grp=insufficient" ]]'
+grow other x1 2 137 s1 r8
+out=$(est newkey other "" 0 r1 s1)
+check "group: for class other an OOM run in the session does not stop the repo half (got '$out')" '[[ $out == "2.0 default,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=0.3,base=8.0" ]]'
 # repo_id: worktrees of one clone share the id; outside git it is "-".
 RT=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-test.XXXXXX")
 git -C "$RT" init -q m && git -C "$RT/m" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x && git -C "$RT/m" worktree add -q --detach "$RT/w" 2>/dev/null
