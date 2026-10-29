@@ -109,10 +109,16 @@ frontend = "vo"   # GPU popup on the vo framework; "gtk4" switches back
 theme = "swiss"
 style = "default"
 layout = "compact"
-# Popup near the middle of the screen (top edge at 45% of the height),
-# 50% wider than the 400 px default, transcript text 17 pt.
+# Popup centred on the screen at its full height (anchor = "center", middle
+# at reading_line = 0.5), 50% wider than the 400 px default, transcript
+# text 17 pt. top_margin only applies with anchor = "top".
+anchor = "center"
+reading_line = 0.5
 width_px = 600
 top_margin = 0.45
+# Show "3/20 Type" (the look's place in the look chord's list and its name)
+# above the popup's top-left corner.
+look_badge = true
 preview_font_pt = 17.0
 # Solid background: the see-through panel was hard to read.
 opacity = 1.0
