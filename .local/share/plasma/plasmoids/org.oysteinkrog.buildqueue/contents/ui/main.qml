@@ -160,7 +160,7 @@ PlasmoidItem {
     }
 
     function machineTip(m) {
-        const lines = [m.local ? (server === "" ? i18n("This PC (%1): jobd and heavy-build run jobs here.", m.name) : i18n("%1 (%2), the machine this panel shows: jobd and heavy-build run jobs there.", server, m.name)) : m.peer ? i18n("%1 (%2): read from its own Build Queue over ssh.", m.label, m.name) : i18n("Worker %1, from job status.", m.name)];
+        const lines = [m.local ? (server === "" ? i18n("%1 (%2), this computer: jobd and heavy-build run jobs here.", root.serverLabel(""), m.name) : i18n("%1 (%2), the machine this panel shows: jobd and heavy-build run jobs there.", server, m.name)) : m.peer ? i18n("%1 (%2): read from its own Build Queue over ssh.", m.label, m.name) : i18n("Worker %1, from job status.", m.name)];
         if (m.peer && m.peerError)
             lines.push(i18n("Last read failed: %1", m.peerError));
         if (m.cpus)
@@ -278,8 +278,9 @@ PlasmoidItem {
         load();
     }
 
+    // A machine's short name: "home" or "office", from the fetch, else its hostname.
     function serverLabel(host) {
-        return host === "" ? i18n("This PC") : host;
+        return host !== "" ? host : localQ.name || (localQ.machine || {}).name || i18n("This PC");
     }
 
     // 45 s, 12 min, 3 h 5 min.
@@ -945,7 +946,7 @@ PlasmoidItem {
                             palette.buttonText: shown && modelData.host !== "" ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
                             onClicked: root.showServer(modelData.host)
                             PlasmaComponents.ToolTip.visible: hovered
-                            PlasmaComponents.ToolTip.text: modelData.host === "" ? i18n("This PC's queue%1.", (root.localQ.machine || {}).name ? " (" + root.localQ.machine.name + ")" : "") : (modelData.fresh ? i18n("%1's queue, read over ssh. Priority changes go to %1.", modelData.host) : i18n("No data from %1 yet.", modelData.host))
+                            PlasmaComponents.ToolTip.text: modelData.host === "" ? i18n("%1's queue. This is the computer you are at.", root.serverLabel("") === (root.localQ.machine || {}).name ? root.serverLabel("") : root.serverLabel("") + " (" + root.localQ.machine.name + ")") : (modelData.fresh ? i18n("%1's queue, read over ssh. Priority changes go to %1.", modelData.host) : i18n("No data from %1 yet.", modelData.host))
                             PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
                         }
                     }
@@ -1585,7 +1586,7 @@ PlasmoidItem {
                                 color: mach.away || (mach.m.peer && !mach.m.fresh) ? view.waitColor : (root.measured(mach.m) ? mach.m.running : 0) + mach.jobs.length > 0 ? view.runColor : view.okColor
                             }
                             Cell {
-                                text: mach.m.local ? (root.server === "" ? i18n("this PC") : root.server) : mach.m.label || mach.m.name
+                                text: mach.m.local ? (root.q.name || root.serverLabel(root.server)) : mach.m.label || mach.m.name
                                 font.weight: Font.DemiBold
                             }
                             Small {
