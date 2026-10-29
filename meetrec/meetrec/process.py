@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -78,7 +79,8 @@ def pipeline_info(gain: float) -> dict:
         "processed": time.strftime("%Y-%m-%d %H:%M:%S"),
         "commit": commit + ("+dirty" if dirty else ""),
         "mic_gain": round(gain, 2),
-        "asr": {"en": EN_MODEL, "no": NO_MODEL_REPO},
+        "asr": {"en": EN_MODEL, "no": NO_MODEL_REPO, "compute_type": compute_type()},
+        "host": socket.gethostname(),
         "config": config.load(),
     }
 
@@ -201,6 +203,25 @@ def runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 # Others -----------------------------------------------------------------------------
+def free_gpu() -> None:
+    """Give cached GPU memory back, so the Whisper models fit on an 8 GB card."""
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def compute_type() -> str:
+    """float16 on a big GPU. int8 weights below 12 GB, so both Whisper models fit."""
+    import torch
+
+    total = torch.cuda.get_device_properties(0).total_memory
+    return "float16" if total >= 12 * 2**30 else "int8_float16"
+
+
 def diarize(others: np.ndarray, k: int) -> tuple[list[dict], dict]:
     import senko
 
@@ -213,6 +234,8 @@ def diarize(others: np.ndarray, k: int) -> tuple[list[dict], dict]:
                 c.k = k
         d.umap_hdbscan_cluster = d.spectral_cluster
     r = d.diarize_samples(others, sample_rate=RATE)
+    del d
+    free_gpu()
     if not r:
         return [], {}
     segs = [
@@ -273,7 +296,8 @@ class Asr:
         from faster_whisper import WhisperModel
         from huggingface_hub import snapshot_download
 
-        self.en = WhisperModel(EN_MODEL, device="cuda", compute_type="float16")
+        ct = compute_type()
+        self.en = WhisperModel(EN_MODEL, device="cuda", compute_type=ct)
         nb = Path(
             snapshot_download(
                 NO_MODEL_REPO,
@@ -293,7 +317,7 @@ class Asr:
             if link.is_symlink() or link.exists():
                 link.unlink()
             link.symlink_to(src.resolve())
-        self.no = WhisperModel(str(model_dir), device="cuda", compute_type="float16")
+        self.no = WhisperModel(str(model_dir), device="cuda", compute_type=ct)
 
     def language(self, audio: np.ndarray) -> tuple[str, float, float]:
         """("en" or "no", confidence between the two, share of all languages they hold)."""
