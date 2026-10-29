@@ -69,14 +69,60 @@ PlasmoidItem {
         return job.queue === "jobd" ? "jobd" : "hb";
     }
 
-    function workerText(w) {
-        const parts = [w.name, w.booked ? i18n("booked") : w.frozen ? i18n("frozen") : w.active ? i18n("owner at the machine") : i18n("owner away")];
-        if (w.threads)
-            parts.push(i18n("%1 threads, %2", w.threads, w.memHigh));
-        if (w.memAvailGib !== undefined && w.memAvailGib !== null)
-            parts.push(i18n("%1 GiB free", w.memAvailGib));
+    // This PC first, then the job system's workers.
+    readonly property var machines: (q.machine ? [q.machine] : []).concat(remoteWorkers)
+
+    // 7.5 below 10, whole numbers above.
+    function num(x) {
+        return x === null || x === undefined || isNaN(x) ? "–" : x < 10 ? (Math.round(x * 10) / 10).toString() : Math.round(x).toString();
+    }
+
+    function machineState(m) {
+        if (m.local)
+            return i18n("builds here");
+        if (m.booked)
+            return i18n("booked") + (m.bookedNote ? ": " + m.bookedNote : "") + (m.bookedEnd ? ", " + i18n("until %1", m.bookedEnd.substr(11, 5)) : "");
+        const parts = [m.frozen ? i18n("frozen") : m.active ? i18n("owner at it") : i18n("owner away")];
+        if (m.name === remoteTarget)
+            parts.push(i18n("takes marked jobs"));
         return parts.join(" · ");
     }
+
+    function machineTip(m) {
+        const lines = [m.local ? i18n("This PC (%1): jobd and heavy-build run jobs here.", m.name) : i18n("Worker %1, from job status.", m.name)];
+        if (m.cpus)
+            lines.push(i18n("%1 cores, load %2", m.cpus, num(m.load)));
+        if (m.local && m.coresBusy !== null && m.coresBusy !== undefined)
+            lines.push(i18n("Busy cores: %1, of which builds %2", num(m.coresBusy), num(m.coresBuilds)));
+        if (m.local)
+            lines.push(i18n("Builds use %1 GiB of memory", num(m.memBuildsGib)));
+        if (m.threads)
+            lines.push(i18n("Jobs capped at %1 threads and %2 memory", m.threads, m.memHigh));
+        if (!m.local)
+            lines.push(i18n("Last hour: %1 ok, %2 failed", m.ok || 0, m.failed || 0));
+        return lines.join("\n");
+    }
+
+    // Cores in use: builds, then the rest. A worker has only its load average.
+    function cpuParts(m) {
+        if (m.local && m.coresBusy !== null && m.coresBusy !== undefined)
+            return [[Math.min(m.coresBuilds, m.coresBusy), root.muted(Kirigami.Theme.linkColor)], [Math.max(0, m.coresBusy - m.coresBuilds), root.tint(0.35)]];
+        return [[Math.min(m.load || 0, m.cpus || 0), root.tint(0.35)]];
+    }
+
+    function cpuText(m) {
+        if (m.local && m.coresBusy !== null && m.coresBusy !== undefined)
+            return i18n("%1 of %2 cores", num(m.coresBusy), m.cpus);
+        return i18n("load %1 of %2", num(m.load), m.cpus);
+    }
+
+    // Memory in use: builds, then the rest.
+    function memParts(m) {
+        const used = Math.max(0, (m.memTotalGib || 0) - (m.memAvailGib || 0));
+        const builds = m.local ? Math.min(m.memBuildsGib || 0, used) : 0;
+        return [[builds, root.muted(Kirigami.Theme.linkColor)], [used - builds, root.tint(0.35)]];
+    }
+
     readonly property var history: q.history || []
 
     // Lane name -> true or false, for lanes the owner opened or closed. The top lane starts open.
@@ -1350,59 +1396,150 @@ PlasmoidItem {
                 }
             }
 
-            // Builds on other machines, from the job system. heavy-build does not see them.
+            // Every machine that runs jobs: this PC, then the job system's workers. CPU and
+            // memory show the share builds use beside everything else.
             Card {
                 Layout.fillWidth: true
-                visible: root.remoteWorkers.length > 0 || root.remoteRunning.length > 0
-                title: i18n("Remote")
-                header: Small {
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    text: root.remoteWorkers.map(w => root.workerText(w)).join("   ")
-                }
-                Repeater {
-                    model: root.remoteRunning.length
-                    delegate: HoverRow {
-                        id: remRow
-                        required property int index
-                        readonly property var job: root.remoteRunning[index] || ({})
+                visible: root.machines.length > 0
+                title: i18n("Machines")
+                header: [
+                    Item {
                         Layout.fillWidth: true
-                        minHeight: view.rowH
-                        spacing: Kirigami.Units.smallSpacing * 1.5
-                        tip: i18n("%1 in %2 on %3, running %4", job.cmd, job.project, job.worker, root.dur(job.age)) + (job.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(job.owner), root.ownerSource(job)) : "")
-                        Dot {
-                            color: view.runColor
-                        }
-                        Cell {
-                            text: remRow.job.cmd || ""
-                            Layout.preferredWidth: view.gu * 5
-                        }
-                        Cell {
-                            text: remRow.job.project || ""
+                    },
+                    Dot {
+                        color: view.runColor
+                    },
+                    Small {
+                        text: i18n("builds")
+                    },
+                    Dot {
+                        color: root.tint(0.35)
+                    },
+                    Small {
+                        text: i18n("everything else")
+                    }
+                ]
+                Repeater {
+                    model: root.machines.length
+                    delegate: ColumnLayout {
+                        id: mach
+                        required property int index
+                        readonly property var m: root.machines[index] || ({})
+                        readonly property bool away: m.booked || m.frozen
+                        readonly property var jobs: root.remoteRunning.filter(j => j.worker === m.name)
+                        Layout.fillWidth: true
+                        Layout.topMargin: index > 0 ? Kirigami.Units.smallSpacing * 1.5 : 0
+                        spacing: 2
+                        HoverRow {
                             Layout.fillWidth: true
-                            opacity: 0.85
+                            minHeight: view.rowH
+                            tip: root.machineTip(mach.m)
+                            Dot {
+                                color: mach.away ? view.waitColor : (mach.m.local ? mach.m.running : mach.jobs.length) > 0 ? view.runColor : view.okColor
+                            }
+                            Cell {
+                                text: mach.m.local ? i18n("this PC") : mach.m.name
+                                font.weight: Font.DemiBold
+                            }
+                            Small {
+                                text: root.machineState(mach.m)
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                            Cell {
+                                visible: !mach.m.booked
+                                text: mach.m.local ? i18n("%1 running · %2 waiting", mach.m.running, mach.m.waiting) : i18n("%1 running · %2 done this hour", mach.jobs.length, (mach.m.ok || 0) + (mach.m.failed || 0))
+                                font.pointSize: root.fsSmall
+                            }
                         }
-                        Cell {
-                            text: root.ownerName(remRow.job.owner) + (remRow.job.owner && root.inferred(remRow.job) ? " ≈" : "")
-                            Layout.preferredWidth: view.gu * 5
-                            opacity: remRow.job.owner ? 0.85 : 0.5
-                            font.italic: !remRow.job.owner
+                        // CPU: cores busy, builds first. A worker reports only its load average.
+                        RowLayout {
+                            visible: !!mach.m.cpus && !mach.m.booked
+                            Layout.fillWidth: true
+                            Layout.leftMargin: view.gu * 0.9
+                            spacing: Kirigami.Units.smallSpacing * 1.5
+                            Small {
+                                text: i18n("CPU")
+                                Layout.preferredWidth: view.gu * 3.4
+                            }
+                            StackBar {
+                                Layout.fillWidth: true
+                                max: mach.m.cpus || 1
+                                parts: root.cpuParts(mach.m)
+                            }
+                            Small {
+                                text: root.cpuText(mach.m)
+                                horizontalAlignment: Text.AlignRight
+                                Layout.preferredWidth: view.gu * 7.5
+                            }
                         }
-                        Cell {
-                            text: remRow.job.worker || ""
-                            Layout.preferredWidth: view.gu * 2.8
-                            font.pointSize: root.fsSmall
-                            opacity: 0.6
+                        RowLayout {
+                            visible: !!mach.m.memTotalGib && !mach.m.booked
+                            Layout.fillWidth: true
+                            Layout.leftMargin: view.gu * 0.9
+                            spacing: Kirigami.Units.smallSpacing * 1.5
+                            Small {
+                                text: i18n("Memory")
+                                Layout.preferredWidth: view.gu * 3.4
+                            }
+                            StackBar {
+                                Layout.fillWidth: true
+                                max: mach.m.memTotalGib || 1
+                                parts: root.memParts(mach.m)
+                            }
+                            Small {
+                                text: i18n("%1 of %2 GiB", root.num(mach.m.memTotalGib - mach.m.memAvailGib), root.num(mach.m.memTotalGib))
+                                horizontalAlignment: Text.AlignRight
+                                Layout.preferredWidth: view.gu * 7.5
+                            }
                         }
-                        Cell {
-                            text: root.dur(remRow.job.age)
-                            horizontalAlignment: Text.AlignRight
-                            Layout.preferredWidth: view.gu * 3.5
+                        // The jobs running on a worker.
+                        Repeater {
+                            model: mach.jobs.length
+                            delegate: HoverRow {
+                                id: remRow
+                                required property int index
+                                readonly property var job: mach.jobs[index] || ({})
+                                Layout.fillWidth: true
+                                Layout.leftMargin: view.gu * 0.9
+                                minHeight: view.rowH
+                                spacing: Kirigami.Units.smallSpacing * 1.5
+                                tip: i18n("%1 in %2 on %3, running %4", job.cmd, job.project, job.worker, root.dur(job.age)) + (job.owner !== undefined ? "\n" + i18n("Owner %1: %2", root.ownerName(job.owner), root.ownerSource(job)) : "")
+                                Dot {
+                                    color: view.runColor
+                                }
+                                Cell {
+                                    text: remRow.job.cmd || ""
+                                    Layout.preferredWidth: view.gu * 5
+                                }
+                                Cell {
+                                    text: remRow.job.project || ""
+                                    Layout.fillWidth: true
+                                    opacity: 0.85
+                                }
+                                Cell {
+                                    text: root.ownerName(remRow.job.owner) + (remRow.job.owner && root.inferred(remRow.job) ? " ≈" : "")
+                                    Layout.preferredWidth: view.gu * 5
+                                    opacity: remRow.job.owner ? 0.85 : 0.5
+                                    font.italic: !remRow.job.owner
+                                }
+                                Cell {
+                                    text: root.dur(remRow.job.age)
+                                    horizontalAlignment: Text.AlignRight
+                                    Layout.preferredWidth: view.gu * 3.5
+                                }
+                            }
                         }
                     }
                 }
-                Small {
-                    text: (root.remoteRunning.length === 0 ? i18n("Nothing running.") + " " : "") + i18n("Last hour: %1 ok, %2 failed", root.remote.ok || 0, root.remote.failed || 0)
+                // Running on a worker the status call did not list.
+                Repeater {
+                    model: root.remoteRunning.filter(j => !root.machines.some(m => !m.local && m.name === j.worker)).length
+                    delegate: Small {
+                        required property int index
+                        readonly property var job: root.remoteRunning.filter(j => !root.machines.some(m => !m.local && m.name === j.worker))[index] || ({})
+                        text: i18n("%1 in %2 on %3, running %4", job.cmd, job.project, job.worker, root.dur(job.age))
+                    }
                 }
             }
 
