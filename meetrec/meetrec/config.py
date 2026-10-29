@@ -16,6 +16,11 @@ DEFAULTS = {
     # Cosine similarity a cluster needs against a stored voiceprint to get that name.
     "voice_threshold": 0.6,
     "voice_margin": 0.08,
+    # Name speakers from the Meet extension's speaking hints (and learn their voices).
+    # Off until the hints are checked against real calls.
+    "trust_meet_speaking": False,
+    # Transcribe while the call runs, for the tray's live window.
+    "live_transcript": True,
 }
 
 

@@ -23,6 +23,8 @@ from . import config, voices
 log = logging.getLogger("meetrec.process")
 
 RATE = 16000
+EN_MODEL = "large-v3-turbo"
+NO_MODEL_REPO = "NbAiLab/nb-whisper-large"
 NORWEGIANISH = {"no", "nn", "sv", "da"}
 # Phrases Whisper invents on silence or noise, mostly from subtitle training data.
 HALLUCINATIONS = re.compile(
@@ -33,6 +35,54 @@ HALLUCINATIONS = re.compile(
 
 
 # Tracks ---------------------------------------------------------------------------
+def to_rate(audio: np.ndarray, rate: int) -> np.ndarray:
+    """Resample to the 16 kHz the models use. Recordings are captured at 48 kHz."""
+    if rate == RATE:
+        return audio
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    g = gcd(RATE, rate)
+    return resample_poly(audio, RATE // g, rate // g).astype(np.float32)
+
+
+def archive_raw(d: Path, out: Path) -> None:
+    """Keep everything the recorder wrote, so the pipeline can be rerun or improved later.
+
+    Each stream's raw PCM becomes a lossless FLAC at its capture rate. The metadata,
+    Meet events and live transcript are copied as they are.
+    """
+    raw = out / "raw"
+    raw.mkdir(exist_ok=True)
+    for f in d.iterdir():
+        if f.suffix == ".pcm":
+            meta = json.loads(f.with_suffix(".json").read_text())
+            audio = np.fromfile(f, dtype="<i2")
+            sf.write(raw / f"{f.stem}.flac", audio, meta.get("rate", RATE), "PCM_16")
+        elif f.is_file():
+            shutil.copy2(f, raw / f.name)
+
+
+def pipeline_info(gain: float) -> dict:
+    """What produced this transcript, so results from different versions can be compared."""
+    src = Path(__file__).resolve().parent
+    git = ["git", "-C", str(src)]
+    commit = subprocess.run(
+        [*git, "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    dirty = subprocess.run(
+        [*git, "status", "--porcelain", "--", "."], capture_output=True, text=True
+    ).stdout.strip()
+    return {
+        "processed": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "commit": commit + ("+dirty" if dirty else ""),
+        "mic_gain": round(gain, 2),
+        "asr": {"en": EN_MODEL, "no": NO_MODEL_REPO},
+        "config": config.load(),
+    }
+
+
 def build_tracks(d: Path) -> tuple[np.ndarray, np.ndarray]:
     parts: dict[str, list[tuple[float, np.ndarray]]] = {"me": [], "others": []}
     for meta_path in sorted(d.glob("*-*-*.json")):
@@ -41,7 +91,7 @@ def build_tracks(d: Path) -> tuple[np.ndarray, np.ndarray]:
         if not pcm.exists():
             continue
         audio = np.fromfile(pcm, dtype="<i2").astype(np.float32) / 32768.0
-        parts[m["role"]].append((m["offset_s"], audio))
+        parts[m["role"]].append((m["offset_s"], to_rate(audio, m.get("rate", RATE))))
     length = max(
         [int(off * RATE) + len(a) for role in parts.values() for off, a in role] or [0]
     )
@@ -91,13 +141,30 @@ def overlap(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> float
 
 
 # My turns -------------------------------------------------------------------------
-def my_turns(me: np.ndarray, others: np.ndarray, muted: list) -> list[dict]:
+def mic_gain(me: np.ndarray) -> float:
+    """Gain that brings my loudest speech to about -12 dBFS.
+
+    Slack levels the mic on its side, so a quiet mic still sounds fine in the call, but
+    the raw track can sit near -50 dBFS and the VAD then misses whole sentences.
+    """
+    frame = RATE // 20
+    n = len(me) // frame
+    if n == 0:
+        return 1.0
+    rms = np.sqrt((me[: n * frame].reshape(n, frame) ** 2).mean(1))
+    peak = float(np.percentile(rms, 99.5))
+    return float(np.clip(0.25 / peak, 1.0, 40.0)) if peak > 0 else 1.0
+
+
+def my_turns(
+    me: np.ndarray, others: np.ndarray, muted: list, gain: float = 1.0
+) -> list[dict]:
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     if not me.any():
         return []
     ts = get_speech_timestamps(
-        me,
+        np.clip(me * gain, -1, 1),
         VadOptions(
             min_silence_duration_ms=700, speech_pad_ms=200, min_speech_duration_ms=300
         ),
@@ -117,7 +184,7 @@ def my_turns(me: np.ndarray, others: np.ndarray, muted: list) -> list[dict]:
         # Smooth over 0.5 s so single frames do not split or join turns.
         bleed = np.convolve(bleed.astype(float), np.ones(10) / 10, mode="same") > 0.5
         for a, b in runs(~bleed):
-            if b - a < 10 or m_rms[a:b].max() < 0.003:
+            if b - a < 10 or m_rms[a:b].max() * gain < 0.02:
                 continue
             start, end = (s + a * frame) / RATE, (s + b * frame) / RATE
             if any(overlap([(start, end)], [mu]) > 0.5 * (end - start) for mu in muted):
@@ -168,11 +235,11 @@ def name_clusters(
     by_cluster: dict[str, list] = {}
     for s in segs:
         by_cluster.setdefault(s["speaker"], []).append((s["start"], s["end"]))
+    # The extension's speaking hints are unverified on live calls; use them only when trusted.
+    speaking = ev["speaking"] if config.load().get("trust_meet_speaking") else {}
     for cid, spans in by_cluster.items():
         scores = {
-            n: overlap(spans, iv)
-            for n, iv in ev["speaking"].items()
-            if n not in me_aliases
+            n: overlap(spans, iv) for n, iv in speaking.items() if n not in me_aliases
         }
         total = sum(scores.values())
         if total:
@@ -206,10 +273,10 @@ class Asr:
         from faster_whisper import WhisperModel
         from huggingface_hub import snapshot_download
 
-        self.en = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
+        self.en = WhisperModel(EN_MODEL, device="cuda", compute_type="float16")
         nb = Path(
             snapshot_download(
-                "NbAiLab/nb-whisper-large",
+                NO_MODEL_REPO,
                 allow_patterns=["ct2/*", "preprocessor_config.json", "tokenizer.json"],
             )
         )
@@ -385,7 +452,7 @@ def write_transcript(d: Path) -> None:
     if info.get("roster"):
         lines.append(f"- Meet participants: {', '.join(info['roster'])}")
     how = "; ".join(
-        f"{c.get('label') or c['name']}: {c['how']}" for c in clusters.values()
+        f"{c['name'] or c.get('label')}: {c['how']}" for c in clusters.values()
     )
     lines.append(f"- Name source: {how or 'only my microphone track'}")
     lines.append(
@@ -450,9 +517,13 @@ def process(d: Path) -> Path:
     ev = parse_events(d, t0)
     log.info("%s: %.0f s of audio, roster %s", d.name, len(me) / RATE, ev["roster"])
 
-    mine = my_turns(me, others, ev["muted"])
+    gain = mic_gain(me)
+    log.info("mic gain %.1fx", gain)
+    mine = my_turns(me, others, ev["muted"], gain)
     roster_others = [n for n in ev["roster"] if n not in (ev["self"], cfg["my_name"])]
-    segs, centroids = diarize(others, len(roster_others))
+    # A roster scraped from the Meet page can be wrong; only trust a plausible size.
+    k = len(roster_others) if 1 <= len(roster_others) <= 15 else 0
+    segs, centroids = diarize(others, k)
     clusters = name_clusters(segs, centroids, ev, cfg["my_name"])
 
     turns = [dict(t, speaker="me") for t in mine]
@@ -474,7 +545,7 @@ def process(d: Path) -> Path:
     )
     prompt = ", ".join(dict.fromkeys(names + cfg["vocabulary"])) + "."
     asr = Asr()
-    transcribe_turns(turns, me, others, asr, prompt)
+    transcribe_turns(turns, np.clip(me * gain, -1, 1), others, asr, prompt)
     del asr
 
     langs: dict[str, float] = {}
@@ -513,6 +584,7 @@ def process(d: Path) -> Path:
         "main_lang": max(langs, key=lambda k: langs[k]) if langs else "no",
         "clusters": clusters,
         "turns": turns,
+        "pipeline": pipeline_info(gain),
     }
     (out / "session.json").write_text(json.dumps(session, indent=1, ensure_ascii=False))
     write_transcript(out)
@@ -523,6 +595,7 @@ def process(d: Path) -> Path:
             voices.enroll(c["name"], c["centroid"], out.name)
 
     summarize(out)
+    archive_raw(d, out)
     shutil.rmtree(d)
     log.info("done: %s", out)
     return out
@@ -531,26 +604,53 @@ def process(d: Path) -> Path:
 def redo(out: Path) -> Path:
     """Transcribe a finished call again from its saved audio, e.g. after a pipeline fix.
 
-    The old folder goes to the trash and the new one takes its name.
+    Uses the raw streams in raw/ when the folder has them, else the two mixed tracks.
+    The new folder takes the old name. The old results move to .history/, so runs of
+    different pipeline versions can be compared.
     """
     session = json.loads((out / "session.json").read_text())
     start = session.get("start") or time.mktime(
         time.strptime(session["date"], "%Y-%m-%d %H:%M")
     )
-    q = config.root() / ".redo" / out.name
+    root = config.root()
+    q = root / ".redo" / out.name
     q.mkdir(parents=True)
-    for role in ("me", "others"):
-        audio, _ = sf.read(out / f"{role}.flac", dtype="int16")
-        stem = f"{role}-0-000000000"
-        (q / f"{stem}.pcm").write_bytes(audio.astype("<i2").tobytes())
-        (q / f"{stem}.json").write_text(
-            json.dumps({"role": role, "node": 0, "offset_s": 0.0})
+    raw = out / "raw"
+    if raw.is_dir() and any(raw.glob("*.flac")):
+        for f in raw.iterdir():
+            if f.suffix == ".flac":
+                audio, _ = sf.read(f, dtype="int16")
+                (q / f"{f.stem}.pcm").write_bytes(audio.astype("<i2").tobytes())
+            elif f.is_file():
+                shutil.copy2(f, q / f.name)
+    else:
+        for role in ("me", "others"):
+            audio, _ = sf.read(out / f"{role}.flac", dtype="int16")
+            stem = f"{role}-0-000000000"
+            (q / f"{stem}.pcm").write_bytes(audio.astype("<i2").tobytes())
+            (q / f"{stem}.json").write_text(
+                json.dumps({"role": role, "node": 0, "offset_s": 0.0, "rate": RATE})
+            )
+        if (out / "events.jsonl").exists():
+            shutil.copy(out / "events.jsonl", q / "events.jsonl")
+    if not (q / "meta.json").exists():
+        (q / "meta.json").write_text(
+            json.dumps({"app": session["app"], "start": start})
         )
-    (q / "meta.json").write_text(json.dumps({"app": session["app"], "start": start}))
-    if (out / "events.jsonl").exists():
-        shutil.copy(out / "events.jsonl", q / "events.jsonl")
     new = process(q)
-    subprocess.run(["gio", "trash", str(out)], check=True)
+    # Files added by hand (labels log, Slack's own transcript) carry over.
+    for f in out.iterdir():
+        if f.is_file() and not (new / f.name).exists():
+            shutil.copy2(f, new / f.name)
+    # The new folder holds the same raw streams, so the old copy is not needed twice.
+    if raw.is_dir() and len(list((new / "raw").glob("*.flac"))) == len(
+        list(raw.glob("*.flac"))
+    ):
+        shutil.rmtree(raw)
+    history = root / ".history"
+    history.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d %H%M%S")
+    out.rename(history / f"{out.name} (replaced {stamp})")
     new.rename(out)
     return out
 
@@ -574,6 +674,10 @@ def relabel(
                 f"no speaker {key!r} in {out}; known: {', '.join(by_label)}"
             )
         c = session["clusters"][cid]
+        with open(out / "labels.jsonl", "a") as f:
+            entry = {"t": time.time(), "cluster": cid, "was": c["name"], "name": name}
+            f.write(json.dumps(entry | {"unsure": key in unsure}, ensure_ascii=False))
+            f.write("\n")
         c["name"] = name
         if key in unsure:
             c["how"] = "labelled by hand, unsure, voice not saved"

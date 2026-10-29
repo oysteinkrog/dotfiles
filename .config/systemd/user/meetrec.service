@@ -4,6 +4,8 @@ After=pipewire.service wireplumber.service
 PartOf=graphical-session.target
 
 [Service]
+# uv exits 143 when systemd stops it with SIGTERM; that is a clean stop.
+SuccessExitStatus=143
 ExecStart=%h/bin/meetrec watch
 Restart=on-failure
 RestartSec=5
