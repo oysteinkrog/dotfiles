@@ -293,11 +293,11 @@ and doc; dotnet build and test; `build.sh`, `build.cmd`, `tools/wine/run-tests.s
 or test in a session.** It has the exit codes, the test loop, Wine prefixes, priority and
 how to keep a long build alive.
 
-**On the office desktop, heavy-build hands every job to jobd** (since 2026-10-28;
-`HEAVY_BUILD_BACKEND=jobd` in `~/.claude/settings.local.json`). Keep calling `heavy-build`
-as before. **Load the `job-system` skill** for long builds (`job submit --detach`, which
-replaces the systemd-run wrapper), the queue and logs, and before running a job on the
-home desktop or Hawk (`job run --on`). The home desktop still uses heavy-build's own queue.
+**On both desktops, heavy-build hands every job to jobd** (office since 2026-10-28,
+home since 2026-10-29; `HEAVY_BUILD_BACKEND=jobd` in `~/.claude/settings.local.json`).
+Keep calling `heavy-build` as before. **Load the `job-system` skill** for long builds
+(`job submit --detach`, which replaces the systemd-run wrapper), the queue and logs, and
+before running a job on the other desktop or Hawk (`job run --on`).
 
 - **Never run a build that can wait or take over 10 minutes as a Claude background
   shell.** Claude Code kills background shells when memory runs low, and the build and its
