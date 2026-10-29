@@ -1,6 +1,6 @@
 ---
 name: job-system
-description: How builds and tests run through jobd, the job queue that replaced heavy-build's own queue on the office desktop, and how to run a job on another machine with `job run --on`. Use before a build or test that must outlive a tool call (`job submit --detach`), when a job waits, exits 75, 76, 77 or 124, when you need the queue or a job's log, when `job ping` fails, and before running anything on the home desktop or the lab PC (Hawk) as a worker.
+description: How builds and tests run through jobd, the job queue that replaced heavy-build's own queue on the office and home desktops, and how to run a job on another machine with `job run --on`. Use before a build or test that must outlive a tool call (`job submit --detach`), when a job waits, exits 75, 76, 77 or 124, when you need the queue or a job's log, when `job ping` fails, and before running anything on the home desktop or the lab PC (Hawk) as a worker.
 ---
 
 # job-system (jobd and jobw)
@@ -15,7 +15,9 @@ jobd uses heavy-build's admission rules, priorities and lanes file, and gives
 the job the same build environment and memory limits. Each job runs as its own
 unit, `job-<attempt>.service`, in `builds.slice`.
 
-The home desktop has no jobd yet. There heavy-build keeps its own queue.
+jobd runs on both desktops (home since 2026-10-29). Each sends routed jobs to
+the other one: the office to `home`, home to `office` (`JOBD_PEER`). Home cannot
+reach Hawk, which is on the office LAN.
 
 Code and design: `~/projects/job-system` (README.md has the full command table)
 and `/var/tmp/claude/job-system/DESIGN.md`.
@@ -104,7 +106,8 @@ routed start with `worker=home`.
 there and brings back the log. `job check DIR` says first whether the tree can
 move. Rules, all hard:
 
-- Workers: `home` (the home desktop) and `hawk` (the lab PC). rigel and vega
+- Workers: `home` and `office` (the desktops, each the other's worker) and `hawk`
+  (the lab PC). rigel and vega
   are not approved.
 - No job may read golf take files or athlete data on a worker.
 - Hawk: never during a Laben booking (`job status hawk` shows it; never pass
