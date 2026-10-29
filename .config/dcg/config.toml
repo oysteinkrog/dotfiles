@@ -65,15 +65,8 @@ exempt_target_globs = [
 
 # --- Decision modes ----------------------------------------------------------
 # Warn = allow with a stderr note, written to blocked.log (0.15.3).
-# Ask (Oystein, 2026-10-29): every match becomes a Claude Code permission prompt, as in
-# 0.5.1, instead of a deny that tells the agent to have him run `dcg allow-once`. Auto mode
-# still shows these prompts. In `claude -p` and SDK runs nobody can answer, so Claude Code
-# denies the call and the agent reads the reason. This also turns medium and low rules
-# (default warn and log, such as `docker image prune`) into prompts. The custom
-# [overrides] blocks below stay hard denies.
-[policy]
-default_mode = "ask"
-
+# Never "ask": tried 2026-10-29 with default_mode = "ask", and every session filled with
+# permission prompts. Oystein rejected it the same evening.
 [policy.rules]
 # 0.15.3 denies these by default; 0.5.1 asked. Recoverable through the reflog, so warn.
 "core.git:branch-force-delete" = "warn"
