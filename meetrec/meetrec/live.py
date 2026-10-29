@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config
-from .process import HALLUCINATIONS, NORWEGIANISH, RATE, to_rate
+from .process import HALLUCINATIONS, NORWEGIANISH, RATE, compute_type, to_rate
 
 log = logging.getLogger("meetrec.live")
 
@@ -56,7 +56,7 @@ def run(d: Path) -> None:
     cfg = config.load()
     who = {"me": cfg["my_name"], "others": "Call"}
     prompt = ", ".join([cfg["my_name"], *cfg["vocabulary"]]) + "."
-    model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
+    model = WhisperModel("large-v3-turbo", device="cuda", compute_type=compute_type())
     vad = VadOptions(min_silence_duration_ms=int(PAUSE_S * 1000), speech_pad_ms=100)
     pos: dict[Path, int] = {}  # samples already handled, per track file
     out = d / "live.jsonl"
