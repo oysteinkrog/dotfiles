@@ -6,7 +6,8 @@ Documentation=file:///home/oystein/projects/job-system/README.md
 WorkingDirectory=%h/projects/job-system
 ExecStart=/usr/bin/python3 -m jobd.daemon
 # Send self-contained test runs to the home desktop (jobd/route.py, Oystein 2026-10-28).
-Environment=JOBD_ROUTE=0
+Environment=JOBD_ROUTE=1
+Environment=JOBD_ROUTE_KINDS=cargo-test,cargo-check,cargo-clippy,cargo-nextest
 Slice=jobd.slice
 # Each job runs as its own job-<attempt>.service, so a restart of jobd never
 # stops a job; jobd adopts the running ones when it comes back.
