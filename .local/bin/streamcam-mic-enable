@@ -31,6 +31,7 @@ and by streamcam-mic-resume-watch after login and wake. Safe to run by hand.
   --reprobe     only rebind the sound card
   --no-relink   skip the PipeWire checks after the reset
 """
+import array
 import ctypes
 import errno
 import fcntl
@@ -46,6 +47,9 @@ PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
 AUDIO_SELECTOR = 15  # 18-byte audio settings block, bytes 2-3 = mode
 # Read right after a factory reset (selector 17) on firmware 0.17, mode set to stereo.
 STEREO_BLOCK = bytes.fromhex("00000100faff01000a00f7fff7fff0fff0ff")
+# Noise state (bad DSP parameters): loud, with unrelated left and right channels.
+NOISE_RMS = 10000
+NOISE_CORR = 0.3
 RESET_SELECTOR = 17  # SET_CUR 1 = restore defaults and reboot
 UVC_SET_CUR = 0x01
 AUDIO_NODE = "alsa_input.usb-046d_Logitech_StreamCam"
@@ -166,24 +170,42 @@ def wait_for_audio_node(seconds):
 
 
 def mic_has_signal():
-    """True if the camera's mic records sound, False if only zeros, None if unknown.
+    """True if the camera's mic records sound, False if it is broken, None if unknown.
 
-    The reset reboots the camera every time, so only send it when the mic is
-    stuck, which shows as samples that are all exactly zero. A working mic always
-    has some room noise.
+    Two broken states. Stuck: every sample is exactly zero. Noise: bad DSP
+    parameters in the audio block make both channels near full-scale white noise
+    (RMS about 18,900) with no relation between left and right. Real sound, even a
+    quiet room, is much quieter or has the two channels strongly correlated.
     """
     names = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True).stdout.split("\n")
     source = next((line.split("\t")[1] for line in names if AUDIO_NODE in line), None)
     if not source:
         return None
     try:
-        raw = subprocess.run(["pw-record", "--target", source, "--rate", "16000", "--channels", "1",
+        raw = subprocess.run(["pw-record", "--target", source, "--rate", "16000", "--channels", "2",
                               "--format", "s16", "-"], capture_output=True, timeout=1.5).stdout
     except subprocess.TimeoutExpired as e:
         raw = e.stdout or b""
-    if len(raw) < 3200:
+    raw = raw[6400:]  # skip the first 0.1 s while the stream starts
+    raw = raw[:len(raw) // 4 * 4]
+    if len(raw) < 6400:
         return None
-    return any(raw[3200:])  # skip the first 0.1 s while the stream starts
+    if not any(raw):
+        print("mic records only zeros")
+        return False
+    samples = array.array("h", raw)
+    left, right = samples[0::2], samples[1::2]
+    n = len(left)
+    ml, mr = sum(left) / n, sum(right) / n
+    sll = sum((x - ml) ** 2 for x in left)
+    srr = sum((x - mr) ** 2 for x in right)
+    slr = sum((x - ml) * (y - mr) for x, y in zip(left, right))
+    rms = ((sll + srr) / (2 * n)) ** 0.5
+    corr = slr / ((sll * srr) ** 0.5) if sll and srr else 1.0
+    if rms > NOISE_RMS and abs(corr) < NOISE_CORR:
+        print(f"mic records white noise (RMS {rms:.0f}, left/right correlation {corr:.2f})")
+        return False
+    return True
 
 
 def reprobe_audio():
@@ -259,10 +281,17 @@ def main():
         if age is not None and age < BACKOFF_SECONDS:
             print(f"last reset timed out {age:.0f} s ago, not resetting (use --force)")
             return
-        if wait_for_audio_node(10) and mic_has_signal():
-            print("StreamCam mic records sound, no reset needed")
-            check_audio()
-            return
+        if wait_for_audio_node(10):
+            signal = mic_has_signal()
+            if signal is False:
+                # The noise state can come back after the first write; one more write fixes it.
+                apply_audio_mode(dev, unit)
+                time.sleep(1)
+                signal = mic_has_signal()
+            if signal:
+                print("StreamCam mic records sound, no reset needed")
+                check_audio()
+                return
     timed_out = False
     for attempt in range(5):
         try:
