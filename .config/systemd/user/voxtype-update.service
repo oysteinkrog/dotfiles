@@ -1,0 +1,9 @@
+[Unit]
+Description=Keep voxtype on the pinned build and restart it at idle (voxtype-update)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/voxtype-update
+# Dry-run until ~/.config/voxtype-sync.conf has the line mode=live.
+Nice=10
