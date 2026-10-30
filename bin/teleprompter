@@ -16,6 +16,7 @@ Esc or Q quit.
 import argparse
 import html
 import os
+import signal
 import sys
 
 # KWin on Wayland ignores window positions set by apps. Through XWayland it
@@ -330,6 +331,9 @@ def main():
     ap.add_argument("--snapshot", help="render one frame to this PNG and exit (for testing)")
     args = ap.parse_args()
 
+    # Qt's event loop never hands control back to Python, so restore the
+    # default SIGINT action to make Ctrl+C in the terminal quit.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv)
     w = Prompter(args)
     if args.snapshot:
