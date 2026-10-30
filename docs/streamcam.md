@@ -2,7 +2,7 @@
 
 How the dotfiles run the Logitech StreamCam (USB ID `046d:0893`, firmware 0.17) mic in
 stereo on Linux, how they recover it when it breaks, what the camera's control
-selectors do, and how to set it up on a new machine. Last updated 2026-10-23.
+selectors do, and how to set it up on a new machine. Last updated 2026-10-30.
 
 ## Setup on a new machine
 
@@ -56,9 +56,11 @@ selector 15, so it may be what set them.
 1. It writes the factory audio block with stereo mode to selector 15:
    `00000100faff01000a00f7fff7fff0fff0ff`. This sets stereo and repairs any bad DSP
    parameters. It does not reboot the camera, so it runs every time.
-2. It records 1.5 s from the camera's PipeWire source. If any sample is not zero, the mic
-   works and the script goes to step 4.
-3. If every sample is zero, it writes 1 to selector 17 (below). The camera restores its
+2. It records 1.5 s in stereo from the camera's PipeWire source and checks for two
+   broken states: every sample zero (stuck), or white noise (RMS above 10,000 with a
+   left/right correlation below 0.3, from bad DSP parameters). If it finds noise, it
+   writes the block again and checks once more. If the mic works, it goes to step 4.
+3. If the mic is still broken, it writes 1 to selector 17 (below). The camera restores its
    default settings and reboots, and reconnects about 2 s later. The reset puts the
    camera back in mono, so the script waits for the camera and repeats step 1.
 4. It checks that PipeWire has the camera's mic source. If not, it rebinds
@@ -170,5 +172,8 @@ streamcam-mic-enable --force
   silent again, the script's step 1 may fix it without a reset. In
   `journalctl --user -u streamcam-mic.service`, "no reset needed" after a silent mic
   means step 1 was enough. A "sent reset" line means it was not.
-- The checks in the script only catch the all-zero state. A noise state (zeroed DSP
-  parameters) passes the "any non-zero sample" check, but step 1 repairs it first.
+- On 2026-10-30 the mic was in the noise state hours after boot, although the script had
+  written the block at boot and reported sound (the check then only caught zeros). We do
+  not know whether the boot write failed to take or something changed the block later.
+  The script runs only on connect, login and wake, so noise that starts later stays until
+  one of those, or until you run `streamcam-mic-enable` by hand.
