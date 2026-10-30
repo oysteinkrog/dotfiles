@@ -260,13 +260,6 @@ if [ -n "$native_linux" ]; then
     # Read over .config/voxtype/config.toml (voxtype's config.d overlays).
     link_one "$host_dir/voxtype.toml" "$HOME/.config/voxtype/config.d/50-host.toml"
   fi
-  if [ -f "$host_dir/asoundrc" ]; then
-    echo ""
-    echo "=== Linking the ALSA devices for $host ==="
-    # Extra ALSA devices, such as a fixed mic for voxtype. alsa-lib reads this file
-    # after the system config, so the default device stays PipeWire's.
-    link_one "$host_dir/asoundrc" "$HOME/.config/alsa/asoundrc"
-  fi
 
   echo ""
   echo "=== Linking tools into ~/.local/bin (native Linux) ==="
