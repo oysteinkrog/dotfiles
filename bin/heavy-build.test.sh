@@ -960,7 +960,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" -v critdrain="${ADM_CRITDRAIN:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1216,6 +1216,21 @@ check "untracked cap off: four scopes hold back 8 GiB (got '$out')" '[[ $out == 
 out=$(printf '%s\n' "$UC_F" "$UC_W" | ADM_UNTCAP=4 adm 0000000999500000000-2-m 0 1 12)
 check "untracked cap 4: the 28 GiB build starts (got '$out')" '[[ $out == start\|* ]]'
 check "untracked cap: the HEAVY_BUILD_UNT_GROW_CAP_GIB default is 4" 'grep -q "^  setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4$" "$HB"'
+# Critical drain (HEAVY_BUILD_CRIT_DRAIN_SECS, 2026-10-30): a critical build
+# that waited 15 min holds back new high, normal and low builds, not critical ones.
+CD_C='W 0000000998000000000-1-c 998000 critical 38 2 600 -'
+CD_WHY='critical drain: 0000000998000000000-1-c has waited 33 min, so no new high, normal or low build starts until it does'
+out=$(printf '%s\n' "$CD_C" 'W 0000000999500000000-2-m 999500 high 1 1 60 -' | ADM_CRITDRAIN=0 adm 0000000999500000000-2-m 0 1 12)
+check "critical drain off: a small high build passes (got '$out')" '[[ $out == start\|* ]]'
+for p in high normal low; do
+  out=$(printf '%s\n' "$CD_C" "W 0000000999500000000-2-m 999500 $p 1 1 60 -" | ADM_CRITDRAIN=900 adm 0000000999500000000-2-m 0 1 12)
+  check "critical drain: a $p build waits (got '$out')" '[[ $out == "wait|$CD_WHY|"* ]]'
+done
+out=$(printf '%s\n' "$CD_C" 'W 0000000999500000000-2-m 999500 critical 1 1 60 -' | ADM_CRITDRAIN=900 adm 0000000999500000000-2-m 0 1 12)
+check "critical drain: another critical build passes (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "${CD_C/ 998000 / 999500 }" 'W 0000000999500000000-2-m 999500 high 1 1 60 -' | ADM_CRITDRAIN=900 adm 0000000999500000000-2-m 0 1 12)
+check "critical drain: not before 15 min (got '$out')" '[[ $out == start\|* ]]'
+check "critical drain: the HEAVY_BUILD_CRIT_DRAIN_SECS default is 900" 'grep -q "^  setting HEAVY_BUILD_CRIT_DRAIN_SECS 900$" "$HB"'
 out=$(printf '%s\n' "$RO_WBR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key: an app run waits for a running broker build (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (wb1)|0" ]]'
 out=$(printf '%s\n' "$RO_APPS" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
