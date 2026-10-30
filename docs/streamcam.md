@@ -1,7 +1,7 @@
 # StreamCam Mic Setup and Recovery on Linux
 
 How the dotfiles run the Logitech StreamCam (USB ID `046d:0893`, firmware 0.17) mic in
-stereo on Linux, how they recover it when it breaks, what the camera's control
+mono on Linux, how they recover it when it breaks, what the camera's control
 selectors do, and how to set it up on a new machine. Last updated 2026-10-30.
 
 ## Setup on a new machine
@@ -53,16 +53,18 @@ selector 15, so it may be what set them.
 
 `streamcam-mic-enable` runs when the camera connects, at login and after each wake:
 
-1. It writes the factory audio block with stereo mode to selector 15:
-   `00000100faff01000a00f7fff7fff0fff0ff`. This sets stereo and repairs any bad DSP
-   parameters. It does not reboot the camera, so it runs every time.
+1. It writes the factory audio block in mono to selector 15:
+   `00000000faff01000a00f7fff7fff0fff0ff`. This repairs any bad DSP parameters. It does
+   not reboot the camera, so it runs every time. With `--stereo` it writes
+   `00000100faff01000a00f7fff7fff0fff0ff` instead (see "Stereo is unstable" below).
 2. It records 1.5 s in stereo from the camera's PipeWire source and checks for two
-   broken states: every sample zero (stuck), or white noise (RMS above 10,000 with a
-   left/right correlation below 0.3, from bad DSP parameters). If it finds noise, it
+   broken states: every sample zero (stuck), or white noise from bad DSP parameters
+   (RMS above 15,000, or in stereo RMS above 10,000 with a left/right correlation below
+   0.3). If it finds noise, it
    writes the block again and checks once more. If the mic works, it goes to step 4.
 3. If the mic is still broken, it writes 1 to selector 17 (below). The camera restores its
-   default settings and reboots, and reconnects about 2 s later. The reset puts the
-   camera back in mono, so the script waits for the camera and repeats step 1.
+   default settings and reboots, and reconnects about 2 s later. The script waits for
+   the camera and repeats step 1.
 4. It checks that PipeWire has the camera's mic source. If not, it rebinds
    `snd-usb-audio` on the camera's audio interfaces so WirePlumber probes the card
    again. This handles the case where WirePlumber probed the card while the camera was
@@ -76,6 +78,16 @@ After a write that times out, the script skips automatic runs for 2 minutes (sta
 `$XDG_RUNTIME_DIR/streamcam-mic-timeout`). Without this, the reboot caused a reconnect,
 the reconnect ran the script again, and the camera reconnected 365 times in 40 minutes
 on 2026-10-23. Earlier versions sent the reset on every connect, even with a working mic.
+
+## Stereo is unstable
+
+The dotfiles ran the camera in stereo from 2026-10-23 to 2026-10-30. On 2026-10-30 the
+mic was in the noise state hours after boot, although the script had written the stereo
+block at boot. Writing the stereo block again gave clean sound for under a minute, then
+the measures slid back: spectral flatness rose from 0.02 to 0.44 and the left/right
+correlation fell from 0.56 to 0.00. After the mono block, flatness settled at 0.002 to
+0.02 and Oystein heard good sound. So the script now writes mono. Stereo stays
+available with `--stereo` but is not recommended.
 
 ## Camera controls
 
@@ -92,7 +104,7 @@ Only two selectors answer on this unit:
 | 17 | 1 byte, range 0 to 1 | Writing 1 restores the defaults and reboots the camera. Writing 0 does nothing. Always reads 0. | Tested 2026-10-23, below. |
 
 Selector 15 right after a factory reset reads `00000000faff01000a00f7fff7fff0fff0ff`
-(mono). The script writes the same block with byte 2 set to 1 (stereo). In both modes
+(mono), the block the script writes. Byte 2 set to 1 is stereo. In both modes
 every sample's low byte is `0x00` or `0xFF`, so the camera's DSP output has about 8 bits
 of real resolution. That is how the firmware works, not a fault.
 
@@ -172,8 +184,6 @@ streamcam-mic-enable --force
   silent again, the script's step 1 may fix it without a reset. In
   `journalctl --user -u streamcam-mic.service`, "no reset needed" after a silent mic
   means step 1 was enough. A "sent reset" line means it was not.
-- On 2026-10-30 the mic was in the noise state hours after boot, although the script had
-  written the block at boot and reported sound (the check then only caught zeros). We do
-  not know whether the boot write failed to take or something changed the block later.
-  The script runs only on connect, login and wake, so noise that starts later stays until
-  one of those, or until you run `streamcam-mic-enable` by hand.
+- Why stereo drifts into noise, and whether mono stays clean over days. The script runs
+  only on connect, login and wake, so noise that starts later stays until one of those,
+  or until you run `streamcam-mic-enable` by hand.

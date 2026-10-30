@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Set the Logitech StreamCam mic to stereo, recover it if it records only zeros,
-then relink the mic filter.
+"""Set the Logitech StreamCam mic to mono, recover it if it records only zeros or
+white noise, then relink the mic filter.
 
 Audio settings: selector 15 on the camera's peripheral extension unit is an
 18-byte block. Bytes 2 and 3 are the mode (0 mono, 1 stereo, little-endian) and
-bytes 4 to 17 are DSP parameters. Each run writes the factory block with the
-mode set to stereo. Logi Options+ also runs this camera in stereo on Windows.
+bytes 4 to 17 are DSP parameters. Each run writes the factory block in mono.
+Stereo (what Logi Options+ uses on Windows) drifted back into white noise within
+a minute on 2026-10-30, while mono stayed clean, so stereo is opt-in.
 Writing the whole block also repairs bad DSP parameters: with those bytes zeroed
 the mic sends loud white noise (tested 2026-10-23). This write does not reboot
 the camera. The control cannot be read back: GET_CUR, GET_DEF, GET_MIN and
@@ -26,7 +27,7 @@ reprobe_audio).
 
 Run by streamcam-mic.service, which a udev rule starts when the camera connects,
 and by streamcam-mic-resume-watch after login and wake. Safe to run by hand.
-  --mono        leave the camera in its default mono mode
+  --stereo      write the stereo block instead of mono
   --force       send the reset even if the mic works, and ignore the backoff
   --reprobe     only rebind the sound card
   --no-relink   skip the PipeWire checks after the reset
@@ -45,10 +46,13 @@ import uuid
 VID, PID = "046d", "0893"
 PERIPHERAL_GUID = uuid.UUID("ffe52d21-8030-4e2c-82d9-f587d00540bd")
 AUDIO_SELECTOR = 15  # 18-byte audio settings block, bytes 2-3 = mode
-# Read right after a factory reset (selector 17) on firmware 0.17, mode set to stereo.
+# Read right after a factory reset (selector 17) on firmware 0.17 (mono). Byte 2 = 1 is stereo.
+MONO_BLOCK = bytes.fromhex("00000000faff01000a00f7fff7fff0fff0ff")
 STEREO_BLOCK = bytes.fromhex("00000100faff01000a00f7fff7fff0fff0ff")
-# Noise state (bad DSP parameters): loud, with unrelated left and right channels.
+# Noise state (bad DSP parameters): RMS about 18,900. In stereo the two channels are
+# also unrelated, so a lower RMS limit is safe there. In mono they are identical.
 NOISE_RMS = 10000
+NOISE_RMS_MONO = 15000
 NOISE_CORR = 0.3
 RESET_SELECTOR = 17  # SET_CUR 1 = restore defaults and reboot
 UVC_SET_CUR = 0x01
@@ -146,12 +150,12 @@ def wait_for_camera(seconds):
 
 
 def apply_audio_mode(dev, unit):
-    """Write the factory audio block in stereo mode."""
-    if "--mono" in sys.argv:
-        return
+    """Write the factory audio block, in mono unless --stereo is given."""
+    stereo = "--stereo" in sys.argv
+    block = STEREO_BLOCK if stereo else MONO_BLOCK
     try:
-        xu_query(dev, unit, AUDIO_SELECTOR, UVC_SET_CUR, STEREO_BLOCK)
-        print(f"set audio block to stereo ({STEREO_BLOCK.hex()})")
+        xu_query(dev, unit, AUDIO_SELECTOR, UVC_SET_CUR, block)
+        print(f"set audio block to {'stereo' if stereo else 'mono'} ({block.hex()})")
     except OSError as e:
         print(f"could not set the audio mode on {dev}: {e}")
 
@@ -202,7 +206,7 @@ def mic_has_signal():
     slr = sum((x - ml) * (y - mr) for x, y in zip(left, right))
     rms = ((sll + srr) / (2 * n)) ** 0.5
     corr = slr / ((sll * srr) ** 0.5) if sll and srr else 1.0
-    if rms > NOISE_RMS and abs(corr) < NOISE_CORR:
+    if rms > NOISE_RMS_MONO or (rms > NOISE_RMS and abs(corr) < NOISE_CORR):
         print(f"mic records white noise (RMS {rms:.0f}, left/right correlation {corr:.2f})")
         return False
     return True
