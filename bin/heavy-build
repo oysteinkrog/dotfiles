@@ -956,6 +956,7 @@ read_conf() {
   setting HEAVY_BUILD_STARVE 1800
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
+  setting HEAVY_BUILD_DRAIN_SECS 3600
   setting HEAVY_BUILD_BACKFILL_FLOOR_SECS 120
   setting HEAVY_BUILD_LOW_NO_STARVE 0
   setting HEAVY_BUILD_LOW_AGE_SECS 7200
@@ -3158,6 +3159,14 @@ END {
   # critw: the first critical waiter that waits for job slots, cores or CPU
   # pressure. Normal and low builds may not start ahead of it.
   headi = 0; starving = 0; shadow = 0; critw = 0; critmempass = 0; bound = ""
+  # Drain (HEAVY_BUILD_DRAIN_SECS, default 3600; 0 turns it off, 2026-10-30):
+  # once the oldest normal or low waiter has waited this long, no other normal
+  # or low build starts, backfills included, until it starts or leaves. High
+  # and critical builds may still pass, so the memory that running builds hold
+  # drains (a Wine run waited 104 min at 12:48 2026-10-30).
+  drainw = 0
+  if (drain > 0) for (i = 1; i <= nw; i++)
+    if ((w_pr[i] == "normal" || w_pr[i] == "low") && !w_lowskip[i] && now - w_arr[i] >= drain && (!drainw || w_arr[i] < w_arr[drainw] || (w_arr[i] == w_arr[drainw] && w_id[i] < w_id[drainw]))) drainw = i
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
@@ -3177,6 +3186,7 @@ END {
     wk = writer(w_keys[i], o)
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
+    if (drainw && i != drainw && (w_pr[i] == "normal" || w_pr[i] == "low")) { why[i] = sprintf("drain: %s has waited %d min, so no new normal or low build starts until it does", w_id[drainw], (now - w_arr[drainw]) / 60); continue }
     if (!headi) {
       # An aged head never starves the queue: high and critical builds that
       # fit pass it, so it holds only the slot it gets next. With the starve
@@ -3290,7 +3300,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v drain="$DRAIN_SECS" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP_SECS" -v idlesecs="$IDLE_CPU_SECS" -v idlemilli="$IDLE_CPU_MILLI" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
