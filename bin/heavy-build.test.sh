@@ -960,7 +960,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1190,6 +1190,23 @@ out=$(printf '%s\n' "$RO_SUFR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-
 check "app read-only key: a plain app run starts next to a running suffixed build (got '$out')" '[[ $out == start\|fits:* ]]'
 out=$(printf '%s\n' "$RO_SUFR" "$RO_WAPP" | ADM_APPRO=0 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key off: the same app run waits for the suffixed build as before (got '$out')" '[[ $out == "wait|key: lock key tree:/repo#s1 is busy (suf1)|0" ]]'
+# Drain (2026-10-30): once the oldest normal waiter has waited an hour, no other
+# normal or low build starts, backfills included; high builds still pass.
+DR_HIGH='W 0000000999000000000-1-h 999000 high 38 2 600 -'
+DR_OLD='W 0000000996000000000-1-o 996000 normal 38 2 600 -'
+DR_N='W 0000000999500000000-2-m 999500 normal 1 1 60 -'
+DR_L='W 0000000999500000000-2-m 999500 low 1 1 60 -'
+DR_H='W 0000000999500000000-2-m 999500 high 1 1 60 -'
+DR_WHY='drain: 0000000996000000000-1-o has waited 66 min, so no new normal or low build starts until it does'
+out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_N" | ADM_DRAIN=0 adm 0000000999500000000-2-m 0 1 12)
+check "drain off: a small normal build backfills past the old one (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_N" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
+check "drain: the small normal build waits for the one that waited 66 min (got '$out')" '[[ $out == "wait|$DR_WHY|"* ]]'
+out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_L" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
+check "drain: a low build waits too (got '$out')" '[[ $out == "wait|$DR_WHY|"* ]]'
+out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_H" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
+check "drain: a high build still passes (got '$out')" '[[ $out == start\|* ]]'
+check "drain: the HEAVY_BUILD_DRAIN_SECS default is 3600" 'grep -q "^  setting HEAVY_BUILD_DRAIN_SECS 3600$" "$HB"'
 out=$(printf '%s\n' "$RO_WBR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key: an app run waits for a running broker build (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (wb1)|0" ]]'
 out=$(printf '%s\n' "$RO_APPS" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
