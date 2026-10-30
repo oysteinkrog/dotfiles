@@ -19,6 +19,12 @@ live_typing = false
 # so the next one starts typing about 1.6 s sooner (no loading screen). Costs
 # about 1 GB RAM (no VRAM) while it waits. 0 = load fresh every time.
 live_preview_warm_secs = 7200
+# Keep it loaded while I am at this computer (presence-detect says "here"),
+# load it at once when I come back, and release it 10 min after I leave or
+# connect from elsewhere over RDP. Without a fresh presence file: release
+# after 30 min with no keyboard or mouse input. Overrides warm_secs above.
+live_preview_warm_presence_file = "~/.local/state/presence/state"
+live_preview_warm_idle_secs = 1800
 # No early release under memory pressure: dictation has priority over builds.
 # Releasing at "pause" made the office PC reload the model for every dictation
 # (5 to 28 s under load, 2026-10-26), because it sat at "pause" for hours.
