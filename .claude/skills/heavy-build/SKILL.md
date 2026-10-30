@@ -144,6 +144,23 @@ fine.
 - A plain `build.sh build --target wine` takes no Wine lock key, since it only compiles
   and copies files and never starts Wine. Chain it with anything that runs Wine, or use
   `build.sh test`, and it waits on the prefix key again.
+- **A script that runs Wine or MC on its own prefix must declare it.** heavy-build and
+  jobd guess the prefix from the command line and `WINEPREFIX` at submit. They cannot see
+  inside a wrapper script (`bash my-run.sh`, `env X=1 bash ...`), so a wrapper with
+  `WINEPREFIX` unset gets the shared prefix's lock key (`wine:~/.local/share/wineprefixes/motioncatalyst`)
+  and blocks every other job on that key. On 2026-10-30 a low theme job held it for
+  over 4 hours while it ran on `motioncatalyst-ui-theme`, and a critical app run waited
+  behind it for nothing. Set the prefix the script really uses when you submit:
+
+  ```bash
+  HEAVY_BUILD_WINE_PREFIX=$HOME/.local/share/wineprefixes/motioncatalyst-ui-theme \
+    heavy-build --class app-run -- bash full_round.sh
+  ```
+
+  It wins over every guess, for any class, and works the same with `job submit`. Set it
+  before you submit: setting it inside the running script is too late. A job that waits
+  on a busy `wine:` key is told to set it. jobd logs `event=key-mismatch` in its
+  `events.log` when a running job's Wine processes use another prefix than its key.
 
 Headless MotionCatalyst has its own rules for display, prefix and memory: load the
 `headless-app-ui` skill. Start a headless MC through
