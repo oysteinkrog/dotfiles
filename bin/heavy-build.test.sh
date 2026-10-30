@@ -966,7 +966,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v starvebound="${ADM_STARVEBOUND:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" -v untsmall="${ADM_UNTSMALL:-0}" -v critdrain="${ADM_CRITDRAIN:-0}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v starvebound="${ADM_STARVEBOUND:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" -v untsmall="${ADM_UNTSMALL:-0}" -v gpufree="${ADM_GPUFREE:-}" -v vramneed="${ADM_VRAMNEED:-3}" -v vramyoung="${ADM_VRAMYOUNG:-120}" -v critdrain="${ADM_CRITDRAIN:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1255,6 +1255,21 @@ check "small scopes on: they are not jobs, the build starts (got '$out')" '[[ $o
 out=$(printf '%s\n' "$US_B" "$US_W" | ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
 check "small scopes on: big or busy scopes still count (got '$out')" '[[ $out == "wait|jobs: 6 builds run"* ]]'
 check "small scopes: the HEAVY_BUILD_UNT_SMALL_NOT_JOB default is 1" 'grep -q "^  setting HEAVY_BUILD_UNT_SMALL_NOT_JOB 1$" "$HB"'
+# VRAM gate (2026-10-30): app runs and Wine tests need 3 GiB VRAM free, after
+# 3 GiB for each such job younger than 120 s; other classes ignore it.
+VG_APP='W 0000000999500000000-2-m 999500 normal 1 1 60 - app-run'
+VG_YOUNG="R g1 999950 2 1 1003000 $((1 << 30)) - 0 normal - app-run"
+out=$(printf '%s\n' "$VG_APP" | ADM_GPUFREE=1.80 adm 0000000999500000000-2-m 0 1 12)
+check "vram: an app run waits with 1.8 GiB free (got '$out')" '[[ $out == "wait|gpu: needs 3.0 GiB VRAM free, 1.8 free|"* ]]'
+out=$(printf '%s\n' 'W 0000000999500000000-2-m 999500 critical 1 1 60 - wine-run-tests' | ADM_GPUFREE=1.80 adm 0000000999500000000-2-m 0 1 12)
+check "vram: a critical Wine test waits too (got '$out')" '[[ $out == "wait|gpu: "* ]]'
+out=$(printf '%s\n' 'W 0000000999500000000-2-m 999500 normal 1 1 60 - cargo-test' | ADM_GPUFREE=0.50 adm 0000000999500000000-2-m 0 1 12)
+check "vram: a cargo test ignores it (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$VG_YOUNG" "$VG_APP" | ADM_GPUFREE=5.00 adm 0000000999500000000-2-m 0 1 12)
+check "vram: a GPU job that just started holds 3 GiB (got '$out')" '[[ $out == "wait|gpu: needs 3.0 GiB VRAM free, 5.0 free, 3.0 held for 1 GPU job that just started|"* ]]'
+out=$(printf '%s\n' "$VG_APP" | ADM_GPUFREE= adm 0000000999500000000-2-m 0 1 12)
+check "vram: unknown free VRAM turns it off (got '$out')" '[[ $out == start\|* ]]'
+check "vram: the HEAVY_BUILD_VRAM_NEED_GIB default is 3" 'grep -q "^  setting HEAVY_BUILD_VRAM_NEED_GIB 3$" "$HB"'
 # scope_age: from the first process's start, not the folder's ctime (2026-10-30).
 SA=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-age.XXXXXX")
 echo 1 > "$SA/cgroup.procs"
