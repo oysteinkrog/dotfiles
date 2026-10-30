@@ -458,6 +458,12 @@ out=$(cls=app-run WINEPREFIX=$K/mine wk "$K/lane-new" tools/wine/run-mc.sh a)
 check "wine key: app run with another WINEPREFIX keys on it (got '$out')" '[[ $out == "wine:$K/mine" ]]'
 out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh run hbc -- true)
 check "wine key: another headless-mc.sh verb uses the instance prefix, so no wine key (got '$out')" '[[ -z $out ]]'
+out=$(cls=app-run NOPFX=1 HEAVY_BUILD_WINE_PREFIX=$UI-theme wk "$K/lane-old" env A=1 bash full_round.sh round22)
+check "wine key: a declared HEAVY_BUILD_WINE_PREFIX wins over the shared-prefix guess for a wrapper script (got '$out')" '[[ $out == "wine:$UI-theme" ]]'
+out=$(cls=app-run WINEPREFIX=$SH HEAVY_BUILD_WINE_PREFIX=$UI-theme//sub/../ wk "$K/lane-new" tools/wine/run-mc.sh a)
+check "wine key: the declared prefix is canonical (no //, .., or trailing slash) and wins over WINEPREFIX (got '$out')" '[[ $out == "wine:$UI-theme" ]]'
+out=$(NOPFX=1 HEAVY_BUILD_WINE_PREFIX='~/.local/share/wineprefixes/motioncatalyst-ui-rail4' wk "$K/lane-new" bash rigrun4.sh)
+check "wine key: a declared prefix starting with ~ is under HOME, and it keys a job that is not an app run too (got '$out')" '[[ $out == "wine:$UI-rail4" ]]'
 out=$(cls=wine-run-tests WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start hbc)
 check "wine key: other classes keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(cd "$K/lane-new" && PROC=$K/proc HOME=$K/home AgentOutputSuffix=-a && unset WINEPREFIX \
@@ -1190,6 +1196,10 @@ out=$(printf '%s\n' "$RO_APP" "$RO_SUF" | ADM_APPRO=0 adm 0000000999000000000-2-
 check "app read-only key off: the same suffixed build waits for the app run as before (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (app1)|0" ]]'
 out=$(printf '%s\n' "$RO_APP" "$RO_PLAIN" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key: a plain build still waits for the app run and names it (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (app1)|0" ]]'
+WK_APP='R app1 999000 4 2 1000600 4294967296 - 0 normal wine:/p/shared app-run'
+WK_W='W 0000000999000000000-2-m 999000 normal 4 2 600 wine:/p/shared app-run'
+out=$(printf '%s\n' "$WK_APP" "$WK_W" | adm 0000000999000000000-2-m 0 1 12)
+check "wine key: a job that waits on a busy wine: key is told to declare HEAVY_BUILD_WINE_PREFIX (got '$out')" '[[ $out == "wait|key: lock key wine:/p/shared is busy (app1); if this job runs on another Wine prefix, set HEAVY_BUILD_WINE_PREFIX to it when you submit|0" ]]'
 out=$(printf '%s\n' "$RO_APP" "$RO_WB" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key: a suffixed build that writes the broker waits on ui-broker (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (app1)|0" ]]'
 out=$(printf '%s\n' "$RO_SUFR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
