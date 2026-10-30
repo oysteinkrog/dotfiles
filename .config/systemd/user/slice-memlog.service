@@ -1,0 +1,8 @@
+[Unit]
+Description=Log memory per top-level slice (one line per run)
+
+[Service]
+Type=oneshot
+Nice=19
+Slice=background.slice
+ExecStart=%h/.dotfiles/bin/slice-memlog
