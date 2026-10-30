@@ -35,9 +35,17 @@ else
     if "$lb" fetch "voxtype@$vx_variant" --from "$p"; then vx_got=1; break; fi
   done
   [ -n "$vx_got" ] || heavy-build "$lb" build "voxtype@$vx_variant"
-  "$lb" install "voxtype@$vx_variant" && ok "$vx_pkg ${vx_pin:0:10} installed"
-  if systemctl --user is-active -q voxtype.service; then
-    info "voxtype runs the old build until it restarts; voxtype-update restarts it when idle"
+  # Never install under a running daemon: it starts its workers by its own path, which
+  # then names a deleted file, and every recording fails until a restart. Stop it while
+  # idle, install, start it; while it records, leave the install to voxtype-update.
+  if ! systemctl --user is-active -q voxtype.service; then
+    "$lb" install "voxtype@$vx_variant" && ok "$vx_pkg ${vx_pin:0:10} installed"
+  elif [ "$(/usr/lib/voxtype-local/voxtype status 2>/dev/null)" = idle ]; then
+    systemctl --user stop voxtype.service
+    "$lb" install "voxtype@$vx_variant" && ok "$vx_pkg ${vx_pin:0:10} installed"
+    systemctl --user start voxtype.service && ok "voxtype restarted"
+  else
+    warn "voxtype is busy; $vx_pkg ${vx_pin:0:10} is built and voxtype-update installs it when idle"
   fi
 fi
 

@@ -80,14 +80,22 @@ new_pin_while_recording_installs_nothing() {
 }
 new_pin_idle_and_away_installs_and_restarts() {
   new_pin
-  run && has 'localbuild install voxtype@cuda' && has 'systemctl --user restart voxtype.service' &&
+  run && [ "$(calls | grep -E 'systemctl|localbuild install')" = "systemctl --user stop voxtype.service
+localbuild install voxtype@cuda
+systemctl --user start voxtype.service" ] &&
     git -C "$T/lb" log -1 --format=%s | grep -q bump && [ ! -e "$T/state/pending-since" ]
+}
+a_failed_install_starts_the_old_build_again() {
+  new_pin
+  sed -i 's/install) cp.*/install) exit 1 ;;/' "$T/bin/localbuild"
+  ! run && [ "$(calls | grep -c 'systemctl --user start voxtype.service')" = 1 ] &&
+    grep -q 'runs the old build again' "$T/out"
 }
 idle_but_here_waits_then_gives_in_after_a_day() {
   new_pin; presence here 5
   run && ! has systemctl || return 1
   echo $((NOW - 90000)) > "$T/state/pending-since"
-  run && has 'systemctl --user restart voxtype.service'
+  run && has 'systemctl --user start voxtype.service'
 }
 stale_presence_is_not_away() {
   new_pin; presence away 600
@@ -118,6 +126,7 @@ no_peer_builds_at_night_only() {
 t same_pin_does_nothing same_pin_does_nothing
 t new_pin_while_recording_installs_nothing new_pin_while_recording_installs_nothing
 t new_pin_idle_and_away_installs_and_restarts new_pin_idle_and_away_installs_and_restarts
+t a_failed_install_starts_the_old_build_again a_failed_install_starts_the_old_build_again
 t idle_but_here_waits_then_gives_in_after_a_day idle_but_here_waits_then_gives_in_after_a_day
 t stale_presence_is_not_away stale_presence_is_not_away
 t diverged_repo_is_left_alone diverged_repo_is_left_alone
