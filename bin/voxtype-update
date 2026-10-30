@@ -14,9 +14,10 @@
 #  2. If the installed voxtype-<variant>-local is not the recipe's PIN, copy the build
 #     from a peer (HOST_VOXTYPE_PEERS) with `localbuild fetch`. When no peer has it,
 #     queue `localbuild build` in jobd between 01:00 and 06:00.
-#  3. When a new build is ready or the config changed, install and restart only while
-#     `voxtype status` says idle and presence-detect says away. After 24 hours of
-#     waiting, idle alone is enough. The status is read again right before the restart.
+#  3. When a new build is ready or the config changed, act only while `voxtype status`
+#     says idle and presence-detect says away; after 24 hours of waiting, idle alone is
+#     enough. A new build means stop voxtype, install, start: never install under a
+#     running daemon. A config change is a plain restart.
 # The variant and peers come from the machine profile (setup/lib.sh). Notices go to the
 # journal and, once per distinct message, to the desktop.
 set -euo pipefail
@@ -129,17 +130,14 @@ cfg=$(config_hash)
 [ -f "$STATE/config-hash" ] || printf '%s\n' "$cfg" > "$STATE/config-hash"
 changed=""
 [ "$cfg" = "$(cat "$STATE/config-hash")" ] || changed=1
-installed_not_restarted=""
-[ -f "$STATE/restart-pending" ] && installed_not_restarted=1
-
-if [ -z "$ready$changed$installed_not_restarted" ]; then
+if [ -z "$ready$changed" ]; then
   rm -f "$STATE/pending-since"
   say "up to date ($pkg $have)"
   exit 0
 fi
 [ -f "$STATE/pending-since" ] || printf '%s\n' "$NOW" > "$STATE/pending-since"
 waited=$(( NOW - $(cat "$STATE/pending-since") ))
-why="${ready:+new build $want }${changed:+config changed }${installed_not_restarted:+installed, not restarted }"
+why="${ready:+new build $want }${changed:+config changed }"
 
 status=$("$VX" status 2>/dev/null || echo unknown)
 if [ "$status" != idle ]; then say "voxtype is $status; waiting ($why)"; exit 0; fi
@@ -154,16 +152,24 @@ if [ -z "$away" ] && [ "$waited" -lt "$WAIT_MAX" ]; then
   exit 0
 fi
 
+# A package installed under a running daemon breaks it: the daemon starts its workers by
+# its own path, which then names a deleted file, so every recording fails until a restart
+# (2026-10-30, one dictation lost). So stop it, install, start it: the hotkey is dead for
+# the few seconds pacman takes instead. A failed install starts the old build again.
 if [ -n "$ready" ]; then
-  act localbuild install "voxtype@$variant"
-  [ "$mode" = live ] && touch "$STATE/restart-pending"
+  act systemctl --user stop voxtype.service
+  if ! act localbuild install "voxtype@$variant"; then
+    act systemctl --user start voxtype.service
+    notice "installing $pkg $want failed; voxtype runs the old build again"
+    exit 1
+  fi
+  act systemctl --user start voxtype.service
+else
+  act systemctl --user restart voxtype.service
 fi
-status=$("$VX" status 2>/dev/null || echo unknown)
-if [ "$status" != idle ]; then say "a recording started; restarting on the next pass"; exit 0; fi
-act systemctl --user restart voxtype.service
 if [ "$mode" = live ]; then
   printf '%s\n' "$cfg" > "$STATE/config-hash"
-  rm -f "$STATE/pending-since" "$STATE/restart-pending"
+  rm -f "$STATE/pending-since"
   notice "voxtype restarted: $why"
 else
   notice "dry-run: would install and restart voxtype now: $why"
