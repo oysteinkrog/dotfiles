@@ -959,6 +959,7 @@ read_conf() {
   setting HEAVY_BUILD_STARVE_BOUND 1
   setting HEAVY_BUILD_DRAIN_SECS 3600
   setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4
+  setting HEAVY_BUILD_UNT_SMALL_NOT_JOB 1
   setting HEAVY_BUILD_CRIT_DRAIN_SECS 900
   setting HEAVY_BUILD_BACKFILL_FLOOR_SECS 120
   setting HEAVY_BUILD_LOW_NO_STARVE 0
@@ -2994,7 +2995,7 @@ function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh, u0) {
   for (j = 1; j <= nr; j++) {
     k = idx[j]
     nrun -= r_job[k]; cpu -= r_cc[k]; tc -= r_tc[k]; held -= r_held[k]; av += r_cur[k]; nh -= r_high[k]
-    if (r_unt[k] && untsolo > 0) untsolo--
+    if (r_unt[k] == 1 && untsolo > 0) untsolo--
     if (why_not(i, nrun, cpu, tc, held, av, nh) == "") { shadowlast = (j == nr); untsolo = u0; return r_end[k] }
   }
   untsolo = u0
@@ -3092,7 +3093,11 @@ $1 == "F" {
   if (ug < 0) ug = 0
   untgrow += ug
   addrun($2, 0, $3 / 1073741824 + ug, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", ug)
-  r_unt[nr] = 1; T_unt++
+  # HEAVY_BUILD_UNT_SMALL_NOT_JOB (default 1, 2026-10-30): a scope under 1 GiB
+  # that has averaged under 1 core is not a job (short pytest scopes filled
+  # the job limit); its memory and cores still count. r_unt 2 marks it.
+  if (untsmall + 0 > 0 && r_job[nr] && $3 < 1073741824 && (c == "-" || c + 0 < 1000)) { r_job[nr] = 0; T_n--; r_unt[nr] = 2 }
+  else { r_unt[nr] = 1; T_unt++ }
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
 # A jobd job: charged as a scope without a heavy-build (its current memory
@@ -3341,7 +3346,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v drain="$DRAIN_SECS" -v untcap="$UNT_GROW_CAP_GIB" -v critdrain="$CRIT_DRAIN_SECS" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v drain="$DRAIN_SECS" -v untcap="$UNT_GROW_CAP_GIB" -v untsmall="$UNT_SMALL_NOT_JOB" -v critdrain="$CRIT_DRAIN_SECS" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP_SECS" -v idlesecs="$IDLE_CPU_SECS" -v idlemilli="$IDLE_CPU_MILLI" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \

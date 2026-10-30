@@ -966,7 +966,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v starvebound="${ADM_STARVEBOUND:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" -v critdrain="${ADM_CRITDRAIN:-0}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v starvebound="${ADM_STARVEBOUND:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" -v untsmall="${ADM_UNTSMALL:-0}" -v critdrain="${ADM_CRITDRAIN:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1237,6 +1237,18 @@ check "critical drain: another critical build passes (got '$out')" '[[ $out == s
 out=$(printf '%s\n' "${CD_C/ 998000 / 999500 }" 'W 0000000999500000000-2-m 999500 high 1 1 60 -' | ADM_CRITDRAIN=900 adm 0000000999500000000-2-m 0 1 12)
 check "critical drain: not before 15 min (got '$out')" '[[ $out == start\|* ]]'
 check "critical drain: the HEAVY_BUILD_CRIT_DRAIN_SECS default is 900" 'grep -q "^  setting HEAVY_BUILD_CRIT_DRAIN_SECS 900$" "$HB"'
+# Small untracked scopes (HEAVY_BUILD_UNT_SMALL_NOT_JOB, 2026-10-30): under 1 GiB
+# and under 1 core on average they are not jobs; big or busy ones still are.
+US_W='W 0000000999500000000-2-m 999500 high 1 1 60 -'
+US_S=$(for n in 0 1 2 3 4 5; do echo "F run-p$n-i1.scope $((200 << 20)) 10000000 200 0 -"; done)
+US_B=$(for n in 0 1 2; do echo "F run-p$n-i1.scope $((1536 << 20)) 10000000 200 0 -"; done; for n in 3 4 5; do echo "F run-p$n-i1.scope $((200 << 20)) 400000000 200 0 -"; done)
+out=$(printf '%s\n' "$US_S" "$US_W" | ADM_UNTSMALL=0 adm 0000000999500000000-2-m 0 1 12)
+check "small scopes off: six fill the job limit (got '$out')" '[[ $out == "wait|jobs: 6 builds run, the limit is 6"* ]]'
+out=$(printf '%s\n' "$US_S" "$US_W" | ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
+check "small scopes on: they are not jobs, the build starts (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$US_B" "$US_W" | ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
+check "small scopes on: big or busy scopes still count (got '$out')" '[[ $out == "wait|jobs: 6 builds run"* ]]'
+check "small scopes: the HEAVY_BUILD_UNT_SMALL_NOT_JOB default is 1" 'grep -q "^  setting HEAVY_BUILD_UNT_SMALL_NOT_JOB 1$" "$HB"'
 # Drain with the starve bound (2026-10-30): a drain head that fits only once
 # the running app runs end does not drain the queue; new app runs still wait.
 DB_APP="R app1 990000 8 2 0 $((20 << 30)) - 2 normal - app-run"
