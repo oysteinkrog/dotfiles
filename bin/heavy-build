@@ -659,10 +659,11 @@
 # - A run whose command dies from a signal, or that ends because heavy-build
 #   itself got TERM, INT or HUP (headless-mc.sh stop), is logged with reason
 #   stopped, not cancelled, and its peak still counts for the estimate.
-# - No shared-prefix wine: key. It keys on its own prefix
-#   motioncatalyst-ui-<name> when WINEPREFIX names one, or when the command
-#   says headless-mc.sh start <name>; otherwise it gets no wine: key (the
-#   tree: key, if any, stays).
+# - It keys on its own prefix motioncatalyst-ui-<name> when WINEPREFIX names
+#   one, or when the command says headless-mc.sh start <name>. Another
+#   headless-mc.sh verb gets no wine: key. Any other app run (run-mc.sh) gets
+#   wine:<WINEPREFIX, else the shared prefix>, so two runs never share one
+#   wineserver (2026-10-30). The tree: key, if any, stays.
 # Priority, the hold file, the critical-first switch, lock keys and every
 # memory gate apply as for builds. When the command ends, heavy-build stops the
 # whole scope: every process left in it (wineserver, winedevice.exe, a mock
@@ -1717,7 +1718,17 @@ wine_key() {
   local top=$1 p rt
   shift
   if [[ ${cls:-} == app-run ]]; then
-    p=$(app_prefix "$@") && echo "wine:$p"
+    if p=$(app_prefix "$@"); then echo "wine:$p"; return 0; fi
+    # 2026-10-30: an app run on the shared or a set prefix (run-mc.sh with
+    # WINEPREFIX unset) shares its wineserver; when one ended at 12:48 the
+    # other's MC froze. headless-mc.sh verbs use the instance's own prefix.
+    local w x
+    read -ra w <<< "${*%%$'\n'*}"
+    for x in "${w[@]}"; do [[ $x =~ (^|/)headless-mc\.sh$ ]] && return 0; done
+    p=${WINEPREFIX:-$SHARED_WINEPREFIX}
+    [[ $p != / ]] && p=${p%/}
+    [[ $(wineservers_for "$p") == *outside* ]] && return 0
+    echo "wine:$p"
     return 0
   fi
   wine_cmd "$@" || return 0

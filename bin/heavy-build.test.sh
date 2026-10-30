@@ -451,9 +451,13 @@ check "wine key: app run gets its own ui-<name> prefix from headless-mc.sh start
 out=$(cls=app-run WINEPREFIX=$UI-env/ wk "$K/lane-new" tools/wine/run-mc.sh a)
 check "wine key: app run with WINEPREFIX = a ui-<name> prefix keys on it (got '$out')" '[[ $out == "wine:$UI-env" ]]'
 out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" tools/wine/run-mc.sh a)
-check "wine key: app run with no instance name gets no wine key (got '$out')" '[[ -z $out ]]'
+check "wine key: app run with no instance name keys on its WINEPREFIX, the shared one here (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(cls=app-run NOPFX=1 wk "$K/lane-old" wine MotionCatalyst.exe)
-check "wine key: app run in an old tree does not get the shared default key (got '$out')" '[[ -z $out ]]'
+check "wine key: app run with WINEPREFIX unset keys on the shared default (got '$out')" '[[ $out == "wine:$SH" ]]'
+out=$(cls=app-run WINEPREFIX=$K/mine wk "$K/lane-new" tools/wine/run-mc.sh a)
+check "wine key: app run with another WINEPREFIX keys on it (got '$out')" '[[ $out == "wine:$K/mine" ]]'
+out=$(cls=app-run WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh run hbc -- true)
+check "wine key: another headless-mc.sh verb uses the instance prefix, so no wine key (got '$out')" '[[ -z $out ]]'
 out=$(cls=wine-run-tests WINEPREFIX=$SH wk "$K/lane-new" tools/wine/headless-mc.sh start hbc)
 check "wine key: other classes keep wine:<WINEPREFIX> (got '$out')" '[[ $out == "wine:$SH" ]]'
 out=$(cd "$K/lane-new" && PROC=$K/proc HOME=$K/home AgentOutputSuffix=-a && unset WINEPREFIX \
