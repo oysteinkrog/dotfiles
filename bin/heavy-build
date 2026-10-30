@@ -960,6 +960,8 @@ read_conf() {
   setting HEAVY_BUILD_DRAIN_SECS 3600
   setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4
   setting HEAVY_BUILD_UNT_SMALL_NOT_JOB 1
+  setting HEAVY_BUILD_VRAM_NEED_GIB 3
+  setting HEAVY_BUILD_VRAM_YOUNG_SECS 120
   setting HEAVY_BUILD_CRIT_DRAIN_SECS 900
   setting HEAVY_BUILD_BACKFILL_FLOOR_SECS 120
   setting HEAVY_BUILD_LOW_NO_STARVE 0
@@ -2727,6 +2729,16 @@ running_lines() {
   done
 }
 
+# gpu_free_gib: free VRAM in GiB from nvidia-smi (the smallest over GPUs),
+# or nothing when unknown or HEAVY_BUILD_VRAM_NEED_GIB is 0, which turns the
+# VRAM gate off. At most 2 s.
+gpu_free_gib() {
+  local v
+  (( VRAM_NEED_GIB > 0 )) || return 0
+  v=$(timeout 2 nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | sort -n | head -1) || return 0
+  [[ $v =~ ^[0-9]+$ ]] && awk -v m="$v" 'BEGIN { printf "%.2f", m / 1024 }'
+}
+
 # scope_age DIR: seconds since the first process in cgroup DIR started. The
 # folder's ctime moves whenever its files change (on 2026-10-30 every scope
 # read 90 s old, so small pytest scopes looked busy), so it is only the fallback.
@@ -2939,6 +2951,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   if (realuse && slicecur >= 0) held = cur + grow
   r_end[nr] = max(end, now + poll); r_tc[nr] = tc; r_cc[nr] = cc; r_held[nr] = held
   r_app[nr] = (cls == "app-run")
+  if ((cls == "app-run" || cls == "wine-run-tests") && start > 0 && now - start < vramyoung) gpu_young++
   r_cur[nr] = cur; r_high[nr] = (prio == "high" && stalled != 1 && !idle); r_job[nr] = (stalled != 1 && !idle)
   T_n += r_job[nr]; T_cpu += cc; T_tc += tc; T_held += held; T_high += r_high[nr]; T_aged += (prio ~ /:aged$/)
   T_nc += (prio !~ /^(high|critical)(:aged)?$/)
@@ -3232,6 +3245,14 @@ END {
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
+    # VRAM gate (2026-10-30, after an MC froze at 15.9 of 16.3 GB): an app run
+    # or Wine test needs vramneed GiB of VRAM free, after vramneed for each such
+    # job younger than vramyoung s. An empty gpufree (unknown) turns it off.
+    if (gpufree != "" && vramneed > 0 && (w_cls[i] == "app-run" || w_cls[i] == "wine-run-tests") && gpufree - gpu_young * vramneed < vramneed) {
+      why[i] = sprintf("gpu: needs %.1f GiB VRAM free, %.1f free", vramneed, gpufree)
+      if (gpu_young) why[i] = why[i] sprintf(", %.1f held for %d GPU job%s that just started", gpu_young * vramneed, gpu_young, gpu_young == 1 ? "" : "s")
+      continue
+    }
     bk = clash(w_keys[i], w_cls[i] == "app-run")
     if (bk != "") { why[i] = "key: lock key " bk " is busy (" clashid ")"; continue }
     # App runs (headless MotionCatalyst) last for hours. At most maxapp of them
@@ -3364,7 +3385,9 @@ decide() {
   jobs_cpu
   mc_swapin=-1 mc_fall=0 mc_harm_ago=999999
   (( MEM_CONTROLLER )) && mem_watch
+  gpufree=$(gpu_free_gib)
   out=$( { running_lines; waiter_lines; } | awk -v now="$EPOCHSECONDS" -v me="${ticket##*/}" \
+    -v gpufree="$gpufree" -v vramneed="$VRAM_NEED_GIB" -v vramyoung="$VRAM_YOUNG_SECS" \
     -v cpuquiet="$cpu_quiet" -v cpuhold="$CPU_PSI_SECS" \
     -v meminfo="$MEMINFO" -v slicemax="$BSLICE/memory.max" -v slicehigh="$BSLICE/memory.high" -v cpupsifile="$PROC/pressure/cpu" \
     -v claudepsifile="$USVC/claude.slice/memory.pressure" -v sessionpsifile="$USVC/session.slice/memory.pressure" \
