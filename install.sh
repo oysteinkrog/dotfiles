@@ -197,6 +197,7 @@ if [ -n "$native_linux" ]; then
     .config/systemd/user/xdg-desktop-portal.service.d
     .config/systemd/user/app.slice.d
     '.config/systemd/user/app-chrome\x2dpersonal@.service.d'
+    '.config/systemd/user/app-org.fooyin.fooyin@.service.d'
     .local/share/kwin/scripts/pin-to-monitor
     .local/share/plasma/plasmoids/org.oysteinkrog.agenda
     .local/share/plasma/plasmoids/org.oysteinkrog.buildqueue
