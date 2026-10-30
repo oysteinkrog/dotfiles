@@ -194,6 +194,7 @@ if [ -n "$native_linux" ]; then
     .config/systemd/user/plasma-kwin_wayland.service.d
     .config/systemd/user/session.slice.d
     .config/systemd/user/plasma-powerdevil.service.d
+    .config/systemd/user/xdg-desktop-portal.service.d
     .config/systemd/user/app.slice.d
     '.config/systemd/user/app-chrome\x2dpersonal@.service.d'
     .local/share/kwin/scripts/pin-to-monitor
