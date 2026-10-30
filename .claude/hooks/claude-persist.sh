@@ -96,9 +96,35 @@ transcript_entrypoint() {
 BOOT_TIME=$(awk '/^btime/{print $2}' /proc/stat)
 claude_alive() {
   local pid=$1 sid=$2
-  [ "$pid" -gt 0 ] && [ -d "/proc/$pid" ] && [ -f "$CLAUDE_SESSIONS/$pid.json" ] \
-    && [ "$(stat -c %Y "$CLAUDE_SESSIONS/$pid.json")" -ge "$BOOT_TIME" ] \
-    && [ "$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)" = "$sid" ]
+  [ -n "$sid" ] && [ "$pid" -gt 0 ] 2>/dev/null && [ -d "/proc/$pid" ] || return 1
+  if [ -f "$CLAUDE_SESSIONS/$pid.json" ]; then
+    [ "$(stat -c %Y "$CLAUDE_SESSIONS/$pid.json")" -ge "$BOOT_TIME" ] \
+      && [ "$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$pid.json" 2>/dev/null)" = "$sid" ]
+  else
+    [ "$(claude_cmdline_sid "$pid")" = "$sid" ]
+  fi
+}
+
+# The session id of a running Claude process that has no ~/.claude/sessions
+# file, from its command line (--resume ID, -r ID or --session-id ID). On
+# 2026-10-30 a Claude 2.1.312 resumed by `respawn` wrote only
+# <pid>.<hash>.key there, no <pid>.json, and every check here missed it.
+# Prints nothing for a process that is not Claude or has no id on its line.
+claude_cmdline_sid() {
+  local pid=$1 i exe
+  local -a argv
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+  mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null
+  case "$exe" in
+    */claude/versions/*) ;;
+    *) [ "${argv[0]##*/}" = claude ] 2>/dev/null || return 0 ;;
+  esac
+  for ((i = 1; i < ${#argv[@]}; i++)); do
+    case "${argv[$i]}" in
+      -r|--resume|--session-id) printf '%s\n' "${argv[$((i + 1))]:-}"; return 0 ;;
+      --resume=*|--session-id=*) printf '%s\n' "${argv[$i]#*=}"; return 0 ;;
+    esac
+  done
 }
 
 # The systemd user unit a process runs in, e.g. frankenterm-mux.service, or
@@ -382,7 +408,7 @@ opencode_session() {
 # the program's name; it is not restarted, the tab comes back as a shell).
 # Classify by the processes in the pane's foreground process group.
 pane_rows() {
-  local listing=$1 pid pgid tpgid tt w p tty lcwd q kind arg cwd lead comm sid
+  local listing=$1 pid pgid tpgid tt w p tty lcwd q kind arg cwd lead comm sid cpid
   local -A fg_of=() all_of=()
   while read -r pid pgid tpgid tt; do
     [ "$tt" = "?" ] && continue
@@ -396,16 +422,18 @@ pane_rows() {
       lcwd=${lcwd#file://}; [ "${lcwd:0:1}" = / ] || lcwd=/${lcwd#*/}
       [ "$lcwd" = / ] || lcwd=${lcwd%/}
     fi
-    kind="" arg="" cwd="" lead=""
+    kind="" arg="" cwd="" lead="" cpid=""
     local procs=${fg_of[$tty]:-${all_of[$tty]:-}}
     for q in $procs; do
       [ -n "$lead" ] || lead=$q
       [ "$(awk '{print $5}' "/proc/$q/stat" 2>/dev/null)" = "$q" ] && lead=$q
       if [ -f "$CLAUDE_SESSIONS/$q.json" ]; then
         sid=$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$q.json" 2>/dev/null)
-        if [ -n "$sid" ] && claude_alive "$q" "$sid"; then
-          kind=claude arg=$sid cwd=$(readlink "/proc/$q/cwd" 2>/dev/null); break
-        fi
+      else
+        sid=$(claude_cmdline_sid "$q")
+      fi
+      if [ -n "$sid" ] && claude_alive "$q" "$sid"; then
+        kind=claude arg=$sid cpid=$q cwd=$(readlink "/proc/$q/cwd" 2>/dev/null); break
       fi
       local -a av=()
       mapfile -d '' -t av < "/proc/$q/cmdline" 2>/dev/null
@@ -425,7 +453,8 @@ pane_rows() {
       [ -n "$lead" ] && cwd=$(readlink "/proc/$lead/cwd" 2>/dev/null)
     fi
     # never an empty cwd: plan splits on tabs, and empty fields would collapse
-    printf '%s\t%s\t%s\t%s\t%s\n' "$w" "$p" "$kind" "${cwd:-${lcwd:-?}}" "$arg"
+    # the 6th column is the Claude pid (snapshot records entries from it)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$w" "$p" "$kind" "${cwd:-${lcwd:-?}}" "$arg" "$cpid"
   done < <(jq -r '.[] | [.window_id, .pane_id, (.tty_name // ""), (.cwd // "")] | @tsv' <<<"$listing" 2>/dev/null)
 }
 
@@ -447,6 +476,24 @@ snapshot() {
   [ -n "$prow" ] && { echo "mux $pid"; printf '%s\n' "$prow"; } > "$PANES.tmp" && mv "$PANES.tmp" "$PANES"
 
   local f epid pane sf ssid scwd em
+  # Every Claude running in a pane must have an entry that names its pid,
+  # however it was started. The loop below finds Claude through
+  # ~/.claude/sessions/<pid>.json, which some Claude versions do not write,
+  # and then the SessionStart hook cannot find its Claude either.
+  local cw_ cp_ ck_ cc_ cs_ cpid_ g_ have_
+  while IFS=$'\t' read -r cw_ cp_ ck_ cc_ cs_ cpid_; do
+    [ "$ck_" = claude ] && [ -n "$cs_" ] && [ -n "${cpid_:-}" ] || continue
+    tr '\0' '\n' < "/proc/$cpid_/environ" 2>/dev/null | grep -qx 'CLAUDE_PERSIST=0' && continue
+    have_=""
+    for g_ in "$SESS_DIR/$cs_"@*.json; do
+      [ -e "$g_" ] && [ "$(jq -r '.pid // 0' "$g_" 2>/dev/null)" = "$cpid_" ] && have_=1
+    done
+    [ -n "$have_" ] && continue
+    em="$STATE_DIR/ended/$(basename "$(entry_file "$cs_" "$cc_")" .json)"
+    [ "$(cat "$em" 2>/dev/null)" = "$cpid_" ] && continue
+    record "$cpid_" "$cs_" "$cc_" ""
+    echo "$(date -Is) recorded $cs_ ($cc_) from snapshot: Claude pid $cpid_ in pane $cp_ had no entry with its pid" >> "$STATE_DIR/events.log"
+  done <<<"$prow"
   local -A row_pane=() row_tty=()
   local w_ p_ t_
   while IFS=$'\t' read -r w_ p_; do row_pane[$p_]=1; done <<<"$rows"
@@ -636,7 +683,7 @@ ordered_entries() {
     done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null)
     if [ -n "$panes_file" ] && [ -f "$panes_file" ]; then
       i=0
-      while IFS=$'\t' read -r w p k pc pa; do
+      while IFS=$'\t' read -r w p k pc pa _; do
         [ -n "$p" ] || continue
         printf '%d\t1\tpane\t%s\t%s\t%s\t%s\n' "${pos[$p]:-$((2000000 + i))}" "$k" "$p" "$pc" "$pa"
         i=$((i + 1))

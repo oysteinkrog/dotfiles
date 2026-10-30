@@ -176,5 +176,31 @@ check "session id from -s" '[ "$(lookup "$apid" "$H/real")" = ses_arg ]'
 check "newest top-level session in the folder, through a symlink" '[ "$(lookup "$spid" "$H/real")" = ses_new ]'
 check "nothing for a folder without sessions" '[ -z "$(lookup "$spid" "$H/projects/life")" ]'
 
+# --- 8. a Claude with no ~/.claude/sessions/<pid>.json (seen with 2.1.312
+# after `respawn`) is still found in its pane, recorded, stamped and listed live
+setup no-sessions-file
+mkdir -p "$H/.local/bin"
+entry nosf "$H/projects/life" 42 "bootOLD:1"
+# a fake Claude on its own pty: argv0 claude, --resume nosf, pane 3
+script -qfc "cd $H/projects/life && WEZTERM_PANE=3 exec -a claude bash -c 'sleep 60; :' --resume nosf" /dev/null \
+  </dev/null >/dev/null 2>&1 & BG+=($!)
+cpid=""; for _ in $(seq 50); do
+  cpid=$(pgrep -f -x "claude -c sleep 60; : --resume nosf" | head -1); [ -n "$cpid" ] && break; sleep 0.1
+done
+ctty=$(readlink "/proc/$cpid/fd/0" 2>/dev/null)
+cat > "$H/.local/bin/frankenterm-gui" <<EOF
+#!/bin/sh
+echo '[{"window_id":0,"pane_id":3,"tty_name":"$ctty","cwd":"file:///nowhere/"}]'
+EOF
+chmod +x "$H/.local/bin/frankenterm-gui"
+HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW bash "$T/hooks/claude-persist.sh" snapshot
+f=$S/sessions/nosf@$(printf '%s' "$H/projects/life" | sed 's/[^A-Za-z0-9]/-/g').json
+check "fake Claude runs on a pty" '[ -n "$cpid" ] && [ "${ctty#/dev/pts/}" != "$ctty" ]'
+check "pane is recorded as claude with its session id" 'grep -qP "^0\t3\tclaude\t$H/projects/life\tnosf\t$cpid$" "$S/panes"'
+check "entry now names the running pid" '[ "$(jq -r .pid "$f")" = "$cpid" ]'
+check "entry is stamped by this server" '[ "$(jq -r .mux "$f")" = "$NEW" ]'
+check "session is in the live list" 'grep -qx nosf "$S/live"'
+check "the recording is logged" 'grep -q "recorded nosf .*Claude pid $cpid in pane 3 had no entry with its pid" "$S/events.log"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
