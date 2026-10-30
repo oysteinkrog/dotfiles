@@ -909,7 +909,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1112,6 +1112,82 @@ check "pressure none: an aged normal waiter ranks behind critical, so it takes n
 W_N_SUF='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo#s1'
 out=$(printf '%s\n' "$RUN_N" "$W_AGED_T" "$W_N_SUF" | adm 0000000999000000000-2-m 0 1 12)
 check "pressure none: the writer preference still holds a suffixed normal build behind it (got '$out')" '[[ $out == wait\|writer:* ]]'
+
+# HEAVY_BUILD_APP_READONLY_KEY: an app run (headless MC) only reads the plain
+# output tree, so its plain tree key holds plain builds back but not suffixed
+# ones. Its ui-broker: key holds back builds that write the broker.
+# 2026-10-29: kpp's critical Wine test on tree:<nepjh>#_mfxrel waited 2 h
+# behind kpp's own app run and gave up with exit 75.
+RO_APP='R app1 999000 4 2 1000600 4294967296 - 0 normal tree:/repo,ui-broker:/repo app-run'
+RO_APPS='R app2 999000 4 2 1000600 4294967296 - 0 normal tree:/repo#a2,ui-broker:/repo app-run'
+RO_SUFR='R suf1 999000 4 2 1000600 4294967296 - 0 normal tree:/repo#s1 -'
+RO_WBR='R wb1 999000 4 2 1000600 4294967296 - 0 normal tree:/repo#s1,tree:/repo#buildcli,ui-broker:/repo -'
+RO_SUF='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo#_mfxrel'
+RO_PLAIN='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo'
+RO_WB='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo#s9,tree:/repo#buildcli,ui-broker:/repo'
+RO_WAPP='W 0000000999000000000-2-m 999000 normal 4 2 600 tree:/repo,ui-broker:/repo app-run'
+RO_WAPPOLD='W 0000000990000000000-1-a 990000 normal 36 2 600 tree:/repo,ui-broker:/repo app-run'
+out=$(printf '%s\n' "$RO_APP" "$RO_SUF" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: a suffixed build starts next to an app run on the plain key (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RO_APP" "$RO_SUF" | ADM_APPRO=0 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key off: the same suffixed build waits for the app run as before (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (app1)|0" ]]'
+out=$(printf '%s\n' "$RO_APP" "$RO_PLAIN" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: a plain build still waits for the app run and names it (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (app1)|0" ]]'
+out=$(printf '%s\n' "$RO_APP" "$RO_WB" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: a suffixed build that writes the broker waits on ui-broker (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (app1)|0" ]]'
+out=$(printf '%s\n' "$RO_SUFR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: a plain app run starts next to a running suffixed build (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RO_SUFR" "$RO_WAPP" | ADM_APPRO=0 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key off: the same app run waits for the suffixed build as before (got '$out')" '[[ $out == "wait|key: lock key tree:/repo#s1 is busy (suf1)|0" ]]'
+out=$(printf '%s\n' "$RO_WBR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: an app run waits for a running broker build (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (wb1)|0" ]]'
+out=$(printf '%s\n' "$RO_APPS" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: two app runs share ui-broker as readers (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RO_APP" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: two app runs on the same plain key still wait as before (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (app1)|0" ]]'
+# The 36 GiB app run does not fit, so it is the head. The suffixed build is
+# short enough to fill in before it, unless writer preference holds it.
+RO_SUFS='W 0000000999000000000-2-m 999000 normal 4 2 60 tree:/repo#_mfxrel'
+out=$(printf '%s\n' "$RUN_N" "$RO_WAPPOLD" "$RO_SUFS" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: a waiting app run takes no writer preference (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$RUN_N" "$RO_WAPPOLD" "$RO_SUFS" | ADM_APPRO=0 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key off: the waiting app run holds writer preference as before (got '$out')" '[[ $out == wait\|writer:* ]]'
+RO_IDLE='F idle.scope 1073741824 0 0 1 tree:/repo'
+out=$(printf '%s\n' "$RO_IDLE" "$RO_SUF" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
+check "app read-only key: an idle scope of unknown class still holds its plain key (got '$out')" '[[ $out == "wait|key: lock key tree:/repo is busy (idle.scope)|0" ]]'
+
+# The keys behind that rule: lock_keys gives an app run and a build that
+# writes the broker the key ui-broker:<top>.
+LK=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-lk.XXXXXX")
+git -C "$LK" init -q
+mkdir -p "$LK/tools/BuildCli" "$LK/apps/online/src/web/client"
+echo AgentOutputSuffix > "$LK/apps/online/src/web/client/Directory.Build.props"
+lk() {  # cls cmd... ; prints lock_keys output, one key per line joined by commas
+  (
+    cd "$LK" || exit 1
+    cls=$1; shift
+    unset AgentOutputSuffix
+    eval "$(sed -n '/^SPLIT_MARK=/p;/^agent_suffix()/,/^}/p;/^broker_user()/,/^}/p;/^lock_keys()/,/^}/p' "$HB")"
+    wine_key() { :; }
+    lock_keys "$@" | paste -sd, -
+  )
+}
+LKT=$(git -C "$LK" rev-parse --show-toplevel)
+out=$(lk app-run "$LKT/tools/wine/headless-mc.sh" _broker rig1)
+check "lock keys: an app run gets the plain tree key and ui-broker (got '$out')" '[[ $out == "tree:$LKT,ui-broker:$LKT" ]]'
+out=$(lk "" ./build.sh build --target wine AgentOutputSuffix=_x)
+check "lock keys: a suffixed build --target wine gets ui-broker (got '$out')" '[[ $out == "tree:$LKT#_x,tree:$LKT#buildcli,ui-broker:$LKT" ]]'
+out=$(lk "" ./build.sh build --target=wine AgentOutputSuffix=_x)
+check "lock keys: --target=wine too (got '$out')" '[[ $out == *",ui-broker:$LKT" ]]'
+out=$(lk "" dotnet build tools/ui-mcp-host/UiMcpHost.csproj -p:AgentOutputSuffix=_x)
+check "lock keys: a dotnet build of UiMcpHost gets ui-broker (got '$out')" '[[ $out == "tree:$LKT#_x,ui-broker:$LKT" ]]'
+out=$(lk "" tools/wine/run-tests.sh Foo.Tests AgentOutputSuffix=_mfxrel)
+check "lock keys: a suffixed run-tests.sh gets no ui-broker (got '$out')" '[[ $out == "tree:$LKT#_mfxrel" ]]'
+out=$(lk "" ./build.sh build AgentOutputSuffix=_x)
+check "lock keys: a suffixed build without --target wine gets no ui-broker (got '$out')" '[[ $out == "tree:$LKT#_x,tree:$LKT#buildcli" ]]'
+out=$(APP_READONLY_KEY=0 lk app-run "$LKT/tools/wine/headless-mc.sh" _broker rig1)
+check "lock keys: HEAVY_BUILD_APP_READONLY_KEY=0 gives no ui-broker key (got '$out')" '[[ $out == "tree:$LKT" ]]'
+rm -rf -- "$LK"
 
 # The give-up clock does not run while the pressure level holds a build,
 # even when the interactive or swap gate is the reason shown.
