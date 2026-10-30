@@ -187,6 +187,7 @@ if [ -n "$native_linux" ]; then
     .config/dcg/config.toml
     .config/voxtype/config.toml
     .config/voxtype/auto-enter-apps
+    .config/systemd/user/dotoold.service.d
     .config/pipewire/iem-eq
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
@@ -252,6 +253,12 @@ if [ -n "$native_linux" ]; then
       [ -e "$conf" ] || continue
       link_one "$conf" "$HOME/.config/pipewire/filter-chain.conf.d/$(basename "$conf")"
     done
+  fi
+  if [ -f "$host_dir/voxtype.toml" ]; then
+    echo ""
+    echo "=== Linking the voxtype settings for $host ==="
+    # Read over .config/voxtype/config.toml (voxtype's config.d overlays).
+    link_one "$host_dir/voxtype.toml" "$HOME/.config/voxtype/config.d/50-host.toml"
   fi
 
   echo ""
