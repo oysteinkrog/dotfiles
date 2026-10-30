@@ -2,7 +2,7 @@
 """Teleprompter strip pinned to the top edge of a screen, under a webcam.
 
 Usage: teleprompter SCRIPT.txt [--screen N] [--width 0.5] [--height 240]
-                               [--font 40] [--speed 40] [--cam-only]
+                               [--font 32] [--speed 40] [--cam-only]
 
 Script format: "# " starts a section, "> " marks a voice-over line (dimmer),
 "//" lines are skipped, blank lines separate paragraphs.
@@ -351,7 +351,7 @@ def main():
     ap.add_argument("--screen", type=int, default=-1, help="screen index (default: primary)")
     ap.add_argument("--width", type=float, default=0.5, help="fraction of the screen width")
     ap.add_argument("--height", type=int, default=240, help="strip height in pixels")
-    ap.add_argument("--font", type=int, default=40, help="text size in pixels")
+    ap.add_argument("--font", type=int, default=32, help="text size in pixels")
     ap.add_argument("--speed", type=int, default=40, help="scroll speed in pixels per second")
     ap.add_argument("--cam-only", action="store_true", help="hide voice-over lines")
     ap.add_argument("--snapshot", help="render one frame to this PNG and exit (for testing)")
