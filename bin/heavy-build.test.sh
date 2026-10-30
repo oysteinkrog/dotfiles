@@ -576,6 +576,10 @@ gbase() { : > "$E/hist"; for i in $(seq 1 20); do grow cargo-build "big$i" "$i" 
 gbase; for i in 1 2 3; do grow cargo-build "g$i" 1 0 s1 r1; done
 out=$(est newkey cargo-build "" 0 r1 s9)
 check "group: 3 repo runs at 1 GiB give 25% of the 18 GiB class p90, 4.5 (got '$out')" '[[ $out == "4.5 class-history,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=1.0,base=18.0" ]]'
+out=$(FIRST_RUN_EST=1 est newkey cargo-build "" 0 r1 s9)
+check "group: the first-run rule (p90 18 here) never raises a repo-max estimate (got '$out')" '[[ $out == "4.5 class-history,mem=repo-max;grp=repo:r1,n=3,age_h=0,max=1.0,base=18.0" ]]'
+out=$(FIRST_RUN_EST=1 est newkey cargo-build "" 0 rnone s1)
+check "group: a session-max estimate is not raised by the first-run rule either (got '$out')" '[[ $out == "4.5 class-history,mem=session-max;grp=session:s1,n=3,age_h=0,max=1.0,base=18.0" ]]'
 out=$(GROUP_EST=0 est newkey cargo-build "" 0 r1 s9)
 check "group: HEAVY_BUILD_GROUP_EST=0 keeps the class p90 (got '$out')" '[[ $out == "18.0 class-history,mem=class-p90" ]]'
 out=$(GROUP_EST_CLASS_PCT=0 est newkey cargo-build "" 0 r1 s9)
