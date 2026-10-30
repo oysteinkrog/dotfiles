@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# voxtype-words-sync: share voxtype's spoken corrections and learned words between
+# machines through the private life repo. Run by voxtype-words-sync.timer.
+#
+#   voxtype-words-sync            one pass, in the mode set in ~/.config/voxtype-sync.conf
+#   voxtype-words-sync --dry-run  say what it would do and change nothing (the default mode)
+#   voxtype-words-sync --live     commit, merge and push
+#
+# Live mode needs the line mode=live in ~/.config/voxtype-sync.conf (or --live).
+#
+# One pass, touching only the two voxtype files:
+#  1. Commit local changes to setup/voxtype/corrections.jsonl and words-learned.toml,
+#     with a pathspec, so other work in the repo stays out of the commit.
+#  2. Merge the upstream (git merge, no rebase). The life repo's .gitattributes merges
+#     both files with merge=union; voxtype keeps the last of a duplicate key. If the
+#     merge stops anyway, it is aborted and a notice says so.
+#  3. Push when there is something to push.
+set -euo pipefail
+
+LIFE=${VXS_LIFE:-$HOME/projects/life}
+STATE=${VXS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/voxtype-sync}
+FILES=(setup/voxtype/corrections.jsonl setup/voxtype/words-learned.toml)
+
+mode=dry-run
+conf=${XDG_CONFIG_HOME:-$HOME/.config}/voxtype-sync.conf
+if [ -f "$conf" ] && grep -qx 'mode=live' "$conf"; then mode=live; fi
+case "${1:-}" in
+  --dry-run) mode=dry-run ;;
+  --live) mode=live ;;
+  "") ;;
+  *) echo "usage: voxtype-words-sync [--dry-run|--live]" >&2; exit 2 ;;
+esac
+mkdir -p "$STATE"
+
+say() { printf 'voxtype-words-sync: %s\n' "$*"; }
+notice() {
+  say "$*"
+  [ "$(cat "$STATE/last-words-notice" 2>/dev/null)" = "$*" ] && return 0
+  printf '%s\n' "$*" > "$STATE/last-words-notice"
+  notify-send -a voxtype-words-sync "Voxtype words" "$*" 2>/dev/null || true
+}
+git_() { git -C "$LIFE" "$@"; }
+
+# 1. Commit this machine's new corrections and words.
+present=()
+for f in "${FILES[@]}"; do [ -e "$LIFE/$f" ] && present+=("$f"); done
+if [ ${#present[@]} -gt 0 ] && [ -n "$(git_ status --porcelain -- "${present[@]}")" ]; then
+  if [ "$mode" = live ]; then
+    git_ add -- "${present[@]}"
+    git_ commit -q -m "voxtype: corrections and learned words from $(hostnamectl hostname 2>/dev/null || hostname)" \
+      -- "${present[@]}"
+    say "committed ${present[*]}"
+  else
+    say "dry-run, would commit ${present[*]}"
+  fi
+fi
+
+# 2. Merge what other machines pushed.
+if ! git_ fetch -q 2>/dev/null; then notice "life repo: fetch failed; trying again next time"; exit 0; fi
+up=$(git_ rev-parse -q --abbrev-ref '@{upstream}' 2>/dev/null) || { notice "life repo: no upstream branch"; exit 0; }
+read -r ahead behind < <(git_ rev-list --left-right --count "HEAD...$up")
+if [ "$behind" != 0 ]; then
+  if [ "$mode" = live ]; then
+    if ! git_ merge -q --no-edit "$up" >/dev/null 2>&1; then
+      git_ merge --abort 2>/dev/null || true
+      notice "life repo: merging $up stopped (local edits in the way or a conflict); left as it was"
+      exit 0
+    fi
+    say "merged $behind commits from $up"
+  else
+    say "dry-run, would merge $behind commits from $up"
+  fi
+fi
+
+# 3. Push.
+read -r ahead behind < <(git_ rev-list --left-right --count "HEAD...$up")
+if [ "$ahead" != 0 ]; then
+  if [ "$mode" = live ]; then
+    git_ push -q 2>/dev/null || notice "life repo: push failed; trying again next time"
+  else
+    say "dry-run, would push $ahead commits"
+  fi
+fi
+rm -f "$STATE/last-words-notice"
