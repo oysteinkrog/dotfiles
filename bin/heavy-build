@@ -3179,6 +3179,19 @@ END {
   # 2026-10-30): once the oldest critical waiter has waited this long, no new
   # high, normal or low build starts until it does. Other critical builds may
   # still pass when they fit.
+  # With the starve bound on (2026-10-30): a drain head that would fit only
+  # once the running app runs end, or never, does not drain the queue, as no
+  # other build ending helps it. Smaller builds may pass; in the "app" case no
+  # new normal or low app run starts.
+  drainbound = ""
+  if (drainw && starvebound) {
+    r0 = why_not(drainw, T_n, T_cpu, T_tc, T_held, avail, T_high)
+    if (r0 ~ /^(memory|slice-cap):/) {
+      untsolo = T_unt
+      if (why_left(drainw, 1) ~ /^(memory|slice-cap):/) drainbound = (why_left(drainw, 0) == "") ? "app" : "nofit"
+      untsolo = 0
+    }
+  }
   cdrainw = 0
   if (critdrain > 0) for (i = 1; i <= nw; i++)
     if (w_pr[i] == "critical" && now - w_arr[i] >= critdrain && (!cdrainw || w_arr[i] < w_arr[cdrainw] || (w_arr[i] == w_arr[cdrainw] && w_id[i] < w_id[cdrainw]))) cdrainw = i
@@ -3202,7 +3215,8 @@ END {
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
     if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (cdrainw && w_pr[i] != "critical") { why[i] = sprintf("critical drain: %s has waited %d min, so no new high, normal or low build starts until it does", w_id[cdrainw], (now - w_arr[cdrainw]) / 60); continue }
-    if (drainw && i != drainw && (w_pr[i] == "normal" || w_pr[i] == "low")) { why[i] = sprintf("drain: %s has waited %d min, so no new normal or low build starts until it does", w_id[drainw], (now - w_arr[drainw]) / 60); continue }
+    if (drainbound == "app" && i != drainw && w_cls[i] == "app-run" && (w_pr[i] == "normal" || w_pr[i] == "low")) { why[i] = sprintf("drain: %s waits for the running app runs to end, so no new normal or low app run starts", w_id[drainw]); continue }
+    if (drainw && drainbound == "" && i != drainw && (w_pr[i] == "normal" || w_pr[i] == "low")) { why[i] = sprintf("drain: %s has waited %d min, so no new normal or low build starts until it does", w_id[drainw], (now - w_arr[drainw]) / 60); continue }
     if (!headi) {
       # An aged head never starves the queue: high and critical builds that
       # fit pass it, so it holds only the slot it gets next. With the starve
