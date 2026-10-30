@@ -2,7 +2,30 @@
 # cass: stops read commands (search, pack, TUI) from starting background index runs
 # inside the caller's cgroup. Indexing runs only from cass-maintenance.service.
 # Set CASS_AUTO_REFRESH=1 in front of a command to allow one on purpose.
+# Read-only query commands also run in their own transient systemd scope with a
+# memory cap, so the mmapped index pages they touch are reclaimed inside that
+# scope and not from other sessions. Set CASS_NO_SCOPE=1 to skip the scope,
+# CASS_SCOPE_MEMHIGH to change the cap (default below).
 # See ~/.dotfiles/docs/cass-setup.md.
 : "${CASS_AUTO_REFRESH:=0}"
 export CASS_AUTO_REFRESH
+
+sub=
+for a in "$@"; do
+  case "$a" in
+    -*) ;;
+    *) sub=$a; break ;;
+  esac
+done
+
+case "$sub" in
+  search|pack|context|sessions|timeline|expand|view|stats|status|state|diag|storage)
+    if [ -z "${CASS_NO_SCOPE:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] \
+       && [ -S "$XDG_RUNTIME_DIR/systemd/private" ] && command -v systemd-run >/dev/null 2>&1; then
+      exec systemd-run --user --scope --quiet --slice=claude.slice \
+        -p "MemoryHigh=${CASS_SCOPE_MEMHIGH:-3G}" -p MemorySwapMax=0 \
+        -- /usr/bin/cass "$@"
+    fi
+    ;;
+esac
 exec /usr/bin/cass "$@"
