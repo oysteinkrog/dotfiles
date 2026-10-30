@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "Øystein Krog" }],
+        "Category": "System Information",
+        "Description": "The aiolos pool Timeline: projected Claude pool capacity over the next 7 days, stepping up at each account's window reset.",
+        "Icon": "office-chart-line",
+        "Id": "org.oysteinkrog.aiolostimeline",
+        "License": "MIT",
+        "Name": "Aiolos Timeline",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

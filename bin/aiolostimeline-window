@@ -1,0 +1,37 @@
+#!/bin/sh
+# Open the Aiolos Timeline widget (org.oysteinkrog.aiolostimeline) as its own window.
+#
+# plasmawindowed allows one process per session bus: a second "plasmawindowed X" hands X to
+# the running one, which swaps its applet for X. So, like buildqueue-window, this gives the
+# widget its own small session bus. Never run a bare "plasmawindowed
+# org.oysteinkrog.aiolostimeline" on the main session bus: it would take over the Agenda.
+# The widget's data comes from aiolostimeline-fetch, which this script runs with the aiolos
+# address and key from the secrets store, and which writes
+# $XDG_RUNTIME_DIR/aiolostimeline/timeline.json.
+
+set -eu
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/aiolostimeline"
+mkdir -p "$dir"
+cat >"$dir/bus.conf" <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir=$dir</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+
+# One fetch process for the life of the window. It stops when this script exits (it watches
+# its parent), or on the trap below. with-secrets execs it, so it stays this script's child.
+"$HOME/bin/with-secrets" AIOLOS_API_KEY ANTHROPIC_BASE_URL -- \
+    "$HOME/bin/aiolostimeline-fetch" --serve "$dir/timeline.json" 60 &
+fetch=$!
+trap 'kill "$fetch" 2>/dev/null' EXIT INT TERM
+# The widget reads timeline.json with XMLHttpRequest, which needs this for a local file.
+QML_XHR_ALLOW_FILE_READ=1 dbus-run-session --config-file="$dir/bus.conf" -- plasmawindowed org.oysteinkrog.aiolostimeline
