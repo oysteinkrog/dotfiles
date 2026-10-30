@@ -393,6 +393,15 @@
 #   only when the tree has the suffix blocks (apps/online/src/web/client/
 #   Directory.Build.props names AgentOutputSuffix). Without them the key stays
 #   plain and live.log gets locksplit=off reason=no-blocks.
+#   An app run (class app-run) only reads the plain output tree, so with
+#   HEAVY_BUILD_APP_READONLY_KEY=1 (the default) its plain tree:<top> holds
+#   back plain builds and other plain app runs, but not suffixed builds, and a
+#   plain app run does not wait for suffixed builds or take writer preference.
+#   The UI broker it loads (tools/ui-mcp-host/bin) has no suffix, so an app
+#   run and a build that writes the broker (build.sh or build.cmd with
+#   --target wine, a dotnet build of UiMcpHost) also take ui-broker:<top>:
+#   the build waits for app runs there and app runs wait for it, but app runs
+#   share it. A scope with no heavy-build keeps its plain key. 0 turns this off.
 # - HEAVY_BUILD_PRIORITY=high|normal|low (default normal). Agents may set high
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
 #   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A
@@ -922,6 +931,7 @@ read_conf() {
   setting HEAVY_BUILD_SLOW_FAST_MIN_GIB 16
   setting HEAVY_BUILD_TC_PCT 50
   setting HEAVY_BUILD_REAL_USE 1
+  setting HEAVY_BUILD_APP_READONLY_KEY 1
   setting HEAVY_BUILD_SLICE_EXCLUDE_INACTIVE_FILE 1
   setting HEAVY_BUILD_YOUNG_PCT 70
   setting HEAVY_BUILD_YOUNG_MIN_SECS 120
@@ -1727,8 +1737,23 @@ lock_keys() {
       echo "tree:$top#$suf"
       [[ $s =~ [[:space:]/]build\.(sh|cmd)[[:space:]] && -d $top/tools/BuildCli ]] && echo "tree:$top#buildcli"
     fi
+    [[ ${APP_READONLY_KEY:-1} == 1 ]] && broker_user "$@" && echo "ui-broker:$top"
   fi
   wine_key "$top" "$@"
+}
+
+# True when this command loads or writes the UI broker's unsuffixed output
+# (tools/ui-mcp-host/bin): an app run loads it, and a BuildCli build
+# --target wine or a dotnet build of UiMcpHost writes it. These share the
+# key ui-broker:<top>, so a suffixed build that rebuilds the broker still
+# waits for an app run in its tree, though the tree key of the app run no longer
+# holds it (HEAVY_BUILD_APP_READONLY_KEY).
+broker_user() {
+  local s=" $* "
+  [[ ${cls:-} == app-run ]] && return 0
+  [[ $s =~ [[:space:]/]build\.(sh|cmd)[[:space:]] && $s =~ [[:space:]]--target(=|[[:space:]]+)wine[[:space:]] ]] && return 0
+  [[ ${s,,} =~ dotnet|msbuild ]] && [[ ${s,,} =~ uimcphost|ui-mcp-host ]] && return 0
+  return 1
 }
 
 # The suffix blocks kpp added last (df22e584067d). A tree without this one may
@@ -2749,22 +2774,33 @@ function pressure_why(i,   gap) {
   return ""
 }
 # Lock keys a build holds. A tree key tree:<top>#<suffix> also marks <top>
-# as held by a suffixed build, so a plain tree:<top> waits for it.
-function hold(keys, id,   n, k, i, b) {
+# as held by a suffixed build, so a plain tree:<top> waits for it. With
+# approkey=1 the plain tree key of an app run goes to appbusy: the app run only
+# reads the plain output tree, so it holds plain builds back but not
+# suffixed ones. Its ui-broker:<top> key goes there too: it holds back a
+# build that writes the broker, but not another app run.
+function hold(keys, id, app,   n, k, i, b) {
   if (keys == "" || keys == "-") return
   n = split(keys, k, ",")
-  for (i = 1; i <= n; i++) { busy[k[i]] = id; if ((b = index(k[i], "#")) > 0) subheld[substr(k[i], 1, b - 1)] = k[i] }
+  for (i = 1; i <= n; i++) {
+    if (app && approkey == 1 && (k[i] ~ /^ui-broker:/ || (k[i] ~ /^tree:/ && index(k[i], "#") == 0))) { appbusy[k[i]] = id; continue }
+    busy[k[i]] = id; if ((b = index(k[i], "#")) > 0) subheld[substr(k[i], 1, b - 1)] = k[i]
+  }
 }
-# The held key that blocks these keys, or "". The same key blocks. A plain
-# tree:<top> and any tree:<top>#<suffix> block each other. Two different
-# suffixes do not.
-function clash(keys,   n, k, i, b) {
+# The held key that blocks these keys, or "", and its holder in clashid. The
+# same key blocks. A plain tree:<top> and any tree:<top>#<suffix> block each
+# other. Two different suffixes do not. With approkey=1 the plain key of an
+# app run blocks only plain keys, and an app run (app=1) waiting with a plain key
+# does not wait for suffixed builds, nor for another app run on ui-broker:.
+function clash(keys, app,   n, k, i, b, t) {
+  clashid = ""
   if (keys == "" || keys == "-") return ""
   n = split(keys, k, ",")
   for (i = 1; i <= n; i++) {
-    if (k[i] in busy) return k[i]
-    if ((b = index(k[i], "#")) > 0) { if (substr(k[i], 1, b - 1) in busy) return substr(k[i], 1, b - 1) }
-    else if (k[i] in subheld) return subheld[k[i]]
+    if (k[i] in busy) { clashid = busy[k[i]]; return k[i] }
+    if ((b = index(k[i], "#")) > 0) { t = substr(k[i], 1, b - 1); if (t in busy) { clashid = busy[t]; return t } }
+    else if ((k[i] in appbusy) && !(app && k[i] ~ /^ui-broker:/)) { clashid = appbusy[k[i]]; return k[i] }
+    else if ((k[i] in subheld) && !(app && approkey == 1)) { clashid = busy[subheld[k[i]]]; return subheld[k[i]] }
   }
   return ""
 }
@@ -2839,7 +2875,7 @@ function addrun(id, start, mem, cores, end, cur, c60, stalled, prio, keys, pct, 
   T_n += r_job[nr]; T_cpu += cc; T_tc += tc; T_held += held; T_high += r_high[nr]; T_aged += (prio ~ /:aged$/)
   T_nc += (prio !~ /^(high|critical)(:aged)?$/)
   T_app += (cls == "app-run")
-  hold(keys, id)
+  hold(keys, id, cls == "app-run")
 }
 # The solo floor of waiter i: solo, or its estimate rounded up plus 1 GiB if
 # that is less. A waiter with a lock key in the monorepo keeps the full solo.
@@ -2994,7 +3030,7 @@ $1 == "R" {
 # An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
   T_held += $3 / 1073741824
-  hold($7, $2)
+  hold($7, $2, 0)
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:idle", $2, $3 / 1073741824)
   next
 }
@@ -3074,6 +3110,8 @@ END {
     if (w_keys[i] == "" || w_keys[i] == "-") continue
     if (pressure_why(i) != "") continue
     if (w_lowskip[i]) continue
+    # An app run only reads the tree, so it holds no suffixed build back.
+    if (approkey == 1 && w_cls[i] == "app-run") continue
     n = split(w_keys[i], k, ",")
     for (j = 1; j <= n; j++) if (k[j] ~ /^tree:/ && index(k[j], "#") == 0 && !(k[j] in wpref)) { wpref[k[j]] = i; wpos[k[j]] = o }
   }
@@ -3088,8 +3126,8 @@ END {
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     if (gate != "") { why[i] = gate; continue }
-    bk = clash(w_keys[i])
-    if (bk != "") { why[i] = "key: lock key " bk " is busy (" busy[bk] ")"; continue }
+    bk = clash(w_keys[i], w_cls[i] == "app-run")
+    if (bk != "") { why[i] = "key: lock key " bk " is busy (" clashid ")"; continue }
     # App runs (headless MotionCatalyst) last for hours. At most maxapp of them
     # hold job slots. One that waits for this keeps its place but is never the
     # head of the line, so it cannot starve builds behind it.
@@ -3223,7 +3261,7 @@ decide() {
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
     -v cf="$cf_on" -v cfslots="$cf_slots" -v cfreserve="$cf_reserve" \
     -v mempsifile="$PROC/pressure/memory" -v swpct="$SWAP_HEADROOM_PCT" -v swcap="$SWAP_HEADROOM_GIB" \
-    -v realuse="$REAL_USE" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
+    -v realuse="$REAL_USE" -v approkey="$APP_READONLY_KEY" -v slicecurfile="$( (( REAL_USE )) && echo "$BSLICE/memory.current")" \
     -v slicestatfile="$( (( REAL_USE && SLICE_EXCLUDE_INACTIVE_FILE )) && echo "$BSLICE/memory.stat")" \
     -v sliceavg="$slice_cores" -v sliceavgwin="$slice_win" -v jobscpu="$jobs_cores" -v youngpct="$YOUNG_PCT" -v youngmin="$YOUNG_MIN_SECS" -v growpct="$YOUNG_GROW_PCT" \
     -v memctl="$MEM_CONTROLLER" -v mctarget="$MC_TARGET_GIB" -v mchard="$MC_HARD_GIB" -v mcstep="$MC_STEP_PCT" -v mcfreegib="$MC_FREE_GIB" -v mcnewfull="$MC_NEW_FULL_SECS" \
