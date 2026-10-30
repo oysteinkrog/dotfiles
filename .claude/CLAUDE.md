@@ -317,12 +317,15 @@ before running a job on the other desktop or Hawk (`job run --on`).
   not delete other sessions' build output to make room.
 - A subagent prompt that builds must say "use `heavy-build` and load the `heavy-build`
   skill".
-- **Big jobs that are not builds go in `builds.slice` too.** Renders (OpenSCAD,
+- **Big jobs that are not builds go through the queue too.** Renders (OpenSCAD,
   CadQuery, Blender), image, video or ML scripts and big data passes that may use more
-  than 2 GB or more than 4 cores run through `heavy-build`, or as
+  than 2 GB run through `heavy-build` or `job submit`, so jobd checks memory before they
+  start. A smaller job that may use more than 4 cores can instead run as
   `systemd-run --user --slice=builds.slice --scope nice -n 10 <cmd>`. Run from your own
   session scope, they skip the memory caps and the pressure pause. On 2026-10-28, two
-  such jobs (4 GB and 11.6 GB) held the home desktop at pause for most of an hour.
+  such jobs (4 GB and 11.6 GB) held the home desktop at pause for most of an hour. On
+  2026-10-30, three video jobs started with a bare `systemd-run` took 8.5 GB at once and
+  made the desktop lag (Oystein, 2026-10-30: over 2 GB must use the queue).
 
 The `build-guard` PreToolUse hook blocks a build dir override, `/tmp` builds and clones,
 and monorepo worktrees outside grove. An unwrapped heavy build gets a warning. For a
