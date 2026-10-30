@@ -2716,7 +2716,7 @@ running_lines() {
     read -r cur 2>/dev/null < "$d/memory.current" || cur=0
     usec=0
     while read -r k v; do [[ $k == usage_usec ]] && { usec=$v; break; }; done 2>/dev/null < "$d/cpu.stat"
-    age=$(( EPOCHSECONDS - $(stat -c %Z -- "$d" 2>/dev/null || echo "$EPOCHSECONDS") ))
+    age=$(scope_age "$d")
     [[ $usec =~ ^[0-9]+$ ]] || usec=0
     r=$(cpu_rate "$u" "$usec")
     idle=0
@@ -2725,6 +2725,24 @@ running_lines() {
       jobd_tracked_line "$u" "$cur" "$r" || echo "J $u $cur $usec $age $idle -"
     else echo "F $u $cur $usec $age $idle ${left[$u]:--}"; fi
   done
+}
+
+# scope_age DIR: seconds since the first process in cgroup DIR started. The
+# folder's ctime moves whenever its files change (on 2026-10-30 every scope
+# read 90 s old, so small pytest scopes looked busy), so it is only the fallback.
+scope_age() {
+  local pid= st bt= k v
+  read -r pid 2>/dev/null < "$1/cgroup.procs"
+  if [[ $pid =~ ^[0-9]+$ ]] && read -r st 2>/dev/null < "/proc/$pid/stat"; then
+    st=${st##*) }
+    read -ra st <<< "$st"
+    while read -r k v; do [[ $k == btime ]] && { bt=$v; break; }; done < /proc/stat
+    if [[ ${st[19]:-} =~ ^[0-9]+$ && -n $bt ]]; then
+      echo $(( EPOCHSECONDS - bt - st[19] / $(getconf CLK_TCK) ))
+      return
+    fi
+  fi
+  echo $(( EPOCHSECONDS - $(stat -c %Z -- "$1" 2>/dev/null || echo "$EPOCHSECONDS") ))
 }
 
 # jobd_tracked_line UNIT CUR_BYTES CPU_MILLI: with HEAVY_BUILD_JOBD_TRACKED=1

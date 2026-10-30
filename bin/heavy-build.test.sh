@@ -1249,6 +1249,16 @@ check "small scopes on: they are not jobs, the build starts (got '$out')" '[[ $o
 out=$(printf '%s\n' "$US_B" "$US_W" | ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
 check "small scopes on: big or busy scopes still count (got '$out')" '[[ $out == "wait|jobs: 6 builds run"* ]]'
 check "small scopes: the HEAVY_BUILD_UNT_SMALL_NOT_JOB default is 1" 'grep -q "^  setting HEAVY_BUILD_UNT_SMALL_NOT_JOB 1$" "$HB"'
+# scope_age: from the first process's start, not the folder's ctime (2026-10-30).
+SA=$(mktemp -d "${TMPDIR:-/var/tmp}/hb-age.XXXXXX")
+echo 1 > "$SA/cgroup.procs"
+out=$(eval "$(sed -n '/^scope_age()/,/^}/p' "$HB")"; scope_age "$SA")
+up=$(cut -d. -f1 /proc/uptime)
+check "scope age: init's cgroup reads as old as the machine's uptime (got $out, uptime $up)" '(( out >= up - 5 && out <= up + 5 ))'
+: > "$SA/cgroup.procs"
+out=$(eval "$(sed -n '/^scope_age()/,/^}/p' "$HB")"; scope_age "$SA")
+check "scope age: no process falls back to the folder ctime (got $out)" '(( out >= 0 && out < 5 ))'
+rm -rf "$SA"
 # Drain with the starve bound (2026-10-30): a drain head that fits only once
 # the running app runs end does not drain the queue; new app runs still wait.
 DB_APP="R app1 990000 8 2 0 $((20 << 30)) - 2 normal - app-run"
@@ -3294,7 +3304,7 @@ B=$T/cg/user.slice/user-$UID.slice/user@$UID.service/builds.slice
 mkdir -p "$B/job-7.service" "$B/job-8.service" "$T/run/heavy-build.jobs"
 for j in 7 8; do echo 'populated 1' > "$B/job-$j.service/cgroup.events"; echo $(( j * 1073741824 )) > "$B/job-$j.service/memory.current"; echo 'usage_usec 5000000' > "$B/job-$j.service/cpu.stat"; done
 echo 'populated 0' > "$B/job-8.service/cgroup.events"
-RL="$(sed -n '/^proc_start()/,/^}/p;/^cpu_rate()/,/^}/p;/^jobd_tracked_line()/,/^}/p;/^running_lines()/,/^}/p' "$HB")"
+RL="$(sed -n '/^proc_start()/,/^}/p;/^cpu_rate()/,/^}/p;/^scope_age()/,/^}/p;/^jobd_tracked_line()/,/^}/p;/^running_lines()/,/^}/p' "$HB")"
 out=$(cd "$T/work" && QDIR=$T/run/heavy-build.queue JDIR=$T/run/heavy-build.jobs CPUDIR=$T/run/heavy-build.cpu BSLICE=$B IDLE_SECS=120 JOBD_JDIR=$T/run/jobd.jobs bash -c "$RL"'; running_lines')
 check "jobd load: a populated job unit is a J line (got '$out')" '[[ $out == "J job-7.service 7516192768 5000000 "[0-9]*" 0 -" ]]'
 mkdir -p "$T/run/heavy-build.cpu"; : > "$T/run/heavy-build.cpu/job-9.service"; : > "$T/run/heavy-build.cpu/job-7.service"
