@@ -1,0 +1,344 @@
+#!/usr/bin/python3
+"""Teleprompter strip pinned to the top edge of a screen, under a webcam.
+
+Usage: teleprompter SCRIPT.txt [--screen N] [--width 0.5] [--height 240]
+                               [--font 40] [--speed 40] [--cam-only]
+
+Script format: "# " starts a section, "> " marks a voice-over line (dimmer),
+"//" lines are skipped, blank lines separate paragraphs.
+
+Keys: Space play/pause, Up/Down speed, PgDn/PgUp next/previous section,
+R back to the start of this section, Home start, +/- text size,
+[ ] narrower/wider, mouse wheel scroll, drag to move, F reload file,
+Esc or Q quit.
+"""
+
+import argparse
+import html
+import os
+import sys
+
+# KWin on Wayland ignores window positions set by apps. Through XWayland it
+# honours them, which is what puts the strip right under the camera.
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import (QColor, QFont, QGuiApplication, QLinearGradient,
+                           QPainter, QTextDocument)
+from PySide6.QtWidgets import QApplication, QWidget
+
+BG = QColor(12, 12, 14)
+TEXT = "#f2f2f2"
+VO = "#8a8f98"
+HEAD = "#e0a83c"
+
+
+def parse(path, cam_only):
+    """Return a list of (kind, text) with kind in head, cam, vo."""
+    items, para, para_kind = [], [], "cam"
+
+    def flush():
+        nonlocal para
+        if para and not (cam_only and para_kind == "vo"):
+            items.append((para_kind, " ".join(para)))
+        para = []
+
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if line.startswith("//"):
+                continue
+            if not line:
+                flush()
+            elif line.startswith("# "):
+                flush()
+                items.append(("head", line[2:]))
+            elif line.startswith(">"):
+                if para_kind != "vo":
+                    flush()
+                para_kind = "vo"
+                para.append(line[1:].strip())
+            else:
+                if para_kind != "cam":
+                    flush()
+                para_kind = "cam"
+                para.append(line)
+    flush()
+    return items
+
+
+class Prompter(QWidget):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.font_px = args.font
+        self.speed = args.speed  # pixels per second
+        self.offset = 0.0
+        self.playing = False
+        self.toast = ""
+        self.section_ys = []
+        self.doc = QTextDocument()
+        self.doc.setDocumentMargin(0)
+
+        self.setWindowTitle("Teleprompter")
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint
+                            | Qt.WindowStaysOnTopHint)
+        self.setCursor(Qt.OpenHandCursor)
+        self.drag_from = None
+
+        self.clock = QElapsedTimer()
+        self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(16)
+        self.toast_timer = QTimer(self, singleShot=True)
+        self.toast_timer.timeout.connect(self.clear_toast)
+
+        self.place()
+        self.load()
+        self.show_toast("Space: play   PgDn: next section   H: keys", 4000)
+
+    # Layout -------------------------------------------------------------
+
+    def screen_geo(self):
+        screens = QGuiApplication.screens()
+        idx = self.args.screen
+        scr = screens[idx] if 0 <= idx < len(screens) else QGuiApplication.primaryScreen()
+        return scr.geometry()
+
+    def place(self):
+        g = self.screen_geo()
+        w = int(g.width() * self.args.width)
+        self.setGeometry(g.x() + (g.width() - w) // 2, g.y(), w, self.args.height)
+
+    def margin(self):
+        return max(24, self.font_px // 2)
+
+    def load(self):
+        items = parse(self.args.script, self.args.cam_only)
+        f = self.font_px
+        parts = [f"<div style='height:{int(self.height() * 0.25)}px'></div>"]
+        for kind, text in items:
+            t = html.escape(text)
+            if kind == "head":
+                parts.append(f"<p style='color:{HEAD}; font-size:{int(f * 0.6)}px;"
+                             f" font-weight:600; margin-top:{f}px; margin-bottom:{f // 3}px'>"
+                             f"{t}</p>")
+            elif kind == "vo":
+                parts.append(f"<p style='color:{VO}; font-size:{f}px; margin-bottom:{f // 2}px'>"
+                             f"<span style='font-size:{int(f * 0.45)}px'>VOICE-OVER&nbsp;&nbsp;</span>{t}</p>")
+            else:
+                parts.append(f"<p style='color:{TEXT}; font-size:{f}px; margin-bottom:{f // 2}px'>{t}</p>")
+        parts.append(f"<div style='height:{self.height()}px'></div>")
+
+        font = QFont("Inter")
+        font.setStyleHint(QFont.SansSerif)
+        font.setPixelSize(f)
+        self.doc.setDefaultFont(font)
+        self.doc.setHtml("".join(parts))
+        self.doc.setTextWidth(self.width() - 2 * self.margin())
+
+        layout = self.doc.documentLayout()
+        self.section_ys = []
+        block = self.doc.begin()
+        idx = 0
+        heads = [i for i, (k, _) in enumerate(items) if k == "head"]
+        # Block 0 is the top spacer, so item i is block i + 1.
+        while block.isValid():
+            if idx - 1 in heads:
+                self.section_ys.append(layout.blockBoundingRect(block).top())
+            block = block.next()
+            idx += 1
+        self.clamp()
+        self.update()
+
+    # Movement -----------------------------------------------------------
+
+    def max_offset(self):
+        return max(0.0, self.doc.size().height() - self.height())
+
+    def clamp(self):
+        self.offset = min(max(self.offset, 0.0), self.max_offset())
+
+    def tick(self):
+        if self.playing:
+            dt = self.clock.restart() / 1000.0
+            self.offset += self.speed * dt
+            if self.offset >= self.max_offset():
+                self.playing = False
+            self.clamp()
+            self.update()
+
+    def set_playing(self, on):
+        self.playing = on
+        self.clock.restart()
+        self.show_toast("Playing" if on else "Paused")
+
+    def jump_section(self, step):
+        # The reading line sits a quarter of the way down; a section start is
+        # put just above it.
+        anchor = self.height() * 0.25 - self.font_px * 0.3
+        here = self.offset + anchor + 1
+        if step > 0:
+            ys = [y for y in self.section_ys if y > here + 1]
+            target = ys[0] if ys else None
+        elif step < 0:
+            ys = [y for y in self.section_ys if y < here - self.font_px * 2]
+            target = ys[-1] if ys else 0.0 + anchor
+        else:
+            ys = [y for y in self.section_ys if y <= here]
+            target = ys[-1] if ys else anchor
+        if target is not None:
+            self.offset = target - anchor
+            self.clamp()
+        self.playing = False
+        self.update()
+
+    # Events -------------------------------------------------------------
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k in (Qt.Key_Escape, Qt.Key_Q):
+            self.close()
+        elif k == Qt.Key_Space:
+            self.set_playing(not self.playing)
+        elif k == Qt.Key_Up:
+            self.speed = min(400, self.speed + 5)
+            self.show_toast(f"Speed {self.speed} px/s")
+        elif k == Qt.Key_Down:
+            self.speed = max(5, self.speed - 5)
+            self.show_toast(f"Speed {self.speed} px/s")
+        elif k == Qt.Key_PageDown:
+            self.jump_section(1)
+        elif k == Qt.Key_PageUp:
+            self.jump_section(-1)
+        elif k == Qt.Key_R:
+            self.jump_section(0)
+            self.show_toast("Start of section")
+        elif k == Qt.Key_Home:
+            self.offset = 0
+            self.playing = False
+            self.update()
+        elif k in (Qt.Key_Plus, Qt.Key_Equal):
+            self.resize_text(4)
+        elif k == Qt.Key_Minus:
+            self.resize_text(-4)
+        elif k == Qt.Key_BracketLeft:
+            self.resize_width(-0.05)
+        elif k == Qt.Key_BracketRight:
+            self.resize_width(0.05)
+        elif k == Qt.Key_F:
+            self.reload_keep_place()
+            self.show_toast("Script reloaded")
+        elif k == Qt.Key_H:
+            self.show_toast("Space play · ↑↓ speed · PgDn/PgUp section · R restart section · "
+                            "+/- size · [ ] width · F reload · Q quit", 6000)
+
+    def resize_text(self, step):
+        frac = self.offset / max(1.0, self.doc.size().height())
+        self.font_px = max(16, min(120, self.font_px + step))
+        self.load()
+        self.offset = frac * self.doc.size().height()
+        self.clamp()
+        self.show_toast(f"Text {self.font_px} px")
+
+    def resize_width(self, step):
+        self.args.width = max(0.2, min(1.0, self.args.width + step))
+        self.place()
+        self.reload_keep_place()
+        self.show_toast(f"Width {int(self.args.width * 100)}%")
+
+    def reload_keep_place(self):
+        frac = self.offset / max(1.0, self.doc.size().height())
+        self.load()
+        self.offset = frac * self.doc.size().height()
+        self.clamp()
+
+    def wheelEvent(self, e):
+        self.offset -= e.angleDelta().y() / 120 * self.font_px * 1.5
+        self.clamp()
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.drag_from = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, e):
+        if self.drag_from is not None:
+            self.move(e.globalPosition().toPoint() - self.drag_from)
+
+    def mouseReleaseEvent(self, e):
+        self.drag_from = None
+        self.setCursor(Qt.OpenHandCursor)
+
+    def show_toast(self, text, ms=1500):
+        self.toast = text
+        self.toast_timer.start(ms)
+        self.update()
+
+    def clear_toast(self):
+        self.toast = ""
+        self.update()
+
+    # Drawing ------------------------------------------------------------
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(self.rect(), BG)
+
+        m = self.margin()
+        p.save()
+        p.translate(m, -self.offset)
+        self.doc.drawContents(p, QRectF(0, self.offset, w - 2 * m, h))
+        p.restore()
+
+        # Reading line marker on both edges, a quarter of the way down.
+        y = h * 0.25 + self.font_px * 0.55
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(HEAD))
+        for x, sign in ((4, 1), (w - 4, -1)):
+            p.drawPolygon([QPointF(x, y - 8), QPointF(x + sign * 12, y), QPointF(x, y + 8)])
+
+        # Fade the text out toward the bottom so the eye stays near the top.
+        fade = QLinearGradient(0, h * 0.55, 0, h)
+        fade.setColorAt(0, QColor(BG.red(), BG.green(), BG.blue(), 0))
+        fade.setColorAt(1, QColor(BG.red(), BG.green(), BG.blue(), 235))
+        p.fillRect(QRectF(0, h * 0.55, w, h * 0.45), fade)
+
+        if self.toast:
+            f = QFont(self.font())
+            f.setPixelSize(15)
+            p.setFont(f)
+            p.setPen(QColor(VO))
+            p.drawText(QRectF(m, h - 26, w - 2 * m, 22), Qt.AlignRight | Qt.AlignVCenter, self.toast)
+        p.end()
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Teleprompter strip at the top of a screen.")
+    ap.add_argument("script")
+    ap.add_argument("--screen", type=int, default=-1, help="screen index (default: primary)")
+    ap.add_argument("--width", type=float, default=0.5, help="fraction of the screen width")
+    ap.add_argument("--height", type=int, default=240, help="strip height in pixels")
+    ap.add_argument("--font", type=int, default=40, help="text size in pixels")
+    ap.add_argument("--speed", type=int, default=40, help="scroll speed in pixels per second")
+    ap.add_argument("--cam-only", action="store_true", help="hide voice-over lines")
+    ap.add_argument("--snapshot", help="render one frame to this PNG and exit (for testing)")
+    args = ap.parse_args()
+
+    app = QApplication(sys.argv)
+    w = Prompter(args)
+    if args.snapshot:
+        w.grab().save(args.snapshot)
+        return 0
+    w.show()
+    w.activateWindow()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
