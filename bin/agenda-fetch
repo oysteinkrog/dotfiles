@@ -224,6 +224,14 @@ def away(account, sources, slack=False):
         out |= {p["name"] for p in extra if p["kind"] == "out"}
         people = [p for p in people if p["email"] not in out and p["name"] not in out]
         people += extra
+    # Part-time hours say nothing new for someone who is out today.
+    out = {p["email"] for p in people if p["kind"] == "out"}
+    out |= {p["name"] for p in people if p["kind"] == "out"}
+    people = [
+        p
+        for p in people
+        if p["kind"] != "hours" or (p["email"] not in out and p["name"] not in out)
+    ]
     order = {"out": 0, "home": 1, "hours": 2}
     people.sort(key=lambda p: (order[p["kind"]], p["name"]))
     return people
