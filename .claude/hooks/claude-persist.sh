@@ -9,7 +9,10 @@
 #                                     user unit (e.g. wezterm-mux.service)
 #   claude-persist.sh snapshot        save the mux server's tab order (systemd
 #                                     timer and ExecStop run this)
-#   claude-persist.sh plan            print sessions to resume (cwd, title, command)
+#   claude-persist.sh plan            print sessions and tabs to resume (cwd, title,
+#                                     command)
+#   claude-persist.sh panes           print what snapshot records for each mux
+#                                     pane (window, pane, kind, cwd, arg); read-only
 #   claude-persist.sh restore         resume every recorded session into the running
 #                                     mux server with `frankenterm-gui cli`
 #   claude-persist.sh list            show recorded sessions
@@ -23,7 +26,12 @@
 # restart a session in the same pane after a Claude Code update.
 #
 # State: ~/.local/state/claude-persist/sessions/<session_id>@<folder>.json,
-# and tab-order (the last saved tab order of the mux server).
+# tab-order (the last saved tab order of the mux server), panes (what ran in
+# each pane: Claude, opencode, a shell or another program, and its folder) and
+# live (the session ids whose Claude was running at the last snapshot).
+# Plain shell and opencode tabs come back too: a shell reopens in its folder,
+# opencode resumes its session with `opencode -s <id>` (or starts fresh in the
+# folder when no session id is found).
 # The key includes the folder because one session id can be open in two
 # folders (sessions copied between projects keep their id).
 # Set CLAUDE_PERSIST=0 in a session's environment to keep it off the list.
@@ -40,6 +48,9 @@ CLAUDE_SESSIONS="$HOME/.claude/sessions"   # Claude writes <pid>.json here per p
 FT_CLI="$HOME/.local/bin/frankenterm-gui"
 MUX_UNIT=frankenterm-mux.service
 TAB_ORDER="$STATE_DIR/tab-order"
+PANES="$STATE_DIR/panes"
+LIVE="$STATE_DIR/live"
+OPENCODE_DB="${OPENCODE_DB:-$HOME/.local/share/opencode/opencode.db}"
 AIOLOS_RC="$HOME/.config/aiolos-rc/aiolos-rc"
 # Runs a tab's resume command, and runs it again in the same pane when
 # claude-version-restart restarts the session (see that script).
@@ -284,6 +295,11 @@ lock_state() {
 # 2026-10-07) that the next boot can hand out again. Then plan would take the
 # new server for the old one and skip both the saved order and the stamp check.
 mux_pid() {
+  # tests set CLAUDE_PERSIST_MUX_ID (empty means no server is running)
+  if [ -n "${CLAUDE_PERSIST_MUX_ID+x}" ]; then
+    [ -n "$CLAUDE_PERSIST_MUX_ID" ] && printf '%s\n' "$CLAUDE_PERSIST_MUX_ID"
+    return 0
+  fi
   local p; p=$(systemctl --user show -p MainPID --value "$MUX_UNIT" 2>/dev/null)
   [ -n "$p" ] && [ "$p" != 0 ] || return 0
   printf '%s:%s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$p"
@@ -331,6 +347,88 @@ spawn_tab() {
     "$FT_CLI" cli spawn "${where[@]}" --cwd "$cwd" -- bash -c "$cmd; exec fish -l"
 }
 
+# The opencode session a running opencode process (pid $1, folder $2) is in:
+# its -s/--session argument, else the newest top-level session in that folder
+# updated since the process started. The database is opened read-only. Prints
+# nothing when no session is found (a fresh opencode that has no message yet).
+opencode_session() {
+  local pid=$1 cwd=$2 i a start_ms id dir want
+  local -a argv
+  mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null
+  for ((i = 1; i < ${#argv[@]}; i++)); do
+    a=${argv[$i]}
+    case "$a" in
+      -s|--session) printf '%s\n' "${argv[$((i + 1))]:-}"; return 0 ;;
+      --session=*) printf '%s\n' "${a#--session=}"; return 0 ;;
+    esac
+  done
+  [ -f "$OPENCODE_DB" ] && command -v sqlite3 >/dev/null || return 0
+  # process start time in ms since the epoch: field 22 of stat, in clock ticks
+  start_ms=$(awk -v bt="$BOOT_TIME" -v hz="$(getconf CLK_TCK)" \
+    '{ sub(/^.*\) /, ""); printf "%d", (bt + $20 / hz) * 1000 }' "/proc/$pid/stat" 2>/dev/null)
+  [ -n "$start_ms" ] || start_ms=0
+  want=$(realpath -m -- "$cwd")
+  while IFS=$'\t' read -r id dir; do
+    # the folder may be stored through a symlink (~/work/x for ~/projects/x)
+    [ "$(realpath -m -- "$dir")" = "$want" ] && { printf '%s\n' "$id"; return 0; }
+  done < <(sqlite3 -readonly -separator $'\t' "$OPENCODE_DB" \
+    "select id, directory from session where parent_id is null and time_archived is null
+       and time_updated >= $start_ms order by time_updated desc limit 50" 2>/dev/null)
+}
+
+# Print one row per pane of the mux listing $1 (`cli list --json`), in its order:
+# <window> TAB <pane> TAB <kind> TAB <cwd> TAB <arg>. kind is claude (arg: the
+# session id), opencode (arg: its session id, or empty), shell, or other (arg:
+# the program's name; it is not restarted, the tab comes back as a shell).
+# Classify by the processes in the pane's foreground process group.
+pane_rows() {
+  local listing=$1 pid pgid tpgid tt w p tty lcwd q kind arg cwd lead comm sid
+  local -A fg_of=() all_of=()
+  while read -r pid pgid tpgid tt; do
+    [ "$tt" = "?" ] && continue
+    all_of[$tt]+="$pid "
+    [ "$pgid" = "$tpgid" ] && fg_of[$tt]+="$pid "
+  done < <(ps -e -o pid=,pgid=,tpgid=,tty= 2>/dev/null)
+  while IFS=$'\t' read -r w p tty lcwd; do
+    tty=${tty#/dev/}
+    # the listing's cwd is a file:// URL; prefer the process's own cwd below
+    if [ -n "$lcwd" ]; then
+      lcwd=${lcwd#file://}; [ "${lcwd:0:1}" = / ] || lcwd=/${lcwd#*/}
+      [ "$lcwd" = / ] || lcwd=${lcwd%/}
+    fi
+    kind="" arg="" cwd="" lead=""
+    local procs=${fg_of[$tty]:-${all_of[$tty]:-}}
+    for q in $procs; do
+      [ -n "$lead" ] || lead=$q
+      [ "$(awk '{print $5}' "/proc/$q/stat" 2>/dev/null)" = "$q" ] && lead=$q
+      if [ -f "$CLAUDE_SESSIONS/$q.json" ]; then
+        sid=$(jq -r '.sessionId // empty' "$CLAUDE_SESSIONS/$q.json" 2>/dev/null)
+        if [ -n "$sid" ] && claude_alive "$q" "$sid"; then
+          kind=claude arg=$sid cwd=$(readlink "/proc/$q/cwd" 2>/dev/null); break
+        fi
+      fi
+      local -a av=()
+      mapfile -d '' -t av < "/proc/$q/cmdline" 2>/dev/null
+      # the opencode binary itself, or node running its script
+      if [ "${av[0]:-}" != "" ] && [ "${av[0]##*/}" = opencode ] \
+         || { [ "${av[1]:-}" != "" ] && [ "${av[1]##*/}" = opencode ]; }; then
+        cwd=$(readlink "/proc/$q/cwd" 2>/dev/null)
+        kind=opencode arg=$(opencode_session "$q" "${cwd:-$lcwd}"); break
+      fi
+    done
+    if [ -z "$kind" ]; then
+      comm=$(cat "/proc/${lead:-0}/comm" 2>/dev/null)
+      case "$comm" in
+        ""|fish|bash|zsh|sh|dash) kind=shell ;;
+        *) kind=other arg=$comm ;;
+      esac
+      [ -n "$lead" ] && cwd=$(readlink "/proc/$lead/cwd" 2>/dev/null)
+    fi
+    # never an empty cwd: plan splits on tabs, and empty fields would collapse
+    printf '%s\t%s\t%s\t%s\t%s\n' "$w" "$p" "$kind" "${cwd:-${lcwd:-?}}" "$arg"
+  done < <(jq -r '.[] | [.window_id, .pane_id, (.tty_name // ""), (.cwd // "")] | @tsv' <<<"$listing" 2>/dev/null)
+}
+
 # Save the mux server's tab order: a header line with the server's id, then
 # <window id> TAB <pane id> per pane, in tab order. Ask the server's own socket,
 # not a GUI's (a GUI numbers panes its own way). Keep the old file when the
@@ -343,6 +441,10 @@ snapshot() {
   [ -n "$rows" ] || return 0
   lock_state
   { echo "mux $pid"; printf '%s\n' "$rows"; } > "$TAB_ORDER.tmp" && mv "$TAB_ORDER.tmp" "$TAB_ORDER"
+  # What runs in each pane, so plan can bring back shell and opencode tabs too.
+  local prow
+  prow=$(pane_rows "$listing")
+  [ -n "$prow" ] && { echo "mux $pid"; printf '%s\n' "$prow"; } > "$PANES.tmp" && mv "$PANES.tmp" "$PANES"
 
   local f epid pane sf ssid scwd em
   local -A row_pane=() row_tty=()
@@ -408,6 +510,29 @@ snapshot() {
     jq --arg m "$pid" '.mux = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
+  # Is the machine or this server going down? Then sessions and panes are
+  # going away: nothing is retired below, and the live list only grows.
+  local stopping=""
+  [ "$(systemctl is-system-running 2>/dev/null)" = stopping ] && stopping=1
+  [ "$(systemctl --user is-active "$MUX_UNIT" 2>/dev/null)" = active ] || stopping=1
+
+  # Save the session ids whose Claude is running now, whatever their stamp.
+  # plan resumes these even when the stamp is old: a session that was running
+  # at the last snapshot must come back. The stamp alone missed sessions whose
+  # terminal was not matched to this server.
+  local lsid_ lrows=""
+  for f in "$SESS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    lsid_=$(jq -r '.session_id // empty' "$f" 2>/dev/null)
+    [ -n "$lsid_" ] && claude_alive "$(jq -r '.pid // 0' "$f")" "$lsid_" && lrows+="$lsid_"$'\n'
+  done
+  # While the machine or the server is stopping, Claude processes are dying one
+  # by one: keep the ids the earlier snapshot of this server saw as well.
+  if [ -n "$stopping" ] && [ "$(head -1 "$LIVE" 2>/dev/null)" = "mux $pid" ]; then
+    lrows+=$(tail -n +2 "$LIVE")$'\n'
+  fi
+  { echo "mux $pid"; printf '%s' "$lrows" | sed '/^$/d' | sort -u; } > "$LIVE.tmp" && mv "$LIVE.tmp" "$LIVE"
+
   # Retire the entries of closed tabs: stamped by this server, Claude no longer
   # running, and the pane gone from this server's list. Closing a tab can kill
   # Claude before its SessionEnd hook runs, and those entries used to come back
@@ -415,9 +540,6 @@ snapshot() {
   # whose Claude exited still has its pane (the fish shell after it).
   # Never during shutdown: sessions and panes are going away then, and their
   # entries must stay for the next boot.
-  local stopping=""
-  [ "$(systemctl is-system-running 2>/dev/null)" = stopping ] && stopping=1
-  [ "$(systemctl --user is-active "$MUX_UNIT" 2>/dev/null)" = active ] || stopping=1
   mkdir -p "$STATE_DIR/restored"
   for f in "$SESS_DIR"/*.json; do
     [ -z "$stopping" ] || break
@@ -487,13 +609,17 @@ resume_prompt() {
   python3 "$(dirname "${BASH_SOURCE[0]}")/claude-persist-resume.py" "$transcript" "$status" 2>/dev/null
 }
 
-# Print the entry files in the order to resume them: by their pane's place in
-# the saved tab order, then the rest oldest first. The saved order is used only
-# when it came from an earlier mux server: pane ids start over in a new server,
-# so a snapshot of the current one says nothing about the recorded panes.
+# Print what plan works through, in the order to resume it: by the pane's
+# place in the saved tab order, then the rest of the entries oldest first.
+# One line per item: "entry TAB <file>", or, when a panes file $1 is given,
+# "pane TAB <kind> TAB <pane> TAB <cwd> TAB <arg>" for each pane in it. At the
+# same place an entry comes before its pane. The saved order is used only when
+# it came from an earlier mux server: pane ids start over in a new server, so a
+# snapshot of the current one says nothing about the recorded panes.
 ordered_entries() {
+  local panes_file=${1:-}
   local -A pos=()
-  local tag spid w p i=0 n=0 f pane
+  local tag spid w p i=0 n=0 f pane k pc pa
   if [ -f "$TAB_ORDER" ]; then
     read -r tag spid < "$TAB_ORDER"
     if [ "$tag" = mux ] && [ "$spid" != "$(mux_pid)" ]; then
@@ -502,11 +628,32 @@ ordered_entries() {
       done < <(tail -n +2 "$TAB_ORDER")
     fi
   fi
-  while IFS= read -r f; do
-    pane=$(jq -r '.pane // empty' "$f")
-    printf '%d\t%s\n' "${pos[${pane:-x}]:-$((1000000 + n))}" "$f"
-    n=$((n + 1))
-  done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null) | sort -s -n -k1,1 | cut -f2-
+  {
+    while IFS= read -r f; do
+      pane=$(jq -r '.pane // empty' "$f" 2>/dev/null)
+      printf '%d\t0\tentry\t%s\n' "${pos[${pane:-x}]:-$((1000000 + n))}" "$f"
+      n=$((n + 1))
+    done < <(ls -1tr "$SESS_DIR"/*.json 2>/dev/null)
+    if [ -n "$panes_file" ] && [ -f "$panes_file" ]; then
+      i=0
+      while IFS=$'\t' read -r w p k pc pa; do
+        [ -n "$p" ] || continue
+        printf '%d\t1\tpane\t%s\t%s\t%s\t%s\n' "${pos[$p]:-$((2000000 + i))}" "$k" "$p" "$pc" "$pa"
+        i=$((i + 1))
+      done < <(tail -n +2 "$panes_file")
+    fi
+  } | sort -s -t$'\t' -k1,1n -k2,2n | cut -f3-
+}
+
+# The folder $1 after the 2026-10 move between ~/work and ~/projects, when $1
+# is gone and the other one exists.
+relocated_dir() {
+  local d=$1 alt=""
+  case "$d/" in
+    "$HOME/work/"*) alt="$HOME/projects${d#"$HOME/work"}" ;;
+    "$HOME/projects/"*) alt="$HOME/work${d#"$HOME/projects"}" ;;
+  esac
+  [ -n "$alt" ] && [ -d "$alt" ] && printf '%s\n' "$alt"
 }
 
 # The tab title for a session: the last name given with /rename, which Claude
@@ -553,22 +700,45 @@ resume_cmd_inner() {
   printf '%s\n' "$cmd"
 }
 
-# Print one line per session to resume: <cwd> TAB <tab title> TAB <bash command>.
+# Print one line per tab to reopen: <cwd> TAB <tab title> TAB <bash command>.
 # The command cds into <cwd> itself, because some spawn APIs ignore the cwd
-# they are given when a command is set (Frankenterm's Lua spawn_tab does).
-# Entries are moved to restored/ as they are handed out; the resumed session's
-# SessionStart hook writes a fresh entry. Log lines go to restore.log.
+# they are given (Frankenterm's Lua spawn_tab when a command is set, and
+# `cli spawn --cwd`). Claude entries are moved to restored/ as they are handed
+# out; the resumed session's SessionStart hook writes a fresh entry. After a
+# restart of the mux server (not when run by hand against a live one), the
+# shell and opencode tabs of the last snapshot come back too.
+#
+# Every entry and pane gets a line in restore.log saying what was done with it
+# and why: resume, reopen, drop, skip or hold. Nothing is left out silently.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
-  local log="$STATE_DIR/restore.log" f sid cwd transcript pid cmd ep
-  local max=${CLAUDE_PERSIST_MAX:-40} n=0 last_mux="" tag spid
-  local -A newest=() mt=()
-  # The pid of the server that wrote the last snapshot, when that server is
+  local log="$STATE_DIR/restore.log" f tag spid
+  local max=${CLAUDE_PERSIST_MAX:-40} max_panes=${CLAUDE_PERSIST_MAX_PANES:-40}
+  local n=0 np=0 last_mux="" panes_file="" k a b c d
+  local -A newest=() mt=() live=() seen=() claimed=() resumed_sid=()
+  local -a out=()
+  # Hold the lock while deciding, so nothing renames or rewrites entries under
+  # us. On 2026-10-30 retire-work-symlinks.service moved an entry from
+  # ~/work/life to ~/projects/life while plan ran; plan had listed the old name,
+  # found it gone, logged "drop : folder  is gone" and never saw the new one.
+  lock_state
+  # The id of the server that wrote the last snapshot, when that server is
   # gone (the normal case at boot). Run by hand against a live server, the
-  # stamp check is skipped.
+  # stamp check is skipped and no shell tabs are reopened.
   if [ -f "$TAB_ORDER" ]; then
     read -r tag spid < "$TAB_ORDER"
     [ "$tag" = mux ] && [ "$spid" != "$(mux_pid)" ] && last_mux=$spid
+  fi
+  echo "=== plan $(date -Is)${last_mux:+ (last mux $last_mux)}" >> "$log"
+  # Sessions whose Claude was running at the last snapshot of that server.
+  if [ -n "$last_mux" ] && [ "$(head -1 "$LIVE" 2>/dev/null)" = "mux $last_mux" ]; then
+    while IFS= read -r a; do [ -n "$a" ] && live[$a]=1; done < <(tail -n +2 "$LIVE")
+  fi
+  # The panes of that server. Used once: a second plan for the same server
+  # (a crash before the first snapshot) must not open the tabs twice.
+  if [ -n "$last_mux" ] && [ "$(head -1 "$PANES" 2>/dev/null)" = "mux $last_mux" ]; then
+    panes_file="$PANES.used"
+    mv "$PANES" "$panes_file"
   fi
   # A pane holds one session at a time. When several entries from the last
   # server claim the same pane, resume only the newest of them.
@@ -576,7 +746,7 @@ plan() {
   if [ -n "$last_mux" ]; then
     for f in "$SESS_DIR"/*.json; do
       [ -e "$f" ] || continue
-      [ "$(jq -r '.mux // empty' "$f")" = "$last_mux" ] || continue
+      [ "$(jq -r '.mux // empty' "$f" 2>/dev/null)" = "$last_mux" ] || continue
       p_=$(jq -r '.pane // empty' "$f"); [ -n "$p_" ] || continue
       # Only an entry that can be resumed may claim the pane. A session that
       # starts again in another folder (same pid and pane) writes a second
@@ -587,51 +757,143 @@ plan() {
       if [ -z "${newest[$p_]:-}" ] || [ "$m_" -gt "${mt[$p_]}" ]; then newest[$p_]=$f; mt[$p_]=$m_; fi
     done
   fi
-  echo "=== plan $(date -Is)" >> "$log"
-  while IFS= read -r f; do
-    sid=$(jq -r .session_id "$f"); cwd=$(jq -r .cwd "$f")
+
+  # One Claude entry.
+  plan_entry() {
+    local f=$1 key sid cwd transcript pid stamp ep cmd mine=""
+    key=$(basename "$f" .json); seen[$key]=1
+    if [ ! -f "$f" ]; then
+      echo "skip $key: the entry vanished during plan (renamed or removed by another program)" >> "$log"
+      # It no longer holds its pane: an entry found under its new name may.
+      for p_ in "${!newest[@]}"; do [ "${newest[$p_]}" = "$f" ] && unset "newest[$p_]"; done
+      return 0
+    fi
+    sid=$(jq -r '.session_id // empty' "$f" 2>/dev/null); cwd=$(jq -r '.cwd // empty' "$f" 2>/dev/null)
+    if [ -z "$sid" ] || [ -z "$cwd" ]; then
+      echo "drop $key: unreadable entry (no session id or folder)" >> "$log"
+      mv "$f" "$STATE_DIR/restored/"; return 0
+    fi
     transcript=$(jq -r '.transcript // empty' "$f"); pid=$(jq -r '.pid // 0' "$f")
+    stamp=$(jq -r '.mux // empty' "$f")
+    [ -n "$last_mux" ] && [ "$stamp" = "$last_mux" ] && mine=1
+    p_=$(jq -r '.pane // empty' "$f")
     if claude_alive "$pid" "$sid"; then
-      echo "skip $sid: still running as pid $pid" >> "$log"
+      resumed_sid[$sid]=1
+      [ -n "$mine" ] && [ -n "$p_" ] && claimed[$p_]="Claude session $sid, still running"
       # It outlived the last server; snapshot resumes it once it exits.
-      if [ -n "$last_mux" ] && [ "$(jq -r '.mux // empty' "$f")" = "$last_mux" ]; then
-        jq --arg m "$last_mux" '.late = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+      if [ -n "$mine" ] || { [ -n "${live[$sid]:-}" ] && [ -n "$stamp" ]; }; then
+        jq --arg m "$stamp" '.late = $m' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
+        echo "skip $sid: still running as pid $pid, resumed when it exits" >> "$log"
+      else
+        echo "skip $sid: still running as pid $pid" >> "$log"
       fi
-      continue
+      return 0
     fi
     if [ -n "$transcript" ] && [ ! -s "$transcript" ]; then
       echo "drop $sid ($cwd): no transcript (session never had a message)" >> "$log"
-      mv "$f" "$STATE_DIR/restored/"; continue
+      mv "$f" "$STATE_DIR/restored/"; return 0
     fi
     if [ ! -d "$cwd" ]; then
-      echo "drop $sid: folder $cwd is gone" >> "$log"; mv "$f" "$STATE_DIR/restored/"; continue
+      echo "drop $sid: folder $cwd is gone" >> "$log"; mv "$f" "$STATE_DIR/restored/"; return 0
     fi
-    if [ -n "$last_mux" ] && [ "$(jq -r '.mux // empty' "$f")" != "$last_mux" ]; then
-      echo "drop $sid ($cwd): not open at the last snapshot of mux $last_mux" >> "$log"
-      mv "$f" "$STATE_DIR/restored/"; continue
+    if [ -n "$last_mux" ] && [ -z "$mine" ]; then
+      if [ -n "${live[$sid]:-}" ]; then
+        # A running Claude at the last snapshot wins over an old stamp.
+        echo "keep $sid ($cwd): stamped by mux ${stamp:-none}, but its Claude was running at the last snapshot" >> "$log"
+      else
+        echo "drop $sid ($cwd): not open at the last snapshot of mux $last_mux (stamp ${stamp:-none})" >> "$log"
+        mv "$f" "$STATE_DIR/restored/"; return 0
+      fi
     fi
     ep=$(transcript_entrypoint "$transcript")
     if [ -n "$ep" ] && [ "$ep" != cli ]; then
       echo "drop $sid ($cwd): started by the Agent SDK ($ep), not in a terminal" >> "$log"
-      mv "$f" "$STATE_DIR/restored/"; continue
+      mv "$f" "$STATE_DIR/restored/"; return 0
     fi
-    p_=$(jq -r '.pane // empty' "$f")
-    if [ -n "$p_" ] && [ -n "${newest[$p_]:-}" ] && [ "${newest[$p_]}" != "$f" ]; then
+    # Pane ids belong to one server; compare them only among its own entries.
+    if [ -n "$mine" ] && [ -n "$p_" ] && [ -n "${newest[$p_]:-}" ] && [ "${newest[$p_]}" != "$f" ]; then
       echo "drop $sid ($cwd): a newer session was in the same pane $p_" >> "$log"
-      mv "$f" "$STATE_DIR/restored/"; continue
+      mv "$f" "$STATE_DIR/restored/"; return 0
     fi
     # Leave the rest on the list, so a runaway list cannot fill memory at boot.
     # Resume them by hand with `claude-persist.sh restore` once you have looked.
     if [ "$n" -ge "$max" ]; then
-      echo "hold $sid ($cwd): over the limit of $max sessions" >> "$log"; continue
+      [ -n "$mine" ] && [ -n "$p_" ] && claimed[$p_]="Claude session $sid, held over the limit"
+      resumed_sid[$sid]=1
+      echo "hold $sid ($cwd): over the limit of $max sessions" >> "$log"; return 0
     fi
     n=$((n + 1))
-
     cmd=$(resume_cmd "$f")
     mv "$f" "$STATE_DIR/restored/"
+    [ -n "$mine" ] && [ -n "$p_" ] && claimed[$p_]="Claude session $sid"
+    resumed_sid[$sid]=1
     echo "resume $sid ($cwd): $cmd" >> "$log"
-    printf '%s\t%s\t%s\n' "$cwd" "$(tab_title "$transcript" "$cwd")" "$cmd"
-  done < <(ordered_entries)
+    out+=("$cwd"$'\t'"$(tab_title "$transcript" "$cwd")"$'\t'"$cmd")
+  }
+
+  # One pane of the last server that is not a resumed Claude session.
+  plan_pane() {
+    local kind=$1 pane=$2 cwd=$3 arg=$4 dir alt cmd what
+    if [ -n "${claimed[$pane]:-}" ]; then
+      echo "skip pane $pane ($kind): ${claimed[$pane]} is in it" >> "$log"; return 0
+    fi
+    if [ "$kind" = claude ] && [ -n "${resumed_sid[$arg]:-}" ]; then
+      echo "skip pane $pane (claude): its session $arg is handled from its entry" >> "$log"; return 0
+    fi
+    if [ "$np" -ge "$max_panes" ]; then
+      echo "skip pane $pane ($kind, $cwd): over the limit of $max_panes tabs" >> "$log"; return 0
+    fi
+    dir=$cwd
+    if [ ! -d "$dir" ]; then
+      if alt=$(relocated_dir "$dir"); then
+        echo "pane $pane: folder $cwd is gone, using $alt (moved)" >> "$log"; dir=$alt
+      else
+        echo "pane $pane: folder $cwd is gone, opening in $HOME instead" >> "$log"; dir=$HOME
+      fi
+    fi
+    case "$kind" in
+      opencode)
+        if [ -n "$arg" ]; then
+          cmd="cd $(printf '%q' "$dir") && opencode -s $(printf '%q' "$arg")"
+          what="opencode session $arg"
+        else
+          cmd="cd $(printf '%q' "$dir") && opencode"
+          what="opencode, started fresh: no session id was found"
+        fi ;;
+      claude) cmd="cd $(printf '%q' "$dir")"; what="a shell: Claude session $arg ran here, but has no entry to resume" ;;
+      other)  cmd="cd $(printf '%q' "$dir")"; what="a shell: it ran $arg, which is not restarted" ;;
+      *)      cmd="cd $(printf '%q' "$dir")"; what="a shell" ;;
+    esac
+    np=$((np + 1))
+    echo "reopen pane $pane in $dir as $what: $cmd" >> "$log"
+    out+=("$dir"$'\t'"$(basename "$dir")"$'\t'"$cmd")
+  }
+
+  while IFS=$'\t' read -r k a b c d; do
+    case "$k" in
+      entry) plan_entry "$a" ;;
+      pane) plan_pane "$a" "$b" "$c" "${d:-}" ;;
+    esac
+  done < <(ordered_entries "$panes_file")
+  # Entries that appeared while plan ran (written under a new name by another
+  # program) would otherwise be missed. Look again until nothing new shows up.
+  for _ in 1 2 3; do
+    local -a extra=()
+    for f in "$SESS_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      [ -n "${seen[$(basename "$f" .json)]:-}" ] || extra+=("$f")
+    done
+    [ ${#extra[@]} -gt 0 ] || break
+    for f in "${extra[@]}"; do
+      echo "found $(basename "$f" .json) after the first pass" >> "$log"
+      plan_entry "$f"
+    done
+  done
+  # Release the lock before printing: the caller spawns tabs as it reads, and
+  # their hooks and snapshots must not wait for us.
+  exec 9>&-
+  [ ${#out[@]} -gt 0 ] && printf '%s\n' "${out[@]}"
+  return 0
 }
 
 wait_for_mux() {
@@ -670,18 +932,22 @@ list() {
   [ -n "$found" ] || echo "no recorded sessions"
 }
 
+# Sourced (by claude-persist.test.sh): define the functions only.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
 case "${1:-}" in
   hook-start) [ -d /run/systemd/system ] && hook_start ;;
   hook-end)   [ -d /run/systemd/system ] && hook_end ;;
   capture)    capture "${2:-}" ;;
   snapshot)   snapshot ;;
   plan)       plan ;;
+  panes)      ft list --json 2>/dev/null | { l=$(cat); pane_rows "$l"; } ;;
   restore)    restore ;;
   list)       list ;;
   forget)     rm -v "$SESS_DIR/${2:?entry key}.json" ;;
   resume-cmd) resume_cmd_inner "${2:?entry file}" ;;
   respawn)    f=${2:?entry file}; [ -f "$f" ] || { echo "no entry file $f" >&2; exit 1; }
               spawn_tab "${3:-}" "$(jq -r .cwd "$f")" "$(resume_cmd "$f")" || exit 1 ;;
-  *) sed -n '2,33p' "$0"; exit 1 ;;
+  *) sed -n '2,/^$/p' "$0"; exit 1 ;;
 esac
 exit 0
