@@ -23,7 +23,8 @@ import sys
 # honours them, which is what puts the strip right under the camera.
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import (QElapsedTimer, QFileSystemWatcher, QPointF, QRectF,
+                            Qt, QTimer)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QLinearGradient,
                            QPainter, QTextDocument)
 from PySide6.QtWidgets import QApplication, QWidget
@@ -94,6 +95,14 @@ class Prompter(QWidget):
         self.timer.start(16)
         self.toast_timer = QTimer(self, singleShot=True)
         self.toast_timer.timeout.connect(self.clear_toast)
+
+        # Reload when the script file changes on disk. Many editors save by
+        # writing a new file and renaming it over the old one, which drops the
+        # watch, so the path is re-added after each change.
+        self.watcher = QFileSystemWatcher([os.path.abspath(args.script)], self)
+        self.watcher.fileChanged.connect(self.on_file_changed)
+        self.reload_timer = QTimer(self, singleShot=True)
+        self.reload_timer.timeout.connect(self.auto_reload)
 
         self.place()
         self.load()
@@ -248,6 +257,23 @@ class Prompter(QWidget):
         self.place()
         self.reload_keep_place()
         self.show_toast(f"Width {int(self.args.width * 100)}%")
+
+    def on_file_changed(self, _path):
+        self.reload_timer.start(200)
+
+    def auto_reload(self):
+        path = os.path.abspath(self.args.script)
+        if not os.path.exists(path):
+            self.reload_timer.start(200)
+            return
+        if path not in self.watcher.files():
+            self.watcher.addPath(path)
+        try:
+            self.reload_keep_place()
+        except (OSError, UnicodeDecodeError):
+            self.reload_timer.start(500)
+            return
+        self.show_toast("Script reloaded")
 
     def reload_keep_place(self):
         frac = self.offset / max(1.0, self.doc.size().height())
