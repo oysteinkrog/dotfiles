@@ -114,9 +114,9 @@ on_transcription = false
 
 [osd]
 frontend = "vo"   # GPU popup on the vo framework; "gtk4" switches back
-# Swiss look (patched build): time and word count, hairline waveform, large
-# transcript, status line, in the KDE Plasma colors and fonts.
-theme = "swiss"
+# The look (theme) is set per machine in config.d/50-host.toml, linked by
+# install.sh from the machine profile in the private life repo
+# (setup/machines/<host>/voxtype.toml).
 style = "default"
 layout = "compact"
 # Popup centred on the screen at its full height (anchor = "center", middle
