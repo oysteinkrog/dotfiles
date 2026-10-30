@@ -14,6 +14,9 @@ units=(
   presence-detect.service                  # dotfiles: here, remote or away (reads local-input-watch, system step)
   shader-wallpaper-theme-sync.path         # dotfiles: Plasma colours into the Star Nest wallpaper
   streamcam-mic-resume.service             # dotfiles: StreamCam mic check at login and wake
+  voxtype.service                          # dotfiles: dictation (package and models: voxtype step)
+  voxtype-update.timer                     # dotfiles: pinned voxtype build and restart at idle
+  voxtype-words-sync.timer                 # dotfiles: corrections and learned words via the life repo
   # Machine health and memory
   pressure-coordinator.service             # dotfiles: memory pressure level for heavy-build
   machine-monitor.service                  # dotfiles: reports machine health problems

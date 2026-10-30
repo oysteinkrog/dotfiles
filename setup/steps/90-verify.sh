@@ -69,6 +69,19 @@ if curl -fsS -m 3 http://127.0.0.1:4809/health >/dev/null 2>&1; then ok "agent-m
 else warn "agent-mail /health on :4809 does not answer"; fi
 tailscale status >/dev/null 2>&1 && ok "tailscale logged in" || warn "tailscale not logged in: tailscale up"
 
+step "verify: voxtype"
+if systemctl --user is-active -q voxtype.service; then
+  vx_status=$(/usr/lib/voxtype-local/voxtype status 2>/dev/null || echo "no answer")
+  ok "voxtype.service active, status $vx_status"
+else
+  warn "voxtype.service not active"
+fi
+for u in voxtype-update.timer voxtype-words-sync.timer; do
+  systemctl --user is-enabled -q "$u" 2>/dev/null && ok "$u" || warn "$u not enabled (services step)"
+done
+if grep -qx 'mode=live' "$HOME/.config/voxtype-sync.conf" 2>/dev/null; then ok "voxtype sync: live"
+else info "voxtype sync: dry-run (mode=live in ~/.config/voxtype-sync.conf turns it on)"; fi
+
 step "verify: session state"
 [[ " $(id -nG) " == *" docker "* ]] && ok "docker group active" || warn "docker group not active in this login; log out and in"
 if pgrep -af 'ld-linux-x86-64.so.2 .*claude' >/dev/null; then
