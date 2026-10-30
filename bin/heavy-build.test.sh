@@ -1203,13 +1203,19 @@ DR_OLD='W 0000000996000000000-1-o 996000 normal 38 2 600 -'
 DR_N='W 0000000999500000000-2-m 999500 normal 1 1 60 -'
 DR_L='W 0000000999500000000-2-m 999500 low 1 1 60 -'
 DR_H='W 0000000999500000000-2-m 999500 high 1 1 60 -'
-DR_WHY='drain: 0000000996000000000-1-o has waited 66 min, so no new normal or low build starts until it does'
+DR_WHY='reserve: 0000000996000000000-1-o has waited 66 min, so 38.0 GiB stays reserved for it'
 out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_N" | ADM_DRAIN=0 adm 0000000999500000000-2-m 0 1 12)
 check "drain off: a small normal build backfills past the old one (got '$out')" '[[ $out == start\|* ]]'
 out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_N" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
-check "drain: the small normal build waits for the one that waited 66 min (got '$out')" '[[ $out == "wait|$DR_WHY|"* ]]'
+check "drain: the small normal build waits beside the reservation of the one that waited 66 min (got '$out')" '[[ $out == "wait|$DR_WHY"* ]]'
 out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_L" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
-check "drain: a low build waits too (got '$out')" '[[ $out == "wait|$DR_WHY|"* ]]'
+check "drain: a low build waits too (got '$out')" '[[ $out == "wait|$DR_WHY"* ]]'
+DR_OLD20='W 0000000996000000000-1-o 996000 normal 20 2 600 -'
+DR_RUN="R b1 999000 2 1 1003000 $((2 << 30)) - 0 normal - cargo-test"
+out=$(printf '%s\n' "$DR_RUN" "$DR_OLD20" "$DR_N" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
+check "drain: a build that fits beside the reservation starts (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$DR_RUN" "$DR_OLD20" 'W 0000000999500000000-2-m 999500 normal 16 1 60 -' | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
+check "drain: a build that does not fit beside the reservation waits (got '$out')" '[[ $out == "wait|reserve: "* ]]'
 out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_H" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
 check "drain: a high build still passes (got '$out')" '[[ $out == start\|* ]]'
 check "drain: the HEAVY_BUILD_DRAIN_SECS default is 3600" 'grep -q "^  setting HEAVY_BUILD_DRAIN_SECS 3600$" "$HB"'
@@ -1263,7 +1269,7 @@ rm -rf "$SA"
 # the running app runs end does not drain the queue; new app runs still wait.
 DB_APP="R app1 990000 8 2 0 $((20 << 30)) - 2 normal - app-run"
 out=$(printf '%s\n' "$DB_APP" "$DR_OLD" "$DR_N" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
-check "drain bound off: the small build still waits (got '$out')" '[[ $out == "wait|drain:"* ]]'
+check "drain bound off: the small build still waits (got '$out')" '[[ $out == "wait|reserve:"* ]]'
 out=$(printf '%s\n' "$DB_APP" "$DR_OLD" "$DR_N" | ADM_DRAIN=3600 ADM_STARVEBOUND=1 ADM_STARVEFIX=1 adm 0000000999500000000-2-m 0 1 12)
 check "drain bound: a head that waits for app runs lets a small build pass (got '$out')" '[[ $out == start\|* ]]'
 out=$(printf '%s\n' "$DB_APP" "$DR_OLD" 'W 0000000999500000000-2-m 999500 normal 1 1 60 - app-run' | ADM_DRAIN=3600 ADM_STARVEBOUND=1 ADM_STARVEFIX=1 adm 0000000999500000000-2-m 0 1 12)
