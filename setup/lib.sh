@@ -21,6 +21,9 @@ HOST_WINDOW_LAYOUT=""     # pin-to-monitor KWin script layout (JSON), see the of
 HOST_FRANKENTERM_BADGE=none  # badge on the main Frankenterm icon: house, building, a letter or none
 HOST_FRANKENTERM_REMOTES=()  # other muxes to open over ssh, as <ssh-host>:<badge>, e.g. work:building
 HOST_USER_UNITS=()        # systemd user units only this machine enables (70-services.sh)
+HOST_VOXTYPE_VARIANT=""   # localbuilds voxtype variant: cuda or cpu; empty picks cuda when lspci shows NVIDIA
+HOST_VOXTYPE_PEERS=()     # ssh hosts to copy voxtype builds and models from (voxtype-update, voxtype-models)
+HOST_VOXTYPE_SOUNDS=0     # 1: also install the sound strip encoder (881 MB)
 host_system() { :; }      # extra root steps for this machine (runs inside the system step)
 
 if [ -f "$HOST_DIR/host.sh" ]; then

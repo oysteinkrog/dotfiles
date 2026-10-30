@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# voxtype-update: keep this machine's voxtype on the build that the localbuilds recipe pins,
+# and restart it when its config changes. Run by voxtype-update.timer every 15 minutes.
+#
+#   voxtype-update            one pass, in the mode set in ~/.config/voxtype-sync.conf
+#   voxtype-update --dry-run  say what it would do and change nothing (the default mode)
+#   voxtype-update --live     act: pull, fetch or build, install, restart
+#
+# Live mode needs the line mode=live in ~/.config/voxtype-sync.conf (or --live).
+#
+# One pass:
+#  1. Fast-forward ~/src/localbuilds and ~/.dotfiles to their upstream. A repo with local
+#     commits is left alone, with a notice; so is one where local edits are in the way.
+#  2. If the installed voxtype-<variant>-local is not the recipe's PIN, copy the build
+#     from a peer (HOST_VOXTYPE_PEERS) with `localbuild fetch`. When no peer has it,
+#     queue `localbuild build` in jobd between 01:00 and 06:00.
+#  3. When a new build is ready or the config changed, install and restart only while
+#     `voxtype status` says idle and presence-detect says away. After 24 hours of
+#     waiting, idle alone is enough. The status is read again right before the restart.
+# The variant and peers come from the machine profile (setup/lib.sh). Notices go to the
+# journal and, once per distinct message, to the desktop.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# shellcheck source=SCRIPTDIR/../setup/lib.sh
+. "$here/../setup/lib.sh"
+
+LB=${VXS_LOCALBUILDS:-$HOME/src/localbuilds}
+DOT=${VXS_DOTFILES:-$DOTFILES}
+VX=${VXS_VOXTYPE:-/usr/lib/voxtype-local/voxtype}
+STATE=${VXS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/voxtype-sync}
+PRESENCE=${VXS_PRESENCE:-${XDG_STATE_HOME:-$HOME/.local/state}/presence/state}
+CONF_DIR=${VXS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/voxtype}
+WAIT_MAX=${VXS_WAIT_MAX_SECS:-86400}
+NOW=${VXS_NOW:-$(date +%s)}
+HOUR=${VXS_HOUR:-$(date +%-H)}
+
+mode=dry-run
+conf=${XDG_CONFIG_HOME:-$HOME/.config}/voxtype-sync.conf
+if [ -f "$conf" ] && grep -qx 'mode=live' "$conf"; then mode=live; fi
+case "${1:-}" in
+  --dry-run) mode=dry-run ;;
+  --live) mode=live ;;
+  "") ;;
+  *) echo "usage: voxtype-update [--dry-run|--live]" >&2; exit 2 ;;
+esac
+mkdir -p "$STATE"
+
+say() { printf 'voxtype-update: %s\n' "$*"; }
+notice() {
+  say "$*"
+  [ "$(cat "$STATE/last-notice" 2>/dev/null)" = "$*" ] && return 0
+  printf '%s\n' "$*" > "$STATE/last-notice"
+  notify-send -a voxtype-update "Voxtype update" "$*" 2>/dev/null || true
+}
+act() {
+  if [ "$mode" = live ]; then "$@"; else say "dry-run, would run: $*"; fi
+}
+
+# Fast-forward a repo; prints the ref to read the recipe from afterwards.
+fast_forward() {
+  local repo=$1 up ahead behind
+  if ! git -C "$repo" fetch -q 2>/dev/null; then
+    say "$repo: fetch failed; using what is here" >&2; echo HEAD; return
+  fi
+  if ! up=$(git -C "$repo" rev-parse -q --abbrev-ref '@{upstream}' 2>/dev/null); then
+    echo HEAD; return
+  fi
+  read -r ahead behind < <(git -C "$repo" rev-list --left-right --count "HEAD...$up")
+  if [ "$behind" = 0 ]; then echo HEAD; return; fi
+  if [ "$ahead" != 0 ]; then
+    notice "$repo has $ahead local and $behind new commits; not pulling it" >&2
+    echo HEAD; return
+  fi
+  if [ "$mode" = live ]; then
+    if git -C "$repo" merge -q --ff-only "$up" >&2; then echo HEAD
+    else notice "$repo: fast-forward failed, local edits are in the way" >&2; echo HEAD; fi
+  else
+    say "dry-run, would fast-forward $repo by $behind commits" >&2; echo "$up"
+  fi
+}
+
+lb_ref=$(fast_forward "$LB")
+fast_forward "$DOT" >/dev/null
+
+variant=${HOST_VOXTYPE_VARIANT:-}
+if [ -z "$variant" ]; then if has_nvidia; then variant=cuda; else variant=cpu; fi; fi
+pkg=voxtype-$variant-local
+pin=$(git -C "$LB" show "$lb_ref:recipes/voxtype/recipe.sh" | sed -n 's/^PIN=//p')
+[ -n "$pin" ] || { notice "no PIN in $LB recipes/voxtype/recipe.sh"; exit 1; }
+want=g${pin:0:10}
+have=$(pacman -Q "$pkg" 2>/dev/null | awk '{print $2}' || true)
+
+# 2. The pinned build, from a peer or from jobd.
+ready=""
+if [[ $have != *".$want-"* ]]; then
+  if [ "$mode" = live ]; then
+    for peer in "${HOST_VOXTYPE_PEERS[@]}" ""; do
+      # With no peer left, fetch still reports a finished local build.
+      if localbuild fetch "voxtype@$variant" --from "${peer:-none}" >&2; then ready=1; break; fi
+    done
+    if [ -z "$ready" ]; then
+      job_exit=$(cat "$STATE/build-job" 2>/dev/null || true)
+      if [ -n "$job_exit" ] && [ ! -e "$job_exit" ]; then
+        say "the build of $pkg $want is still running in jobd"
+      elif [ "$HOUR" -ge 1 ] && [ "$HOUR" -lt 6 ]; then
+        out=$(job submit --detach -- localbuild build "voxtype@$variant")
+        printf '%s\n' "${out##* }" > "$STATE/build-job"
+        notice "no peer has $pkg $want; building it here in jobd"
+      else
+        notice "no peer has $pkg $want; it will be built here between 01:00 and 06:00"
+      fi
+    fi
+  else
+    say "dry-run, would fetch $pkg $want from ${HOST_VOXTYPE_PEERS[*]:-no peers} or build it (installed: ${have:-none})"
+    ready=1
+  fi
+fi
+
+# 3. Config: compare with what the daemon got at its last restart by this script. The
+# first pass takes the current config as that baseline.
+config_hash() {
+  local f
+  for f in "$CONF_DIR/config.toml" "$CONF_DIR"/config.d/*.toml; do
+    if [ -f "$f" ]; then printf '%s\n' "$f"; cat "$f"; fi
+  done | sha256sum | cut -c1-16
+}
+cfg=$(config_hash)
+[ -f "$STATE/config-hash" ] || printf '%s\n' "$cfg" > "$STATE/config-hash"
+changed=""
+[ "$cfg" = "$(cat "$STATE/config-hash")" ] || changed=1
+installed_not_restarted=""
+[ -f "$STATE/restart-pending" ] && installed_not_restarted=1
+
+if [ -z "$ready$changed$installed_not_restarted" ]; then
+  rm -f "$STATE/pending-since"
+  say "up to date ($pkg $have)"
+  exit 0
+fi
+[ -f "$STATE/pending-since" ] || printf '%s\n' "$NOW" > "$STATE/pending-since"
+waited=$(( NOW - $(cat "$STATE/pending-since") ))
+why="${ready:+new build $want }${changed:+config changed }${installed_not_restarted:+installed, not restarted }"
+
+status=$("$VX" status 2>/dev/null || echo unknown)
+if [ "$status" != idle ]; then say "voxtype is $status; waiting ($why)"; exit 0; fi
+away=""
+if [ -f "$PRESENCE" ] && jq -e --argjson now "$NOW" \
+     '.state == "away" and (.updated | type == "number") and ($now - .updated) < 120' \
+     "$PRESENCE" >/dev/null 2>&1; then
+  away=1
+fi
+if [ -z "$away" ] && [ "$waited" -lt "$WAIT_MAX" ]; then
+  say "waiting until you are away ($why, waiting ${waited}s)"
+  exit 0
+fi
+
+if [ -n "$ready" ]; then
+  act localbuild install "voxtype@$variant"
+  [ "$mode" = live ] && touch "$STATE/restart-pending"
+fi
+status=$("$VX" status 2>/dev/null || echo unknown)
+if [ "$status" != idle ]; then say "a recording started; restarting on the next pass"; exit 0; fi
+act systemctl --user restart voxtype.service
+if [ "$mode" = live ]; then
+  printf '%s\n' "$cfg" > "$STATE/config-hash"
+  rm -f "$STATE/pending-since" "$STATE/restart-pending"
+  notice "voxtype restarted: $why"
+else
+  notice "dry-run: would install and restart voxtype now: $why"
+fi
