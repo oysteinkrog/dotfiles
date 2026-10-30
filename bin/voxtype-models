@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# voxtype-models: make sure this machine has the voxtype models its config uses.
+#
+#   voxtype-models            copy or download what is missing
+#   voxtype-models --dry-run  say what is missing and change nothing
+#
+# Each missing model is copied from the first peer that has it (HOST_VOXTYPE_PEERS in the
+# machine profile), else downloaded with `voxtype setup --download`. The int8 live preview
+# model is made from the fp32 download with the localbuilds recipe's quantize script when
+# no peer has it. The sound strip files (encoder-sounds.onnx, sound-probe.bin) come only
+# from a peer, and only with HOST_VOXTYPE_SOUNDS=1. Nothing is ever deleted: models this
+# list does not name stay where they are.
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# shellcheck source=SCRIPTDIR/../setup/lib.sh
+. "$here/../setup/lib.sh"
+
+VX=${VXS_VOXTYPE:-/usr/lib/voxtype-local/voxtype}
+M=${VXS_MODELS:-${XDG_DATA_HOME:-$HOME/.local/share}/voxtype/models}
+LB=${VXS_LOCALBUILDS:-$HOME/src/localbuilds}
+# The peers keep their models at the default place.
+REL=${VXS_PEER_MODELS:-.local/share/voxtype/models}
+dry=""
+case "${1:-}" in --dry-run) dry=1 ;; "") ;; *) echo "usage: voxtype-models [--dry-run]" >&2; exit 2 ;; esac
+
+variant=${HOST_VOXTYPE_VARIANT:-}
+if [ -z "$variant" ]; then if has_nvidia; then variant=cuda; else variant=cpu; fi; fi
+UNIFIED=parakeet-unified-en-0.6b-int8
+UNIFIED_FILES=(encoder.onnx decoder_joint.onnx tokenizer.model vocab.txt)
+SOUND_FILES=(encoder-sounds.onnx sound-probe.bin)
+# Cohere is the final engine on a GPU; without one the preview model types the final text.
+downloads=(parakeet-tdt-0.6b-v3-int8)
+[ "$variant" = cuda ] && downloads=(cohere-transcribe-q4f16 "${downloads[@]}")
+
+# Copy files of model dir $1 from the first peer that has all of them. Files go in under a
+# temporary name and are renamed once complete.
+from_peer() {
+  local dir=$1 p f; shift
+  for p in "${HOST_VOXTYPE_PEERS[@]}"; do
+    # shellcheck disable=SC2029  # the paths are meant to expand here
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$p" "cd '$REL/$dir' && ls $*" >/dev/null 2>&1 || continue
+    if [ -n "$dry" ]; then info "would copy $dir ($*) from $p"; return 0; fi
+    mkdir -p "$M/$dir"
+    for f; do
+      [ -e "$M/$dir/$f" ] && continue
+      rsync -a "$p:$REL/$dir/$f" "$M/$dir/.$f.part" && mv "$M/$dir/.$f.part" "$M/$dir/$f" || return 1
+    done
+    ok "$dir: copied from $p"
+    return 0
+  done
+  return 1
+}
+
+# Files of a model dir as the peer has them, for a whole-directory copy.
+peer_files() {
+  local dir=$1 p
+  for p in "${HOST_VOXTYPE_PEERS[@]}"; do
+    # shellcheck disable=SC2029
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$p" "cd '$REL/$dir' && ls" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+step "voxtype models ($variant)"
+[ -n "$dry" ] || mkdir -p "$M"
+for model in "${downloads[@]}"; do
+  if [ -d "$M/$model" ] && [ -n "$(ls -A "$M/$model" 2>/dev/null)" ]; then ok "$model"; continue; fi
+  mapfile -t files < <(peer_files "$model" || true)
+  if [ ${#files[@]} -gt 0 ] && from_peer "$model" "${files[@]}"; then continue; fi
+  if [ -n "$dry" ]; then info "would download $model"; continue; fi
+  "$VX" setup --download --model "$model" --quiet --no-post-install && ok "$model: downloaded"
+done
+
+missing=()
+for f in "${UNIFIED_FILES[@]}"; do [ -e "$M/$UNIFIED/$f" ] || missing+=("$f"); done
+if [ ${#missing[@]} = 0 ]; then
+  ok "$UNIFIED"
+elif ! from_peer "$UNIFIED" "${UNIFIED_FILES[@]}"; then
+  if [ -n "$dry" ]; then
+    info "would download parakeet-unified-en-0.6b (2.4 GB) and quantize it to $UNIFIED"
+  else
+    [ -d "$M/parakeet-unified-en-0.6b" ] ||
+      "$VX" setup --download --model parakeet-unified-en-0.6b --quiet --no-post-install
+    heavy-build uv run --no-project --with onnxruntime --with onnx python -I \
+      "$LB/recipes/voxtype/quantize-parakeet-unified.py" \
+      "$M/parakeet-unified-en-0.6b" "$M/$UNIFIED"
+    ok "$UNIFIED: made from the fp32 model"
+  fi
+fi
+
+if [ "${HOST_VOXTYPE_SOUNDS:-0}" = 1 ]; then
+  have_all=1
+  for f in "${SOUND_FILES[@]}"; do [ -e "$M/$UNIFIED/$f" ] || have_all=""; done
+  if [ -n "$have_all" ]; then ok "sound strip files"
+  elif ! from_peer "$UNIFIED" "${SOUND_FILES[@]}"; then
+    warn "sound strip files missing and no peer has them"
+  fi
+fi
