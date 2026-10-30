@@ -383,6 +383,8 @@
 #   for dotnet and Wine commands, and wine:<prefix> for Wine runs that would
 #   share one prefix and so one wineserver (the DESKTOP-14957 guard). The guard
 #   never sets WINEPREFIX. HEAVY_BUILD_KEY=none turns lock keys off.
+#   HEAVY_BUILD_WINE_PREFIX=<path>, set when the job is submitted, names the
+#   prefix the job uses and gives it wine:<that path>, whatever else it runs.
 #   For tools/wine/run-tests.sh the wine: key follows the prefix the script
 #   will use, read from that tree's own run-tests.sh. A script with its own
 #   prefix per worktree (motioncatalyst-tests-<tree><AgentOutputSuffix>) gets
@@ -1720,6 +1722,19 @@ run_tests_prefix() {
 wine_key() {
   local top=$1 p rt
   shift
+  # HEAVY_BUILD_WINE_PREFIX (2026-10-30, Astra via manager-machine): the
+  # submitter names the Wine prefix the job uses, so a wrapper script that runs
+  # on its own prefix does not get the shared-prefix key below. It wins over
+  # every guess. Set it before the job is submitted; inside the running job is
+  # too late. jobd resolves it the same way (estimate.wine_key).
+  if [[ -n ${HEAVY_BUILD_WINE_PREFIX:-} ]]; then
+    p=$HEAVY_BUILD_WINE_PREFIX
+    [[ $p == "~" || $p == "~/"* ]] && p=$HOME${p:1}
+    p=$(realpath -m -- "$p")
+    [[ $(wineservers_for "$p") == *outside* ]] && return 0
+    echo "wine:$p"
+    return 0
+  fi
   if [[ ${cls:-} == app-run ]]; then
     if p=$(app_prefix "$@"); then echo "wine:$p"; return 0; fi
     # 2026-10-30: an app run on the shared or a set prefix (run-mc.sh with
@@ -3254,7 +3269,12 @@ END {
       continue
     }
     bk = clash(w_keys[i], w_cls[i] == "app-run")
-    if (bk != "") { why[i] = "key: lock key " bk " is busy (" clashid ")"; continue }
+    if (bk != "") {
+      why[i] = "key: lock key " bk " is busy (" clashid ")"
+      # A wine: key may be a guess (2026-10-30): point the waiter at the fix.
+      if (bk ~ /^wine:/) why[i] = why[i] "; if this job runs on another Wine prefix, set HEAVY_BUILD_WINE_PREFIX to it when you submit"
+      continue
+    }
     # App runs (headless MotionCatalyst) last for hours. At most maxapp of them
     # hold job slots. One that waits for this keeps its place but is never the
     # head of the line, so it cannot starve builds behind it.
