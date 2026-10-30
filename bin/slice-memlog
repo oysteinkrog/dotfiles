@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Append one tab-separated memory line per run to ~/.local/state/slice-memlog/YYYY-MM-DD.tsv.
+# Columns: ISO time, MemAvailable, MemTotal, SwapFree, Slab, Shmem, Cached, Zswap (kB, from
+# /proc/meminfo), then memory.current and memory.swap.current (bytes) for each top-level
+# slice of the user manager, system.slice and init.scope, then the 5 largest depth-5 (absolute; two levels below the user manager)
+# cgroups under the user manager as name=GiB pairs. Bash and awk only.
+set -u
+dir=${XDG_STATE_HOME:-$HOME/.local/state}/slice-memlog
+mkdir -p "$dir"
+root=/sys/fs/cgroup
+um=$root/user.slice/user-$UID.slice/user@$UID.service
+
+printf -v now '%(%Y-%m-%dT%H:%M:%S%z)T' -1
+day=${now%%T*}
+
+groups=(builds.slice claude.slice app.slice session.slice background.slice jobs.slice)
+for d in "$um"/*.slice; do
+  [[ -d $d ]] || continue
+  n=${d##*/}
+  [[ " ${groups[*]} " == *" $n "* ]] || groups+=("$n")
+done
+
+hdr="time	MemAvailable_kB	MemTotal_kB	SwapFree_kB	Slab_kB	Shmem_kB	Cached_kB	Zswap_kB"
+paths=()
+for n in "${groups[@]}"; do paths+=("$um/$n"); hdr+="	$n:cur	$n:swap"; done
+paths+=("$root/system.slice" "$root/init.scope")
+hdr+="	system.slice:cur	system.slice:swap	init.scope:cur	init.scope:swap	top5_depth5_GiB"
+
+line=$(shopt -s nullglob; printf '%s\n' "$um"/*/*/ | awk -v now="$now" -v um="$um" -v paths="${paths[*]}" '
+BEGIN {
+  while ((getline l < "/proc/meminfo") > 0) { split(l, a, /:[ \t]*/); split(a[2], b, " "); m[a[1]] = b[1] }
+  out = now
+  n = split("MemAvailable MemTotal SwapFree Slab Shmem Cached Zswap", k, " ")
+  for (i = 1; i <= n; i++) out = out "\t" ((k[i] in m) ? m[k[i]] : "-")
+  np = split(paths, p, " ")
+  for (i = 1; i <= np; i++)
+    for (j = 0; j < 2; j++) {
+      f = p[i] "/" (j ? "memory.swap.current" : "memory.current"); v = ""
+      if ((getline v < f) <= 0) v = "-"
+      close(f); out = out "\t" v
+    }
+}
+{
+  sub(/\/$/, "", $0); f = $0 "/memory.current"; v = ""
+  if ((getline v < f) > 0) sz[$0] = v + 0
+  close(f)
+}
+END {
+  for (t = 0; t < 5; t++) {
+    best = ""; bv = -1
+    for (d in sz) if (sz[d] > bv) { bv = sz[d]; best = d }
+    if (best == "") break
+    nm = substr(best, length(um) + 2); gsub(/\//, ">", nm)
+    top = top (t ? " " : "") nm "=" sprintf("%.2f", bv / 1073741824)
+    delete sz[best]
+  }
+  print out "\t" (top == "" ? "-" : top)
+}')
+
+f=$dir/$day.tsv
+[[ -s $f ]] || printf '%s\n' "$hdr" > "$f"
+printf '%s\n' "$line" >> "$f"
+
+# Delete files older than 14 days (names sort by date).
+printf -v cutoff '%(%Y-%m-%d)T' $(( EPOCHSECONDS - 14*86400 ))
+for old in "$dir"/*.tsv; do
+  b=${old##*/}; [[ ${b%.tsv} < $cutoff ]] && rm -f -- "$old"
+done
+exit 0
