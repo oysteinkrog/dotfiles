@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The suite tests heavy-build's own queue; a jobd backend from the caller's env makes every check refuse (142 FAILs, 2026-10-30).
+unset HEAVY_BUILD_BACKEND
 # Tests for heavy-build's give-up clock, the manager hold file, estimates,
 # classes and the critical-first switch.
 # Runs heavy-build in shadow mode against private runtime, state, config and
