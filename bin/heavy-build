@@ -349,7 +349,8 @@
 #   First run (HEAVY_BUILD_FIRST_RUN_EST=1, since 2026-10-30; 0 turns it
 #   off): a command with no run of its own gets at least the p90 peak of
 #   the last 50 first runs of other commands in its class (mem=first-p90),
-#   since a first run often builds cold.
+#   since a first run often builds cold. It never raises a repo-max or
+#   session-max group estimate.
 #   Cores and wall time come from the
 #   last 5 runs of the same command, then from the class, then 8 cores and
 #   600 s. History: ~/.local/state/heavy-build/history.tsv,
@@ -1355,6 +1356,10 @@ SIG_DAYS=14
 # 3-day replay (/var/tmp/claude/hb-firstrun): first runs under their need
 # 250 -> 171 of 2403, over-estimate 350 -> 379 GiB-h. Decided by Astra
 # together with HEAVY_BUILD_WINE_FALLBACK_PCT=95 in the conf file.
+# It never raises a group estimate (mem=repo-max or session-max, see below
+# the function): a new worktree of a small repo keeps its group figure. On
+# the same replay that left 209 runs at their group figure, added 1 run
+# under its need and cut 4.9 GiB-h of over-estimate.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
@@ -1520,9 +1525,10 @@ estimate() {
       }
       # First run (HEAVY_BUILD_FIRST_RUN_EST=1): a key with no run of its
       # own gets at least the p90 peak of the last 50 first runs of other
-      # keys in its class, once there are 5. It is applied last, so it also
-      # raises a group estimate.
-      if (firston == 1 && kmn == 0 && fmn >= 5) {
+      # keys in its class, once there are 5. It never raises a group
+      # estimate (repo-max, session-max): that rule keeps a new worktree of
+      # a small repo off the class figure (af85602).
+      if (firston == 1 && kmn == 0 && fmn >= 5 && msrc !~ /^(repo|session)-max$/) {
         m = 0; for (i = (fmn > 50 ? fmn - 49 : 1); i <= fmn; i++) fp[++m] = fmp[i]
         srt(fp, m); i = int(0.9 * m) + 1; if (i > m) i = m
         if (fp[i] / 1073741824 > mem) { mem = fp[i] / 1073741824; msrc = "first-p90" }
