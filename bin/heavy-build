@@ -346,6 +346,10 @@
 #   and runs held at their cap count alone, as before. On 2026-10-26 one
 #   4,245 s run with a 14.4 GiB non-file peak (memory.peak 10.2 GiB) gave
 #   its command a 14.4 GiB estimate, and it held the queue as a starve head.
+#   First run (HEAVY_BUILD_FIRST_RUN_EST=1, since 2026-10-30; 0 turns it
+#   off): a command with no run of its own gets at least the p90 peak of
+#   the last 50 first runs of other commands in its class (mem=first-p90),
+#   since a first run often builds cold.
 #   Cores and wall time come from the
 #   last 5 runs of the same command, then from the class, then 8 cores and
 #   600 s. History: ~/.local/state/heavy-build/history.tsv,
@@ -979,6 +983,7 @@ read_conf() {
   setting HEAVY_BUILD_WINE_FALLBACK_PCT 75
   setting HEAVY_BUILD_OWN_EST 1
   setting HEAVY_BUILD_OWN_EST_ONE 1
+  setting HEAVY_BUILD_FIRST_RUN_EST 1
   setting HEAVY_BUILD_CLASS_BUILD_SH 1
   setting HEAVY_BUILD_GROUP_EST 1
   setting HEAVY_BUILD_GROUP_EST_SESSION 1
@@ -1336,16 +1341,27 @@ SIG_DAYS=14
 # source: history, class-history, class or default (where wall and cores
 # came from), then ",mem=" and what set memory: key, key-one, class-p90,
 # class-pNN, sig-p90, sig-max, sig-max-one, class, default, floor, key-own,
-# key-own-one, repo-max, session-max or cap.
+# key-own-one, repo-max, session-max, first-p90 or cap.
 # Group estimate (HEAVY_BUILD_GROUP_EST=1, since 2026-10-29): see below the
 # function. REPO and SESSION are the optional 5th and 6th arguments.
+# First run (HEAVY_BUILD_FIRST_RUN_EST=1, the default since 2026-10-30; 0
+# turns it off): a key with no run of its own (no history line with a wall
+# time, exit 75 and 124 left out) gets at least the p90 peak of the last 50
+# first runs of other keys in its class (the first line of each key in the
+# file, peaks counted as above), once the class has 5; mem=first-p90. A
+# first run often builds cold in a new tree, output suffix or configuration.
+# On 2026-10-29 three first runs peaked at 13.4, 9.7 and 10.1 GiB against
+# estimates of 6.0, 5.1 and 6.2 and took MemAvailable down to 3.8 GiB. The
+# 3-day replay (/var/tmp/claude/hb-firstrun): first runs under their need
+# 250 -> 171 of 2403, over-estimate 350 -> 379 GiB-h. Decided by Astra
+# together with HEAVY_BUILD_WINE_FALLBACK_PCT=95 in the conf file.
 estimate() {
   local h=$HIST
   [[ -r $h ]] || h=/dev/null
   LC_ALL=C awk -F'\t' -v k="$1" -v c="$2" -v t="$(class_table "$2")" -v maxm="$EST_MEM_MAX_GIB" \
     -v s="${3:-}" -v sf="${4:-0}" -v now="$EPOCHSECONDS" -v swin="$(( ${SIG_DAYS:-14} * 86400 ))" -v fpct="${WINE_FALLBACK_PCT:-75}" \
     -v ownest="${OWN_EST:-1}" -v nfon="${EST_NONFILE:-1}" -v nfpad="${NONFILE_PAD_PCT:-125}" -v onerow="${EST_ONE_ROW_GIB:-8}" -v ownone="${OWN_EST_ONE:-1}" \
-    -v repo="${5:--}" -v sess="${6:--}" -v grpon="${GROUP_EST:-1}" -v grpsess="${GROUP_EST_SESSION:-1}" \
+    -v repo="${5:--}" -v sess="${6:--}" -v grpon="${GROUP_EST:-1}" -v grpsess="${GROUP_EST_SESSION:-1}" -v firston="${FIRST_RUN_EST:-1}" \
     -v grpmin="${GROUP_EST_MIN_RUNS:-3}" -v grpwin="$(( ${GROUP_EST_DAYS:-30} * 86400 ))" -v grprecent="$(( ${GROUP_EST_RECENT_DAYS:-7} * 86400 ))" \
     -v grppct="${GROUP_EST_PCT:-200}" -v grpmingib="${GROUP_EST_MIN_GIB:-2}" -v grpcpct="${GROUP_EST_CLASS_PCT:-25}" '
     function max2(a, b) { return a > b ? a : b }
@@ -1363,6 +1379,9 @@ estimate() {
       return m1
     }
     function srt(a, n,   g, i, j, x) { for (g = 1; g * 3 < n; g = g * 3 + 1); for (; g >= 1; g = int(g / 3)) for (i = g + 1; i <= n; i++) { x = a[i]; for (j = i; j > g && a[j - g] + 0 > x + 0; j -= g) a[j] = a[j - g]; a[j] = x } }
+    # ffirst: this line is the first line of its key in the file, whatever
+    # its exit code.
+    { ffirst = !($3 in fseen); fseen[$3] = 1 }
     $4 > 0 && $7 != 75 && $7 != 124 {
       oom = ($8 == "oom" || ($7 == 137 && $8 != "cancelled" && $8 != "timeout"))
       if ($7 >= 128 && !oom && $2 != "app-run") next
@@ -1394,6 +1413,7 @@ estimate() {
         if (sess != "-" && sess != "" && gw[1] == sess) { if (pk + 0 > gsmax) gsmax = pk + 0; gsok += ($7 == 0); if ($1 + 0 > gsnew) gsnew = $1 + 0; gsveto += strong }
       }
       if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cnf += nf }
+      if ($2 == c && ffirst && pk != "NA") fmp[++fmn] = pk
       if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk; sms[smn] = strong }
       if (oom) next
       if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5 }
@@ -1497,6 +1517,15 @@ estimate() {
           if (cand < base) { mem = cand; msrc = gsrc; gnote = sprintf("%s,n=%d,age_h=%d,max=%.1f,base=%.1f", gid, gn, (now - gnew) / 3600, gmg, base) }
           else gnote = "higher"
         }
+      }
+      # First run (HEAVY_BUILD_FIRST_RUN_EST=1): a key with no run of its
+      # own gets at least the p90 peak of the last 50 first runs of other
+      # keys in its class, once there are 5. It is applied last, so it also
+      # raises a group estimate.
+      if (firston == 1 && kmn == 0 && fmn >= 5) {
+        m = 0; for (i = (fmn > 50 ? fmn - 49 : 1); i <= fmn; i++) fp[++m] = fmp[i]
+        srt(fp, m); i = int(0.9 * m) + 1; if (i > m) i = m
+        if (fp[i] / 1073741824 > mem) { mem = fp[i] / 1073741824; msrc = "first-p90" }
       }
       if (maxm > 0 && mem > maxm) { mem = maxm; msrc = "cap" }
       if (mem < 0.1) mem = 0.1
