@@ -1,0 +1,140 @@
+#!/usr/bin/env -S python3 -I -S
+"""Data for the Aiolos Timeline widget (org.oysteinkrog.aiolostimeline).
+
+    aiolostimeline-fetch                    print one snapshot as JSON
+    aiolostimeline-fetch --serve FILE [S]   rewrite FILE every S seconds (default 60) until the
+                                            parent process exits
+
+aiolostimeline-window starts it with --serve under with-secrets, and the widget reads the file.
+It reads the pool data that the aiolos Accounts page draws its Timeline from
+(GET /dashboard/api/accounts/pool-data), keeps only the fields the Timeline uses, and adds the
+os-theme choice so the widget matches the Agenda and the Build Queue.
+
+The server address and key come from the environment, never from this repo:
+ANTHROPIC_BASE_URL (the aiolos base URL) and AIOLOS_API_KEY. Stdlib only, no LLM.
+"""
+
+import json
+import os
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.request
+
+HOME = pathlib.Path.home()
+POOL = "anthropic"
+TIMEOUT_S = 20
+# The desktop theme picked with os-theme, shared with the Agenda and the Build Queue.
+PANEL_THEMES = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "os-theme" / "themes.json"
+PANEL_CHOICE = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state")) / "os-theme" / "current"
+
+
+def write_atomic(path, text):
+    """Write path through a temp file of this process's own, so two fetches never share one."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def panel_theme(cache):
+    """The theme picked with os-theme: its name and colour tokens. Read again only when the
+    choice or the theme file changes."""
+    try:
+        key = (PANEL_CHOICE.stat().st_mtime_ns, PANEL_THEMES.stat().st_mtime_ns)
+    except OSError:
+        key = None
+    if cache.get("key") == key and "value" in cache:
+        return cache["value"]
+    value = {"name": "plasma"}
+    try:
+        themes = json.loads(PANEL_THEMES.read_text())
+        name = PANEL_CHOICE.read_text().strip()
+        if name in themes:
+            value = {"name": name, **themes[name]}
+    except (OSError, ValueError):
+        pass
+    cache.update(key=key, value=value)
+    return value
+
+
+def pool_data():
+    base = os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/")
+    key = os.environ.get("AIOLOS_API_KEY", "")
+    if not base or not key:
+        raise RuntimeError("ANTHROPIC_BASE_URL or AIOLOS_API_KEY is not set: start with aiolostimeline-window")
+    req = urllib.request.Request(
+        f"{base}/dashboard/api/accounts/pool-data?pool={POOL}",
+        headers={"x-api-key": key, "accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"aiolos answered HTTP {exc.code}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"aiolos is not reachable: {exc.reason}") from None
+
+
+def slim(d):
+    """Only what the Timeline uses: per account its multiplier, windows and request rates."""
+    accounts = []
+    for a in d.get("accounts") or []:
+        accounts.append({
+            "name": a.get("name") or a.get("id") or "?",
+            "paused": bool(a.get("paused")),
+            "routable": a.get("routing_available") is not False,
+            "mx": a.get("multiplier_x") if a.get("multiplier_x") is not None else 1,
+            "windows": [
+                {"label": w.get("label"), "pct": w.get("pct") or 0, "resets": w.get("resets_at_ms")}
+                for w in a.get("windows") or []
+            ],
+            "rates": a.get("req_rates") or {"h1": 0, "h24": 0, "d7": 0},
+        })
+    return {"nowMs": d.get("now_ms") or int(time.time() * 1000), "accounts": accounts}
+
+
+def snapshot(cache):
+    """A fresh pool read, or only the error. The widget keeps its last data on an error."""
+    try:
+        return {"updated": int(time.time() * 1000), "pool": slim(pool_data())}
+    except Exception as exc:
+        return {"updated": int(time.time() * 1000), "error": f"{exc}"}
+
+
+def render(snap, cache):
+    return json.dumps({**snap, "panelTheme": panel_theme(cache)}, separators=(",", ":"), allow_nan=False)
+
+
+def serve(path, every):
+    """Read aiolos every `every` seconds. A theme change is written within 3 s, with the last
+    pool data."""
+    import signal
+
+    out = pathlib.Path(path)
+    parent = os.getppid()
+    cache = {}
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    snap, due = None, 0.0
+    while os.getppid() == parent:
+        theme_key = cache.get("key")
+        if time.time() >= due:
+            snap, due = snapshot(cache), time.time() + every
+            write_atomic(out, render(snap, cache))
+        else:
+            panel_theme(cache)
+            if cache.get("key") != theme_key:
+                write_atomic(out, render(snap, cache))
+        time.sleep(3)
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--serve":
+        serve(sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 60.0)
+        return
+    cache = {}
+    sys.stdout.write(render(snapshot(cache), cache))
+
+
+if __name__ == "__main__":
+    main()

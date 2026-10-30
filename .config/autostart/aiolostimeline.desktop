@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Aiolos Timeline
+Comment=Projected aiolos pool capacity over the next 7 days (org.oysteinkrog.aiolostimeline widget)
+Icon=office-chart-line
+Exec=sh -c "exec ~/bin/aiolostimeline-window"
+X-KDE-autostart-phase=2

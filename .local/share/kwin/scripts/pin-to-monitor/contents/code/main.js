@@ -16,6 +16,9 @@
 //          "fraction" fills a full-height slice: "side" is "left" or "right", "width" the
 //          share of the monitor (0.3 for 30%). Two slices whose widths add up to 1 meet
 //          without a gap or an overlap.
+// vside:   optional, with "left", "right" or "fraction": "top" or "bottom" keeps only that
+//          part of the column, and "height" is its share (0.3 for 30%). Two rules on the same
+//          column whose heights add up to 1 meet without a gap or an overlap.
 
 // Outputs need a moment to settle after a monitor turns on.
 const SETTLE_MS = 2000;
@@ -61,20 +64,31 @@ function place(w) {
         w.setMaximize(false, false);
         const a = workspace.clientArea(KWin.MaximizeArea, output, workspace.currentDesktop);
         const half = Math.floor(a.width / 2);
-        w.frameGeometry = {
+        w.frameGeometry = slice(rule, {
             x: rule.mode === "left" ? a.x : a.x + half, y: a.y,
             width: half, height: a.height,
-        };
+        });
     } else if (rule.mode === "fraction") {
         w.setMaximize(false, false);
         const a = workspace.clientArea(KWin.MaximizeArea, output, workspace.currentDesktop);
         const share = Math.min(1, Math.max(0, Number(rule.width) || 0.5));
         // The edge between the slices is at the same pixel for both sides.
         const edge = rule.side === "right" ? Math.floor(a.width * (1 - share)) : Math.floor(a.width * share);
-        w.frameGeometry = rule.side === "right"
+        w.frameGeometry = slice(rule, rule.side === "right"
             ? { x: a.x + edge, y: a.y, width: a.width - edge, height: a.height }
-            : { x: a.x, y: a.y, width: edge, height: a.height };
+            : { x: a.x, y: a.y, width: edge, height: a.height });
     }
+}
+
+// The top or bottom part of a column, for a rule with "vside". The edge is rounded from the
+// top part's share for both rules, so a top of 0.7 and a bottom of 0.3 share one pixel row.
+function slice(rule, g) {
+    if (rule.vside !== "top" && rule.vside !== "bottom") return g;
+    const share = Math.min(1, Math.max(0, Number(rule.height) || 0.5));
+    const edge = Math.round(g.height * (rule.vside === "top" ? share : 1 - share));
+    return rule.vside === "top"
+        ? { x: g.x, y: g.y, width: g.width, height: edge }
+        : { x: g.x, y: g.y + edge, width: g.width, height: g.height - edge };
 }
 
 function placeAll() {
