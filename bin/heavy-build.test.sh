@@ -471,6 +471,9 @@ row() {  # class key peak_gib exit reason [cap_gib]
 est() {  # key class [sig filtered] ; prints "mem source"
   (
     HIST=$E/hist
+    # Most fixtures give each other key one run, so every run is a first
+    # run; the first-run rule is off here unless a test sets it.
+    FIRST_RUN_EST=${FIRST_RUN_EST:-0}
     eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^SIG_DAYS=/p;/^estimate()/,/^}/p' "$HB")"
     estimate "$@" | awk '{print $1, $4}'
   )
@@ -523,6 +526,45 @@ check "own history, one run: 2 x 4 = 8 is above the 6 GiB class figure, so that 
 row wine-run-tests wtwo 2 0 ok
 out=$(est wtwo wine-run-tests)
 check "own history, one run: 2 x 2 = 4 goes under the 6 GiB wine-run-tests floor (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
+# First run (2026-10-30): a key with no run of its own gets at least the p90
+# peak of the last 50 first runs of other keys in its class.
+: > "$E/hist"
+for i in $(seq 1 10); do row cargo-test "first$i" "$i" 0 ok; done
+for i in $(seq 1 40); do row cargo-test rep 1 0 ok; done
+out=$(FIRST_RUN_EST=0 est newkey cargo-test)
+check "first run: off, a new key gets the class p90 of all 50 runs, 6 GiB (got '$out')" '[[ $out == "6.0 class-history,mem=class-p90" ]]'
+out=$(FIRST_RUN_EST=1 est newkey cargo-test)
+check "first run: a new key gets the p90 of the 11 first runs (rep's first line counts too), 9 GiB (got '$out')" '[[ $out == "9.0 class-history,mem=first-p90" ]]'
+out=$(FIRST_RUN_EST=1 est rep cargo-test)
+check "first run: a key with runs of its own keeps its own rules (got '$out')" '[[ $out == "1.2 history,mem=key-own" ]]'
+row cargo-test once 2 0 ok
+out=$(FIRST_RUN_EST=1 est once cargo-test)
+check "first run: one own run is enough to leave the rule out (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
+printf '1\tcargo-test\tgaveup\t10\t20\tNA\t75\twait\n' >> "$E/hist"
+out=$(FIRST_RUN_EST=1 est gaveup cargo-test)
+check "first run: a key whose only line is an exit 75 still counts as new (got '$out')" '[[ $out == "9.0 class-history,mem=first-p90" ]]'
+out=$(FIRST_RUN_EST=1 est newkey cargo-clippy)
+check "first run: first runs of another class do not count (got '$out')" '[[ $out == "7.6 class,mem=class" ]]'
+: > "$E/hist"
+for i in $(seq 1 3); do row cargo-test "first$i" 9 0 ok; done
+for i in $(seq 1 40); do row cargo-test rep 1 0 ok; done
+out=$(FIRST_RUN_EST=1 est newkey cargo-test)
+check "first run: under 5 first runs (3 plus rep) the rule waits (got '$out')" '[[ $out == "4.0 class-history,mem=floor" ]]'
+: > "$E/hist"
+for i in $(seq 1 10); do row cargo-test "small$i" 1 0 ok; done
+for i in $(seq 1 40); do row cargo-test big 8 0 ok; done
+out=$(FIRST_RUN_EST=1 est newkey cargo-test)
+check "first run: a first-run p90 under the class p90 never lowers it (got '$out')" '[[ $out == "8.0 class-history,mem=class-p90" ]]'
+: > "$E/hist"
+for i in $(seq 1 10); do row wine-run-tests "wf$i" 12 0 ok; done
+for i in $(seq 1 40); do row wine-run-tests "wrep" 3 0 ok; done
+for i in $(seq 1 5); do printf '%s\twine-run-tests\tsigrun%s\t10\t20\t%s\t0\tok\t\t\t\tsigZ\n' "$EPOCHSECONDS" "$i" "$(( 3 * G ))" >> "$E/hist"; done
+out=$(FIRST_RUN_EST=1 est newkey wine-run-tests sigZ 1)
+check "first run: a filtered Wine run in a new tree is raised over its sig p90 (got '$out')" '[[ $out == "12.0 class-history,mem=first-p90" ]]'
+out=$(FIRST_RUN_EST=0 est newkey wine-run-tests sigZ 1)
+check "first run: off, the sig p90 decides, then the floor (got '$out')" '[[ $out == "6.0 class-history,mem=floor" ]]'
+check "first run: the HEAVY_BUILD_FIRST_RUN_EST default is 1" 'grep -q "^  setting HEAVY_BUILD_FIRST_RUN_EST 1$" "$HB"'
+check "first run: the estimate defaults to on when the variable is unset" 'grep -q "firston=\"\${FIRST_RUN_EST:-1}\"" "$HB"'
 # Group estimate (2026-10-29): a key with no own runs falls back to the
 # highest peak of its repo's (column 15) or session's (column 14) runs of the
 # same class: max(2 GiB, 2 x that, 25% of the class figure), when lower.
@@ -869,23 +911,28 @@ teardown
 
 # End to end: under 5 sig runs, the script's default falls back to the class
 # p75 and logs mem=class-p75; HEAVY_BUILD_WINE_FALLBACK_PCT=90 brings p90 back.
-for pct in "" 90; do
+# The 20 class runs are all first runs, so the first-run rule is off for
+# those two; with it on (the default, "first") their p90 decides.
+for pct in "" 90 first; do
   setup
   read -r _ s <<< "$(sg wine-run-tests tools/wine/run-tests.sh Foo.Tests --filter Name~Bar)"
   mkdir -p "$T/state/heavy-build"
   for i in $(seq 1 20); do
     printf '%d\twine-run-tests\tc%d\t10\t20\t%d\t0\tok\t%d\t%d\t-\tother\n' "$(( EPOCHSECONDS - 60 ))" "$i" "$(( i * G ))" "$(( 24 * G ))" "$(( 22 * G ))" >> "$T/state/heavy-build/history.tsv"
   done
-  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN -u HEAVY_BUILD_WINE_FALLBACK_PCT \
+  (cd "$T/work" && exec env -u HEAVY_BUILD_MODE -u HEAVY_BUILD_ALLOW_RERUN -u HEAVY_BUILD_WINE_FALLBACK_PCT -u HEAVY_BUILD_FIRST_RUN_EST \
     XDG_RUNTIME_DIR="$T/run" XDG_STATE_HOME="$T/state" XDG_CONFIG_HOME="$T/config" \
     HB_CGROUP="$T/cg" HB_MACHINE_SESSION=/bin/false HEAVY_BUILD_PRIORITY=normal \
     HEAVY_BUILD_WAIT=3 HEAVY_BUILD_POLL=1 HEAVY_BUILD_FORCE=1 HEAVY_BUILD_KEY=none \
-    ${pct:+HEAVY_BUILD_WINE_FALLBACK_PCT=$pct} \
+    $([[ $pct == first ]] || echo HEAVY_BUILD_FIRST_RUN_EST=0) \
+    $([[ $pct == 90 ]] && echo HEAVY_BUILD_WINE_FALLBACK_PCT=90) \
     "$HB" tools/wine/run-tests.sh Foo.Tests --filter Name~Bar) > "$T/out" 2>&1
   if [[ -z $pct ]]; then
     check "sig: by default a filtered run with no sig history logs est=16.0G...mem=class-p75" 'grep -q "est=16.0G/[^ ]*mem=class-p75)" "$T/state/heavy-build/shadow.log"'
-  else
+  elif [[ $pct == 90 ]]; then
     check "sig: HEAVY_BUILD_WINE_FALLBACK_PCT=90 logs est=19.0G...mem=class-p90" 'grep -q "est=19.0G/[^ ]*mem=class-p90)" "$T/state/heavy-build/shadow.log"'
+  else
+    check "first run: by default a new key logs the p90 of the class's first runs, est=19.0G...mem=first-p90" 'grep -q "est=19.0G/[^ ]*mem=first-p90)" "$T/state/heavy-build/shadow.log"'
   fi
   teardown
 done
@@ -2835,6 +2882,9 @@ rownf() {  # class key peak_gib nonfile_gib [wall] ; values may have decimals
 est() {  # key class [sig filtered] ; prints "mem source"
   (
     HIST=$E/hist
+    # Most fixtures give each other key one run, so every run is a first
+    # run; the first-run rule is off here unless a test sets it.
+    FIRST_RUN_EST=${FIRST_RUN_EST:-0}
     eval "$(sed -n '/^class_table()/,/^}/p;/^EST_MEM_MAX_GIB=/p;/^SIG_DAYS=/p;/^estimate()/,/^}/p' "$HB")"
     estimate "$@" | awk '{print $1, $4}'
   )
