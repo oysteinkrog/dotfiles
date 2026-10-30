@@ -47,7 +47,10 @@ job wait <request id>     # follow the output; returns the job's exit code
 Wait for the exit file with a Bash `run_in_background` until-loop or a
 `Monitor`. Run `job submit` from the directory the build needs, as with
 heavy-build. `--class app-run`, `--ready-file` and `--wait-timeout` work as in
-heavy-build.
+heavy-build. A wrapper script that runs Wine or MC on its own prefix must
+declare it with `HEAVY_BUILD_WINE_PREFIX=<prefix path>` in the submit environment, or
+it takes the shared prefix's lock key and blocks other Wine jobs (heavy-build skill,
+section 8).
 
 ## 3. Killed clients
 
