@@ -1,0 +1,9 @@
+[Unit]
+Description=Share voxtype corrections and learned words through the life repo (voxtype-words-sync)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/voxtype-words-sync
+# Dry-run until ~/.config/voxtype-sync.conf has the line mode=live.
+Nice=10
