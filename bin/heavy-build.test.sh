@@ -960,7 +960,7 @@ adm() {  # me cf cfslots cfreserve ; R and W lines on stdin ; prints "decision|r
       -v realuse="${ADM_REALUSE:-0}" -v slicecurfile="${ADM_SLICECUR:-}" -v slicestatfile="${ADM_SLICESTAT:-}" -v sliceavg="${ADM_SLICEAVG:-}" -v sliceavgwin=30 -v jobscpu="${ADM_JOBSCPU:-}" \
       -v youngpct=70 -v youngmin=120 -v growpct="${ADM_GROWPCT:-100}" \
       -v memctl="${ADM_MC:-}" -v mcfreegib="${ADM_MCFREE:-}" -v mcharmago="${ADM_MCHARMAGO:-}" -v mcfall="${ADM_MCFALL:-}" \
-      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" "$ADMIT_AWK" \
+      -v starvefix="${ADM_STARVEFIX:-}" -v lownostarve="${ADM_LNS:-}" -v lowage2="${ADM_LOWAGE2:-7200}" -v lowheadsecs="${ADM_LOWHEAD:-0}" -v appyoung="${ADM_APPYOUNG:-}" -v approkey="${ADM_APPRO:-}" -v drain="${ADM_DRAIN:-0}" -v untcap="${ADM_UNTCAP:-0}" "$ADMIT_AWK" \
       | awk -F'\t' '{print $1 "|" $3 "|" $5}'
   )
 }
@@ -1207,6 +1207,15 @@ check "drain: a low build waits too (got '$out')" '[[ $out == "wait|$DR_WHY|"* ]
 out=$(printf '%s\n' "$DR_HIGH" "$DR_OLD" "$DR_H" | ADM_DRAIN=3600 adm 0000000999500000000-2-m 0 1 12)
 check "drain: a high build still passes (got '$out')" '[[ $out == start\|* ]]'
 check "drain: the HEAVY_BUILD_DRAIN_SECS default is 3600" 'grep -q "^  setting HEAVY_BUILD_DRAIN_SECS 3600$" "$HB"'
+# Untracked growth cap (HEAVY_BUILD_UNT_GROW_CAP_GIB, 2026-10-30): four small
+# untracked scopes charge 8 GiB still to come uncapped, 4 GiB with the cap.
+UC_F=$(for n in 0 1 2 3; do echo "F run-p$n-i1.scope $((200 << 20)) 1000000 200 0 -"; done)
+UC_W='W 0000000999500000000-2-m 999500 normal 28 1 60 -'
+out=$(printf '%s\n' "$UC_F" "$UC_W" | ADM_UNTCAP=0 adm 0000000999500000000-2-m 0 1 12)
+check "untracked cap off: four scopes hold back 8 GiB (got '$out')" '[[ $out == wait\|memory:*"8.0 still to come"* ]]'
+out=$(printf '%s\n' "$UC_F" "$UC_W" | ADM_UNTCAP=4 adm 0000000999500000000-2-m 0 1 12)
+check "untracked cap 4: the 28 GiB build starts (got '$out')" '[[ $out == start\|* ]]'
+check "untracked cap: the HEAVY_BUILD_UNT_GROW_CAP_GIB default is 4" 'grep -q "^  setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4$" "$HB"'
 out=$(printf '%s\n' "$RO_WBR" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
 check "app read-only key: an app run waits for a running broker build (got '$out')" '[[ $out == "wait|key: lock key ui-broker:/repo is busy (wb1)|0" ]]'
 out=$(printf '%s\n' "$RO_APPS" "$RO_WAPP" | ADM_APPRO=1 adm 0000000999000000000-2-m 0 1 12)
