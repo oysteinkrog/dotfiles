@@ -161,6 +161,22 @@ record() {
   fi
   flags=$(keep_flags "$pid" "$via" | jq -R . | jq -s .)
   transcript="$HOME/.claude/projects/$(project_slug "$cwd")/$sid.jsonl"
+  # A session that changed folder reports the new folder, but its transcript
+  # stays in the project folder it started in, and --resume only finds it from
+  # there. Record that folder instead. On 2026-10-30 manager-CTO (started in
+  # ~/work/ifkb, later in ~/work/cto-review/work) was dropped at boot with
+  # "no transcript".
+  if [ ! -s "$transcript" ]; then
+    local -a found=("$HOME"/.claude/projects/*/"$sid".jsonl)
+    if [ ${#found[@]} -eq 1 ] && [ -s "${found[0]}" ]; then
+      local home
+      home=$(grep -a -m1 -o '"cwd":"[^"]*"' "${found[0]}" | cut -d'"' -f4)
+      if [ -n "$home" ] && [ -d "$home" ] \
+         && [ "$(project_slug "$home")" = "$(basename "$(dirname "${found[0]}")")" ]; then
+        cwd=$home transcript=${found[0]}
+      fi
+    fi
+  fi
   # the mux pane the session runs in, to put its tab back in the same place
   pane=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^WEZTERM_PANE=//p' | head -1)
   mkdir -p "$SESS_DIR"
