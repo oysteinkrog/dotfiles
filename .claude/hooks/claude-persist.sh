@@ -558,6 +558,12 @@ resume_cmd_inner() {
   cmd="cd $(printf '%q' "$(jq -r .cwd "$f")") &&"
   if [ "$(jq '.launcher | length' "$f")" -gt 0 ]; then
     while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.launcher[]' "$f")
+  elif [ -x "$AIOLOS_RC" ]; then
+    # No saved launcher: the session was started with plain `claude`. Resume it
+    # through aiolos-rc anyway (routed like `c`), so it runs in its own scope in
+    # claude.slice instead of the mux's cgroup in app.slice. On 2026-10-30
+    # manager-machine had been resumed bare since 10-19 and sat in app.slice.
+    cmd+=" CLAUDE_BIN=$(printf '%q' "$CLAUDE_BIN") $(printf '%q' "$AIOLOS_RC") --no-pin"
   else
     cmd+=" $(printf '%q' "$CLAUDE_BIN")"
   fi
