@@ -1,0 +1,10 @@
+[Unit]
+Description=Run slice-memlog every minute
+
+[Timer]
+OnActiveSec=1s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
