@@ -957,6 +957,7 @@ read_conf() {
   setting HEAVY_BUILD_STARVE_FIX 1
   setting HEAVY_BUILD_STARVE_BOUND 1
   setting HEAVY_BUILD_DRAIN_SECS 3600
+  setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4
   setting HEAVY_BUILD_BACKFILL_FLOOR_SECS 120
   setting HEAVY_BUILD_LOW_NO_STARVE 0
   setting HEAVY_BUILD_LOW_AGE_SECS 7200
@@ -3063,6 +3064,8 @@ $1 == "R" {
   if ($13 == "jobd") untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG:jobd", $2, $7 / 1073741824)
 }
 # A scope without a live heavy-build: charged its current memory plus 2 GiB still to come.
+# HEAVY_BUILD_UNT_GROW_CAP_GIB (default 4, 2026-10-30) caps that sum over all such
+# scopes; 0 charges 2 GiB each. Five short pytest scopes once held back 10 GiB.
 # An idle one only holds its current memory (and its lock keys); it is not a running build.
 $1 == "F" && $6 == 1 {
   T_held += $3 / 1073741824
@@ -3072,7 +3075,11 @@ $1 == "F" && $6 == 1 {
 }
 $1 == "F" {
   c = ($5 >= 10) ? $4 / 1e6 / $5 * 1000 : "-"
-  addrun($2, 0, $3 / 1073741824 + 2, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", 2)
+  ug = (untcap + 0 <= 0) ? 2 : untcap - untgrow
+  if (ug > 2) ug = 2
+  if (ug < 0) ug = 0
+  untgrow += ug
+  addrun($2, 0, $3 / 1073741824 + ug, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", ug)
   r_unt[nr] = 1; T_unt++
   untracked = untracked (untracked == "" ? "" : ",") sprintf("%s:%.1fG", $2, $3 / 1073741824)
 }
@@ -3300,7 +3307,7 @@ decide() {
     -v plevel="$plevel" -v preason="$preason" -v lastnc="$lastnc" \
     -v slowgap="$SLOW_GAP_SECS" -v slowfastgap="$SLOW_FAST_GAP_SECS" -v slowfastgib="$SLOW_FAST_MIN_GIB" \
     -v maxjobs="$MAX_JOBS" -v cpubudget="$CPU_BUDGET" -v reserve="$MEM_RESERVE_GIB" \
-    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v drain="$DRAIN_SECS" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
+    -v maxcpupsi="$MAX_CPU_PSI" -v maxmempsi="$MAX_MEM_PSI" -v starve="$STARVE" -v starvefix="$STARVE_FIX" -v starvebound="$STARVE_BOUND" -v drain="$DRAIN_SECS" -v untcap="$UNT_GROW_CAP_GIB" -v bfloor="$BACKFILL_FLOOR_SECS" -v solo="$SOLO_MEM_GIB" -v monorepo="$MONOREPO" \
     -v minswap="$MIN_SWAP_ROOM_GIB" -v warm="$WARMUP_SECS" -v idlesecs="$IDLE_CPU_SECS" -v idlemilli="$IDLE_CPU_MILLI" -v poll="$POLL" -v lowage=1800 -v tcpct="$TC_PCT" \
     -v agesecs="$AGE_SECS" -v ageslots="$AGE_SLOTS" -v critage="$CRIT_AGE_SECS" -v maxapp="$MAX_APP_RUNS" \
     -v lownostarve="$LOW_NO_STARVE" -v lowage2="$LOW_AGE_SECS" -v lowheadsecs="$LOW_HEAD_SECS" \
