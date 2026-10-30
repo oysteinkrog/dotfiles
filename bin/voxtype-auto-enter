@@ -14,10 +14,11 @@ rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voxtype"
 [ "$(cat "$rt/hotkey-last" 2>/dev/null)" = alt ] && exit 0
 
 # The hook also runs when a dictation is cancelled (Right Alt double tap) or
-# ends with no text. voxtype writes how it ended before the hook runs and
-# clears it when the next recording starts, so no Enter unless text went out.
-case "$(cat "$rt/outcome" 2>/dev/null)" in
-    cancelled|empty|failed) exit 0 ;;
+# ends with no text. Newer voxtype says how it ended in VOXTYPE_OUTCOME; older
+# builds only write the runtime outcome file. No Enter unless text was typed.
+outcome="${VOXTYPE_OUTCOME:-$(cat "$rt/outcome" 2>/dev/null)}"
+case "$outcome" in
+    cancelled|empty|failed|not-pasted) exit 0 ;;
 esac
 
 # kdotool answers in about 5 ms. When KWin hands its script an id that another
