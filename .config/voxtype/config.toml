@@ -53,6 +53,10 @@ double_tap_ms = 300
 # Double tap Right Shift also starts and stops. Stopping with it pastes
 # without the automatic Enter (voxtype-auto-enter checks hotkey-last).
 double_tap_alt_key = "RIGHTSHIFT"
+# Hold Right Shift while recording to say a correction for the words on
+# screen ("Quiet test" over a wrong "test"; "spell K R O G" spells one word).
+# Taps keep their meaning; only a hold with no other key counts.
+correction_key = "RIGHTSHIFT"
 
 [audio]
 device = "default"
@@ -129,3 +133,7 @@ filter_filler_words = true
 # Names and project words, kept in the private life repo (this repo is public).
 # Built by ~/projects/life/setup/voxtype/glossary.py; a missing file is skipped.
 replacements_file = "~/projects/life/setup/voxtype/words.toml"
+# Spoken corrections and the words learned from them name people and
+# projects too, so they live in the private life repo as well.
+corrections_log = "~/work/life/setup/voxtype/corrections.jsonl"
+learned_words_file = "~/work/life/setup/voxtype/words-learned.toml"
