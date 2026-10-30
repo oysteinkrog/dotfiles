@@ -10,8 +10,15 @@ list="${XDG_CONFIG_HOME:-$HOME/.config}/voxtype/auto-enter-apps"
 
 # Stopped with the alt double tap ([hotkey] double_tap_alt_key, Right Shift):
 # paste only, so the text can be edited before sending.
-last="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voxtype/hotkey-last"
-[ "$(cat "$last" 2>/dev/null)" = alt ] && exit 0
+rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voxtype"
+[ "$(cat "$rt/hotkey-last" 2>/dev/null)" = alt ] && exit 0
+
+# The hook also runs when a dictation is cancelled (Right Alt double tap) or
+# ends with no text. voxtype writes how it ended before the hook runs and
+# clears it when the next recording starts, so no Enter unless text went out.
+case "$(cat "$rt/outcome" 2>/dev/null)" in
+    cancelled|empty|failed) exit 0 ;;
+esac
 
 # kdotool answers in about 5 ms. When KWin hands its script an id that another
 # loaded script already has, it waits 5 s and fails; voxtype keeps the popup up
