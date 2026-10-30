@@ -129,6 +129,10 @@ top_margin = 0.45
 # Show "3/20 Type" (the look's place in the look chord's list and its name)
 # above the popup's top-left corner.
 look_badge = true
+# Fix text by keyboard: tap Right Shift once while recording (the alt
+# double-tap key, since [hotkey] edit_key is unset), wait for the caret,
+# then type. Tap again to listen; two taps paste.
+keyboard_edit = true
 preview_font_pt = 17.0
 # Solid background: the see-through panel was hard to read.
 opacity = 1.0
