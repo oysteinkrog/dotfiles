@@ -3310,6 +3310,8 @@ check "jobd: the env form of --class is passed on as --class (rc $rc)" '(( rc ==
 jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_WINE_ORPHAN=stop HEAVY_BUILD_FORCE=1 -- true
 check "jobd: a variable jobd does not read is refused with exit 2 (rc $rc)" '(( rc == 2 )) && [[ ! -e $T/job.calls ]]'
 check "jobd: and the refusal names each one" 'grep -q "jobd does not support HEAVY_BUILD_FORCE HEAVY_BUILD_WINE_ORPHAN, so nothing was submitted" "$T/out"'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_WINE_PREFIX="$T/pfx/motioncatalyst-ui-x" -- --class app-run -- bash run.sh
+check "jobd: HEAVY_BUILD_WINE_PREFIX is passed to job submit, not refused (rc $rc)" '(( rc == 42 )) && grep -qx "HEAVY_BUILD_WINE_PREFIX=$T/pfx/motioncatalyst-ui-x" "$T/job.env"'
 jb HEAVY_BUILD_BACKEND=jobd PING=69 -- true
 check "jobd: job ping fails, so one warning and heavy-build's own queue runs it (rc $rc)" '(( rc == 0 )) && (( $(grep -c "jobd does not answer (job ping); using heavy-build" "$T/out") == 1 )) && [[ $(cat "$T/job.calls") == ping ]]'
 check "jobd: the fallback build is in heavy-build's history" '[[ -s $T/state/heavy-build/history.tsv ]]'
