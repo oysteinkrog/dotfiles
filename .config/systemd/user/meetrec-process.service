@@ -8,6 +8,9 @@ Type=oneshot
 ExecStart=%h/bin/meetrec process-queue
 Nice=10
 IOSchedulingClass=idle
+# Batch work, not an app Oystein uses: keep it out of app.slice (weight 500, memory
+# protection). It used about 3.4 cores there after a huddle on 2026-10-30.
+Slice=background.slice
 # claude (for the summary) and uv live in ~/.local/bin.
 Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin
 TimeoutStartSec=4h
