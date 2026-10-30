@@ -573,6 +573,28 @@ resume_cmd_inner() {
 # The command cds into <cwd> itself, because some spawn APIs ignore the cwd
 # they are given when a command is set (Frankenterm's Lua spawn_tab does).
 # Entries are moved to restored/ as they are handed out; the resumed session's
+# Mark a folder as trusted in ~/.claude.json, so a resumed session does not
+# stop at "Do you trust the files in this folder?". Claude keys trust by path,
+# so a folder that moved has none: on 2026-10-30 retire-work-symlinks moved
+# ~/work/aiolos, job-system and life to ~/projects, and all three resumed tabs
+# waited at the prompt. Every resumed folder ran a session before, so it was
+# trusted once already. Inside a git repo Claude looks no higher than the repo
+# root, so mark the root too. Claude writes the file by temp file and rename,
+# with no lock; plan runs at boot before any Claude starts.
+CLAUDE_CONFIG="${CLAUDE_PERSIST_CONFIG:-$HOME/.claude.json}"
+trust_folder() {
+  local dir=$1 log=$2 root key tmp
+  [ -f "$CLAUDE_CONFIG" ] || return 0
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
+  for key in "$dir" ${root:+"$root"}; do
+    [ "$(jq -r --arg k "$key" '.projects[$k].hasTrustDialogAccepted // false' "$CLAUDE_CONFIG")" = true ] && continue
+    tmp="$CLAUDE_CONFIG.tmp.persist.$$"
+    jq --arg k "$key" '.projects[$k] = ((.projects[$k] // {}) + {hasTrustDialogAccepted: true})' \
+      "$CLAUDE_CONFIG" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$CLAUDE_CONFIG" \
+      && echo "trust $key: marked trusted for resume" >> "$log"
+  done
+}
+
 # SessionStart hook writes a fresh entry. Log lines go to restore.log.
 plan() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored"
@@ -643,6 +665,7 @@ plan() {
     fi
     n=$((n + 1))
 
+    trust_folder "$cwd" "$log"
     cmd=$(resume_cmd "$f")
     mv "$f" "$STATE_DIR/restored/"
     echo "resume $sid ($cwd): $cmd" >> "$log"
