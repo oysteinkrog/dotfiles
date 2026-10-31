@@ -638,6 +638,8 @@
 #   charged memory and cores like a build (after 2 min, the cores it used over
 #   the last 60 s). An app run that waits for the cap (reason app-cap:) keeps
 #   its place in line but never heads it, so builds behind it are not held up.
+#   A critical app run may take one slot more than the cap, when VRAM, memory,
+#   cores and HEAVY_BUILD_MAX_JOBS all pass.
 # - No HEAVY_BUILD_TIMEOUT unless the caller sets one. Its wall-time guess is
 #   4 h until it has history.
 # - No "it may be hung" warning when it idles; it still stops being charged
@@ -3277,8 +3279,12 @@ END {
     }
     # App runs (headless MotionCatalyst) last for hours. At most maxapp of them
     # hold job slots. One that waits for this keeps its place but is never the
-    # head of the line, so it cannot starve builds behind it.
-    if (w_cls[i] == "app-run" && maxapp > 0 && T_app >= maxapp) { why[i] = sprintf("app-cap: %d app runs hold job slots, the limit is %d", T_app, maxapp); continue }
+    # head of the line, so it cannot starve builds behind it. A critical app
+    # run may take one slot more (manager-machine and Astra, 2026-10-31) when
+    # VRAM, memory, cores and the job limit all pass; maxapp+1 is a hard
+    # total, and a run picked earlier in this pass already counts in T_app.
+    appcap = maxapp + (w_pr[i] == "critical" ? 1 : 0)
+    if (w_cls[i] == "app-run" && maxapp > 0 && T_app >= appcap) { why[i] = sprintf("app-cap: %d app runs hold job slots, the limit is %d%s", T_app, maxapp, w_pr[i] == "critical" ? sprintf(", and %d for a critical run", appcap) : ""); continue }
     # The pressure level: a held normal or low build keeps its place but is
     # never the head of the line, so high and critical builds behind it go on.
     pw = pressure_why(i)

@@ -1967,7 +1967,15 @@ check "app-cap: a second app run starts next to one (got '$out')" '[[ $out == st
 out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" | adm 0000000999000000000-1-a 0 1 12)
 check "app-cap: a third app run waits, and its give-up clock runs (got '$out')" '[[ $out == "wait|app-cap: 2 app runs hold job slots, the limit is 2|0" ]]'
 out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APPC" | adm 0000000999000000000-1-a 0 1 12)
-check "app-cap: a critical app run waits for the cap too (got '$out')" '[[ $out == wait\|app-cap:* ]]'
+check "app-cap: a critical app run may take one slot over the cap (got '$out')" '[[ $out == start\|fits:* ]]'
+RUN_A3='R a3 999000 8 1 1014400 4294967296 - 0 normal - app-run'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$RUN_A3" "$W_APPC" | adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: a critical app run waits at the cap plus one (got '$out')" '[[ $out == "wait|app-cap: 3 app runs hold job slots, the limit is 2, and 3 for a critical run|0" ]]'
+W_APPC2='W 0000000999000000000-1-e 999000 critical 8 1.5 14400 - app-run'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APPC" "$W_APPC2" | adm 0000000999000000000-1-a 0 1 12)
+check "app-cap: of two critical app runs in one pass, the first takes the extra slot (got '$out')" '[[ $out == start\|fits:* ]]'
+out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APPC" "$W_APPC2" | adm 0000000999000000000-1-e 0 1 12)
+check "app-cap: and the second waits, the extra slot is taken (got '$out')" '[[ $out == wait\|app-cap:* ]]'
 out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" "$W_BLD" | adm 0000000999000000001-2-b 0 1 12)
 check "app-cap: a build behind a capped app run starts as next in order, not as backfill (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
 out=$(printf '%s\n' "$RUN_A1" "$RUN_A2" "$W_APP" | ADM_MAXAPP=3 adm 0000000999000000000-1-a 0 1 12)
