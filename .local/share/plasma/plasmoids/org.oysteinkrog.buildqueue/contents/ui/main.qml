@@ -41,10 +41,23 @@ PlasmoidItem {
     // The peers to switch to, with whether their data is fresh.
     readonly property var servers: localQ.peers || []
     readonly property var serverPeer: servers.find(p => p.host === server) || null
+    // A job system worker that runs no Build Queue of its own (hawk, mac): its tab shows only
+    // its Machines row, from this PC's job status. "" while a queue is shown.
+    property string worker: ""
+    readonly property var workers: {
+        const me = (localQ.machine || {}).name;
+        const all = ((localQ.remote || {}).workers || []).concat(...servers.map(p => p.fresh ? p.workers || [] : []));
+        const out = [];
+        for (const w of all.filter(w => w.state !== "unreachable").concat(all.filter(w => w.state === "unreachable")))
+            if (w.host !== me && !servers.some(p => p.host === w.name || (w.host && (p.machine || {}).name === w.host)) && !out.some(o => o.name === w.name))
+                out.push(w);
+        return out;
+    }
 
     Settings {
         category: "BuildQueue"
         property alias server: root.server
+        property alias worker: root.worker
     }
     property double now: Date.now()
     // When the fetch last wrote, with data or only an error. q.updated is when the data shown
@@ -52,7 +65,8 @@ PlasmoidItem {
     property double fetched: 0
     // The fetch writes every 5 s, so 30 s without a new file means it has stopped.
     readonly property bool stale: fetched > 0 && now - fetched > 30000
-    readonly property string problem: stale && server !== "" ? i18n("No new data from %1 for %2", server, dur((now - fetched) / 1000)) + (serverPeer && serverPeer.error ? ": " + serverPeer.error : "")
+    readonly property string problem: worker !== "" && workers.length > 0 && !workers.some(w => w.name === worker) ? i18n("%1 is not in job status now", worker)
+        : stale && server !== "" ? i18n("No new data from %1 for %2", server, dur((now - fetched) / 1000)) + (serverPeer && serverPeer.error ? ": " + serverPeer.error : "")
         : stale ? i18n("No new data for %1: is buildqueue-fetch running?", dur((now - fetched) / 1000))
         : server !== "" && !serverPeer ? i18n("%1 is no longer in ~/.config/buildqueue/peers", server)
         : server !== "" && q.updated === 0 ? i18n("No data from %1 yet", server) + (serverPeer.error ? ": " + serverPeer.error : "")
@@ -110,7 +124,11 @@ PlasmoidItem {
                 peerAge: p.age,
                 peerError: p.error
             }));
-        const workers = remoteWorkers.concat(...peers.map(p => p.fresh ? p.workers || [] : []));
+        // A worker this machine cannot reach comes last, so a peer's report of it wins.
+        const reports = remoteWorkers.concat(...peers.map(p => p.fresh ? (p.workers || []).map(w => Object.assign({}, w, {
+                    via: p.host
+                })) : []));
+        const workers = reports.filter(w => w.state !== "unreachable").concat(reports.filter(w => w.state === "unreachable"));
         for (const w of workers) {
             const same = rows.find(r => r.workerName === w.name || (w.host && r.name === w.host) || (!r.local && !r.peer && r.name === w.name));
             if (!same)
@@ -131,6 +149,8 @@ PlasmoidItem {
         }
         return rows;
     }
+    // The Machines card's rows: all of them, or only the worker whose tab is shown.
+    readonly property var shownMachines: worker === "" ? machines : machines.filter(m => m.workerName === worker || (!m.local && !m.peer && m.name === worker))
     // The worker that takes marked jobs, here or on a fresh peer.
     readonly property var targets: peers.reduce((all, p) => p.fresh && p.target ? all.concat([p.target]) : all, remoteTarget ? [remoteTarget] : [])
 
@@ -147,8 +167,10 @@ PlasmoidItem {
     function machineState(m) {
         if (m.peer && !m.fresh)
             return m.peerAge !== null && m.peerAge !== undefined ? i18n("no update for %1", dur(m.peerAge)) : i18n("no data") + (m.peerError ? ": " + m.peerError : "");
+        if (m.state === "unreachable")
+            return i18n("%1 cannot reach it", q.name || serverLabel(server));
         if (m.booked)
-            return i18n("booked") + (m.bookedNote ? ": " + m.bookedNote : "") + (m.bookedEnd ? ", " + i18n("until %1", m.bookedEnd.substr(11, 5)) : "");
+            return i18n("booked") + (m.bookedNote ? ": " + m.bookedNote : "") + (m.bookedEnd ? ", " + i18n("until %1", m.bookedEnd.substr(11, 5)) : "") + (m.via && !m.peer ? " · " + i18n("via %1", m.via) : "");
         const parts = [];
         if (m.local)
             parts.push(i18n("builds here"));
@@ -156,6 +178,8 @@ PlasmoidItem {
             parts.push(m.frozen ? i18n("frozen") : m.active ? i18n("owner at it") : i18n("owner away"));
         if (m.workerName && targets.indexOf(m.workerName) >= 0)
             parts.push(i18n("takes marked jobs"));
+        if (m.via && !m.peer)
+            parts.push(i18n("via %1", m.via));
         return parts.join(" · ");
     }
 
@@ -264,6 +288,7 @@ PlasmoidItem {
     // Shows another machine's panel, or this PC's for "". The old data goes at once, so one
     // machine's jobs never show under another's name.
     function showServer(host) {
+        worker = "";
         if (host === server)
             return;
         server = host;
@@ -276,6 +301,13 @@ PlasmoidItem {
         if (host === "")
             fetched = localQ.updated || 0;
         load();
+    }
+
+    // Shows one job system worker's row. Its data is in this PC's job status, so this PC's
+    // queue is loaded underneath.
+    function showWorker(name) {
+        showServer("");
+        worker = name;
     }
 
     // A machine's short name: "home" or "office", from the fetch, else its hostname.
@@ -927,7 +959,7 @@ PlasmoidItem {
                 // pressed, in accent text while it is another machine's.
                 RowLayout {
                     id: serverTabs
-                    visible: root.servers.length > 0 || root.server !== ""
+                    visible: root.servers.length > 0 || root.server !== "" || root.workers.length > 0
                     spacing: 0
                     Repeater {
                         model: [{
@@ -936,8 +968,8 @@ PlasmoidItem {
                             }].concat(root.servers)
                         PlasmaComponents.ToolButton {
                             required property var modelData
-                            readonly property bool shown: modelData.host === root.server
-                            icon.name: modelData.host === "" ? "computer" : "network-server"
+                            readonly property bool shown: modelData.host === root.server && root.worker === ""
+                            icon.name: modelData.host === "" ? "computer" : ""
                             text: root.serverLabel(modelData.host)
                             font.pointSize: root.fs
                             font.weight: shown ? Font.DemiBold : Font.Normal
@@ -950,13 +982,34 @@ PlasmoidItem {
                             PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
                         }
                     }
-                }
-                Item {
-                    Layout.fillWidth: true
+                    Repeater {
+                        model: root.workers
+                        PlasmaComponents.ToolButton {
+                            required property var modelData
+                            readonly property bool shown: modelData.name === root.worker
+                            text: modelData.name
+                            font.pointSize: root.fs
+                            font.weight: shown ? Font.DemiBold : Font.Normal
+                            checked: shown
+                            palette.buttonText: shown ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
+                            onClicked: root.showWorker(modelData.name)
+                            PlasmaComponents.ToolTip.visible: hovered
+                            PlasmaComponents.ToolTip.text: i18n("Job system worker %1, from job status on %2. It runs no Build Queue, so this shows its machine row only.", modelData.name, root.serverLabel(""))
+                            PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                        }
+                    }
                 }
                 Small {
                     visible: root.q.updated > 0
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideLeft
                     text: root.stale ? i18n("No update for %1", root.dur((root.now - root.fetched) / 1000)) : i18n("Updated %1 ago", root.dur(Math.max(0, root.now - root.q.updated) / 1000))
+                }
+                Item {
+                    visible: root.q.updated <= 0
+                    Layout.fillWidth: true
                 }
                 Dot {
                     visible: root.q.updated > 0
@@ -1005,6 +1058,7 @@ PlasmoidItem {
             // The gate: one banner with the state and why.
             Rectangle {
                 Layout.fillWidth: true
+                visible: root.worker === ""
                 Layout.topMargin: -Kirigami.Units.smallSpacing
                 implicitHeight: banner.implicitHeight + Kirigami.Units.smallSpacing * 3
                 radius: 6
@@ -1066,6 +1120,7 @@ PlasmoidItem {
             // The key numbers, each on its visual, in one card split by hairlines.
             Card {
                 Layout.fillWidth: true
+                visible: root.worker === ""
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.largeSpacing
@@ -1258,6 +1313,7 @@ PlasmoidItem {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: false
+                visible: root.worker === ""
                 spacing: Kirigami.Units.largeSpacing
 
                 Card {
@@ -1447,6 +1503,7 @@ PlasmoidItem {
             // Running builds, longest first.
             Card {
                 Layout.fillWidth: true
+                visible: root.worker === ""
                 title: i18n("Running now")
                 header: Small {
                     text: i18n("%1 of %2 slots", root.running.length, root.slots.jobs || "?")
@@ -1568,11 +1625,11 @@ PlasmoidItem {
                     }
                 ]
                 Repeater {
-                    model: root.machines.length
+                    model: root.shownMachines.length
                     delegate: ColumnLayout {
                         id: mach
                         required property int index
-                        readonly property var m: root.machines[index] || ({})
+                        readonly property var m: root.shownMachines[index] || ({})
                         readonly property bool away: !!(m.booked || m.frozen)
                         readonly property var jobs: root.allRemoteRunning.filter(j => m.workerName ? j.worker === m.workerName : !m.local && !m.peer && j.worker === m.name)
                         Layout.fillWidth: true
@@ -1595,7 +1652,7 @@ PlasmoidItem {
                                 elide: Text.ElideRight
                             }
                             Cell {
-                                visible: !mach.m.booked && (!mach.m.peer || mach.m.fresh)
+                                visible: !mach.m.booked && mach.m.state !== "unreachable" && (!mach.m.peer || mach.m.fresh)
                                 text: root.measured(mach.m) ? i18n("%1 running · %2 waiting", mach.m.running, mach.m.waiting) : i18n("%1 running · %2 done this hour", mach.jobs.length, (mach.m.ok || 0) + (mach.m.failed || 0))
                                 font.pointSize: root.fsSmall
                             }
@@ -1694,7 +1751,7 @@ PlasmoidItem {
             // The next jobs in queue order.
             Card {
                 Layout.fillWidth: true
-                visible: root.nextJobs.length > 0
+                visible: root.worker === "" && root.nextJobs.length > 0
                 title: i18n("Next in line")
                 header: Small {
                     text: i18n("%1 of %2 waiting", root.nextJobs.length, root.waiting.count)
@@ -1797,6 +1854,7 @@ PlasmoidItem {
             Card {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                visible: root.worker === ""
                 title: i18n("Sessions")
                 header: [
                     Repeater {
@@ -2156,8 +2214,14 @@ PlasmoidItem {
                 }
             }
 
+            // A worker's tab has no Sessions card to take the spare room.
+            Item {
+                Layout.fillHeight: true
+                visible: root.worker !== ""
+            }
             Small {
                 Layout.fillWidth: true
+                visible: root.worker === ""
                 text: i18n("Queue rules: %1", root.q.limits || "?")
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
