@@ -59,6 +59,17 @@ configs_using() {
 fix_persist() {
   local old=$1 new=$2 f cwd pid sid newcwd transcript newf
   [ -d "$PERSIST_DIR" ] || return 0
+  # Take claude-persist's lock. This service runs at login, the same moment the
+  # mux server runs `claude-persist.sh plan`. On 2026-10-30 it renamed an entry
+  # while plan was working through the old names, and that session was not
+  # resumed. The lock lasts until this script exits.
+  if [ $DRY = 0 ]; then
+    exec 9>"$(dirname "$PERSIST_DIR")/.lock"
+    if ! flock -w 60 9; then
+      log "claude-persist is busy (its lock is held), session entries left for next login"
+      return 0
+    fi
+  fi
   for f in "$PERSIST_DIR"/*.json; do
     [ -f "$f" ] || continue
     cwd=$(jq -r '.cwd // empty' "$f" 2>/dev/null)
@@ -75,8 +86,10 @@ fix_persist() {
     log "session entry $sid: $cwd -> $newcwd"
     [ $DRY = 1 ] && continue
     if [ ! -e "$newf" ]; then
+      # keep the entry's date: plan orders entries by it and keeps the newest
+      # entry of a pane, so a renamed old entry must not look new
       jq --arg cwd "$newcwd" --arg t "$transcript" '.cwd = $cwd | .transcript = $t' "$f" >"$newf.tmp" \
-        && mv -f "$newf.tmp" "$newf" || { rm -f "$newf.tmp"; continue; }
+        && touch -r "$f" "$newf.tmp" && mv -f "$newf.tmp" "$newf" || { rm -f "$newf.tmp"; continue; }
     fi
     rm -f "$f"
   done
