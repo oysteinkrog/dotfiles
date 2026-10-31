@@ -35,10 +35,10 @@ live_preview_warm_idle_secs = 1800
 live_preview_corpus_dir = "~/.local/share/voxtype/corpus"
 # Final text from Cohere on the GPU ("engine"), or the preview model's own
 # text on the CPU only ("preview": one model, no VRAM, about 1 GB less RAM).
-# "preview" since 2026-10-25: memory is the main criterion. Measured with 20
-# CPU workers running: 1.4 GB RAM per recording (GPU final: 3.0 GB + 2.4 GiB
-# VRAM), text 0.3 s after stop. Back to Cohere: set "engine".
-live_preview_final = "preview"
+# "engine" again since 2026-10-31: text quality matters more than the memory.
+# Measured on 2026-10-25 with 20 CPU workers running: 1.4 GB RAM per recording
+# with "preview", 3.0 GB + 2.4 GiB VRAM with "engine".
+live_preview_final = "engine"
 # Load Cohere only with at least 2.6 GiB VRAM free (its 2.4 GiB peak plus
 # margin); otherwise paste the preview text and say so in the popup.
 live_preview_min_free_vram_mib = 2662
