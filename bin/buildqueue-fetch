@@ -1110,6 +1110,7 @@ def remote_view(r, now, owner):
             "threads": int(cpu) // 100 if cpu.isdigit() else None,
             "memHigh": lim.get("MemoryHigh", ""),
             "running": len(w.get("running") or []),
+            "state": w.get("state", ""),  # available, busy, active, on battery or unreachable
         })
     return {
         "workers": workers,
