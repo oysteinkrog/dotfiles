@@ -168,8 +168,21 @@ These rules hold whether or not a skill is loaded:
   | Search, read and summarise, explore, mechanical edits, builds, tests, UI checks, log scraping | `sonnet` |
   | Writing real code, normal debugging, coordinating lanes, the session's own main thread | `opus` |
   | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult Astra (`codex exec -m gpt-6-astra`, effort `medium`) by default with a short, self-contained brief and a bounded reading list. Add `fable` for high-stakes or contested decisions, or when Astra is unavailable. Gemini 4 Argon (PAL) is currently unavailable. The answer comes back as text; the lane carries on on its own model |
-  | Review agents: PR review, security review, plan or bead polish review and verify | Codex/Astra at effort `medium`, given the diff and the named files it may open. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails |
+  | Review agents: PR review, security review, plan or bead polish review and verify | Codex/Astra at effort `medium`, with the diff and the named files pasted into one prompt of about 60k tokens. Use the bounded command below. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails |
   | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
+
+  **Every Astra call uses the bounded command**, run from an empty folder with the tools off:
+
+  ```sh
+  cd "$(mktemp -d -p /var/tmp/claude)" && timeout 900 codex exec -m gpt-6-astra \
+    -c model_reasoning_effort=medium --disable shell_tool --disable unified_exec \
+    --disable code_mode_host --skip-git-repo-check -o out.md - < prompt.md
+  ```
+
+  Put everything Astra needs into `prompt.md`. With tools on (`-s read-only`, or run
+  from a repo) Astra opens files by itself, and a prompt that asks it to read only some
+  files does not stop it. On 2026-11-01 two reviews run that way read 264k and 342k
+  tokens instead of about 60k.
 
   Why Astra first (Oystein, 2026-10-24): the Claude accounts were near their weekly limits
   while the three OpenAI accounts sat at 0% to 21% with reset credits unused. Astra never
