@@ -17,7 +17,7 @@ The hook reports and never rewrites. Two reasons:
    stop matching and the Edit fails.
 
 So the fixing commands stay a manual step, run once when the work is done:
-`ruff check --fix && ruff format && ty check` (the Python rule in ~/CLAUDE.md).
+`ruff check --fix && ruff format && ty check` (the Python rule in ~/.dotfiles/AGENTS.md).
 
 Skips: non-.py files, files outside a git repo, files under site-packages or a
 .venv, and any tool not on PATH. Each tool is time-boxed. Every failure of
