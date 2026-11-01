@@ -1,4 +1,4 @@
-# User CLAUDE.md
+# Machine notes for work under ~
 
 Machine-level notes for work under `~`. The global rules are in `~/.claude/CLAUDE.md`,
 including multi-agent orchestration, secrets and the writing contract.
