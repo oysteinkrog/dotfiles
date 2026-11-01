@@ -43,7 +43,7 @@ for one high-stakes question, and say why.
 
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
-| **GPT-6 Astra** (`gpt-6-astra`) | Codex CLI (see `/codex` skill): `codex exec -m gpt-6-astra -c model_reasoning_effort=<effort> "<question>" < /dev/null` | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
+| **GPT-6 Astra** (`gpt-6-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
 | **Fable** | Fresh subagent via `Agent` tool with `model: "fable"` | Secondary oracle. Add it for security reviews and contested calls (Astra looks wrong, or two oracles disagree), or use it when Codex fails |
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable and Astra both fail. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted and a GPT view is needed |
@@ -97,7 +97,8 @@ Astra answers from the prompt and cannot browse the tree:
 ```bash
 mkdir -p /var/tmp/claude/<task>/astra-empty && cd /var/tmp/claude/<task>/astra-empty
 codex exec -m gpt-6-astra -c model_reasoning_effort=<effort> \
-  --disable shell_tool --disable unified_exec --skip-git-repo-check \
+  --disable shell_tool --disable unified_exec --disable code_mode_host \
+  --skip-git-repo-check \
   -o <scratchpad>/oracle-astra.md - < <scratchpad>/astra-prompt.md 2>/dev/null
 ```
 
@@ -106,8 +107,10 @@ Command details that matter:
 - `<effort>` comes from the `--effort` flag (default `medium`, see Arguments).
 - `- < prompt.md` feeds the prompt on stdin. Without a stdin source `codex exec`
   blocks forever on "Reading additional input from stdin" and looks like a slow model.
-- `--disable shell_tool --disable unified_exec` turns off file reading (probe-verified
-  2026-10-24). A reading cap written in the prompt does not hold: on 2026-10-24
+- `--disable shell_tool --disable unified_exec --disable code_mode_host` turns off file
+  reading. All three are needed: with only the first two, Astra still runs shell
+  commands through the JavaScript tool (`tools.exec_command`). On 2026-10-30 one
+  review that way made 12 such calls and read 433k (probe-verified that day). A reading cap written in the prompt does not hold: on 2026-10-24
   reviewers told to stop at about 40 reads ran 100 to 756 each.
 - `--skip-git-repo-check` is required outside a git repo root, which the empty
   directory is. Without it `codex exec` refuses to start.
@@ -164,6 +167,7 @@ codex exec -m gpt-6-astra \            - model: "fable"
   -c model_reasoning_effort=medium \   - prompt: "<same question>"
   --disable shell_tool \
   --disable unified_exec \
+  --disable code_mode_host \
   --skip-git-repo-check \
   -o <scratchpad>/oracle-astra.md \
   - < <scratchpad>/astra-prompt.md 2>/dev/null
