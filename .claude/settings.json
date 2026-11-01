@@ -1,4 +1,9 @@
 {
+  "pluginConfigs": {
+    "agents-md@builtin": {
+      "options": { "instructionFiles": "claude-md-and-agents-md" }
+    }
+  },
   "cleanupPeriodDays": 36500,
   "env": {
     "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1",
