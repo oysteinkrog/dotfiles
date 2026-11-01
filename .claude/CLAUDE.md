@@ -344,6 +344,11 @@ The `build-guard` PreToolUse hook blocks a build dir override, `/tmp` builds and
 and monorepo worktrees outside grove. An unwrapped heavy build gets a warning. For a
 deliberate exception, append `# noqa: build-guard` to the command.
 
+**Load `rust-fast-iteration` for Rust work**: before you start or restructure a Rust workspace, add or split
+a crate, touch Cargo profiles, test features or `.cargo/config.toml`, look into slow Rust builds or `target/`
+growth, or review a Rust PR for build cost. It sets the crate layout, profiles and lane edit loop for every
+Rust project here.
+
 ## Publishing static sites
 
 Pick the destination by **who owns the content**, not by who is typing.
