@@ -337,6 +337,10 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/systemd-run-slice-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/astra-guard.py"
           }
         ]
       },

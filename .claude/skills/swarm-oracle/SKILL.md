@@ -93,10 +93,12 @@ why. `xhigh`, `max` and `ultra` only when Oystein asks for them:
 ```bash
 mkdir -p /var/tmp/claude/<task>/astra-empty && cd /var/tmp/claude/<task>/astra-empty
 codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
-  --disable shell_tool --disable unified_exec --skip-git-repo-check \
+  --disable shell_tool --disable unified_exec --disable code_mode_host \
+  --skip-git-repo-check \
   -o <scratchpad>/oracle-for.md - < <scratchpad>/prompt-for.md 2>/dev/null
 codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
-  --disable shell_tool --disable unified_exec --skip-git-repo-check \
+  --disable shell_tool --disable unified_exec --disable code_mode_host \
+  --skip-git-repo-check \
   -o <scratchpad>/oracle-against.md - < <scratchpad>/prompt-against.md 2>/dev/null
 ```
 
