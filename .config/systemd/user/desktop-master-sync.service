@@ -1,0 +1,9 @@
+[Unit]
+Description=Move ~/work/desktop/master to the tip of if/master (desktop-master-sync)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/desktop-master-sync
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min
