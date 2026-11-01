@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Keep the shared ~/work/desktop/master checkout at the tip of if/master, so
+# every agent working there runs the latest harness (.claude, CLAUDE.md, hooks).
+#
+# It only ever moves a detached HEAD forward. It skips the run, and says why,
+# when that could touch anyone's work:
+#   - HEAD has commits that if/master does not (someone committed here)
+#   - a tracked file has local edits that differ from if/master
+#   - a git lock exists, or a repack or build is running in the checkout
+# Untracked files are never touched.
+set -u
+repo="$HOME/work/desktop/master"
+g() { git -C "$repo" -c maintenance.auto=false -c gc.auto=0 "$@"; }
+
+if [ -e "$repo/.git/index.lock" ] || [ -e "$(g rev-parse --git-dir)/index.lock" ]; then
+  echo "index.lock exists, skipping"; exit 0
+fi
+# Only a repack of this repo's object store matters. Its worktrees all live
+# under the parent folder; other repos (for example the agent-mail mailbox) run
+# their own maintenance.
+root=$(dirname "$repo")
+for pid in $(pgrep -f "git.*(repack|gc|maintenance)"); do
+  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+  case "$cwd" in "$root"/*) echo "git repack/gc running in $cwd (pid $pid), skipping"; exit 0 ;; esac
+  if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$root/"; then
+    echo "git repack/gc running for $root (pid $pid), skipping"; exit 0
+  fi
+done
+# Match process names, not whole command lines: agent shells often only mention
+# a build (for example a loop tailing a heavy-build log).
+for pid in $(pgrep -x 'dotnet|cargo|rustc|MSBuild|msbuild|ninja|cmake|heavy-build|build\.sh|run-tests\.sh'); do
+  case "$(readlink "/proc/$pid/cwd" 2>/dev/null)" in
+    "$repo"|"$repo"/*) echo "build running in checkout (pid $pid), skipping"; exit 0 ;;
+  esac
+done
+
+g fetch -q if master || { echo "fetch failed"; exit 1; }
+target=$(g rev-parse if/master)
+head=$(g rev-parse HEAD)
+[ "$head" = "$target" ] && exit 0
+
+if g symbolic-ref -q HEAD >/dev/null; then
+  echo "HEAD is on a branch, not detached, skipping"; exit 0
+fi
+if ! g merge-base --is-ancestor HEAD "$target"; then
+  echo "HEAD has commits not on if/master, skipping"; exit 0
+fi
+
+# Local edits are fine only when they already match if/master (for example a
+# hook copied from master by hand). Put those back to HEAD so checkout can move.
+mapfile -t dirty < <(g diff --name-only HEAD)
+if [ "${#dirty[@]}" -gt 0 ]; then
+  if ! g diff --quiet "$target" -- "${dirty[@]}"; then
+    echo "local edits differ from if/master, skipping: $(g diff --name-only "$target" -- "${dirty[@]}" | tr '\n' ' ')"
+    exit 0
+  fi
+  g restore --staged --worktree --source=HEAD -- "${dirty[@]}" || exit 1
+fi
+
+behind=$(g rev-list --count HEAD.."$target")
+g checkout -q --detach "$target" || { echo "checkout failed"; exit 1; }
+echo "moved ${head:0:11} -> ${target:0:11} ($behind commits)"
