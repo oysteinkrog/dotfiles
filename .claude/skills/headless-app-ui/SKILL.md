@@ -283,16 +283,17 @@ through `heavy-build`. On master it starts its own Xvfb display for each run, so
 windows do not reach the real screen. For Wine prefixes, exit codes and the test loop,
 load the `heavy-build` skill.
 
-Each headless MC uses 5 to 9 GiB of memory. Start it through heavy-build as class
-`app-run`, so it waits for admission:
+Each headless MC uses 5 to 9 GiB of memory. `headless-mc.sh start` takes its own
+heavy-build `app-run` scope and waits for admission, so call it directly:
 
 ```bash
-heavy-build --class app-run --ready-file "$READY" --wait-timeout 600 -- headless-mc.sh start <name>
+headless-mc.sh start <name> --wait-timeout 600
 ```
 
-heavy-build writes `--ready-file` once the command is let in and started, and removes it
-when heavy-build exits. `--wait-timeout` gives up with exit 77 if the run is not let in in
-time. A command that names `headless-mc.sh` is `app-run` already. Run
+Never wrap it in an outer `heavy-build --class app-run`. The inner scope then sits inside the
+outer one, the outer one ends at once, and it kills the broker and MC with it (seen
+2026-11-02, lane ffnew-opens-16735). `--wait-timeout` gives up with exit 77 if the instance
+is not let in in time; `HEADLESS_MC_HEAVY_BUILD=0` starts without heavy-build. Run
 `headless-mc.sh stop --rm <name>` as soon as you are done. `start` can also end with
 heavy-build's exit 75 or 76.
 
