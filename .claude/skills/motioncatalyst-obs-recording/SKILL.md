@@ -53,7 +53,7 @@ wmctrl -r "MCRecord - Wine Desktop" -e 0,-1,-1,1920,1080
 ```
 mc-record              # 1920x1080, the default
 mc-record 1600x900     # smaller size
-mc-record 1920x1080 --hiveDir 'Z:\\home\\oystein\\.local\\share\\motioncatalyst-hives\\run262'
+mc-record 1920x1080 --hiveDir 'Z:\home\oystein\.local\share\motioncatalyst-hives\run262'
 ```
 
 Arguments after the size go to MotionCatalyst.exe.
