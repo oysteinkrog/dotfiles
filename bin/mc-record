@@ -5,7 +5,7 @@
 # Usage: mc-record [WIDTHxHEIGHT] [MC arguments...]   (default 1920x1080)
 #   e.g. mc-record 1920x1080 --hiveDir 'Z:\home\oystein\.local\share\motioncatalyst-hives\run262'
 #
-# Wine marks the desktop window fullscreen when it is as wide as the monitor, and KWin then
+# Wine marks its desktop window fullscreen, and KWin then
 # stretches it to the whole monitor (1920x1200 on the office screens). The area below MC is
 # never drawn and shows garbage. The fixer below takes the window out of fullscreen and sizes
 # it to WIDTHxHEIGHT in X pixels once it appears. The KWin rule "mcrecord-fullhd" in
@@ -28,12 +28,23 @@ fix_window() {
     sleep 1
   done
   [ -z "$id" ] && return 0
-  # Wine may set fullscreen again while MC starts, so repeat for the first 30 seconds.
-  for _ in $(seq 1 15); do
-    wmctrl -i -r "$id" -b remove,fullscreen,maximized_vert,maximized_horz
+  # A fullscreen window that has focus sits above "keep on top" windows such as the
+  # teleprompter. wmctrl cannot clear the fullscreen state Wine asks for, but a KWin
+  # script can. Wine may ask again while MC starts, so repeat for the first 30 seconds.
+  local js
+  js=$(mktemp -p /var/tmp --suffix=.js mc-record-XXXX)
+  echo 'for (const w of workspace.windowList()) if (w.caption === "MCRecord - Wine Desktop") w.fullScreen = false;' >> "$js"
+  for i in $(seq 1 15); do
+    local sid
+    sid=$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$js" "mc-record-$$-$i" 2>/dev/null) &&
+      qdbus6 org.kde.KWin "/Scripting/Script$sid" org.kde.kwin.Script.run >/dev/null 2>&1
+    sleep 0.5
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "mc-record-$$-$i" >/dev/null 2>&1
+    wmctrl -i -r "$id" -b remove,maximized_vert,maximized_horz
     wmctrl -i -r "$id" -e "0,-1,-1,$W,$H"
-    sleep 2
+    sleep 1.5
   done
+  rm -f "$js"
 }
 fix_window &
 
