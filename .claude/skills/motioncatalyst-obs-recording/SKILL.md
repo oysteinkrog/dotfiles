@@ -23,33 +23,40 @@ Why not the other ways:
 | Screen Capture plus crop | Works, but the crop must match the window exactly and breaks when the window moves. |
 | obs-vkcapture (Game Capture) | Installed and works for the main window (DXVK turns MC's D3D9Ex and D3D11 into Vulkan). It captures one swapchain at a time, so subwindows are expected to be missing. |
 
-## 1. Make X11 apps render 1:1 (the full HD part)
+## 1. Window size and scaling
 
-The office monitors (DP-1, DP-2, DP-3) are Dell 1920x1200 panels at **110% scale**, and KWin is set
-to scale X11 apps itself (`~/.config/kwinrc`, `[Xwayland] Scale=1`, which System Settings calls
-"Legacy applications (X11): Scaled by the system"). Wine is an X11 app. With these settings a
-1920x1080 Wine window is stretched by 1.1 to about 2112x1188 physical pixels. It is blurry and
-does not fit on a 1920-pixel-wide screen.
+Measured on the office desktop on 2026-11-02: the monitors (DP-1, DP-2, DP-3) are Dell 1920x1200
+panels at 110% scale, and XWayland still reports each monitor as 1920x1200 (`xrandr
+--listmonitors`). So X11 apps such as Wine draw at physical pixels, and a 1920x1080 MC desktop is
+1920x1080 real pixels. No scaling change is needed.
 
-Pick one of these before recording:
+Two traps, both handled by `mc-record`:
 
-- **Recommended:** set the monitor you record on to **100%** in System Settings > Display &
-  Monitor. Everything on that screen is then 1:1. Set it back to 110% after recording.
-- Or set System Settings > Display & Monitor > Legacy applications (X11) to **Apply scaling
-  themselves**. X11 apps then draw at physical pixels and stay sharp. This changes every X11 app,
-  not only MC.
+- **Garbage strip under MC.** Wine marks the desktop window fullscreen when it is as wide as the
+  monitor. KWin then stretches the window to the whole 1920x1200 monitor. Wine draws only the top
+  1920x1080, and the 120 pixels below show leftover image data. `mc-record` takes the window out of
+  fullscreen and sizes it to 1920x1080 for the first 30 seconds after it appears.
+- **KWin rule sizes are logical, not X pixels.** A KWin rule that forces the size to 1920x1080
+  gives a 2112x1188 window at 110% scale. The rule `mcrecord-fullhd` in `~/.config/kwinrulesrc`
+  therefore sets no size. It only removes the frame and blocks maximize and fullscreen. Size the
+  window in X pixels with `wmctrl -e`, as `mc-record` does.
 
-With either setting, a 1920x1080 MC desktop plus its title bar fits on a 1920x1200 monitor.
+If the strip comes back mid-session, run:
 
-I worked this out from the config and how KWin scales X11 apps, not from a test recording. Check it
-with the size test in step 4.
+```
+wmctrl -r "MCRecord - Wine Desktop" -b remove,fullscreen,maximized_vert,maximized_horz
+wmctrl -r "MCRecord - Wine Desktop" -e 0,-1,-1,1920,1080
+```
 
 ## 2. Start MC in the recording desktop
 
 ```
 mc-record              # 1920x1080, the default
-mc-record 1600x900     # smaller, for a screen that cannot fit 1920x1080
+mc-record 1600x900     # smaller size
+mc-record 1920x1080 --hiveDir 'Z:\\home\\oystein\\.local\\share\\motioncatalyst-hives\\run262'
 ```
+
+Arguments after the size go to MotionCatalyst.exe.
 
 `mc-record` (`~/.dotfiles/bin/mc-record`) uses the same prefix (`~/.wine`), Wine build
 (`~/.local/share/motioncatalyst-wine/current`) and `dxvk.conf` as the normal Swing Catalyst menu
@@ -85,8 +92,9 @@ Scene:
 Right-click the source > Resize output (source size). OBS shows the source size. It must be
 **1920x1080**:
 
-- 2112x1188 or anything else that is not 1920x1080: step 1 was skipped. Fix the scaling and
-  restart `mc-record`.
+- 1920x1200: the window went fullscreen again. Run the two `wmctrl` lines in step 1.
+- 2112x1188: something sized the window in logical units, such as a KWin size rule. Remove that
+  rule and run the `wmctrl` lines.
 - 1920x1080 but MC does not fill it: maximize MC inside the MCRecord window.
 
 Also record 5 seconds, open a dialog and a dropdown, and check that both appear in the file.

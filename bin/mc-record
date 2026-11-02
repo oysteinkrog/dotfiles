@@ -2,12 +2,40 @@
 # Start the installed Swing Catalyst inside a Wine virtual desktop of a fixed size,
 # so every MC window (main window, dialogs, menus, popups) lives in one host window.
 # Capture that one window in OBS with "Window Capture (PipeWire)".
-# Usage: mc-record [WIDTHxHEIGHT]   (default 1920x1080)
+# Usage: mc-record [WIDTHxHEIGHT] [MC arguments...]   (default 1920x1080)
+#   e.g. mc-record 1920x1080 --hiveDir 'Z:\home\oystein\.local\share\motioncatalyst-hives\run262'
+#
+# Wine marks the desktop window fullscreen when it is as wide as the monitor, and KWin then
+# stretches it to the whole monitor (1920x1200 on the office screens). The area below MC is
+# never drawn and shows garbage. The fixer below takes the window out of fullscreen and sizes
+# it to WIDTHxHEIGHT in X pixels once it appears. The KWin rule "mcrecord-fullhd" in
+# ~/.config/kwinrulesrc also removes the frame and blocks maximize.
 set -euo pipefail
-SIZE="${1:-1920x1080}"
+SIZE=1920x1080
+if [[ "${1:-}" =~ ^[0-9]+x[0-9]+$ ]]; then SIZE="$1"; shift; fi
+W="${SIZE%x*}"
+H="${SIZE#*x}"
 export WINEPREFIX=/home/oystein/.wine
 export DXVK_CONFIG_FILE=/home/oystein/.wine/dxvk.conf
 export WINEDEBUG=fixme-all
 WINE=/home/oystein/.local/share/motioncatalyst-wine/current/bin/wine
+
+fix_window() {
+  local id=""
+  for _ in $(seq 1 120); do
+    id=$(wmctrl -l 2>/dev/null | awk '/MCRecord - Wine Desktop/ {print $1; exit}')
+    [ -n "$id" ] && break
+    sleep 1
+  done
+  [ -z "$id" ] && return 0
+  # Wine may set fullscreen again while MC starts, so repeat for the first 30 seconds.
+  for _ in $(seq 1 15); do
+    wmctrl -i -r "$id" -b remove,fullscreen,maximized_vert,maximized_horz
+    wmctrl -i -r "$id" -e "0,-1,-1,$W,$H"
+    sleep 2
+  done
+}
+fix_window &
+
 cd "/home/oystein/.wine/drive_c/Program Files/Initial Force/Swing Catalyst/bin"
-exec "$WINE" explorer "/desktop=MCRecord,$SIZE" MotionCatalyst.exe
+exec "$WINE" explorer "/desktop=MCRecord,$SIZE" MotionCatalyst.exe "$@"
