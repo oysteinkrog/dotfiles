@@ -38,13 +38,22 @@ Two traps, both handled by `mc-record`:
   fullscreen and sizes it to 1920x1080 for the first 30 seconds after it appears.
 - **KWin rule sizes are logical, not X pixels.** A KWin rule that forces the size to 1920x1080
   gives a 2112x1188 window at 110% scale. The rule `mcrecord-fullhd` in `~/.config/kwinrulesrc`
-  therefore sets no size. It only removes the frame and blocks maximize and fullscreen. Size the
+  therefore sets no size. It only removes the frame and blocks maximize. Size the
   window in X pixels with `wmctrl -e`, as `mc-record` does.
 
-If the strip comes back mid-session, run:
+- **Teleprompter hidden behind MC.** While the Wine window is fullscreen and has focus, KWin
+  puts it above every "keep on top" window, so the teleprompter disappears behind it. Clearing
+  fullscreen fixes this too. `wmctrl -b remove,fullscreen` does not work here (Wine or KWin puts
+  it back); a KWin script setting `fullScreen = false` does, and that is what `mc-record` runs.
+  Do not add a KWin rule that forces fullscreen off: with that rule in place, the script cannot
+  change the state of a window that was already open.
+
+If the strip or the hidden teleprompter comes back mid-session, run:
 
 ```
-wmctrl -r "MCRecord - Wine Desktop" -b remove,fullscreen,maximized_vert,maximized_horz
+echo 'for (const w of workspace.windowList()) if (w.caption === "MCRecord - Wine Desktop") w.fullScreen = false;' > /var/tmp/unfull.js
+qdbus6 org.kde.KWin /Scripting/Script$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript /var/tmp/unfull.js unfull) org.kde.kwin.Script.run
+qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript unfull
 wmctrl -r "MCRecord - Wine Desktop" -e 0,-1,-1,1920,1080
 ```
 
@@ -92,9 +101,9 @@ Scene:
 Right-click the source > Resize output (source size). OBS shows the source size. It must be
 **1920x1080**:
 
-- 1920x1200: the window went fullscreen again. Run the two `wmctrl` lines in step 1.
+- 1920x1200: the window went fullscreen again. Run the fix-it commands in step 1.
 - 2112x1188: something sized the window in logical units, such as a KWin size rule. Remove that
-  rule and run the `wmctrl` lines.
+  rule and run the fix-it commands in step 1.
 - 1920x1080 but MC does not fill it: maximize MC inside the MCRecord window.
 
 Also record 5 seconds, open a dialog and a dropdown, and check that both appear in the file.
