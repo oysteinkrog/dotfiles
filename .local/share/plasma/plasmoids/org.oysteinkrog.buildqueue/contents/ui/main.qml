@@ -941,9 +941,28 @@ PlasmoidItem {
         // The window sits a step darker than the cards, so the cards lift off it.
         color: root.themed ? root.pt.window : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, "black", 0.18)
 
-        ColumnLayout {
+        // The page scrolls when the cards need more height than the window has (four
+        // machines, a two-line banner and a full Next card), so nothing is drawn on top of
+        // anything else. While it fits, the Sessions card takes the spare room.
+        Flickable {
+            id: page
             anchors.fill: parent
             anchors.margins: Kirigami.Units.largeSpacing * 1.25
+            contentWidth: width
+            contentHeight: pageColumn.height
+            interactive: contentHeight > height
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+            PlasmaComponents.ScrollBar.vertical: PlasmaComponents.ScrollBar {
+                id: pageBar
+                policy: page.interactive ? PlasmaComponents.ScrollBar.AsNeeded : PlasmaComponents.ScrollBar.AlwaysOff
+            }
+
+        ColumnLayout {
+            id: pageColumn
+            // Leaves room for the scroll bar, so it never covers the right-hand numbers.
+            width: page.width - (page.interactive ? pageBar.width + Kirigami.Units.smallSpacing : 0)
+            height: Math.max(page.height, implicitHeight)
             spacing: Kirigami.Units.largeSpacing
 
             // Header: title, how fresh the data is, and any problem.
@@ -1934,7 +1953,7 @@ PlasmoidItem {
                     visible: root.listMode === "session"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: view.gu * 4
+                    Layout.minimumHeight: view.gu * 8
                     clip: true
                     model: root.projects.length
                     boundsBehavior: Flickable.StopAtBounds
@@ -2140,7 +2159,7 @@ PlasmoidItem {
                     visible: root.listMode === "queue"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: view.gu * 4
+                    Layout.minimumHeight: view.gu * 8
                     clip: true
                     model: root.queueRows.length
                     boundsBehavior: Flickable.StopAtBounds
@@ -2227,6 +2246,7 @@ PlasmoidItem {
                 maximumLineCount: 2
                 elide: Text.ElideRight
             }
+        }
         }
     }
 }
