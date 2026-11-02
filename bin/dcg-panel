@@ -141,7 +141,9 @@ def is_hard_block(reason: str) -> bool:
 AGENT_ADVICE = (
     "Do not ask Oystein to run `dcg allow-once`. Rewrite the command so dcg can check it: use "
     "literal absolute paths instead of variables, split long chains into separate calls, or "
-    "put the script in a file under /var/tmp/claude/ and run that file."
+    "put the script in a file under /var/tmp/claude/ and run that file. For "
+    "core.git:branch-dynamic-token on a command with no `git branch` in it, quote the path "
+    'after -C: `git -C "$L" show $c` passes, `git -C $L show $c` does not (dcg 0.15.3 bug).'
 )
 
 
@@ -281,7 +283,8 @@ def ask_member(member: dict, prompt: str, keys: dict) -> dict:
                     "instructions": SYSTEM_PROMPT,
                     "input": prompt,
                     "reasoning": {"effort": "low"},
-                    "max_output_tokens": 2000,
+                    # 2000 cut the JSON reply off mid-string 3 times (2026-11-02).
+                    "max_output_tokens": 6000,
                 },
             )
             text = data.get("output_text") or "".join(
