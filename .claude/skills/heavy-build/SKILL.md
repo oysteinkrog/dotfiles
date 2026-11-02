@@ -115,6 +115,11 @@ Never pass `--no-dependencies` to `dotnet build` or `dotnet test` in the monorep
 risks stale DLLs. For parallel .NET builds in one checkout, use `AgentOutputSuffix`
 (monorepo `docs/dev/recovery.md`).
 
+On Linux, a monorepo build of a `net10.0-windows` project fails with NETSDK1100 unless
+`EnableWindowsTargeting` is set. The repo does not set it globally. Use
+`build.sh build -r win-x64`, which adds it, or pass `-p:EnableWindowsTargeting=true` to a
+bare `dotnet build` or `dotnet test`. Three lanes lost runs to this on 2026-11-01 and 11-02.
+
 ## 6. Parallel builds of one tree
 
 Do not start a second build of the same tree while one waits or runs. heavy-build makes
