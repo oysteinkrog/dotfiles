@@ -12,6 +12,10 @@
 # this script runs and which writes $XDG_RUNTIME_DIR/buildqueue/queue.json.
 
 set -eu
+# Plasma finds the widget package through the XDG data folders. A shell that points
+# XDG_DATA_HOME somewhere else (agent and FrankenTerm shells do) makes the window show
+# "Error loading applet: package format is invalid", so always use the defaults.
+unset XDG_DATA_HOME XDG_DATA_DIRS
 dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/buildqueue"
 mkdir -p "$dir"
 cat >"$dir/bus.conf" <<EOF
