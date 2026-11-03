@@ -160,7 +160,9 @@ set nojoinspaces " Prevents inserting two spaces after punctuation on a join (J)
 set splitright " Puts new vsplit windows to the right of the current
 set splitbelow " Puts new split windows to the bottom of the current
 "set matchpairs+=<:> " Match, to be used with %
-set pastetoggle=<F12> " pastetoggle (sane indentation on pastes)
+if !has('nvim')
+    set pastetoggle=<F12> " pastetoggle (sane indentation on pastes); removed in neovim
+endif
 
 
 " Ctags {

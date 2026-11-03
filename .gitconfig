@@ -15,7 +15,7 @@
     ;fsmonitor = true
     ;useBuiltinFSMonitor = false
     commitGraph = true
-    editor = vim
+    editor = nvim
     longpaths = true
     compression = 9
     packedGitLimit = 512m 
@@ -87,7 +87,7 @@
     prompt = false
     keepBackup = false
 [mergetool "splice"]
-    cmd = "vim -f $BASE $LOCAL $REMOTE $MERGED -c 'SpliceInit'"
+    cmd = "nvim -f $BASE $LOCAL $REMOTE $MERGED -c 'SpliceInit'"
     trustExitCode = true
 [mergetool "vimdiff"]
     trustExitCode = true
