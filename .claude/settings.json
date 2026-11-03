@@ -1,9 +1,4 @@
 {
-  "pluginConfigs": {
-    "agents-md@builtin": {
-      "options": { "instructionFiles": "claude-md-and-agents-md" }
-    }
-  },
   "cleanupPeriodDays": 36500,
   "env": {
     "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1",
@@ -434,7 +429,8 @@
     "ui-ux-pro-max@ui-ux-pro-max-skill": false,
     "cowork-plugin-management@inline": false,
     "claude-seo@agricidaniel-claude-seo": true,
-    "cc-plugin-you-should-know@builtin": true
+    "cc-plugin-you-should-know@builtin": true,
+    "agent-hub@agent-hub-plugins": false
   },
   "extraKnownMarketplaces": {
     "ui-ux-pro-max-skill": {
@@ -448,6 +444,12 @@
         "source": "github",
         "repo": "AgriciDaniel/claude-seo"
       }
+    },
+    "agent-hub-plugins": {
+      "source": {
+        "source": "directory",
+        "path": "/home/oystein/.local/share/agent-hub/personal-marketplace"
+      }
     }
   },
   "syntaxHighlightingDisabled": false,
@@ -455,6 +457,13 @@
   "modelSettings": {
     "claude-fable-5-1": {
       "effortLevel": "medium"
+    }
+  },
+  "pluginConfigs": {
+    "agents-md@builtin": {
+      "options": {
+        "instructionFiles": "claude-md-and-agents-md"
+      }
     }
   },
   "autoUpdatesChannel": "latest",
