@@ -78,6 +78,16 @@ same gate on anything about to reach a person and hands back findings on failure
   multiple-choice or clarifying question, and for open questions too, so there is a clear
   input affordance.
 
+## No time estimates
+
+Oystein, 2026-11-03: never estimate time or effort, anywhere, ever. Do not write
+durations, hours, agent-days, "about a week" or effort sizes in plans, beads, PRDs,
+reports, artifacts, chat replies or subagent prompts. Leave estimate fields empty when
+creating beads, never ask him to choose between estimates, and do not track or compare
+work against them. Order work by priority and dependencies instead. Measured times are
+facts, not estimates, and stay: a build that took 44 s, a test's run time, a latency
+figure.
+
 ## Secrets and credentials
 
 **Do not search the filesystem or old session logs for secrets.** Everything is in one place.
