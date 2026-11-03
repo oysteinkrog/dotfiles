@@ -35,6 +35,9 @@ screen was locked.
   prefix has one wineserver, and Wine's desktop window lives on the display of
   whichever process started first. MC on the other display then dies with
   `BadWindow`.
+- Each instance needs its own `XDG_CACHE_HOME`, set before KWin or the app starts
+  (`headless-scope.sh` does this for you). A shared `~/.cache/ksycoca6_*` file makes
+  the real KWin rebuild it on its main thread and freezes the desktop (2026-11-03).
 - Stop only what you started: your own Xvfb or compositor, broker and wineserver,
   by the PID you recorded. Never `pkill wine`, `pkill kwin_wayland` or
   `pkill Xvfb`. The real desktop runs `kwin_wayland --socket wayland-0`, and other
@@ -217,6 +220,7 @@ while :; do
   n=$((n+1))                            # lost a race for :$n; try the next number
 done
 export DISPLAY=:$(cat "$run/display") WAYLAND_DISPLAY=no-such-wl XAUTHORITY=/dev/null
+export XDG_CACHE_HOME="$run/cache"; mkdir -p "$XDG_CACHE_HOME"   # own cache per instance
 dbus-run-session -- <your launcher>
 # when done
 kill "$(cat "$run/xvfb.pid")"
@@ -248,6 +252,7 @@ is rebuilding it. Do not try to fix KWin yourself. Check with
 `kwin_wayland --version` before you rely on it.
 
 ```bash
+export XDG_CACHE_HOME="$run/kwincache"; mkdir -p "$XDG_CACHE_HOME"   # never share ~/.cache
 dbus-run-session -- kwin_wayland --virtual --xwayland --no-lockscreen \
     --no-global-shortcuts --socket <tag>-wl --width 1920 --height 1200 \
     --exit-with-session <inner.sh> 2>"$run/kwin.log"
