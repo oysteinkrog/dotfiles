@@ -76,8 +76,13 @@ let g:solarized_visibility = "high"
 let g:solarized_termtrans = 0
 let g:solarized_contrast = "high"
 
-colorscheme solarized
 set background=dark
+" Fall back to a built-in scheme until vim-plug has installed solarized.
+try
+    colorscheme solarized
+catch /^Vim\%((\a\+)\)\=:E185/
+    colorscheme habamax
+endtry
 
 set shortmess+=filmnrxoOtT " Abbrev. of messages (avoids 'hit enter')
 set viewoptions=folds,options,cursor,unix,slash " Better Unix / Windows compatibility
