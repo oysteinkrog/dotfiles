@@ -1,0 +1,57 @@
+#!/bin/bash
+# desktop-cache apply|undo|status
+# Replace desktop cache files in ~/.cache with symlinks into $XDG_RUNTIME_DIR/desktop-cache (tmpfs).
+# Reason: btrfs_page_mkwrite stalls in KWin and plasmashell. Never deletes a mapped file:
+# a symlink is renamed over the old name, so running processes keep their old inode.
+set -euo pipefail
+C="$HOME/.cache"
+T="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/desktop-cache"
+B=/var/tmp/claude/desktop-cache/backup
+# kind:name-in-~/.cache:name-in-tmpfs
+items=(
+  "f:kwinsession.kcache:kwinsession.kcache"
+  "f:plasma_theme_default.kcache:plasma_theme_default.kcache"
+  "f:plasma_theme_Sweet.kcache:plasma_theme_Sweet.kcache"
+  "f:mesa_shader_cache/index:mesa_shader_cache.index"
+  "f:event-sound-cache.tdb.5f7b4db0d9694aa495a7b42006049303.x86_64-pc-linux-gnu:event-sound-cache.tdb"
+  "d:nvidia/GLCache/0672c47a47b9a64bdb5b6fc8e378ef8e:nvidia-glcache-0672c47a"
+)
+apply() {
+  systemd-tmpfiles --user --create "$HOME/.config/user-tmpfiles.d/desktop-cache.conf"
+  mkdir -p "$B"
+  for it in "${items[@]}"; do
+    IFS=: read -r k src dst <<<"$it"; p="$C/$src"
+    if [ -L "$p" ]; then echo "skip (already link): $src"; continue; fi
+    if [ "$k" = f ]; then
+      # No seeding: copying a live mmap cache can capture inconsistent lock state. Apps recreate it empty.
+      if [ -e "$p" ]; then cp --reflink=auto -p "$p" "$B/$dst"; fi
+      ln -s "$T/$dst" "$C/.$dst.new"
+      mv -T "$C/.$dst.new" "$p"        # atomic rename over the file
+    else
+      if [ ! -d "$p" ]; then echo "skip (missing): $src"; continue; fi
+      rm -rf "$B/$dst"                 # only an old backup of ours
+      mv "$p" "$B/$dst"                # dir: move aside (same fs rename), then link
+      ln -s "$T/$dst" "$p"
+    fi
+    echo "linked: $src -> $T/$dst"
+  done
+}
+undo() {
+  for it in "${items[@]}"; do
+    IFS=: read -r k src dst <<<"$it"; p="$C/$src"
+    if [ ! -L "$p" ]; then echo "not a link: $src"; continue; fi
+    if [ "$k" = f ]; then
+      # restore the backup if there is one, else the app recreates the cache
+      if [ -e "$B/$dst" ]; then cp -p "$B/$dst" "$C/.$dst.new"; mv -T "$C/.$dst.new" "$p"; else rm "$p"; fi
+    else
+      rm "$p"
+      if [ -d "$B/$dst" ]; then mv "$B/$dst" "$p"; else mkdir -m 0700 "$p"; fi
+    fi
+    echo "restored: $src"
+  done
+}
+status() {
+  for it in "${items[@]}"; do IFS=: read -r k src dst <<<"$it"; ls -ld "$C/$src"; done
+  du -sh "$T" 2>&1 || true
+}
+case "${1:-}" in apply) apply;; undo) undo;; status) status;; *) echo "usage: $0 apply|undo|status" >&2; exit 2;; esac

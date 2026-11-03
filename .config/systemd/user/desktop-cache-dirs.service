@@ -1,0 +1,13 @@
+[Unit]
+Description=Create tmpfs folders for desktop cache symlinks
+DefaultDependencies=no
+Before=basic.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=systemd-tmpfiles --user --create %h/.config/user-tmpfiles.d/desktop-cache.conf
+
+[Install]
+WantedBy=basic.target
