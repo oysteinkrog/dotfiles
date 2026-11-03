@@ -1992,8 +1992,26 @@ RUN_H1='R h1 990000 4 2 1000600 4294967296 - 0 high -'
 RUN_H2='R h2 990000 4 2 1000600 4294967296 - 0 high -'
 W_HOLD='W 0000000990000000000-3-h 990000 high 4 2 600 -'
 W_NEW='W 0000000999000000001-2-b 999001 normal 4 2 600 -'
+# Past the cap (2026-11-03, Oystein): a third high build is judged as a
+# normal build. It starts when it fits, and waits with the normal reason when
+# it does not. Before, it waited with "high-cap" on an idle machine.
+OCN='; 2 high builds already run, so it is judged as a normal build'
 out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" | adm 0000000990000000000-3-h 0 1 12)
-check "high-cap: a third high build waits (got '$out')" '[[ $out == wait\|high-cap:* ]]'
+check "high-cap: a third high build that fits starts as a normal build (got '$out')" '[[ $out == "start|fits: next in order$OCN|0" ]]'
+W_HBIG='W 0000000990000000000-3-h 990000 high 58 2 600 -'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HBIG" | adm 0000000990000000000-3-h 0 1 12)
+check "high-cap: a third high build that does not fit waits for memory, not high-cap (got '$out')" '[[ $out == wait\|memory:*"$OCN|0" ]]'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HBIG" "$W_NEW" | adm 0000000999000000001-2-b 0 1 12)
+check "high-cap: a third high build that does not fit is not the head, so a normal build behind it starts (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" | ADM_PLEVEL=pause adm 0000000990000000000-3-h 0 1 12)
+check "high-cap: at pressure level pause a third high build waits like a normal one (got '$out')" '[[ $out == wait\|pressure:\ level\ pause*"$OCN|1" ]]'
+out=$(printf '%s\n' "$RUN_H1" "$W_HOLD" | ADM_PLEVEL=pause adm 0000000990000000000-3-h 0 1 12)
+check "high-cap: a second high build is still not held by pressure level pause (got '$out')" '[[ $out == start\|fits:* && $out != *"$OCN"* ]]'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" | adm 0000000990000000000-3-h 1 1 12)
+check "high-cap: with critical-first on, two high builds past the cap fill nothing yet, so a third starts (got '$out')" '[[ $out == "start|fits: next in order$OCN|0" ]]'
+RUN_H3='R h3 990000 4 2 1000600 4294967296 - 0 high -'
+out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$RUN_H3" "$W_HOLD" | adm 0000000990000000000-3-h 1 1 12)
+check "high-cap: with critical-first on, a running high build past the cap takes the non-critical slot (got '$out')" '[[ $out == "wait|critical-first: 1 normal or low builds run, the limit is 1 while critical builds go first$OCN|1" ]]'
 out=$(printf '%s\n' "$RUN_H1" "$RUN_H2" "$W_HOLD" "$W_NEW" | adm 0000000999000000001-2-b 0 1 12)
 check "high-cap: a normal build behind an old capped high waiter starts as next in order (got '$out')" '[[ $out == "start|fits: next in order|0" ]]'
 out=$(printf '%s\n' "$RUN_H1" "$W_HOLD" "$W_NEW" | adm 0000000990000000000-3-h 0 1 12)

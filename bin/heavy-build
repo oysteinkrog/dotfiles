@@ -411,11 +411,15 @@
 #   share it. A scope with no heavy-build keeps its plain key. 0 turns this off.
 # - HEAVY_BUILD_PRIORITY=high|normal|low (default normal). Agents may set high
 #   ONLY for a P0 bug or for the last local check before a PR, and must give
-#   the reason in HEAVY_BUILD_REASON. At most 2 high builds run at once. A
-#   high build that waits only for this cap keeps its place but is never the
-#   head of the line, so it cannot hold up other builds through the starve or
-#   backfill rule (on 2026-10-23 it did: one high waiter blocked 37 builds for
-#   40 min while the machine sat idle). A low
+#   the reason in HEAVY_BUILD_REASON. While 2 high builds run, a third high
+#   build is judged as a normal build (2026-11-03, Oystein): it keeps its high
+#   place in line, but starts only when every check for a normal build passes
+#   (memory, cores, pressure level, critical-first, critical builds waiting,
+#   the drain reserve). Its reason ends "so it is judged as a normal build".
+#   It is never the head of the line, so it cannot hold up other builds
+#   through the starve or backfill rule (on 2026-10-23 it did: one high waiter
+#   blocked 37 builds for 40 min while the machine sat idle). Before
+#   2026-11-03 it waited with "high-cap" even on an idle machine. A low
 #   build counts as normal after 30 min of waiting. Only live mode uses it.
 #   With HEAVY_BUILD_LOW_NO_STARVE=1 (default 0) a low build stays low: it
 #   gets only what no normal or higher build can use. It is never the head of
@@ -2846,7 +2850,7 @@ function psifull10(f,   l, a, b, v) {
 # seconds while MemAvailable is above slowfastgib GiB, else slowgap seconds.
 # "" when it may go on.
 function pressure_why(i,   gap) {
-  if (w_pr[i] == "high" || w_pr[i] == "critical") return ""
+  if ((w_pr[i] == "high" && !w_oc[i]) || w_pr[i] == "critical") return ""
   if (plevel == "pause") return "pressure: level pause, only high and critical builds start (" preason ")"
   # The memory controller (memctl=1) takes the place of the slow level gap.
   if (memctl) {
@@ -3002,7 +3006,8 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh,   sn) {
   if (nrun - untsolo <= 0 && T_idle == 0 && av < sn) return sprintf("memory: %.1f GiB available, the first build needs %d", av, sn)
   if (nrun - untsolo <= 0 && T_idle == 0 && plevel != "slow" && plevel != "pause") return ""
   if (nrun >= maxjobs) return sprintf("jobs: %d builds run, the limit is %d", nrun, maxjobs)
-  if (w_pr[i] == "high" && nhigh >= 2) return "high-cap: 2 high-priority builds already run"
+  # The 2-high cap is no longer a wait reason here (2026-11-03): the walk
+  # judges a high build past it as a normal build (w_oc).
   if (cpu + w_cores[i] > cpubudget) {
     if (cpureal) return sprintf("cores: needs %.1f, %.1f of %d in use (builds.slice used %.1f over the last %d s, plus %.1f for builds that started recently%s)", w_cores[i], cpu, cpubudget, sliceavg, sliceavgwin, cpu - sliceavg - jobscpu, jobscpu > 0 ? sprintf(", plus %.1f for jobs.slice", jobscpu) : "")
     return sprintf("cores: needs %.1f, %.1f of %d are charged%s", w_cores[i], cpu, cpubudget, jobscpu > 0 ? sprintf(" (%.1f of them jobs.slice)", jobscpu) : "")
@@ -3023,14 +3028,16 @@ function why_not(i, nrun, cpu, tc, held, av, nhigh,   sn) {
 # The critical-first switch (cf=1): a normal or low waiter also needs a free
 # non-critical slot and cfreserve GiB left after its estimate. "" when it may go on.
 function cf_why(i, nnc, tc, av) {
-  if (!cf || w_pr[i] == "high" || w_pr[i] == "critical") return ""
+  if (!cf || (w_pr[i] == "high" && !w_oc[i]) || w_pr[i] == "critical") return ""
+  # High builds past the 2-high cap count as normal ones.
+  if (T_high > 2) nnc += T_high - 2
   if (nnc >= cfslots) return sprintf("critical-first: %d normal or low builds run, the limit is %d while critical builds go first", nnc, cfslots)
   if (av + swx - tc - w_mem[i] < cfreserve) return sprintf("critical-first: needs %.1f GiB; %.1f available%s, %.1f still to come for running builds, normal and low builds must leave %d", w_mem[i], av, swxnote, tc, cfreserve)
   return ""
 }
 function pick(i) {
   addrun(w_id[i], now, w_mem[i], w_cores[i], now + w_wall[i], 0, "-", 0, w_pr[i] (w_aged[i] ? ":aged" : ""), w_keys[i], tcpct, w_cls[i], 0); picked[i] = 1
-  if (w_pr[i] != "high" && w_pr[i] != "critical") lastnc = now
+  if ((w_pr[i] != "high" || w_oc[i]) && w_pr[i] != "critical") lastnc = now
 }
 # When enough running builds should have ended for waiter i to fit.
 function shadow_time(i,   j, k, x, idx, nrun, cpu, tc, held, av, nh, u0) {
@@ -3261,6 +3268,10 @@ END {
     if (w_pr[i] == "critical" && now - w_arr[i] >= critdrain && (!cdrainw || w_arr[i] < w_arr[cdrainw] || (w_arr[i] == w_arr[cdrainw] && w_id[i] < w_id[cdrainw]))) cdrainw = i
   for (o = 1; o <= nw; o++) {
     i = ord[o]
+    # The high-cap is a share rule, not a resource limit (2026-11-03): while
+    # 2 high builds run, a high build is judged as a normal one (w_oc). It
+    # keeps its place in line but is never the head of the line.
+    w_oc[i] = (w_pr[i] == "high" && T_high >= 2)
     if (gate != "") { why[i] = gate; continue }
     # VRAM gate (2026-10-30, after an MC froze at 15.9 of 16.3 GB): an app run
     # or Wine test needs vramneed GiB of VRAM free, after vramneed for each such
@@ -3289,12 +3300,9 @@ END {
     # never the head of the line, so high and critical builds behind it go on.
     pw = pressure_why(i)
     if (pw != "") { why[i] = pw; continue }
-    # The high-cap is a share rule, not a resource limit. A high build that
-    # waits for it keeps its place but is never the head of the line.
-    if (w_pr[i] == "high" && T_high >= 2) { why[i] = "high-cap: 2 high-priority builds already run"; continue }
     wk = writer(w_keys[i], o)
     if (wk != "") { why[i] = "writer: " w_id[wpref[wk]] " waits for " wk ", so no new build with a suffixed key in that tree starts first"; continue }
-    if (critw && w_rank[i] > 1) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
+    if (critw && (w_rank[i] > 1 || w_oc[i])) { why[i] = sprintf("critical: %s from a critical session waits for %s, so it goes first", w_id[critw], critwhat); continue }
     if (cdrainw && w_pr[i] != "critical") { why[i] = sprintf("critical drain: %s has waited %d min, so no new high, normal or low build starts until it does", w_id[cdrainw], (now - w_arr[cdrainw]) / 60); continue }
     if (drainbound == "app" && i != drainw && w_cls[i] == "app-run" && (w_pr[i] == "normal" || w_pr[i] == "low")) { why[i] = sprintf("drain: %s waits for the running app runs to end, so no new normal or low app run starts", w_id[drainw]); continue }
     if (drainw && drainbound == "" && i != drainw && (w_pr[i] == "normal" || w_pr[i] == "low" || w_pr[i] == "high")) {
@@ -3320,6 +3328,7 @@ END {
       # that had aged to normal was the starve head for over 2 h and held
       # about 100 normal and critical builds.
       if (w_lowskip[i]) { why[i] = r "; it is low, so it holds back no other build"; untsolo = 0; continue }
+      if (w_oc[i]) { why[i] = r; untsolo = 0; continue }
       headi = i; why[i] = r; shadow = shadow_time(i); starving = st; untsolo = 0
       # The queue never holds an empty machine: when no tracked build runs
       # and the head still does not fit (pressure level slow or pause, or
@@ -3358,7 +3367,7 @@ END {
     if (r == "") r = cf_why(i, T_nc, T_tc, avail)
     if (r != "" && !critw && w_pr[i] == "critical" && r ~ /^(jobs|cores|cpu-pressure):/) { critw = i; critwhat = substr(r, 1, index(r, ":") - 1) }
     if (r != "") { why[i] = r; continue }
-    if (w_aged[headi] && w_rank[i] <= 1) { pick(i); why[i] = "fits: the aged build " w_id[headi] " does not fit yet, and " w_pr[i] " builds may pass it"; continue }
+    if (w_aged[headi] && w_rank[i] <= 1 && !w_oc[i]) { pick(i); why[i] = "fits: the aged build " w_id[headi] " does not fit yet, and " w_pr[i] " builds may pass it"; continue }
     # Backfill floor (bfloor, default 120 s): an overdue running build counts
     # as ending at the next poll, so the shadow time is often under a minute
     # away. The limit is never sooner than now + bfloor.
@@ -3372,13 +3381,14 @@ END {
     i = ord[o]
     if (w_id[i] != me) continue
     if (picked[i] && w_aged[i]) why[i] = sprintf("aged: it waited %d min, so it goes ahead of other normal builds (%s)", (now - w_arr[i]) / 60, why[i])
+    if (w_oc[i]) why[i] = why[i] "; 2 high builds already run, so it is judged as a normal build"
     # prioheld: this build waits only because a higher-priority build is
     # ahead of it, or for the critical-first switch, so its give-up clock
     # does not run. While the switch is on, a normal or low build that waits
     # for memory counts as held too: the critical builds it lets in take that
     # memory. On 2026-10-20 a 26.1 beta test gave up after 7201 s of such waits.
     kind = substr(why[i], 1, index(why[i], ":") - 1); ph = 0
-    if (!picked[i] && kind !~ /^(swap|interactive|key|writer|app-cap)$/ && (kind == "critical" || kind == "critical-first" || kind == "pressure" || (cf && kind == "memory" && w_pr[i] != "high" && w_pr[i] != "critical") || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
+    if (!picked[i] && kind !~ /^(swap|interactive|key|writer|app-cap)$/ && (kind == "critical" || kind == "critical-first" || kind == "pressure" || (cf && kind == "memory" && (w_pr[i] != "high" || w_oc[i]) && w_pr[i] != "critical") || (headi && headi != i && w_rank[headi] < w_rank[i]))) ph = 1
     # The pressure level holds this build whatever reason is shown (a swap or
     # interactive gate may come first), so the clock does not run.
     if (!picked[i] && pressure_why(i) != "") ph = 1
@@ -4201,7 +4211,8 @@ else
         write_state 0 - 0   # our reservation, written while we hold the mutex
         # The start of a normal or low build, for the one-per-120-s rule at
         # pressure level slow. Written under the mutex.
-        if [[ $PRIO != high && $PRIO != critical ]]; then
+        # A high build past the 2-high cap starts as a normal one.
+        if [[ $PRIO != high && $PRIO != critical ]] || [[ $why == *"so it is judged as a normal build"* ]]; then
           printf '%s\n' "$EPOCHSECONDS" > "$NCSTART.$$" && mv -f -- "$NCSTART.$$" "$NCSTART"
         fi
         rm -f -- "$ticket"

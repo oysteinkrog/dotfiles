@@ -174,7 +174,10 @@ An app run is capped at 8 CPU threads (CPUQuota 800%); to raise it, set
 Leave `HEAVY_BUILD_PRIORITY` unset.
 
 - `high` only for a P0 bug or the last local check before a PR, with
-  `HEAVY_BUILD_REASON` set. At most 2 high builds run at once.
+  `HEAVY_BUILD_REASON` set. While 2 high builds run, a third high build keeps
+  its high place in line but is judged as a normal build: it starts only when
+  every normal check passes (memory, cores, pressure level). Its reason then
+  ends "so it is judged as a normal build" (since 2026-11-03).
 - `low` for builds that can wait.
 - `critical` comes from `~/.config/machine/sessions.toml` (a critical session, or a
   grove lane it owns or works in). It cannot be set by hand.
