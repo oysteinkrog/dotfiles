@@ -74,7 +74,14 @@ one. A client stopped with SIGTERM or Ctrl-C cancels its job (exit 130).
 
 Cancel only your own requests. Exit codes are heavy-build's: 75 not run (gave
 up waiting, or jobd went away while it waited), 76 rerun guard, 77
-`--wait-timeout`, 124 `HEAVY_BUILD_TIMEOUT`, 130 cancelled.
+`--wait-timeout`, 124 `HEAVY_BUILD_TIMEOUT`, 130 cancelled. jobd adds 78
+replaced: your session submitted the same argv with the same lock key while
+this job still waited, so the newer request runs it. Do not retry on 78.
+
+A job estimated at 10 s or less (`wall=` in its submit line) is interactive:
+it skips the line and starts at once while fewer than 3 such jobs run, its
+lock key is free, the pressure level is not `pause` and memory allows. It is
+charged 1 GiB and 1 core. The `JOBD_INTERACTIVE_*` settings are in the README.
 
 ## 5. Logs
 

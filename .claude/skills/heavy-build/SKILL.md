@@ -45,6 +45,7 @@ when a slice is missing.
 | 75 | Not run: waited 7200 s without moving up in line, or less than 60 GiB free disk | Do not resubmit at once. Try later or tell the manager session. For low disk, stop and tell Oystein or the manager session, and never delete other sessions' build output |
 | 76 | Not run: the same command failed twice in a row within 30 min and the git tree did not change | Read the last log and change something first. Set `HEAVY_BUILD_ALLOW_RERUN=1` only when the change is outside the tree (prefix, environment) |
 | 77 | Not run: your `--wait-timeout` ran out | Decide whether to wait longer. Nothing started |
+| 78 | Not run, replaced (jobd only): your session submitted the same command with the same lock key while this one still waited | Nothing. The newer request runs it. Do not retry |
 | 124 | Stopped by `HEAVY_BUILD_TIMEOUT` or `HEAVY_BUILD_WINE_ORPHAN=stop` | Read the log. Raise the timeout only with a reason |
 | 137 | OOM kill | Retry once, then tell the manager session |
 | 70 | heavy-build was replaced while your build ran | Run it again |
