@@ -54,6 +54,11 @@ LOCAL = STATE / "local-layout.json"  # the office layout, the fallback when SAVE
 LOCK = STATE / "lock"
 POLL = 2
 ON_AFTER = 3   # seconds connected before switching on (skips failed handshakes)
+# KRDP runs the resize hook, which switches remote mode on, once its portal has started.
+# Turning monitors off before that makes the portal hang (2026-10-25, 2026-10-30, 2026-11-03),
+# so this loop switches on by itself only if the hook has not done it after this long, which
+# is past KRDP's 15 s portal timeout.
+ON_FALLBACK = 20
 OFF_AFTER = 5  # seconds disconnected before restoring (rides out quick reconnects)
 RETRY = 60     # seconds between restore attempts when KWin rejects one
 HOLD = 600     # seconds of office idle after a takeover before KRDP starts again
@@ -371,7 +376,7 @@ def main():
                 last_restore = time.monotonic()
                 takeover()
                 on = False
-            elif now and not on and held >= ON_AFTER:
+            elif now and not on and held >= ON_FALLBACK:
                 with locked():
                     remote_on()
                 on, remote_since = True, time.time()
