@@ -48,12 +48,25 @@ esac
 mkdir -p "$STATE"
 
 say() { printf 'voxtype-update: %s\n' "$*"; }
+# A notice goes to the journal every time and to the desktop at most once a day per
+# message. Numbers are left out of the match, so "3 local and 4 new commits" and
+# "3 local and 5 new commits" count as one message. Until 2026-11-03 only the last
+# message was remembered, so two warnings that took turns toasted on every run.
+NOTICE_EVERY=${VXS_NOTICE_SECS:-86400}
 notice() {
   say "$*"
-  [ "$(cat "$STATE/last-notice" 2>/dev/null)" = "$*" ] && return 0
-  printf '%s\n' "$*" > "$STATE/last-notice"
-  notify-send -a voxtype-update "Voxtype update" "$*" 2>/dev/null || true
+  local key seen=$STATE/notices-seen when k keep=""
+  key=$(printf '%s' "$*" | tr -s '0-9' 'N')
+  if [ -f "$seen" ]; then
+    while IFS=$'\t' read -r when k; do
+      [ "$k" = "$key" ] && [ $(( NOW - when )) -lt "$NOTICE_EVERY" ] && return 0
+      [ "$k" = "$key" ] || keep+="$when"$'\t'"$k"$'\n'
+    done < "$seen"
+  fi
+  printf '%s%s\t%s\n' "$keep" "$NOW" "$key" > "$seen.tmp" && mv "$seen.tmp" "$seen"
+  toast "$*"
 }
+toast() { notify-send -a voxtype-update "Voxtype update" "$*" 2>/dev/null || true; }
 act() {
   if [ "$mode" = live ]; then "$@"; else say "dry-run, would run: $*"; fi
 }
@@ -170,7 +183,7 @@ fi
 if [ "$mode" = live ]; then
   printf '%s\n' "$cfg" > "$STATE/config-hash"
   rm -f "$STATE/pending-since"
-  notice "voxtype restarted: $why"
+  say "voxtype restarted: $why"; toast "voxtype restarted: $why"
 else
   notice "dry-run: would install and restart voxtype now: $why"
 fi
