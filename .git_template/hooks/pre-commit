@@ -80,6 +80,14 @@ if [ -x "$hook_dir/check-secrets.py" ]; then
     fi
 fi
 
+# Paid jeffreys-skills.md skills: jsm installs them into ~/.claude/skills,
+# which is this repo. They were purged from history on 2026-11-03.
+if [ -x "$hook_dir/check-paid-skills.py" ]; then
+    if ! python3 "$hook_dir/check-paid-skills.py"; then
+        exit 1
+    fi
+fi
+
 # Pattern-based secret scan (catches NEW secrets; complements the
 # hash-banlist in check-secrets.py which only knows already-leaked values).
 if [ -x ".claude/scripts/scan-secrets.sh" ]; then
