@@ -86,4 +86,9 @@ Plug 'guns/vim-clojure-highlight'
 
 call plug#end()
 
+" Install any plugin that is listed above but missing from ~/.vim/plugged.
+autocmd VimEnter * if len(filter(values(g:plugs), '!isdirectory(v:val.dir)'))
+  \| PlugInstall --sync | source $MYVIMRC
+\| endif
+
 filetype plugin indent on    " required
