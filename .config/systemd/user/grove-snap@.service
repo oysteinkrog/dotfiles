@@ -1,0 +1,16 @@
+[Unit]
+Description=Read-only snaps of grove lanes that are btrfs subvolumes (repo %i)
+# Lanes that are subvolumes are not in snapper's @home snapshots. This puts
+# back an hourly undo net for their uncommitted work. Install with
+#   systemctl --user enable --now grove-snap@<repo id>.timer
+# Never enable btrfs quotas (qgroups) on this filesystem: with many
+# snapshots they make deletes and commits slow.
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.cargo/bin/grove --repo %i snap
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=1G
+TimeoutStartSec=1h
