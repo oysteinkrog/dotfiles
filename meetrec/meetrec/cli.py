@@ -1,4 +1,4 @@
-"""meetrec: record Slack huddles and Google Meet calls, transcribe them with names."""
+"""meetrec: record Slack huddles, Google Meet and Teams calls, transcribe them with names."""
 
 from __future__ import annotations
 

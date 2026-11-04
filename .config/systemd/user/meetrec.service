@@ -1,5 +1,5 @@
 [Unit]
-Description=meetrec: record Slack huddles and Google Meet calls
+Description=meetrec: record Slack huddles, Google Meet and Teams calls
 After=pipewire.service wireplumber.service
 PartOf=graphical-session.target
 
