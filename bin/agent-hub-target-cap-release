@@ -1,0 +1,13 @@
+#!/bin/bash
+# ExecStartPost for the agent-hub target prune: a prune has run, so lift the
+# 200 GiB hold if it was set. The total covers the main target/ and every
+# /var/tmp/claude/ah-*/target.
+hold=/home/oystein/.local/state/agent-hub-target-cap.hold
+log=/home/oystein/.local/state/agent-hub-target-cap.log
+kib=$(/home/oystein/bin/agent-hub-target-cap-total)
+echo "$(date '+%F %T') AGENT_HUB_TARGET_TOTAL total_gib=$((${kib:-0} / 1024 / 1024)) after=prune" >>"$log"
+if [ -e "$hold" ]; then
+    rm -f "$hold"
+    echo "$(date '+%F %T') AGENT_HUB_TARGET_CAP_RELEASE total_gib=$((${kib:-0} / 1024 / 1024))" >>"$log"
+fi
+exit 0

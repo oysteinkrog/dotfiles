@@ -1,0 +1,14 @@
+#!/bin/bash
+# Prints the agent-hub build output total in KiB: ~/projects/agent-hub/target
+# plus every lane worktree's /var/tmp/claude/ah-*/target. The cap scripts use
+# this one total for the 140 GiB prune and the 200 GiB hold.
+# --list prints the target dirs instead, one per line.
+dirs=(/home/oystein/projects/agent-hub/target)
+for d in /var/tmp/claude/ah-*/target; do
+    [ -d "$d" ] && dirs+=("$d")
+done
+if [ "${1:-}" = "--list" ]; then
+    printf '%s\n' "${dirs[@]}"
+    exit 0
+fi
+du -sck "${dirs[@]}" 2>/dev/null | tail -1 | cut -f1

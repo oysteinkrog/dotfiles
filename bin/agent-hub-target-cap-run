@@ -1,0 +1,6 @@
+#!/bin/bash
+# ExecStart for agent-hub-target-cap.service: prunes the main target/ and
+# every lane worktree's /var/tmp/claude/ah-*/target (systemd does not expand
+# globs, so the list comes from agent-hub-target-cap-total --list).
+mapfile -t dirs < <(/home/oystein/bin/agent-hub-target-cap-total --list)
+exec /home/oystein/bin/cargo-target-prune --targets "${dirs[@]}" --cap-gib 120
