@@ -1,0 +1,10 @@
+#!/bin/sh
+# Exit 0 if io "full avg10" is under 10.0 (or unreadable), else print a line and exit 1.
+v=$(sed -n 's/^full avg10=\([0-9.]*\).*/\1/p' /proc/pressure/io 2>/dev/null) || exit 0
+[ -n "$v" ] || exit 0
+if awk -v v="$v" 'BEGIN{exit !(v < 10.0)}'; then
+  echo "grove-snap io ok: full avg10=$v"
+  exit 0
+fi
+echo "grove-snap skipped: io full avg10=$v"
+exit 1
