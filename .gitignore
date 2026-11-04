@@ -223,6 +223,39 @@ bin/logs/
 .claude/skills/wills-and-estate-planning-skill/
 .claude/skills/world-class-doctor-mode-for-cli-tools/
 .claude/skills/xf/
+# Added 2026-11-04: jsm-installed skills that were untracked but not ignored.
+.claude/skills/ai-model-into-rust-mega-fused-hyper-kernel/
+.claude/skills/bend2-mega-skill/
+.claude/skills/bulk-convert-huge-folder-of-pdfs-into-markdown/
+.claude/skills/choose-the-best-skills-for-me-to-run-in-this-project/
+.claude/skills/de-monolithize-your-codebase-isomorphically/
+.claude/skills/drone-flyover-video-to-home-model-in-blender/
+.claude/skills/eidetic-engine-cli/
+.claude/skills/fixing-beads-problems/
+.claude/skills/focr/
+.claude/skills/franken-manim-mega-skill/
+.claude/skills/frankensqlite-mega-skill/
+.claude/skills/fsnow/
+.claude/skills/ftts/
+.claude/skills/fw/
+.claude/skills/interior-home-3d-reconstruction-from-videos/
+.claude/skills/iphone-videos-to-music-video-with-audio-track/
+.claude/skills/lean-proof-mastery-with-epistemic-humility/
+.claude/skills/math-explainer-videos-end-to-end-with-franken-manim-frankentts/
+.claude/skills/mini-display-for-headless-system-status/
+.claude/skills/multi-agent-swarm-workflow/
+.claude/skills/natural-sounding-narration-with-frankentts/
+.claude/skills/open-beads-weighted-tmux-agent-sessions/
+.claude/skills/optimizing-your-rust-projects-for-wasm-in-browsers-and-phones/
+.claude/skills/porting-to-bend2/
+.claude/skills/redacting-sensitive-parts-of-screencast-videos/
+.claude/skills/sell-my-stuff-on-ebay/
+.claude/skills/simplify-and-refactor-code-isomorphically/
+.claude/skills/spectrogram-videos-with-karaoke-style-subtitles/
+.claude/skills/threejs-visualizations-with-good-quality-and-real-physics/
+.claude/skills/transcribing-audio-from-calls-and-meetings/
+.claude/skills/transcribing-youtube-videos/
+.claude/skills/web-frontend-ui-ux-excellence-on-desktop-and-mobile/
 
 # Anthropic skills synced by Claude Code. Local only.
 .claude/skills/synced/
