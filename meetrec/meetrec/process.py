@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import config, voices
+from . import apps, config, voices
 
 log = logging.getLogger("meetrec.process")
 
@@ -575,14 +575,7 @@ def process(d: Path) -> Path:
     langs: dict[str, float] = {}
     for t in turns:
         langs[t["lang"]] = langs.get(t["lang"], 0) + t["end"] - t["start"]
-    label = {"slack": "Slack huddle", "meet": "Google Meet"}[meta["app"]]
-    title = meta.get("title") or ev["title"]
-    if (
-        title
-        and meta["app"] == "meet"
-        and not re.fullmatch(r"(Meet|Google Meet)( - [a-z-]+)?", title)
-    ):
-        label = f"{label} - {title.removeprefix('Meet - ')}"
+    label = apps.folder_label(meta["app"], meta.get("title") or ev["title"])
     stamp = time.strftime("%Y-%m-%d %H%M", time.localtime(t0))
     out = config.root() / safe_name(f"{stamp} {label}")
     i = 2

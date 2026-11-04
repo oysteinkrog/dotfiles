@@ -1,14 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "meetrec Meet signal",
-  "version": "0.1.0",
-  "description": "Tells the local meetrec recorder when a Google Meet call is open, and who is in it.",
+  "name": "meetrec call signal",
+  "version": "0.2.0",
+  "description": "Tells the local meetrec recorder when a Google Meet or Microsoft Teams call is live.",
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://teams.cloud.microsoft/*"
+      ],
+      "js": ["teams.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "host_permissions": ["http://127.0.0.1:47833/*"]

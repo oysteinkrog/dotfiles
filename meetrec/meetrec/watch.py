@@ -1,5 +1,9 @@
 """Recorder daemon: start recording when Slack or Chrome opens a microphone stream.
 
+Chrome hosts both Google Meet and Microsoft Teams calls. Which one a Chrome call is
+comes from the meetrec extension's heartbeat, or, without the extension, from the
+newest Meet room or Teams meeting link in Chrome's history.
+
 Each call gets two tracks. "me" is the microphone source the app reads from,
 "others" is the app's own playback stream. Both are written as raw s16le 48 kHz
 mono, the rate PipeWire runs at, so nothing is lost before processing. A reader thread pads silence whenever PipeWire stops delivering data, so
@@ -20,7 +24,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import config
+from . import apps, config
 
 log = logging.getLogger("meetrec.watch")
 
@@ -29,27 +33,44 @@ BYTES_PER_SEC = RATE * 2
 POLL_S = 1.0
 START_AFTER_S = 2.0
 STOP_AFTER_S = 20.0
-MEET_FRESH_S = 10.0  # the extension sends a heartbeat every second
-# Without the extension, a Meet call counts when Chrome opened a Meet room this recently.
-MEET_HISTORY_S = 30 * 60
-MEET_ROOM_GLOB = (
-    "https://meet.google.com/*[a-z][a-z][a-z]-[a-z][a-z][a-z][a-z]-[a-z][a-z][a-z]*"
-)
+BROWSER_FRESH_S = 10.0  # the extension sends a heartbeat every second
+# Without the extension, a Chrome call counts when Chrome opened a Meet room or a
+# Teams meeting link this recently. The newest of the two decides which app it is.
+HISTORY_S = 30 * 60
+TEAMS_HOSTS = ("teams.microsoft.com", "teams.live.com", "teams.cloud.microsoft")
+HISTORY_GLOBS = {
+    "meet": (
+        "https://meet.google.com/*[a-z][a-z][a-z]-[a-z][a-z][a-z][a-z]-[a-z][a-z][a-z]*",
+    ),
+    # Seen in Chrome's history for a Teams join (2026-11-03 and 11-04): /meet/<id>,
+    # /v2/?meetingjoin=true#/meet/<id>, /light-meetings/launch?... Older invite links
+    # use /l/meetup-join/. Plain /v2/ (chat, calendar) does not count.
+    "teams": tuple(
+        f"https://{host}/{path}"
+        for host in TEAMS_HOSTS
+        for path in (
+            "meet/[0-9]*",
+            "l/meetup-join/*",
+            "light-meetings/launch*",
+            "*meetingjoin=true*",
+        )
+    ),
+}
 CHROME_DIRS = (".config/google-chrome", ".config/chromium")
 EVENT_PORT = 47833
 
 
-def last_meet_visit() -> float:
-    """Newest visit to a Meet room in any Chrome profile's history, as epoch seconds."""
+def last_visit(globs: tuple[str, ...]) -> float:
+    """Newest visit to a URL matching any glob, over all Chrome profiles, as epoch seconds."""
     newest = 0.0
+    where = " OR ".join("url GLOB ?" for _ in globs)
     for d in CHROME_DIRS:
         for hist in (Path.home() / d).glob("*/History"):
             try:
                 con = sqlite3.connect(f"file:{hist}?immutable=1", uri=True, timeout=1)
                 try:
                     row = con.execute(
-                        "SELECT max(last_visit_time) FROM urls WHERE url GLOB ?",
-                        (MEET_ROOM_GLOB,),
+                        f"SELECT max(last_visit_time) FROM urls WHERE {where}", globs
                     ).fetchone()
                 finally:
                     con.close()
@@ -61,10 +82,11 @@ def last_meet_visit() -> float:
     return newest
 
 
-# Matched against application.process.binary, then application.name (lowercased).
+# PipeWire stream groups, matched against application.process.binary, then
+# application.name (lowercased). A Chrome session is recorded as "meet" or "teams".
 APPS = {
     "slack": {"slack"},
-    "meet": {"chrome", "google-chrome", "google chrome", "chromium"},
+    "chrome": {"chrome", "google-chrome", "google chrome", "chromium"},
 }
 OWN_BINARIES = {"pw-record", "pw-cat"}
 
@@ -210,16 +232,17 @@ class TrackRecorder:
 
 
 class Session:
-    def __init__(self, app: str, root: Path):
+    def __init__(self, app: str, root: Path, group: str | None = None):
         self.app = app
+        self.group = group or app  # the PipeWire stream group the tracks come from
         self.t0 = time.time()
         stamp = time.strftime("%Y-%m-%d_%H%M%S", time.localtime(self.t0))
         self.dir = root / ".recording" / f"{stamp}-{app}"
         self.dir.mkdir(parents=True)
         self.recorders: dict[tuple[str, int], TrackRecorder] = {}
         self.skipped = False
-        self.meet_events = 0
-        self.meet_from_history = False
+        self.events = 0
+        self.from_history = False
         self.last_seen = self.t0
         self.write_meta()
         self.live: subprocess.Popen | None = None
@@ -237,8 +260,8 @@ class Session:
         p.write_text(json.dumps(meta, indent=2))
 
     def sync(self, g: Graph) -> None:
-        wanted = {("others", n) for n in g.out_streams.get(self.app, [])}
-        wanted |= {("me", n) for n in g.sources_for.get(self.app, set())}
+        wanted = {("others", n) for n in g.out_streams.get(self.group, [])}
+        wanted |= {("me", n) for n in g.sources_for.get(self.group, set())}
         for key, rec in list(self.recorders.items()):
             if key not in wanted or rec.proc.poll() is not None:
                 rec.stop()
@@ -268,7 +291,7 @@ class Session:
         }
 
     def add_event(self, ev: dict) -> None:
-        self.meet_events += 1
+        self.events += 1
         with open(self.dir / "events.jsonl", "a") as f:
             f.write(json.dumps(ev) + "\n")
 
@@ -277,30 +300,39 @@ class Watcher:
     def __init__(self) -> None:
         self.cfg = config.load()
         self.root = config.root()
+        # Keyed by stream group ("slack", "chrome"); Session.app says which call app it is.
         self.sessions: dict[str, Session] = {}
         self.pending: dict[str, float] = {}
         self.suppressed: set[str] = set()
         self.lock = threading.Lock()
-        # Meet events that arrive before the mic opens (the roster on the green room page).
+        # Extension events that arrive before the mic opens (the roster on the join page).
         self.early_events: list[dict] = []
-        self.last_meet: tuple = ()
-        self.last_meet_at = 0.0
-        self.meet_visit_at = 0.0
-        self.meet_visit_checked = 0.0
+        self.last_state: dict[str, tuple] = {}
+        self.heartbeat_at = {app: 0.0 for app in apps.BROWSER}
+        self.visit_at = {app: 0.0 for app in apps.BROWSER}
+        self.visit_checked = 0.0
 
     # Extension events -----------------------------------------------------------
     def on_event(self, ev: dict) -> None:
+        src = ev.get("source", "meet")
+        if src not in apps.BROWSER:
+            return
         with self.lock:
-            self.last_meet_at = time.time()
+            self.heartbeat_at[src] = time.time()
             state = (ev.get("code"), ev.get("title"), tuple(ev.get("participants", [])))
-            if state != self.last_meet:
-                self.last_meet = state
-                log.info("meet: extension reports %s %r, participants %s", *state)
-            s = self.sessions.get("meet")
-            if s:
+            if state != self.last_state.get(src):
+                self.last_state[src] = state
+                log.info("%s: extension reports %s %r, participants %s", src, *state)
+            s = self.sessions.get("chrome")
+            if s and s.app != src and s.events == 0:
+                # Started from history as the wrong app; the extension knows better.
+                log.info("chrome: extension says this is %s, not %s", src, s.app)
+                s.app = src
+                s.write_meta(app=src)
+            if s and s.app == src:
                 s.add_event(ev)
-                if ev.get("title") and s.meet_events == 1:
-                    s.write_meta(title=ev["title"], meet_code=ev.get("code"))
+                if ev.get("title") and s.events == 1:
+                    s.write_meta(title=ev["title"], call_code=ev.get("code"))
             else:
                 now = time.time() * 1000
                 self.early_events = [
@@ -308,9 +340,26 @@ class Watcher:
                 ]
                 self.early_events.append(ev)
 
+    def browser_app(self, now: float) -> tuple[str | None, bool]:
+        """Which call app Chrome's mic belongs to, and whether only history says so."""
+        fresh = {
+            app: t for app, t in self.heartbeat_at.items() if now - t < BROWSER_FRESH_S
+        }
+        if fresh:
+            return max(fresh, key=fresh.__getitem__), False
+        if now - self.visit_checked > 10:
+            self.visit_checked = now
+            self.visit_at = {
+                app: last_visit(HISTORY_GLOBS[app]) for app in apps.BROWSER
+            }
+        recent = {app: t for app, t in self.visit_at.items() if now - t < HISTORY_S}
+        if recent:
+            return max(recent, key=recent.__getitem__), True
+        return None, False
+
     # Notification ---------------------------------------------------------------
     def notify(self, s: Session) -> None:
-        label = {"slack": "Slack huddle", "meet": "Google Meet call"}[s.app]
+        label = apps.LABEL.get(s.app, "call")
         if not self.cfg.get("notify", True):
             return
 
@@ -339,15 +388,18 @@ class Watcher:
     def skip(self, app: str, only: Session | None = None) -> bool:
         """Stop a recording and delete it; it stays off until the app releases the mic."""
         with self.lock:
-            s = self.sessions.get(app)
-            if not s or (only and s is not only):
+            group, s = next(
+                ((k, v) for k, v in self.sessions.items() if app in (v.app, k)),
+                (None, None),
+            )
+            if not s or not group or (only and s is not only):
                 return False
-            log.info("%s: skipped by user, deleting %s", app, s.dir)
+            log.info("%s: skipped by user, deleting %s", s.app, s.dir)
             s.stop()
             s.skipped = True
             shutil.rmtree(s.dir, ignore_errors=True)
-            del self.sessions[app]
-            self.suppressed.add(app)
+            del self.sessions[group]
+            self.suppressed.add(group)
             return True
 
     def status(self) -> dict:
@@ -362,11 +414,13 @@ class Watcher:
     # Main loop ------------------------------------------------------------------
     def finish(self, s: Session) -> None:
         s.stop()
-        # Chrome counts only while the meetrec extension reports an open Meet call.
-        # Anything else using the mic (Claude voice chat, a dictation site) is dropped.
-        if s.app == "meet" and s.meet_events == 0 and not s.meet_from_history:
+        # Chrome counts only while the extension reports an open call, or when history
+        # shows a call link. Anything else using the mic (Claude voice chat, a dictation
+        # site) is dropped.
+        if s.app in apps.BROWSER and s.events == 0 and not s.from_history:
             log.info(
-                "meet: Chrome used the mic but no Meet call was seen, discarding %s",
+                "%s: Chrome used the mic but no call was seen, discarding %s",
+                s.app,
                 s.dir,
             )
             shutil.rmtree(s.dir, ignore_errors=True)
@@ -387,57 +441,53 @@ class Watcher:
         g = read_graph()
         now = time.time()
         with self.lock:
-            # Chrome counts as a call while the extension reports an open Meet call, or,
-            # when the extension is missing, if Chrome opened a Meet room recently.
-            meet_heartbeat = now - self.last_meet_at < MEET_FRESH_S
-            meet_history = False
-            if g.mic_streams.get("meet") and not meet_heartbeat:
-                if now - self.meet_visit_checked > 10:
-                    self.meet_visit_checked = now
-                    self.meet_visit_at = last_meet_visit()
-                meet_history = now - self.meet_visit_at < MEET_HISTORY_S
-            for app in APPS:
-                s = self.sessions.get(app)
-                active = bool(g.mic_streams.get(app)) and (
-                    app != "meet" or s is not None or meet_heartbeat or meet_history
-                )
+            for group in APPS:
+                s = self.sessions.get(group)
+                app: str | None = group
+                from_history = False
+                if group == "chrome" and s is None and g.mic_streams.get(group):
+                    app, from_history = self.browser_app(now)
+                active = bool(g.mic_streams.get(group)) and (s is not None or bool(app))
                 if not active:
-                    self.pending.pop(app, None)
-                    self.suppressed.discard(app)
+                    self.pending.pop(group, None)
+                    self.suppressed.discard(group)
                 if s:
                     if active:
                         s.last_seen = now
                         s.sync(g)
                     elif now - s.last_seen > STOP_AFTER_S:
-                        del self.sessions[app]
+                        del self.sessions[group]
                         self.finish(s)
                     else:
                         s.sync(g)
                     continue
-                if not active or app in self.suppressed:
+                if not active or not app or group in self.suppressed:
                     continue
-                first = self.pending.setdefault(app, now)
+                first = self.pending.setdefault(group, now)
                 if now - first >= START_AFTER_S:
-                    self.pending.pop(app)
-                    s = Session(app, self.root)
+                    self.pending.pop(group)
+                    s = Session(app, self.root, group)
                     log.info("%s: mic in use, recording to %s", app, s.dir)
-                    if app == "meet" and not meet_heartbeat:
-                        s.meet_from_history = True
+                    if from_history:
+                        s.from_history = True
                         log.info(
-                            "meet: no extension signal, Meet room opened in Chrome recently"
+                            "%s: no extension signal, Chrome opened a %s link recently",
+                            app,
+                            apps.FOLDER[app],
                         )
-                    if app == "meet":
+                    if group == "chrome":
                         for ev in self.early_events:
-                            s.add_event(ev)
+                            if ev.get("source", "meet") == app:
+                                s.add_event(ev)
                         self.early_events.clear()
-                    self.sessions[app] = s
+                    self.sessions[group] = s
                     s.sync(g)
                     self.notify(s)
 
     def run(self) -> None:
         self.recover()
         start_event_server(self)
-        log.info("watching PipeWire for Slack and Meet calls")
+        log.info("watching PipeWire for Slack, Meet and Teams calls")
         while True:
             try:
                 self.tick()

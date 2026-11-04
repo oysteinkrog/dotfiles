@@ -27,9 +27,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import config
+from .apps import LABEL
 
 BASE = os.environ.get("MEETREC_URL", "http://127.0.0.1:47833")
-LABEL = {"slack": "Slack huddle", "meet": "Google Meet call"}
 
 
 def get_status() -> dict | None:

@@ -1,4 +1,4 @@
-// Forward Meet state from the content script to the local recorder.
+// Forward call state from the content scripts (Meet, Teams) to the local recorder.
 // The page itself cannot reach 127.0.0.1 (CORS); the service worker can, via host_permissions.
 chrome.runtime.onMessage.addListener((ev) => {
   fetch("http://127.0.0.1:47833/event", {
