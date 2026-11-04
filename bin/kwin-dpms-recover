@@ -1,0 +1,27 @@
+#!/bin/bash
+# Bring the screens back when KWin fails to turn them on, usually because a CUDA
+# job filled the GPU (2026-11-04). Waits for at least 2 GB of free VRAM (up to
+# 30 s), then switches to VT 3 and back, which makes KWin set up its outputs again.
+# Restarts no apps. Runs as the user unit kwin-dpms-recover.service.
+set -u
+LOG=/var/tmp/claude/kwin-dpms-recover/recover.log
+mkdir -p "${LOG%/*}"
+say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
+last=0
+journalctl -f -n0 -o cat _COMM=kwin_wayland 2>/dev/null | while IFS= read -r line; do
+  case "$line" in *"Setting dpms mode to On failed"*) ;; *) continue ;; esac
+  now=$(date +%s)
+  (( now - last < 20 )) && continue
+  last=$now
+  free=0
+  for _ in $(seq 1 30); do
+    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)
+    [ "${free:-0}" -ge 2048 ] && break
+    sleep 1
+  done
+  vt=$(sudo -n fgconsole 2>/dev/null || echo 1)
+  say "dpms-on failed; free VRAM ${free} MiB; switching to VT 3 and back to $vt"
+  sudo -n chvt 3 && sleep 3 && sudo -n chvt "$vt"
+  sleep 3
+  say "dpms now: $(cat /sys/class/drm/card1-*/dpms 2>/dev/null | tr '\n' ' ')"
+done

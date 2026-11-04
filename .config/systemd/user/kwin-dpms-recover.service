@@ -1,0 +1,11 @@
+[Unit]
+Description=Bring the screens back when KWin fails to turn them on (VT switch away and back)
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/bin/kwin-dpms-recover
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
