@@ -27,18 +27,26 @@ if [ -n "$kib" ] && [ "$kib" -gt $((ceiling_gib * 1024 * 1024)) ] && [ ! -e "$ho
     date '+%F %T' >"$hold"
     echo "$(date '+%F %T') AGENT_HUB_TARGET_CAP_HOLD total_gib=$((kib / 1024 / 1024)) ceiling_gib=${ceiling_gib}" >>"$log"
 fi
-q=$(job queue 2>/dev/null) || exit 1
+skip() { echo "$1"; echo "$(date '+%F %T') AGENT_HUB_TARGET_SKIP reason=\"$1\"" >>"$log"; exit 1; }
+# jobd sometimes does not answer under heavy load (the 16:56 and 18:26 runs on
+# 2026-11-04 skipped with no reason), so retry before giving up.
+q=""
+for try in 1 2 3 4 5; do
+    q=$(timeout 20 job queue 2>/dev/null) && break
+    q=""
+    sleep 10
+done
+[ -n "$q" ] || skip "job queue did not answer after 5 tries"
 mine() { printf '%s' "$q" | jq -e "[.jobs[] | select((.cwd | startswith(\"/home/oystein/projects/agent-hub\")) or (.cwd | startswith(\"/var/tmp/claude/ah-\"))) $1] | length > 0" >/dev/null; }
 if mine '| select(.state == "running")'; then
-    echo "agent-hub job running; prune skipped"
-    exit 1
+    skip "agent-hub job running; prune skipped"
 fi
 if [ -n "$kib" ] && [ "$kib" -gt $((force_gib * 1024 * 1024)) ]; then
     echo "agent-hub build output is $((kib / 1024 / 1024)) GiB, over ${force_gib} GiB, no agent-hub job running; prune runs"
+    echo "$(date '+%F %T') AGENT_HUB_TARGET_PRUNE total_gib=$((kib / 1024 / 1024)) over_gib=${force_gib}" >>"$log"
     exit 0
 fi
 if mine ''; then
-    echo "agent-hub job queued; prune skipped"
-    exit 1
+    skip "agent-hub job queued; prune skipped"
 fi
 exit 0
