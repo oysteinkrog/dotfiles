@@ -9,6 +9,7 @@ Description=Read-only snaps of grove lanes that are btrfs subvolumes (repo %i)
 [Service]
 Type=oneshot
 Environment=PATH=%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin
+ExecCondition=%h/bin/grove-snap-io-ok
 ExecStart=%h/.cargo/bin/grove --repo %i snap
 Nice=19
 IOSchedulingClass=idle
