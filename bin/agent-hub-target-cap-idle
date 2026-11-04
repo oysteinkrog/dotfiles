@@ -1,0 +1,44 @@
+#!/bin/bash
+# ExecCondition for agent-hub-target-cap.service.
+# Exit 0 runs the prune, exit 1 skips this run (systemd does not count a skip
+# as a failure).
+# The size is one total: ~/projects/agent-hub/target plus every lane
+# worktree's /var/tmp/claude/ah-*/target (agent-hub-target-cap-total).
+# - A running agent-hub job (main checkout or an ah-* lane worktree) always
+#   skips the prune. On 2026-11-03 a prune beside a running cargo test deleted
+#   rlibs that rustdoc then could not find (E0463), so cargo's locks do not
+#   make that safe.
+# - Over 140 GiB: queued (not running) agent-hub jobs no longer hold the
+#   prune off, so a long queue cannot keep the total growing.
+# - Otherwise: skip while an agent-hub job is queued or running.
+# - Over 200 GiB: write AGENT_HUB_TARGET_CAP_HOLD to the log and create the
+#   hold file. Agent-hub sessions submit no new jobs while it exists. The
+#   2-minute hold timer prunes in the first gap with no running job, and
+#   agent-hub-target-cap-release then removes the file.
+# Every run logs AGENT_HUB_TARGET_TOTAL with the total, for watchdogs.
+force_gib=140
+ceiling_gib=200
+hold=/home/oystein/.local/state/agent-hub-target-cap.hold
+log=/home/oystein/.local/state/agent-hub-target-cap.log
+kib=$(/home/oystein/bin/agent-hub-target-cap-total)
+ndirs=$(/home/oystein/bin/agent-hub-target-cap-total --list | wc -l)
+echo "$(date '+%F %T') AGENT_HUB_TARGET_TOTAL total_gib=$((${kib:-0} / 1024 / 1024)) dirs=${ndirs}" >>"$log"
+if [ -n "$kib" ] && [ "$kib" -gt $((ceiling_gib * 1024 * 1024)) ] && [ ! -e "$hold" ]; then
+    date '+%F %T' >"$hold"
+    echo "$(date '+%F %T') AGENT_HUB_TARGET_CAP_HOLD total_gib=$((kib / 1024 / 1024)) ceiling_gib=${ceiling_gib}" >>"$log"
+fi
+q=$(job queue 2>/dev/null) || exit 1
+mine() { printf '%s' "$q" | jq -e "[.jobs[] | select((.cwd | startswith(\"/home/oystein/projects/agent-hub\")) or (.cwd | startswith(\"/var/tmp/claude/ah-\"))) $1] | length > 0" >/dev/null; }
+if mine '| select(.state == "running")'; then
+    echo "agent-hub job running; prune skipped"
+    exit 1
+fi
+if [ -n "$kib" ] && [ "$kib" -gt $((force_gib * 1024 * 1024)) ]; then
+    echo "agent-hub build output is $((kib / 1024 / 1024)) GiB, over ${force_gib} GiB, no agent-hub job running; prune runs"
+    exit 0
+fi
+if mine ''; then
+    echo "agent-hub job queued; prune skipped"
+    exit 1
+fi
+exit 0
