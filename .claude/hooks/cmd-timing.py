@@ -251,6 +251,12 @@ def cmake_source(build_dir):
 
 
 def dir_option(bd, tokens, cwd):
+    """The folder the build really runs in; a CMake build folder maps to
+    its source folder."""
+    return cmake_source(build_dir_of(bd, tokens, cwd))
+
+
+def build_dir_of(bd, tokens, cwd):
     """The folder the build really runs in.
 
     Follows `-C`, `--prefix`, `--cwd` and `--dir`, the folder of a
@@ -268,8 +274,6 @@ def dir_option(bd, tokens, cwd):
         else:
             continue
         path = bd.seg_mod.resolve_dir(bd.expand(val), cwd)
-        if name in CMAKE_DIR_OPTS:
-            return cmake_source(path)
         if name in FILE_OPTS and not os.path.isdir(path):
             return os.path.dirname(path)
         return path
@@ -503,7 +507,15 @@ def changed_lines(top, old_tree, new_tree):
     if old_tree == new_tree:
         return 0
     total = 0
-    out = git(top, "diff", "--raw", "--numstat", old_tree, new_tree)
+    out = git(
+        top,
+        "diff",
+        "--raw",
+        "--numstat",
+        "--ignore-submodules=none",
+        old_tree,
+        new_tree,
+    )
     for line in out.splitlines():
         if line.startswith(":"):
             # A changed submodule commit (mode 160000) hides an unknown

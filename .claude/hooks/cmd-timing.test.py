@@ -559,6 +559,12 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     rc, ctx, _ = run(claude("cargo test", 360, str(sup), sid="s26"), e)
     check("removed submodule is not a small change", ctx == "Command took 6 min.", ctx)
 
+    # 27. ctest run from inside an outside build folder uses the source repo.
+    e = env("st27")
+    run(claude("ctest --output-on-failure", 5, str(bdir), sid="s27"), e)
+    snaps = json.loads((tmp / "st27" / "s27.json").read_text())["snapshots"]
+    check("ctest in a build folder uses the source repo", str(repo) in snaps, snaps)
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)
