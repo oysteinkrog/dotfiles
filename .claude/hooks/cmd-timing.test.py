@@ -565,6 +565,12 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     snaps = json.loads((tmp / "st27" / "s27.json").read_text())["snapshots"]
     check("ctest in a build folder uses the source repo", str(repo) in snaps, snaps)
 
+    # 28. npm ci installs, it does not build or test.
+    e = env("st28")
+    run(claude("npm ci", 360, str(repo), sid="s28"), e, now=T - 600)
+    rc, ctx, _ = run(claude("npm ci", 360, str(repo), sid="s28"), e)
+    check("npm ci is not a build", ctx == "Command took 6 min.", ctx)
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)

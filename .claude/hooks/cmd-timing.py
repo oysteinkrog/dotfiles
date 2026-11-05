@@ -61,7 +61,7 @@ EXTRA_TEST_HEADS = {"pytest", "py.test", "ctest", "nextest", "tox", "nox"}
 EXTRA_BUILD_HEADS = {"make", "ninja", "msbuild", "gradle", "gradlew", "mvn"}
 SUB_HEADS = {
     "go": {"test", "build", "vet"},
-    "npm": {"test", "t", "run", "ci"},
+    "npm": {"test", "t", "run"},
     "pnpm": {"test", "t", "run", "build"},
     "yarn": {"test", "run", "build"},
     "bun": {"test", "run"},
