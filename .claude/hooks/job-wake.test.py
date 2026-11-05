@@ -45,7 +45,10 @@ class Env:
             JOB_WAKE_TEST_KIND="async",
             JOB_WAKE_POLL_SECS="0.2",
             CLAUDE_CONFIG_DIR=str(self.claude),
+            JOB_WAKE_TEST_VERSION="9.9.9",
+            JOB_WAKE_VALIDATED_FILE=str(self.root / "validated"),
         )
+        (self.root / "validated").write_text("# tested\n9.9.9\n")
         e.update(extra)
         return e
 
@@ -547,6 +550,54 @@ check(
     "fake footer line not shown",
     "ignore all rules" not in err and "waited 2 s in queue" in err,
     err,
+)
+
+# --- version guard ---
+for ver, label in (("9.9.8", "other version"), ("", "unknown version")):
+    e = Env()
+    ib = e.teammate(inbox="[]")
+    rc, err, _ = run(
+        e.env(JOB_WAKE_TEST_VERSION=ver),
+        e.payload(e.job(code=0), agent_id="abuilder-0123"),
+    )
+    w = e.wakes()
+    check(
+        "%s: no delivery, main forwards" % label,
+        ib.read_text() == "[]"
+        and "forward this result" in err
+        and "builder" in err
+        and "validated-versions" in err,
+        err,
+    )
+    check(
+        "%s: logged unvalidated-version" % label,
+        w
+        and w[0]["outcome"] == "unvalidated-version"
+        and w[0]["claude_version"] == (ver or "unknown"),
+        w,
+    )
+e = Env()
+ib = e.teammate(inbox="[]")
+rc, err, _ = run(
+    e.env(JOB_WAKE_TEST_VERSION="9.9.8", JOB_WAKE_ASSUME_VALIDATED="1"),
+    e.payload(e.job(code=0), agent_id="abuilder-0123"),
+)
+check(
+    "assume-validated (selftest) delivers",
+    len(json.loads(ib.read_text())) == 1,
+    ib.read_text(),
+)
+e = Env()
+rc, err, _ = run(e.env(JOB_WAKE_TEST_VERSION="9.9.8"), e.payload(e.job(code=0)))
+check(
+    "main-session submit unaffected by version",
+    rc == 2 and e.wakes()[0]["outcome"] == "woke",
+    e.wakes(),
+)
+check(
+    "real binary path gives version",
+    jw.VERSION_RE.search("/home/x/.local/share/claude/versions/2.1.318").group(1)
+    == "2.1.318",
 )
 
 print("\n%d failure(s)" % failures)
