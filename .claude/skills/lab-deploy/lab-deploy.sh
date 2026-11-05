@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run commands on, push files to, and pull logs from the lab PC (Windows "Hawk").
+# Run commands on, push files to, and pull logs from the lab PC (trd-lab-pc, formerly "Hawk").
 # Uses the "labpc" host entry in ~/.ssh/config (key login only).
 #
 # Usage:

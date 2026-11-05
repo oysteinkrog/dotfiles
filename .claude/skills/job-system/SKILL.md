@@ -1,6 +1,6 @@
 ---
 name: job-system
-description: How builds and tests run through jobd, the job queue that replaced heavy-build's own queue on the office and home desktops, and how to run a job on another machine with `job run --on`. Use before a build or test that must outlive a tool call (`job submit --detach`), when a job waits, exits 75, 76, 77 or 124, when you need the queue or a job's log, when `job ping` fails, and before running anything on the home desktop or the lab PC (Hawk) as a worker.
+description: How builds and tests run through jobd, the job queue that replaced heavy-build's own queue on the office and home desktops, and how to run a job on another machine with `job run --on`. Use before a build or test that must outlive a tool call (`job submit --detach`), when a job waits, exits 75, 76, 77 or 124, when you need the queue or a job's log, when `job ping` fails, and before running anything on the home desktop or the lab PC (trd-lab-pc, formerly Hawk) as a worker.
 ---
 
 # job-system (jobd and jobw)
@@ -17,7 +17,7 @@ unit, `job-<attempt>.service`, in `builds.slice`.
 
 jobd runs on both desktops (home since 2026-10-29). Each sends routed jobs to
 the other one: the office to `home`, home to `office` (`JOBD_PEER`). Home cannot
-reach Hawk, which is on the office LAN.
+reach the lab PC, which is on the office LAN.
 
 Code and design: `~/projects/job-system` (README.md has the full command table)
 and `/var/tmp/claude/job-system/DESIGN.md`.
@@ -124,13 +124,13 @@ there and brings back the log. `job check DIR` says first whether the tree can
 move. Rules, all hard:
 
 - Workers: `home` and `office` (the desktops, each the other's worker) and `hawk`
-  (the lab PC). rigel and vega
+  (the lab PC, trd-lab-pc; the worker id keeps its old name until job-system renames it). rigel and vega
   are not approved.
 - No job may read golf take files or athlete data on a worker.
-- Hawk: never during a Laben booking (`job status hawk` shows it; never pass
+- Lab PC: never during a Laben booking (`job status hawk` shows it; never pass
   `--force`). Weekdays 07:00 to 18:00 need Oystein's yes for each run
   (`--lab-ok` records that he said yes). Never overlap someone's testing on
-  Hawk.
+  the lab PC.
 - Home: its guard holds jobs back while the machine is busy (`frozen` in
   `job status home`). That is normal; do not work around it.
 - Forward environment variables with `-e NAME`, never a secret.

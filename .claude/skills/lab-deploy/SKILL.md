@@ -1,18 +1,19 @@
 ---
 name: lab-deploy
 description: >-
-  Reach the lab PC, the Windows machine "Hawk" at 192.168.1.143 in the Trondheim
+  Reach the lab PC, the Windows machine "trd-lab-pc" (formerly Hawk) at 192.168.1.143 in the Trondheim
   office: log in over ssh, run PowerShell there, copy a build or file to it, and pull
   the newest Swing Catalyst logs back. Use when the user mentions the lab PC, the lab
-  machine, Hawk, testing on the lab rig, or wants logs from the lab.
+  machine, trd-lab-pc, Hawk (its old name), testing on the lab rig, or wants logs from the lab.
 ---
 
-# Lab PC (Hawk)
+# Lab PC (trd-lab-pc)
 
 | | |
 |---|---|
 | Address | `192.168.1.143`, office LAN only. Not on Tailscale, so it is unreachable from outside the office network |
-| Login | `ssh labpc` (alias `hawk`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` |
+| Name | `trd-lab-pc`. It used to be called Hawk, and Windows still reports `Hawk` until the PC is renamed. Do not use the old name in new text |
+| Login | `ssh trd-lab-pc` (old aliases `labpc` and `hawk`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` |
 | Auth | Keys only. sshd has `PasswordAuthentication no`. Backup config: `C:\ProgramData\ssh\sshd_config.bak-2026-09-29` |
 | Remote shell | `cmd`. Run PowerShell through the script below rather than quoting it by hand |
 | Installed app | `C:\Program Files\Initial Force\Swing Catalyst` (plus an old `Swing Catalyst Alpha` from 2026-06) |
@@ -23,7 +24,7 @@ description: >-
 `~/.claude/skills/lab-deploy/lab-deploy.sh`:
 
 ```sh
-lab-deploy.sh run 'Get-Process MotionCatalyst* | Select Id,StartTime'   # PowerShell on Hawk
+lab-deploy.sh run 'Get-Process MotionCatalyst* | Select Id,StartTime'   # PowerShell on the lab PC
 lab-deploy.sh push ./SwingCatalystSetup.exe                             # to C:/lab-drop
 lab-deploy.sh push ./build-dir 'C:/lab-drop/26.2.3'                     # folder, chosen dir
 lab-deploy.sh logs 3                                                    # newest 3 logs -> ~/.lab-logs/<timestamp>/
@@ -46,7 +47,7 @@ lab-deploy.sh logs 3                                                    # newest
   test hive like any `C:\LabQa\ri` build. Use a CI installer only when the installer itself is
   under test (`desktop-classic-release-installers` finds the link, then `push`).
   `ri-push --name <name>` installs under `C:\LabQa\ri\<name>`, so several builds can sit side by side.
-- **Portable tools are fine on Hawk without asking.** Oystein, 2026-10-20: a self-contained
+- **Portable tools are fine on the lab PC without asking.** Oystein, 2026-10-20: a self-contained
   tool you copy in and can delete again (a signed Sysinternals exe, a static binary) goes in
   `C:\LabQa\perf\tools` or another `C:\LabQa` task folder. Download it from the vendor's site,
   check the Authenticode signature (`(Get-AuthenticodeSignature <exe>).Status` must be `Valid`)

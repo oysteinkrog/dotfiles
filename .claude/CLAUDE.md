@@ -68,8 +68,8 @@ same gate on anything about to reach a person and hands back findings on failure
   Oystein instead.
 - **Portable single-use tools need no approval, on any machine.** Oystein, 2026-10-20: a
   self-contained tool you copy into place and can delete again (for example a signed
-  Sysinternals exe such as RAMMap, or a static binary) is fine on this desktop, Hawk, the
-  pool hosts or a VM. Put it in a task folder (on Hawk `C:\LabQa\perf\tools`), take it from
+  Sysinternals exe such as RAMMap, or a static binary) is fine on this desktop, the lab PC, the
+  pool hosts or a VM. Put it in a task folder (on the lab PC `C:\LabQa\perf\tools`), take it from
   the vendor's own site, check its signature or hash, and say where it went. Packages from
   the package manager are covered by the rule above. Other installers, services, drivers or
   registry changes on Windows machines still need approval.
@@ -243,8 +243,10 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
 
 ## Lab PC
 
-The lab PC is the Windows machine `Hawk` at `192.168.1.143` on the office LAN (not on
-Tailscale). Log in with **`ssh labpc`**, which uses the key `~/.ssh/labpc_ed25519`; sshd there
+The lab PC is the Windows machine `trd-lab-pc` at `192.168.1.143` on the office LAN (not on
+Tailscale). It used to be called Hawk; Windows still reports that name until it is
+renamed, and the jobd worker id is `hawk` until job-system renames it. Never call it Hawk in
+new text. Log in with **`ssh trd-lab-pc`** (old aliases `labpc` and `hawk` still work), which uses the key `~/.ssh/labpc_ed25519`; sshd there
 accepts keys only. The shell is Windows, so wrap commands in `powershell -NoProfile -Command`.
 To deploy a build or pull logs, load `lab-deploy`.
 
@@ -320,7 +322,7 @@ how to keep a long build alive.
 home since 2026-10-29; `HEAVY_BUILD_BACKEND=jobd` in `~/.claude/settings.local.json`).
 Keep calling `heavy-build` as before. **Load the `job-system` skill** for long builds
 (`job submit --detach`, which replaces the systemd-run wrapper), the queue and logs, and
-before running a job on the other desktop or Hawk (`job run --on`).
+before running a job on the other desktop or the lab PC (`job run --on`).
 
 - **Never run a build that can wait or take over 10 minutes as a Claude background
   shell.** Claude Code kills background shells when memory runs low, and the build and its
