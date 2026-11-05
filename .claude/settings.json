@@ -247,6 +247,11 @@
             "type": "command",
             "command": "bash ~/.claude/hooks/worktree-log.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/cmd-timing.sh",
+            "timeout": 15
           }
         ]
       }
@@ -259,6 +264,16 @@
             "type": "command",
             "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/cmd-timing.sh",
+            "timeout": 15
           }
         ]
       }
