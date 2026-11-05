@@ -188,7 +188,7 @@ if [ -n "$native_linux" ]; then
     .config/voxtype/config.toml
     .config/voxtype/auto-enter-apps
     .config/systemd/user/dotoold.service.d
-    .config/pipewire/iem-eq
+    .config/hesuvi-fir
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
     .config/autostart/buildqueue.desktop
@@ -232,6 +232,8 @@ if [ -n "$native_linux" ]; then
     .config/systemd/user/shader-wallpaper-theme-sync.path
     .config/systemd/user/shader-wallpaper-theme-sync.service
     .local/bin/streamcam-mic-enable
+    .local/bin/hesuvi
+    .local/share/applications/hesuvi.desktop
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
     .local/bin/cass
@@ -254,6 +256,12 @@ if [ -n "$native_linux" ]; then
       [ -e "$conf" ] || continue
       link_one "$conf" "$HOME/.config/pipewire/filter-chain.conf.d/$(basename "$conf")"
     done
+  fi
+  if [ -f "$host_dir/hesuvi.json" ]; then
+    echo ""
+    echo "=== Linking the HeSuVi defaults for $host ==="
+    # Output device, HRIR and headphone EQ the hesuvi tool starts from (state.json overrides).
+    link_one "$host_dir/hesuvi.json" "$HOME/.config/hesuvi/defaults.json"
   fi
   if [ -f "$host_dir/voxtype.toml" ]; then
     echo ""

@@ -1,0 +1,799 @@
+#!/usr/bin/python3
+"""HeSuVi for PipeWire: pick a virtual surround HRIR and a headphone EQ.
+
+Apps play into a stable sink (a loopback in filter-chain.service). Its output goes
+to a hidden convolver sink run by hesuvi-eq.service, which this tool restarts after
+it writes new impulse responses. Apps keep their sink while the filter is swapped.
+
+  hesuvi status                     current choice
+  hesuvi list hrir|eq [TEXT]        what you can pick
+  hesuvi set [--hrir N] [--eq N] [--upmix auto|on|off] [--gain DB]
+  hesuvi gui                        the picker window
+  hesuvi import HESUVI_DIR          copy hrir/ and eq/ from a HeSuVi install
+  hesuvi render [--if-missing]      write the PipeWire config and IRs (used by the unit)
+
+Data lives in ~/.local/share/hesuvi (hrir/, hrir/44/, hrir/more/, eq/, fir/), and
+headphone FIR folders also in ~/.config/hesuvi-fir (see its README).
+Defaults come from ~/.config/hesuvi/defaults.json (the machine profile), and your
+choices go to ~/.config/hesuvi/state.json.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+DATA = Path(os.environ.get("HESUVI_DATA", Path.home() / ".local/share/hesuvi"))
+CONF_DIR = Path.home() / ".config/hesuvi"
+STATE = CONF_DIR / "state.json"
+DEFAULTS = CONF_DIR / "defaults.json"
+ACTIVE = DATA / "active"
+# Headphone FIR folders: your own in DATA/fir, tracked ones in ~/.config/hesuvi-fir.
+FIR_DIRS = (DATA / "fir", Path.home() / ".config/hesuvi-fir")
+PW_CONF = Path.home() / ".config/pipewire/hesuvi-eq.conf"
+UNIT = "hesuvi-eq.service"
+RATES = (48000, 44100)
+EQ_NONE = "none"
+
+BASE_STATE = {
+    "hrir": "dht-",
+    "eq": EQ_NONE,
+    "upmix": "auto",
+    "gain_db": 0.0,
+    "output": "",
+}
+
+# HeSuVi's stereo to 7.1 matrix (matrix.txt): speaker -> (from L, from R).
+UPMIX = {
+    "FL": (0.5, 0.0),
+    "FR": (0.0, 0.5),
+    "FC": (0.2, 0.2),
+    "RL": (0.3, -0.2),
+    "RR": (-0.2, 0.3),
+    "SL": (0.45, -0.25),
+    "SR": (-0.25, 0.45),
+}
+NO_UPMIX = {"FL": (1.0, 0.0), "FR": (0.0, 1.0)}
+# Channel order of a 14-channel HeSuVi HRIR: (speaker, ear).
+LAYOUT14 = [
+    ("FL", "L"),
+    ("FL", "R"),
+    ("SL", "L"),
+    ("SL", "R"),
+    ("RL", "L"),
+    ("RL", "R"),
+    ("FC", "L"),
+    ("FR", "R"),
+    ("FR", "L"),
+    ("SR", "R"),
+    ("SR", "L"),
+    ("RR", "R"),
+    ("RR", "L"),
+    ("FC", "R"),
+]
+# A 7-channel HRIR holds the left speakers and the centre: L-L, L-R, SL-L, SL-R,
+# RL-L, RL-R, C. The right speakers mirror the left ones, and C feeds both ears.
+SEVEN_TO_14 = [0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6]
+
+EQ_TAPS = 8192
+EQ_FFT = 65536
+
+
+# ---------------------------------------------------------------- state
+
+
+def load_state():
+    st = dict(BASE_STATE)
+    for p in (DEFAULTS, STATE):
+        if p.exists():
+            try:
+                st.update(json.loads(p.read_text()))
+            except (OSError, ValueError) as e:
+                print(f"hesuvi: ignoring {p}: {e}", file=sys.stderr)
+    return st
+
+
+def save_state(st):
+    CONF_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({k: st[k] for k in BASE_STATE}, indent=2) + "\n")
+    os.replace(tmp, STATE)
+
+
+# ---------------------------------------------------------------- catalogue
+
+
+def _read_info(path):
+    info = {}
+    if not path.exists():
+        return info
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        if ";" in line:
+            k, v = line.split(";", 1)
+            info[k.strip()] = v.strip().replace("/n", "\n")
+    return info
+
+
+def _describe(name, info):
+    if name in info:
+        return info[name]
+    for k, v in info.items():
+        if k.endswith("*") and name.startswith(k[:-1]):
+            return v
+    return ""
+
+
+def hrirs():
+    """[(name, group, description)] for every HRIR on disk."""
+    out = []
+    main = DATA / "hrir"
+    info = _read_info(main / "info.csv")
+    for f in sorted(main.glob("*.wav"), key=lambda p: p.stem.lower()):
+        out.append((f.stem, "HeSuVi", _describe(f.stem, info)))
+    more = main / "more"
+    minfo = _read_info(more / "info.csv")
+    for f in sorted(more.glob("*.wav"), key=lambda p: p.stem.lower()):
+        out.append((f.stem, "Measured heads", _describe(f.stem, minfo)))
+    return out
+
+
+def eqs():
+    """[(id, label)] for the headphone EQs: none, FIR folders, then AutoEq GraphicEQ files."""
+    out = [(EQ_NONE, "None")]
+    seen = set()
+    for fir in FIR_DIRS:
+        if not fir.is_dir():
+            continue
+        for d in sorted(
+            p for p in fir.iterdir() if p.is_dir() and any(p.glob("*.wav"))
+        ):
+            if d.name not in seen:
+                seen.add(d.name)
+                out.append((f"fir:{d.name}", f"{d.name} (FIR)"))
+    eqdir = DATA / "eq"
+    if eqdir.is_dir():
+        for f in sorted(eqdir.rglob("*.txt"), key=lambda p: str(p).lower()):
+            rel = f.relative_to(eqdir).with_suffix("")
+            out.append((f"graphic:{rel}", str(rel).replace("/", " / ")))
+    return out
+
+
+def matches(text, *fields):
+    """True when every word of text appears in one of the fields (any case)."""
+    hay = " ".join(fields).lower()
+    return all(w in hay for w in text.lower().split())
+
+
+def no_upmix_advised(name, desc=None):
+    if desc is None:
+        desc = dict((n, d) for n, _, d in hrirs()).get(name, "")
+    return "do not use any upmix" in desc.lower()
+
+
+def upmix_on(st):
+    if st["upmix"] == "on":
+        return True
+    if st["upmix"] == "off":
+        return False
+    return not no_upmix_advised(st["hrir"])
+
+
+# ---------------------------------------------------------------- DSP
+
+
+def _np():
+    import numpy as np
+
+    return np
+
+
+def _read_wav(path):
+    import scipy.io.wavfile as wavfile
+    import warnings
+
+    np = _np()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, d = wavfile.read(path)
+    if d.dtype.kind == "i":
+        d = d.astype(np.float64) / float(np.iinfo(d.dtype).max)
+    d = np.asarray(d, dtype=np.float64)
+    if d.ndim == 1:
+        d = d[:, None]
+    return rate, d
+
+
+def _resample(d, src, dst):
+    if src == dst:
+        return d
+    from math import gcd
+    from scipy.signal import resample_poly
+
+    g = gcd(src, dst)
+    return resample_poly(d, dst // g, src // g, axis=0)
+
+
+def load_hrir(name, rate):
+    """HRIR as an (n, 14) array in LAYOUT14 order at the given rate."""
+    candidates = [
+        DATA / "hrir" / ("44" if rate == 44100 else "") / f"{name}.wav",
+        DATA / "hrir" / f"{name}.wav",
+        DATA / "hrir" / "more" / f"{name}.wav",
+    ]
+    for path in candidates:
+        if path.exists():
+            src, d = _read_wav(path)
+            d = _resample(d, src, rate)
+            if d.shape[1] == 14:
+                return d
+            if d.shape[1] == 7:
+                return d[:, SEVEN_TO_14]
+            raise SystemExit(
+                f"hesuvi: {path} has {d.shape[1]} channels, expected 7 or 14"
+            )
+    raise SystemExit(f"hesuvi: no HRIR named {name!r} in {DATA / 'hrir'}")
+
+
+def parse_graphic_eq(text):
+    for line in text.splitlines():
+        if line.strip().lower().startswith("graphiceq:"):
+            pts = []
+            for pair in line.split(":", 1)[1].split(";"):
+                parts = pair.split()
+                if len(parts) == 2:
+                    pts.append((float(parts[0]), float(parts[1])))
+            if pts:
+                return pts
+    raise ValueError("no GraphicEQ line")
+
+
+def min_phase_fir(points, rate, taps=EQ_TAPS, nfft=EQ_FFT):
+    """Minimum phase FIR whose magnitude follows (freq, dB) points."""
+    np = _np()
+    f, g = np.array(points).T
+    freqs = np.fft.rfftfreq(nfft, 1.0 / rate)
+    logf = np.log10(np.maximum(freqs, 1.0))
+    gain = np.interp(logf, np.log10(f), g)
+    logmag = gain * np.log(10) / 20.0
+    full = np.concatenate([logmag, logmag[-2:0:-1]])
+    cep = np.fft.ifft(full).real
+    fold = np.zeros(nfft)
+    fold[0] = cep[0]
+    fold[1 : nfft // 2] = 2 * cep[1 : nfft // 2]
+    fold[nfft // 2] = cep[nfft // 2]
+    h = np.fft.ifft(np.exp(np.fft.fft(fold))).real[:taps]
+    fade = taps // 8
+    h[-fade:] *= np.hanning(2 * fade)[fade:]
+    return h
+
+
+def load_eq(eq_id, rate):
+    """Headphone EQ as an (n, 2) array (left ear, right ear)."""
+    np = _np()
+    if eq_id == EQ_NONE:
+        return np.array([[1.0, 1.0]])
+    kind, _, name = eq_id.partition(":")
+    if kind == "fir":
+        d = next(
+            (f / name for f in FIR_DIRS if (f / name).is_dir()), FIR_DIRS[0] / name
+        )
+        path = d / f"{rate}.wav"
+        if not path.exists():
+            other = d / f"{RATES[0] if rate != RATES[0] else RATES[1]}.wav"
+            if not other.exists():
+                raise SystemExit(f"hesuvi: no {rate}.wav in {d}")
+            path = other
+        src, h = _read_wav(path)
+        h = _resample(h, src, rate)
+        return h if h.shape[1] >= 2 else np.repeat(h, 2, axis=1)
+    if kind == "graphic":
+        path = DATA / "eq" / f"{name}.txt"
+        if not path.exists():
+            raise SystemExit(f"hesuvi: no EQ file {path}")
+        h = min_phase_fir(parse_graphic_eq(path.read_text(errors="replace")), rate)
+        return np.stack([h, h], axis=1)
+    raise SystemExit(f"hesuvi: unknown EQ {eq_id!r}")
+
+
+def build_ir(st, rate):
+    """(n, 4) float32 IR: LtoL, LtoR, RtoL, RtoR, normalised so no input can clip."""
+    np = _np()
+    from scipy.signal import fftconvolve
+
+    hrir = load_hrir(st["hrir"], rate)
+    eq = load_eq(st["eq"], rate)
+    weights = UPMIX if upmix_on(st) else NO_UPMIX
+    paths = []
+    for in_idx in (0, 1):
+        for ear_idx, ear in enumerate(("L", "R")):
+            ear_ir = np.zeros(hrir.shape[0])
+            for col, (spk, e) in enumerate(LAYOUT14):
+                if e == ear and spk in weights:
+                    ear_ir += weights[spk][in_idx] * hrir[:, col]
+            paths.append(fftconvolve(ear_ir, eq[:, ear_idx]))
+    n = max(len(p) for p in paths)
+    ir = np.zeros((n, 4))
+    for i, p in enumerate(paths):
+        ir[: len(p), i] = p
+    # Worst case per ear over frequency: |from L| + |from R|. Scale that to 0 dB.
+    nfft = 1 << int(np.ceil(np.log2(max(n, 2) * 2)))
+    spec = np.abs(np.fft.rfft(ir, nfft, axis=0))
+    worst = max((spec[:, 0] + spec[:, 2]).max(), (spec[:, 1] + spec[:, 3]).max())
+    ir *= 10 ** (float(st["gain_db"]) / 20.0) / worst
+    # Trim the silent tail.
+    energy = np.abs(ir).max(axis=1)
+    keep = np.nonzero(energy > 1e-6)[0]
+    if len(keep):
+        ir = ir[: keep[-1] + 1]
+    return ir.astype(np.float32)
+
+
+# ---------------------------------------------------------------- PipeWire
+
+
+def pw_conf(st):
+    files = " ".join(f'"{ACTIVE}/ir-{r}.wav"' for r in RATES)
+    conv = "\n".join(
+        f"                    {{ type = builtin label = convolver name = {n} config = {{ filename = [ {files} ] channel = {i} }} }}"
+        for i, n in enumerate(("LtoL", "LtoR", "RtoL", "RtoR"))
+    )
+    target = st["output"]
+    if not target:
+        # The default sink is normally the stable HeSuVi sink, so following it would
+        # feed the convolver back into itself.
+        raise SystemExit(
+            "hesuvi: no output device set (hesuvi set --output NODE_NAME, "
+            "see wpctl status or pw-cli ls Node)"
+        )
+    target_line = (
+        f'                target.object  = "{target}"\n'
+        "                # Wait for the device (late at boot, unplugged) instead of\n"
+        "                # falling back to the default sink, which feeds this filter.\n"
+        "                node.dont-fallback = true\n"
+        "                node.linger        = true"
+    )
+    return f"""# Generated by hesuvi (~/.local/bin/hesuvi). Do not edit: hesuvi render rewrites it.
+# Run by hesuvi-eq.service. The stable sink apps use is in filter-chain.service.
+context.properties = {{
+    log.level = 0
+}}
+context.spa-libs = {{
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.*       = support/libspa-support
+}}
+context.modules = [
+    {{ name = libpipewire-module-rt args = {{ }} flags = [ ifexists nofail ] }}
+    {{ name = libpipewire-module-protocol-native }}
+    {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-adapter }}
+    {{ name = libpipewire-module-filter-chain
+        args = {{
+            node.description = "HeSuVi convolver"
+            media.name       = "HeSuVi convolver"
+            filter.graph = {{
+                nodes = [
+                    {{ type = builtin label = copy name = inL }}
+                    {{ type = builtin label = copy name = inR }}
+{conv}
+                    {{ type = builtin label = mixer name = earL }}
+                    {{ type = builtin label = mixer name = earR }}
+                ]
+                links = [
+                    {{ output = "inL:Out" input = "LtoL:In" }}
+                    {{ output = "inL:Out" input = "LtoR:In" }}
+                    {{ output = "inR:Out" input = "RtoL:In" }}
+                    {{ output = "inR:Out" input = "RtoR:In" }}
+                    {{ output = "LtoL:Out" input = "earL:In 1" }}
+                    {{ output = "RtoL:Out" input = "earL:In 2" }}
+                    {{ output = "LtoR:Out" input = "earR:In 1" }}
+                    {{ output = "RtoR:Out" input = "earR:In 2" }}
+                ]
+                inputs  = [ "inL:In" "inR:In" ]
+                outputs = [ "earL:Out" "earR:Out" ]
+            }}
+            capture.props = {{
+                node.name      = "hesuvi_eq_input"
+                media.class    = Audio/Sink
+                # Hidden: apps use the stable sink, which feeds this one.
+                node.virtual   = true
+                priority.session = 1
+                audio.channels = 2
+                audio.position = [ FL FR ]
+            }}
+            playback.props = {{
+                node.name      = "hesuvi_eq_output"
+                node.passive   = true
+                audio.channels = 2
+                audio.position = [ FL FR ]
+{target_line}
+            }}
+        }}
+    }}
+]
+"""
+
+
+def render(st, if_missing=False):
+    ACTIVE.mkdir(parents=True, exist_ok=True)
+    conf = pw_conf(st)
+    if not PW_CONF.exists() or PW_CONF.read_text() != conf:
+        PW_CONF.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PW_CONF.with_suffix(".tmp")
+        tmp.write_text(conf)
+        os.replace(tmp, PW_CONF)
+    if if_missing and all((ACTIVE / f"ir-{r}.wav").exists() for r in RATES):
+        return
+    import scipy.io.wavfile as wavfile
+
+    for rate in RATES:
+        ir = build_ir(st, rate)
+        tmp = ACTIVE / f".ir-{rate}.tmp.wav"
+        wavfile.write(tmp, rate, ir)
+        os.replace(tmp, ACTIVE / f"ir-{rate}.wav")
+    (ACTIVE / "built-from.json").write_text(json.dumps(st, indent=2) + "\n")
+
+
+def restart_unit():
+    r = subprocess.run(
+        ["systemctl", "--user", "restart", UNIT], capture_output=True, text=True
+    )
+    if r.returncode:
+        raise SystemExit(f"hesuvi: restarting {UNIT} failed: {r.stderr.strip()}")
+
+
+def apply(st):
+    render(st)
+    save_state(st)
+    restart_unit()
+
+
+# ---------------------------------------------------------------- CLI
+
+
+def resolve(kind, text):
+    items = [(n, n) for n, _, _ in hrirs()] if kind == "hrir" else eqs()
+    for i, label in items:
+        if text == i or text == label:
+            return i
+    hits = [i for i, label in items if matches(text, i, label)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise SystemExit(
+            f"hesuvi: no {kind} matches {text!r} (hesuvi list {kind} TEXT)"
+        )
+    shown = "\n  ".join(hits[:15])
+    raise SystemExit(f"hesuvi: {len(hits)} {kind} entries match {text!r}:\n  {shown}")
+
+
+def cmd_status(_):
+    st = load_state()
+    built = ACTIVE / "built-from.json"
+    print(
+        f"HRIR:   {st['hrir']}  (upmix {st['upmix']}, now {'on' if upmix_on(st) else 'off'})"
+    )
+    print(f"EQ:     {st['eq']}")
+    print(f"Gain:   {st['gain_db']:+.1f} dB")
+    print(f"Output: {st['output'] or 'default sink'}")
+    if built.exists() and json.loads(built.read_text()) != st:
+        print(
+            "Note: the running filter was built from other settings (hesuvi set to rebuild)."
+        )
+    r = subprocess.run(
+        ["systemctl", "--user", "is-active", UNIT], capture_output=True, text=True
+    )
+    print(f"{UNIT}: {r.stdout.strip()}")
+
+
+def cmd_list(a):
+    t = a.text or ""
+    if a.what == "hrir":
+        for n, group, desc in hrirs():
+            first = desc.splitlines()[0] if desc else ""
+            if matches(t, n, desc):
+                print(f"{n:<14} {group:<15} {first}")
+    else:
+        for i, label in eqs():
+            if matches(t, i, label):
+                print(i)
+
+
+def cmd_set(a):
+    st = load_state()
+    if a.hrir:
+        st["hrir"] = resolve("hrir", a.hrir)
+    if a.eq:
+        st["eq"] = resolve("eq", a.eq)
+    if a.upmix:
+        st["upmix"] = a.upmix
+    if a.gain is not None:
+        st["gain_db"] = a.gain
+    if a.output is not None:
+        st["output"] = a.output
+    apply(st)
+    cmd_status(a)
+
+
+def cmd_render(a):
+    render(load_state(), if_missing=a.if_missing)
+
+
+def cmd_import(a):
+    src = Path(a.dir)
+    if not (src / "hrir").is_dir():
+        raise SystemExit(f"hesuvi: {src} has no hrir/ folder")
+    DATA.mkdir(parents=True, exist_ok=True)
+    for sub in ("hrir", "eq"):
+        if (src / sub).is_dir():
+            shutil.copytree(src / sub, DATA / sub, dirs_exist_ok=True)
+            print(f"copied {src / sub} -> {DATA / sub}")
+
+
+def cmd_gui(_):
+    gui_main()
+
+
+# ---------------------------------------------------------------- GUI
+
+
+def gui_main():
+    from PySide6.QtCore import Qt, QProcess
+    from PySide6.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDoubleSpinBox,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QListWidget,
+        QListWidgetItem,
+        QPushButton,
+        QSplitter,
+        QVBoxLayout,
+        QWidget,
+    )
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("HeSuVi")
+    app.setDesktopFileName("hesuvi")
+    st = load_state()
+    hrir_list = hrirs()
+    eq_list = eqs()
+
+    win = QWidget()
+    win.setWindowTitle("HeSuVi")
+    win.resize(1100, 720)
+    root = QVBoxLayout(win)
+
+    def picker(title, placeholder):
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        search = QLineEdit()
+        search.setPlaceholderText(placeholder)
+        search.setClearButtonEnabled(True)
+        lst = QListWidget()
+        lay.addWidget(search)
+        lay.addWidget(lst, 1)
+        return box, lay, search, lst
+
+    hbox, hlay, hsearch, hlst = picker(
+        "Virtual surround (HRIR)", "Search HRIRs and descriptions"
+    )
+    hdesc = QLabel()
+    hdesc.setWordWrap(True)
+    hdesc.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    hdesc.setMinimumHeight(90)
+    hdesc.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+    hlay.addWidget(hdesc)
+    ebox, elay, esearch, elst = picker("Headphone EQ", "Search brand or model")
+    ecount = QLabel()
+    elay.addWidget(ecount)
+
+    split = QSplitter()
+    split.addWidget(hbox)
+    split.addWidget(ebox)
+    split.setSizes([500, 600])
+    root.addWidget(split, 1)
+
+    row = QHBoxLayout()
+    row.addWidget(QLabel("Upmix"))
+    upmix = QComboBox()
+    for v, label in (("auto", "Auto"), ("on", "On (stereo to 7.1)"), ("off", "Off")):
+        upmix.addItem(label, v)
+    upmix.setCurrentIndex(max(0, upmix.findData(st["upmix"])))
+    row.addWidget(upmix)
+    row.addSpacing(16)
+    row.addWidget(QLabel("Gain"))
+    gain = QDoubleSpinBox()
+    gain.setRange(-30.0, 20.0)
+    gain.setSingleStep(0.5)
+    gain.setSuffix(" dB")
+    gain.setValue(float(st["gain_db"]))
+    gain.setToolTip(
+        "0 dB = the loudest frequency just reaches full scale, so nothing clips."
+    )
+    row.addWidget(gain)
+    row.addSpacing(16)
+    auto = QCheckBox("Apply on select")
+    auto.setChecked(True)
+    row.addWidget(auto)
+    row.addStretch(1)
+    status = QLabel()
+    row.addWidget(status)
+    applyb = QPushButton("Apply")
+    applyb.setDefault(True)
+    row.addWidget(applyb)
+    root.addLayout(row)
+
+    current = QLabel()
+    current.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    root.addWidget(current)
+
+    def fill_hrirs():
+        text = hsearch.text()
+        hlst.blockSignals(True)
+        hlst.clear()
+        group = None
+        for n, g, desc in hrir_list:
+            if not matches(text, n, desc):
+                continue
+            if g != group:
+                head = QListWidgetItem(g)
+                head.setFlags(Qt.NoItemFlags)
+                f = head.font()
+                f.setBold(True)
+                head.setFont(f)
+                hlst.addItem(head)
+                group = g
+            first = desc.splitlines()[0] if desc else ""
+            it = QListWidgetItem(f"{n}    {first}" if first else n)
+            it.setData(Qt.UserRole, n)
+            it.setToolTip(desc)
+            hlst.addItem(it)
+            if n == st["hrir"]:
+                it.setSelected(True)
+                hlst.setCurrentItem(it)
+        hlst.blockSignals(False)
+        show_desc()
+
+    def fill_eqs():
+        text = esearch.text()
+        elst.blockSignals(True)
+        elst.clear()
+        shown = 0
+        for i, label in eq_list:
+            if not matches(text, label):
+                continue
+            it = QListWidgetItem(label)
+            it.setData(Qt.UserRole, i)
+            elst.addItem(it)
+            shown += 1
+            if i == st["eq"]:
+                elst.setCurrentItem(it)
+        elst.blockSignals(False)
+        ecount.setText(f"{shown} of {len(eq_list)} shown")
+
+    def show_desc():
+        it = hlst.currentItem()
+        n = it.data(Qt.UserRole) if it else None
+        desc = dict((a, d) for a, _, d in hrir_list).get(n, "")
+        hdesc.setText(f"<b>{n}</b><br>{desc.replace(chr(10), '<br>')}" if n else "")
+
+    def show_current():
+        s = load_state()
+        current.setText(
+            f"Active: {s['hrir']}  +  {dict(eq_list).get(s['eq'], s['eq'])}  "
+            f"(upmix {'on' if upmix_on(s) else 'off'}, gain {s['gain_db']:+.1f} dB)"
+            f"  ->  {s['output'] or 'default sink'}"
+        )
+
+    proc = QProcess(win)
+    pending = {"again": False}
+
+    def selection():
+        h = hlst.currentItem()
+        e = elst.currentItem()
+        return (
+            h.data(Qt.UserRole) if h else st["hrir"],
+            e.data(Qt.UserRole) if e else st["eq"],
+        )
+
+    def do_apply():
+        if proc.state() != QProcess.NotRunning:
+            pending["again"] = True
+            return
+        h, e = selection()
+        st.update(hrir=h, eq=e, upmix=upmix.currentData(), gain_db=gain.value())
+        status.setText("Building...")
+        applyb.setEnabled(False)
+        proc.start(
+            sys.executable,
+            [
+                os.path.abspath(__file__),
+                "set",
+                "--hrir",
+                h,
+                "--eq",
+                e,
+                "--upmix",
+                st["upmix"],
+                "--gain",
+                str(st["gain_db"]),
+            ],
+        )
+
+    def done(code, _status):
+        applyb.setEnabled(True)
+        if code == 0:
+            status.setText("Applied")
+        else:
+            err = bytes(proc.readAllStandardError()).decode(errors="replace").strip()
+            status.setText(
+                "Failed: " + (err.splitlines()[-1] if err else f"exit {code}")
+            )
+        show_current()
+        if pending["again"]:
+            pending["again"] = False
+            do_apply()
+
+    def maybe_apply():
+        if auto.isChecked():
+            do_apply()
+
+    proc.finished.connect(done)
+    hsearch.textChanged.connect(fill_hrirs)
+    esearch.textChanged.connect(fill_eqs)
+    hlst.currentItemChanged.connect(lambda *_: (show_desc(), maybe_apply()))
+    elst.currentItemChanged.connect(lambda *_: maybe_apply())
+    upmix.currentIndexChanged.connect(lambda *_: maybe_apply())
+    gain.editingFinished.connect(maybe_apply)
+    applyb.clicked.connect(do_apply)
+
+    fill_hrirs()
+    fill_eqs()
+    show_current()
+    if os.environ.get("HESUVI_GUI_SCREENSHOT"):
+        win.show()
+        app.processEvents()
+        win.grab().save(os.environ["HESUVI_GUI_SCREENSHOT"])
+        return
+    win.show()
+    sys.exit(app.exec())
+
+
+def main():
+    p = argparse.ArgumentParser(prog="hesuvi", description=__doc__.split("\n")[0])
+    sub = p.add_subparsers(dest="cmd")
+    sub.add_parser("status").set_defaults(fn=cmd_status)
+    s = sub.add_parser("list")
+    s.add_argument("what", choices=["hrir", "eq"])
+    s.add_argument("text", nargs="?")
+    s.set_defaults(fn=cmd_list)
+    s = sub.add_parser("set")
+    s.add_argument("--hrir")
+    s.add_argument("--eq")
+    s.add_argument("--upmix", choices=["auto", "on", "off"])
+    s.add_argument("--gain", type=float, help="dB above the no-clip level (default 0)")
+    s.add_argument("--output", help="PipeWire node.name of the real output device")
+    s.set_defaults(fn=cmd_set)
+    s = sub.add_parser("render")
+    s.add_argument("--if-missing", action="store_true", help="keep existing IR files")
+    s.set_defaults(fn=cmd_render)
+    s = sub.add_parser("import")
+    s.add_argument("dir")
+    s.set_defaults(fn=cmd_import)
+    sub.add_parser("gui").set_defaults(fn=cmd_gui)
+    a = p.parse_args()
+    if not a.cmd:
+        p.print_help()
+        return
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
