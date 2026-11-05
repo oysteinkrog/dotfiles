@@ -269,6 +269,35 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         ctx,
     )
 
+    # 5h. Our job still queued while another session's job in the same
+    # folder ended: no split.
+    rid5, rid6 = f"{sub_ns}-4646-aaaa0001", f"{sub_ns}-4747-aaaa0002"
+    events.write_text(
+        f"{ts(t0 + 1)} request={rid5} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t0 + 3)} request={rid6} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t0 + 3)} attempt={rid6}-a{int(t0 + 3)} request={rid6} event=start\n"
+        f"{ts(T - 5)} request={rid6} event=end exit=0 reason=ok\n"
+    )
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), env("st5h"))
+    check("unfinished own job gives no split", ctx == "Command took 6 min 40 s.", ctx)
+
+    # 5i. A failed last attempt stops counting at the failure.
+    rid7 = f"{sub_ns}-4848-aaaa0003"
+    a7 = f"{rid7}-a{int(t0 + 11)}"
+    events.write_text(
+        f"{ts(t0 + 1)} request={rid7} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t0 + 11)} attempt={a7} request={rid7} event=start worker=home\n"
+        f"{ts(t0 + 21)} attempt={a7} request={rid7} event=route-failed worker=home\n"
+        f"{ts(T)} request={rid7} event=end exit=75 reason=cancel\n"
+    )
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), env("st5i"))
+    check(
+        "failed last attempt is not run time",
+        ctx
+        == "Command took 6 min 40 s: 6 min 29 s waiting in the jobd queue, 10 s running.",
+        ctx,
+    )
+
     # 6. Non-build long command: report, no warn.
     e = env("st6")
     run(claude("sleep 400", 400, str(repo)), e, now=T - 600)
@@ -357,6 +386,54 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     rc, ctx, _ = run(raw, env("st15"))
     check(
         "nested duration_ms does not hide the report", ctx == "Command took 1 min.", ctx
+    )
+
+    # 16. Codex call with one duration_ms nested in the output: still timed.
+    e = env("st16")
+    pre16 = {
+        "session_id": "codex-16",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "tool_use_id": "call_16",
+        "cwd": str(plain),
+    }
+    run(pre16, e, now=T - 60)
+    post16 = dict(
+        pre16, hook_event_name="PostToolUse", tool_response={"duration_ms": 1}
+    )
+    rc, ctx, _ = run(post16, e)
+    check(
+        "Codex call with nested duration_ms is reported",
+        ctx == "Command took 1 min.",
+        ctx,
+    )
+
+    # 17. exec-style input with cmd and workdir.
+    e = env("st17")
+    pre17 = {
+        "session_id": "codex-17",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"cmd": "cargo test", "workdir": str(repo)},
+        "tool_use_id": "call_17",
+        "cwd": str(plain),
+    }
+    run(pre17, e, now=T - 45)
+    rc, ctx, _ = run(dict(pre17, hook_event_name="PostToolUse"), e)
+    snaps = json.loads((tmp / "st17" / "codex-17.json").read_text())["snapshots"]
+    check(
+        "cmd and workdir inputs are used",
+        ctx == "Command took 45 s." and str(repo) in snaps,
+        f"{ctx} {snaps}",
+    )
+
+    # 18. Options with values before the subcommand.
+    e = env("st18")
+    run(claude("npm --prefix web test", 5, str(repo), sid="s18"), e)
+    check(
+        "npm --prefix web test is a test run",
+        (tmp / "st18" / "s18.json").exists(),
     )
 
     # 10. Garbage input: exit 0, no output.
