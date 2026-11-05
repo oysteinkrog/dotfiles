@@ -3206,6 +3206,10 @@ $1 == "F" {
   ug = (untcap + 0 <= 0) ? 2 : untcap - untgrow
   if (ug > 2) ug = 2
   if (ug < 0) ug = 0
+  # 2026-11-05: leaked licence mocks (a few MB, hours old) held 4 GiB to come.
+  # A small scope (UNT_SMALL_NOT_JOB) older than 600 s does not grow, so it
+  # gets none; a fresh one keeps its reserve. jobd admit.py does the same.
+  if (untsmall + 0 > 0 && $3 < 1073741824 && (c == "-" || c + 0 < 1000) && $5 + 0 >= 600) ug = 0
   untgrow += ug
   addrun($2, 0, $3 / 1073741824 + ug, 8, now + 600, $3 / 1073741824, c, 0, "normal", ($7 == "" ? "-" : $7), 100, "-", ug)
   # HEAVY_BUILD_UNT_SMALL_NOT_JOB (default 1, 2026-10-30): a scope under 1 GiB
