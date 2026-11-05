@@ -2052,9 +2052,9 @@ check "aged critical: the high build then waits for cores (got '$out')" '[[ $out
 out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED" "$W_HNEW" | adm 0000000999500000000-3-h 0 1 12)
 check "aged critical: a high build that fits may not pass an aged critical head that waits for cores (got '$out')" '[[ $out == "wait|starve: 0000000990000000000-1-c has waited 166 min, so nothing may pass it|1" ]]'
 out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CYOUNG" "$W_HNEW" | adm 0000000999500000000-3-h 0 1 12)
-check "aged critical: a critical build that waited 1000 s still ranks behind high (got '$out')" '[[ $out == start\|fits:* ]]'
-out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CAGED" "$W_HNEW" | ADM_CRITAGE=0 adm 0000000999500000000-3-h 0 1 12)
-check "aged critical: HEAVY_BUILD_CRIT_AGE_SECS=0 turns it off (got '$out')" '[[ $out == start\|fits:* ]]'
+check "critical before high (2026-11-05): a critical build that waited 1000 s also ranks ahead of high (got '$out')" '[[ $out == wait\|cores:* ]]'
+out=$(printf '%s\n' "$RUN_X1" "$RUN_X2" "$W_CYOUNG" "$W_HNEW" | ADM_CRITAGE=0 adm 0000000999500000000-3-h 0 1 12)
+check "critical before high: with HEAVY_BUILD_CRIT_AGE_SECS=0 too (got '$out')" '[[ $out == wait\|cores:* ]]'
 # The memory exception: the aged critical head needs 36 GiB of the 40 (reserve 6).
 printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(( 40 * 1048576 )) > "$A/meminfo40"
 W_CBIG='W 0000000990000000000-1-c 990000 critical 36 2 300 -'
