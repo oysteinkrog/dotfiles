@@ -34,6 +34,10 @@ def main() -> None:
     )
     p = sub.add_parser("redo", help="transcribe a finished call again from its audio")
     p.add_argument("dir", type=Path)
+    p = sub.add_parser(
+        "merge", help="join recordings of one call (left and rejoined) into one"
+    )
+    p.add_argument("dirs", type=Path, nargs="+")
     p = sub.add_parser("voices", help="list or remove stored voiceprints")
     p.add_argument("--forget", metavar="NAME", help="delete one person's voiceprints")
     sub.add_parser("status", help="show recordings in progress, queued and failed")
@@ -71,6 +75,10 @@ def main() -> None:
         from . import process
 
         print(process.redo(args.dir.resolve()))
+    elif args.cmd == "merge":
+        from . import process
+
+        print(process.merge([d.resolve() for d in args.dirs]))
     elif args.cmd == "label":
         from . import process
 
