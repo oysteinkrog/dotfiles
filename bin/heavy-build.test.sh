@@ -2159,11 +2159,14 @@ check "app scope: run-mc.sh is detected and HEAVY_BUILD_APP_MEM_HIGH_GIB=14 give
 teardown2
 
 # App runs get CPUQuota from HEAVY_BUILD_APP_CPU_QUOTA (default 800%); 0 or
-# empty means none; builds never get one.
+# empty in the conf means none; builds never get one. The environment may only
+# lower it (manager-machine, 2026-11-05): 0, empty or higher is ignored and logged.
 # Each case: label|env setting or -|conf line or -|class (app or build)|expected quota or none
-for c in "default|-|-|app|800" "env override|HEAVY_BUILD_APP_CPU_QUOTA=400|-|app|400" \
-  "conf override|-|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|1200" "env beats conf|HEAVY_BUILD_APP_CPU_QUOTA=300|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|300" \
-  "env 0 disables|HEAVY_BUILD_APP_CPU_QUOTA=0|-|app|none" "env empty disables|HEAVY_BUILD_APP_CPU_QUOTA=|-|app|none" \
+for c in "default|-|-|app|800" "env lowers|HEAVY_BUILD_APP_CPU_QUOTA=400|-|app|400" \
+  "conf override|-|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|1200" "env lowers conf|HEAVY_BUILD_APP_CPU_QUOTA=300|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|300" \
+  "env 0 ignored|HEAVY_BUILD_APP_CPU_QUOTA=0|-|app|800" "env empty ignored|HEAVY_BUILD_APP_CPU_QUOTA=|-|app|800" \
+  "env higher ignored|HEAVY_BUILD_APP_CPU_QUOTA=1600|-|app|800" "env equal ignored|HEAVY_BUILD_APP_CPU_QUOTA=1200|HEAVY_BUILD_APP_CPU_QUOTA=1200|app|1200" \
+  "env lowers no-limit conf|HEAVY_BUILD_APP_CPU_QUOTA=400|HEAVY_BUILD_APP_CPU_QUOTA=|app|400" \
   "conf 0 disables|-|HEAVY_BUILD_APP_CPU_QUOTA=0|app|none" "conf empty disables|-|HEAVY_BUILD_APP_CPU_QUOTA=|app|none" \
   "build unaffected|-|-|build|none" "build unaffected by env|HEAVY_BUILD_APP_CPU_QUOTA=400|-|build|none"; do
   IFS='|' read -r lbl ev cf kind want <<< "$c"
@@ -2184,8 +2187,22 @@ for c in "default|-|-|app|800" "env override|HEAVY_BUILD_APP_CPU_QUOTA=400|-|app
   else
     check "cpu quota: $lbl logs no cpu_quota" '! grep -q cpu_quota "$T/state/heavy-build/shadow.log"'
   fi
+  if [[ $lbl == *ignored ]]; then
+    check "cpu quota: $lbl logs event=env-ignored" 'grep -q "event=env-ignored name=HEAVY_BUILD_APP_CPU_QUOTA " "$T/state/heavy-build/shadow.log"'
+  fi
   teardown2
 done
+
+# A caller --class may not move a Wine test run out of its class (it has the
+# Wine timeout), as in jobd.
+setup2
+mkdir -p "$T/w3/tools/wine"; printf '#!/bin/sh\nexit 0\n' > "$T/w3/tools/wine/run-tests.sh"; chmod +x "$T/w3/tools/wine/run-tests.sh"
+printf 'HEAVY_BUILD_WINE_TIMEOUT=3600\n' > "$T/config/heavy-build.conf"
+hbe HEAVY_BUILD_TIMEOUT=9000 -- --class app-run "$T/w3/tools/wine/run-tests.sh" X.Tests
+wait "$hbpid"; rc=$?
+check "class lock: --class app-run on run-tests.sh stays wine-run-tests (rc $rc)" '(( rc == 0 )) && awk -F"\t" '\''$2 ~ /^wine-run-tests/'\'' "$T/state/heavy-build/history.tsv" | grep -q . && grep -q "event=env-ignored name=HEAVY_BUILD_CLASS " "$T/state/heavy-build/shadow.log"'
+check "class lock: a caller HEAVY_BUILD_TIMEOUT above the Wine cap is cut to it" 'grep -q "event=env-ignored name=HEAVY_BUILD_TIMEOUT value=\"9000\"" "$T/state/heavy-build/shadow.log"'
+teardown2
 
 # MemoryMax is twice MemoryHigh but never over builds.slice memory.max.
 setup2
