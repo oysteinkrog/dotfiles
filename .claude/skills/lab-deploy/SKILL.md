@@ -12,7 +12,7 @@ description: >-
 | | |
 |---|---|
 | Address | `192.168.1.143`, office LAN only. Not on Tailscale, so it is unreachable from outside the office network |
-| Name | `trd-lab-pc`. It used to be called Hawk, and Windows still reports `Hawk` until the PC is renamed. Do not use the old name in new text |
+| Name | `trd-lab-pc` (Windows computer name `TRD-LAB-PC` since 2026-11-05). It used to be called Hawk. Do not use the old name in new text |
 | Login | `ssh labpc` (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` |
 | Auth | Keys only. sshd has `PasswordAuthentication no`. Backup config: `C:\ProgramData\ssh\sshd_config.bak-2026-09-29` |
 | Remote shell | `cmd`. Run PowerShell through the script below rather than quoting it by hand |
