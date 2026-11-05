@@ -1022,10 +1022,10 @@ read_conf() {
   setting HEAVY_BUILD_MAX_APP_RUNS 2
   (( APP_MEM_HIGH_GIB >= 1 )) || APP_MEM_HIGH_GIB=10
   setting HEAVY_BUILD_APP_CPU_QUOTA 800
-  # An empty value, in the environment or the conf file, means no quota, as 0 does.
-  if [[ ${HEAVY_BUILD_APP_CPU_QUOTA+x} ]]; then
-    [[ -z $HEAVY_BUILD_APP_CPU_QUOTA ]] && APP_CPU_QUOTA=0
-  elif [[ ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]+x} && -z ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]} ]]; then
+  # An empty value in the conf file means no quota, as 0 does. A caller may
+  # only lower the quota (setting), so an empty or 0 in the environment is ignored.
+  if [[ (! ${HEAVY_BUILD_APP_CPU_QUOTA+x} || -n ${ENV_IGNORED[HEAVY_BUILD_APP_CPU_QUOTA]+x})
+        && ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]+x} && -z ${CONFV[HEAVY_BUILD_APP_CPU_QUOTA]} ]]; then
     APP_CPU_QUOTA=0
   fi
   APP_CPU_QUOTA=$(( 10#$APP_CPU_QUOTA ))
@@ -1080,8 +1080,28 @@ presence_override() {
   fi
 }
 
+# Per-job caps a caller may only lower, as in jobd (manager-machine,
+# 2026-11-05): the environment counts only when it is a whole number above 0
+# and below the machine value (the conf, else the default; 0 means no limit).
+# Anything else is dropped and noted in ENV_IGNORED, which is logged once.
 setting() {
-  local v=${!1:-}
+  local v=${!1:-} m
+  local lower=" HEAVY_BUILD_APP_CPU_QUOTA HEAVY_BUILD_APP_MEM_HIGH_GIB HEAVY_BUILD_DOTNET_MAXCPU HEAVY_BUILD_LOW_CARGO_JOBS HEAVY_BUILD_WINE_TIMEOUT "
+  declare -p ENV_IGNORED &> /dev/null || declare -gA ENV_IGNORED=()
+  if [[ $lower == *" $1 "* && ${!1+x} ]]; then
+    unset 'ENV_IGNORED[$1]'
+    m=${CONFV[$1]:-}
+    if [[ $1 == HEAVY_BUILD_APP_CPU_QUOTA && ${CONFV[$1]+x} && -z $m ]]; then m=0
+    elif [[ ! $m =~ ^[0-9]{1,18}$ ]]; then m=$2
+    fi
+    m=$(( 10#$m ))
+    if ! [[ $v =~ ^[0-9]{1,18}$ ]] || (( 10#$v == 0 )) || (( m > 0 && 10#$v >= m )); then
+      ENV_IGNORED[$1]="value=\"${v//[^[:alnum:]._-]/?}\" why=\"a caller may only lower it below the machine value $m\""
+      v=
+    else
+      v=$(( 10#$v ))
+    fi
+  fi
   [[ -n $v ]] || v=${CONFV[$1]:-}
   [[ $v =~ ^[0-9]+$ ]] || v=$2
   printf -v "${1#HEAVY_BUILD_}" %s "$v"
@@ -4056,17 +4076,30 @@ cmdline=${cmdline//\"/\'}
 # HEAVY_BUILD_WINE_FALLBACK_PCT reaches estimate().
 read_conf
 cls=$(classify "$@")
+# A caller's --class may not move a job out of a class with a cap of its own
+# (app-run, the Wine test classes), as in jobd.
+if [[ -n $CLASS_ARG ]]; then
+  own_cls=$(CLASS_ARG= classify "$@")
+  if [[ $own_cls != "$cls" && $own_cls =~ ^(app-run|gpu-eval|wine-run-tests|wine-run-tests-prebuilt)$ ]]; then
+    ENV_IGNORED[HEAVY_BUILD_CLASS]="value=\"${CLASS_ARG//[^[:alnum:]._-]/?}\" why=\"a caller may not move a job out of $own_cls\""
+    cls=$own_cls CLASS_ARG=
+  fi
+fi
 sig=- sig_f=0
 if [[ $cls == wine-run-tests || $cls == wine-run-tests-prebuilt ]]; then
   read -ra sig_words <<< "$*"
   read -r sig_f sig <<< "$(wine_sig "$cls" "${sig_words[@]}")"
   [[ -n $sig ]] || sig=- sig_f=0
 fi
-# Time limit for Wine test runs: HEAVY_BUILD_WINE_TIMEOUT seconds (conf or
-# environment). A caller's own HEAVY_BUILD_TIMEOUT wins. 0 or unset: no limit.
-if [[ -z $TIMEOUT && $cls == wine-run-tests* ]]; then
+# Time limit for Wine test runs: HEAVY_BUILD_WINE_TIMEOUT seconds (conf, or a
+# lower value from the environment). A caller's own HEAVY_BUILD_TIMEOUT counts
+# only up to it. 0 or unset: no limit.
+if [[ $cls == wine-run-tests* ]]; then
   setting HEAVY_BUILD_WINE_TIMEOUT 0
-  (( WINE_TIMEOUT > 0 )) && TIMEOUT=$WINE_TIMEOUT
+  if (( WINE_TIMEOUT > 0 )) && [[ -z $TIMEOUT ]] || (( WINE_TIMEOUT > 0 && ${TIMEOUT:-0} > WINE_TIMEOUT )); then
+    [[ -n $TIMEOUT ]] && ENV_IGNORED[HEAVY_BUILD_TIMEOUT]="value=\"$TIMEOUT\" why=\"above the Wine cap $WINE_TIMEOUT\""
+    TIMEOUT=$WINE_TIMEOUT
+  fi
 fi
 repo=$(repo_id)
 keys_out=$(lock_keys "$@")
@@ -4189,6 +4222,10 @@ else
   if [[ -n $adopted ]]; then adopt_ticket; else ticket=$QDIR/$(date +%s%N)-$$-$hash; fi
   jobid=${ticket##*/}
   write_ticket
+  for k in "${!ENV_IGNORED[@]}"; do
+    log_line "event=env-ignored name=$k ${ENV_IGNORED[$k]} cmd=\"$cmdline\""
+    say "ignored $k from the caller: ${ENV_IGNORED[$k]}"
+  done
   if [[ -n $keys_note ]]; then
     log_line "$keys_note keys=$keys_csv cmd=\"$cmdline\""
     say "lock key not split by AgentOutputSuffix: this tree has no suffix blocks ($SPLIT_MARK)"
