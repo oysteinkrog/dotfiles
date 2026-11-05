@@ -212,20 +212,72 @@ def session_kind():
     forced = os.environ.get("JOB_WAKE_TEST_KIND")
     if forced in ("async", "print", "unknown"):
         return forced
+    found = find_claude()
+    if found is None:
+        return "unknown"
+    pid, argv = found
+    return classify_argv(argv, has_tty(pid))
+
+
+def find_claude():
+    """(pid, argv) of the nearest claude ancestor, or None."""
     pid = os.getppid()
     for _ in range(16):
         try:
             argv, ppid = proc_argv_ppid(pid)
         except (OSError, ValueError, IndexError):
-            return "unknown"
+            return None
         if argv and (
             os.path.basename(argv[0]) == "claude" or "/claude/versions/" in argv[0]
         ):
-            return classify_argv(argv, has_tty(pid))
+            return pid, argv
         if ppid <= 1:
-            return "unknown"
+            return None
         pid = ppid
-    return "unknown"
+    return None
+
+
+VERSION_RE = re.compile(r"/claude/versions/(\d+\.\d+\.\d+)$")
+
+
+def claude_version():
+    """Version of the claude binary running this session, or None.
+    JOB_WAKE_TEST_VERSION overrides it, for tests only."""
+    forced = os.environ.get("JOB_WAKE_TEST_VERSION")
+    if forced is not None:
+        return forced or None
+    found = find_claude()
+    if found is None:
+        return None
+    pid, argv = found
+    for path in (proc_exe(pid), argv[0]):
+        m = VERSION_RE.search(path or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+def proc_exe(pid):
+    try:
+        return os.readlink("/proc/%d/exe" % pid)
+    except OSError:
+        return None
+
+
+def validated_versions():
+    """Claude Code versions whose inbox format and lock were checked with
+    bin/job-wake-selftest, one per line in job-wake.validated-versions."""
+    path = os.environ.get("JOB_WAKE_VALIDATED_FILE") or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "job-wake.validated-versions"
+    )
+    f = open_regular(path)
+    if f is None:
+        return set()
+    with f:
+        text = f.read(65536).decode("utf8", "replace")
+    return {
+        ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")
+    }
 
 
 def trusted(rid, log, exitf):
@@ -554,11 +606,25 @@ def main(rec):
         return 0
     cap = MAX_SECS if kind == "async" else min(UNPROVEN_SECS, MAX_SECS)
     mate = None
+    unvalidated = None
     if agent_id:
         try:
             mate = teammate_of(payload)
         except Exception:
             mate = None
+        if mate and os.environ.get("JOB_WAKE_ASSUME_VALIDATED") != "1":
+            # The inbox format comes from reading one Claude Code build. On any
+            # other build, do not write it; the main session forwards instead.
+            try:
+                ver = claude_version()
+                ok = ver is not None and ver in validated_versions()
+            except Exception:
+                ver, ok = None, False
+            if not ok:
+                unvalidated = ver or "unknown"
+                rec["claude_version"] = unvalidated
+                rec["agent_name"] = mate[0]
+                mate = None
 
     start = time.monotonic()
     pending = list(jobs)
@@ -635,6 +701,8 @@ def main(rec):
         rec["exit_code"] = first[0]
         rec["exit_to_wake_s"] = round(max(0.0, time.time() - first[1]), 1)
     rec["outcome"] = "timeout" if timed_out else "woke"
+    if unvalidated and not timed_out:
+        rec["outcome"] = "unvalidated-version"
 
     if agent_id:
         delivered = False
@@ -668,7 +736,14 @@ def main(rec):
                 "so do not forward it." % (mate[0], agent_id, agent_type)
             )
         else:
-            who = "%s (agent %s)" % (mate[0], agent_id) if mate else agent_id
+            name = mate[0] if mate else rec.get("agent_name")
+            who = "%s (agent %s)" % (name, agent_id) if name else agent_id
+            if unvalidated:
+                msgs.append(
+                    "job-wake did not write to the teammate's inbox: Claude Code %s is not "
+                    "in job-wake.validated-versions. Run job-wake-selftest to check it."
+                    % unvalidated
+                )
             msgs.append(
                 "This job was submitted by subagent %s (type %s), not by you. If that "
                 "subagent is still running or waiting, forward this result to it with "
