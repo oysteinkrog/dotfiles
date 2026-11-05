@@ -413,21 +413,18 @@ def teammate_of(payload):
 
 
 def take_lock(lock, deadline):
-    """mkdir lock, the same scheme as Claude Code's proper-lockfile: a lock
-    directory older than 10 s counts as stale and is removed. Returns the
-    lock's inode, or None."""
+    """mkdir lock, the same scheme as Claude Code's proper-lockfile. Returns
+    the lock's inode, or None. A stale lock is never removed here: the check
+    and the rmdir cannot be atomic, so removing it could delete a lock that
+    a Claude Code writer took in between. Claude Code clears stale locks
+    itself; until then the main session forwards the result."""
     delay = 0.005
     while True:
         try:
             os.mkdir(lock, 0o755)
             return os.lstat(lock).st_ino
         except FileExistsError:
-            try:
-                if time.time() - os.lstat(lock).st_mtime > 10:
-                    os.rmdir(lock)
-                    continue
-            except OSError:
-                pass
+            pass
         if time.monotonic() > deadline:
             return None
         time.sleep(delay)

@@ -312,7 +312,7 @@ check(
 check("held lock: gives up in about 3 s", 2.5 < secs < 8, secs)
 check("held lock: other owner's lock kept", lock.is_dir())
 
-# 12. stale lock (over 10 s old) is taken over
+# 12. stale lock (over 10 s old) is not taken over
 e = Env()
 ib = e.teammate(inbox="[]")
 lock = Path(str(ib) + ".lock")
@@ -320,8 +320,8 @@ lock.mkdir()
 os.utime(lock, (time.time() - 60, time.time() - 60))
 rc, err, _ = run(e.env(), e.payload(e.job(code=0), agent_id="abuilder-0123"))
 check(
-    "stale lock taken over",
-    len(json.loads(ib.read_text())) == 1 and not lock.exists(),
+    "stale lock left alone, main forwards",
+    ib.read_text() == "[]" and lock.is_dir() and "forward this result" in err,
     ib.read_text(),
 )
 
