@@ -77,7 +77,7 @@ one. A client stopped with SIGTERM or Ctrl-C cancels its job (exit 130).
 | `job estimate ID GIB` | Operator only: set a waiting job's memory estimate when a class estimate blocks the queue. It keeps its place |
 | `job ping` | Exit 0 if jobd answers within 3 s, else 69 |
 | `job report [--hours N]` | Faults, lost jobs and jobs run twice in the last N hours (exit 1 if any) |
-| `job status [home\|hawk]` | A worker's memory, load, frozen state and running jobs |
+| `job status [home\|trd-lab-pc]` | A worker's memory, load, frozen state and running jobs |
 
 Cancel only your own requests. Exit codes are heavy-build's: 75 not run (gave
 up waiting, or jobd went away while it waited), 76 rerun guard, 77
@@ -123,11 +123,11 @@ routed start with `worker=home`.
 there and brings back the log. `job check DIR` says first whether the tree can
 move. Rules, all hard:
 
-- Workers: `home` and `office` (the desktops, each the other's worker) and `hawk`
-  (the lab PC, trd-lab-pc; the worker id keeps its old name until job-system renames it). rigel and vega
-  are not approved.
+- Workers: `home` and `office` (the desktops, each the other's worker) and
+  `trd-lab-pc` (the lab PC, renamed from Hawk on 2026-11-05; `hawk` still works as
+  an alias for now). rigel and vega are not approved.
 - No job may read golf take files or athlete data on a worker.
-- Lab PC: never during a Laben booking (`job status hawk` shows it; never pass
+- Lab PC: never during a Laben booking (`job status trd-lab-pc` shows it; never pass
   `--force`). Weekdays 07:00 to 18:00 need Oystein's yes for each run
   (`--lab-ok` records that he said yes). Never overlap someone's testing on
   the lab PC.
