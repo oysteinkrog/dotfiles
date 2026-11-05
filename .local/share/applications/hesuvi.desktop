@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HeSuVi
+GenericName=Headphone virtual surround and EQ
+Comment=Pick the HRIR and headphone EQ for the HeSuVi sink
+Exec=hesuvi gui
+Icon=audio-headphones
+Categories=AudioVideo;Audio;Settings;
+Keywords=hesuvi;hrir;eq;equalizer;surround;headphones;autoeq;

@@ -16,22 +16,36 @@ step "verify: pipewire filters"
 # pw-cli info exits 0 even for a name that does not exist, so match node.name in a dump.
 pw_nodes=$(pw-dump 2>/dev/null | jq -r '.[].info.props["node.name"] // empty')
 pw_has() { grep -qxF "$1" <<<"$pw_nodes"; }
+pw_check_conf() {  # FILE HINT: each node.name exists, and each target.object too
+  local l=$1 node
+  for node in $(sed -n 's/^[[:space:]]*node.name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
+    if pw_has "$node"; then ok "$node"
+    else fail "$node not in PipeWire ($2)"; fi
+  done
+  # The filter exists even when the device it feeds or reads from is missing.
+  for node in $(sed -n 's/^[[:space:]]*target.object[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
+    if pw_has "$node"; then ok "target $node"
+    else fail "target $node not in PipeWire (unplugged, its card profile is off, or its service is down)"; fi
+  done
+}
 for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
   l="$HOME/.config/pipewire/filter-chain.conf.d/$conf"
   if [ ! -e "$l" ]; then
     fail "$conf missing or broken in filter-chain.conf.d (rerun install.sh)"
     continue
   fi
-  for node in $(sed -n 's/^[[:space:]]*node.name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
-    if pw_has "$node"; then ok "$node"
-    else fail "$node not in PipeWire (systemctl --user restart filter-chain; journalctl --user -u filter-chain)"; fi
-  done
-  # The filter exists even when the device it feeds or reads from is missing.
-  for node in $(sed -n 's/^[[:space:]]*target.object[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$l"); do
-    if pw_has "$node"; then ok "device $node"
-    else fail "device $node not in PipeWire (unplugged, or its card profile is off: pactl list cards)"; fi
-  done
+  pw_check_conf "$l" "systemctl --user restart filter-chain; journalctl --user -u filter-chain"
 done
+# HeSuVi convolver (the hesuvi tool). The stable sink in filter-chain.conf.d feeds it.
+if [ -e "$HOME/.config/hesuvi/defaults.json" ]; then
+  if [ -d "$HOME/.local/share/hesuvi/hrir" ]; then ok "hesuvi HRIR data"
+  else fail "no HeSuVi data in ~/.local/share/hesuvi (hesuvi import <HeSuVi install dir>)"; fi
+  if [ -e "$HOME/.config/pipewire/hesuvi-eq.conf" ]; then
+    pw_check_conf "$HOME/.config/pipewire/hesuvi-eq.conf" "systemctl --user restart hesuvi-eq; journalctl --user -u hesuvi-eq"
+  else
+    fail "~/.config/pipewire/hesuvi-eq.conf missing (systemctl --user enable --now hesuvi-eq)"
+  fi
+fi
 # install.sh supports two layouts: ~/.claude linked whole, or a real dir with items linked.
 if [ "$(realpath "$HOME/.claude")" = "$(realpath "$DOTFILES/.claude")" ]; then
   ok "~/.claude -> dotfiles"
