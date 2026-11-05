@@ -457,6 +457,14 @@ def teammate_of(payload):
     if len(me) != 1:
         return None
     inboxes = os.path.join(team_dir, "inboxes")
+    if os.path.islink(team_dir) or not os.path.isdir(team_dir):
+        return None
+    try:
+        # Claude Code makes this folder on the first message in the team, so
+        # it may not exist yet when a teammate submits right after spawning.
+        os.mkdir(inboxes, 0o755)
+    except FileExistsError:
+        pass
     if not os.path.isdir(inboxes) or os.path.islink(inboxes):
         return None
     # joinedAt and agentId tell a teammate apart from a later one with the same name.

@@ -600,5 +600,16 @@ check(
     == "2.1.318",
 )
 
+# team folder without an inboxes folder yet (teammate submits right after spawn)
+e = Env()
+ib = e.teammate()
+os.rmdir(ib.parent)
+rc, err, _ = run(e.env(), e.payload(e.job(code=0), agent_id="abuilder-0123"))
+check(
+    "missing inboxes folder is created",
+    ib.exists() and len(json.loads(ib.read_text())) == 1,
+    err,
+)
+
 print("\n%d failure(s)" % failures)
 raise SystemExit(1 if failures else 0)
