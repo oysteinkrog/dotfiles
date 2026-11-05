@@ -467,10 +467,19 @@ JOBD_LOGS = os.environ.get("CMD_TIMING_JOBD_LOGS") or os.path.join(
 )
 PENDING_MAX = 2 * 86400
 FOOTER_TAIL = 8192
-# `jobd: waited 12 s, ran 340 s` or `jobd: wait=12 run=340` (seconds; a
-# trailing `min` unit is also read).
-FOOTER_WAIT_RE = re.compile(r"\bwait(?:ed)?\s*[=:]?\s*([\d.]+)\s*(min|m|s)?\b")
-FOOTER_RUN_RE = re.compile(r"\b(?:ran|run)\s*[=:]?\s*([\d.]+)\s*(min|m|s)?\b")
+# The footer reads like `jobd: waited 2 min in queue, ran 4 min 39 s, exit 0`.
+# Durations are `N h`, `N min` and `N s` parts in any mix. A machine field
+# such as `wait=12 run=340` or `wait_s=12.5` (seconds) wins when present.
+FOOTER_KEY_RE = {
+    "wait": re.compile(r"\bwait(?:_s|_secs)?=([\d.]+)"),
+    "run": re.compile(r"\brun(?:_s|_secs)?=([\d.]+)"),
+}
+FOOTER_WORD_RE = {
+    "wait": re.compile(r"\bwait(?:ed)?\b((?:\s*[\d.]+\s*(?:h|min|m|s)\b,?)+)"),
+    "run": re.compile(r"\b(?:ran|run)\b((?:\s*[\d.]+\s*(?:h|min|m|s)\b,?)+)"),
+}
+DUR_PART_RE = re.compile(r"([\d.]+)\s*(h|min|m|s)\b")
+UNIT_SECS = {"h": 3600, "min": 60, "m": 60, "s": 1}
 
 
 def response_text(response):
@@ -493,20 +502,42 @@ def jobd_db():
     return sqlite3.connect(f"file:{JOBD_DB}?mode=ro", uri=True, timeout=0.5)
 
 
-def find_submitted(cwds, t0, t1):
-    """Request ids jobd took from these folders between t0 and t1."""
-    if not cwds:
-        return []
+def find_submitted(detached, command, t0, t1):
+    """Request ids this command submitted, from jobd's database.
+
+    A request counts when it came from a submit folder in the time window and
+    its command words appear in this command. When more requests match than
+    the command submitted, another agent in the same folder may own some, so
+    none are taken.
+    """
+    cwds = {d[2] for d in detached}
+    texts = [" ".join(command.split())]
+    with contextlib.suppress(ValueError):
+        texts.append(" ".join(shlex.split(command)))
     db = jobd_db()
     try:
         rows = db.execute(
-            "select id, cwd from requests where submitted between ? and ? "
+            "select id, cwd, argv from requests where submitted between ? and ? "
             "order by submitted",
             (t0 - 2, t1 + 2),
         ).fetchall()
     finally:
         db.close()
-    return [rid for rid, c in rows if c in cwds]
+    found = []
+    for rid, c, argv in rows:
+        if c not in cwds:
+            continue
+        try:
+            args = json.loads(argv)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(args, list) or not args:
+            continue
+        want = " ".join(str(a) for a in args)
+        if not any(want in t for t in texts):
+            continue
+        found.append(rid)
+    return found if len(found) <= len(detached) else []
 
 
 def times_from_db(rid):
@@ -531,9 +562,14 @@ def times_from_db(rid):
     return sub, end, min(run, total)
 
 
-def secs_of(m):
-    v = float(m.group(1))
-    return v * 60 if m.group(2) in ("min", "m") else v
+def footer_secs(line, key):
+    m = FOOTER_KEY_RE[key].search(line)
+    if m:
+        return float(m.group(1))
+    m = FOOTER_WORD_RE[key].search(line)
+    if not m:
+        return None
+    return sum(float(v) * UNIT_SECS[u] for v, u in DUR_PART_RE.findall(m.group(1)))
 
 
 def split_from_footer(log):
@@ -545,9 +581,9 @@ def split_from_footer(log):
     for line in reversed(tail.splitlines()):
         if not line.startswith("jobd:"):
             continue
-        w, r = FOOTER_WAIT_RE.search(line), FOOTER_RUN_RE.search(line)
-        if w and r:
-            return secs_of(w), secs_of(r)
+        wait, run = footer_secs(line, "wait"), footer_secs(line, "run")
+        if wait is not None and run is not None:
+            return wait, run
     return None
 
 
@@ -958,7 +994,7 @@ def record_jobs(payload, command, detached, t0, t1):
     ids = list(dict.fromkeys(RID_RE.findall(text)))
     if not ids:
         with contextlib.suppress(Exception):
-            ids = find_submitted({d[2] for d in detached}, t0, t1)
+            ids = find_submitted(detached, command, t0, t1)
     if not ids:
         return set()
     sid = payload.get("session_id")
@@ -993,7 +1029,9 @@ def record_jobs(payload, command, detached, t0, t1):
             save(path, state)
         except OSError:
             return set()
-    set_pending_mark(sid, True)
+        # Under the lock, so a finish that empties the list cannot clear
+        # the marker after this job was added.
+        set_pending_mark(sid, True)
     return set(ids)
 
 
@@ -1008,6 +1046,7 @@ def finish_jobs(sid, cwd, t1, skip):
             return [], []
         state = load(path)
         pending = state.get("pending") or {}
+        ended = []
         for rid in list(pending):
             job = pending[rid]
             if rid in skip:
@@ -1022,23 +1061,27 @@ def finish_jobs(sid, cwd, t1, skip):
                 del pending[rid]
                 continue
             del pending[rid]
-            wait, run, total, _ = finish_times(job, mtime)
+            ended.append((finish_times(job, mtime), rid, job))
+        # Oldest first, each judged at the time it ended, so jobs collected
+        # together are not taken for runs close in time.
+        ended.sort(key=lambda e: e[0][3])
+        for (wait, run, total, end), rid, job in ended:
             label = job.get("label")
             warn = None
             if label:
-                warn = slow_check(state, label, run, t1, job.get("small"))
+                warn = slow_check(state, label, run, end, job.get("small"), now_t=t1)
             if total < REPORT_SECS and not warn:
                 continue
             code = exit_code(job["exit"])
             what = label or "command"
-            ended = f"ended with exit {code}" if code is not None else "ended"
+            how = f"ended with exit {code}" if code is not None else "ended"
             if wait is not None:
                 text = (
-                    f"Job {rid} ({what}) {ended} after {fmt(total)}: "
+                    f"Job {rid} ({what}) {how} after {fmt(total)}: "
                     f"{fmt(wait)} waiting in the jobd queue, {fmt(run)} running."
                 )
             else:
-                text = f"Job {rid} ({what}) {ended} after {fmt(total)} since submit."
+                text = f"Job {rid} ({what}) {how} after {fmt(total)} since submit."
             notes.append(text)
             if warn:
                 notes.append(warn)
@@ -1061,7 +1104,7 @@ def finish_jobs(sid, cwd, t1, skip):
             save(path, state)
         except OSError:
             pass
-    set_pending_mark(sid, bool(pending))
+        set_pending_mark(sid, bool(pending))
     return notes, records
 
 
@@ -1100,11 +1143,15 @@ def update_snapshot(state, cwd):
     return small
 
 
-def slow_check(state, label, run_secs, t1, small):
-    slow = [r for r in state.get("slow", []) if t1 - r["end"] <= REPEAT_WINDOW]
+def slow_check(state, label, run_secs, t1, small, now_t=None):
+    """Warn on a slow run that ended at t1. now_t (default t1) is the time
+    of this hook call: runs older than the window before it are forgotten."""
+    now_t = t1 if now_t is None else now_t
+    kept = [r for r in state.get("slow", []) if now_t - r["end"] <= REPEAT_WINDOW]
     warn = None
     if run_secs >= SLOW_SECS:
-        slow.append({"end": t1, "secs": run_secs, "label": label})
+        kept.append({"end": t1, "secs": run_secs, "label": label})
+        slow = [r for r in kept if abs(t1 - r["end"]) <= REPEAT_WINDOW]
         reasons = []
         if small is not None and small < SMALL_DIFF_LINES:
             lines = "line" if small == 1 else "lines"
@@ -1126,7 +1173,7 @@ def slow_check(state, label, run_secs, t1, small):
                 "one project or crate, or a check-only build (such as cargo check). "
                 "Run the full suite once at the end, when the narrow run passes."
             )
-    state["slow"] = slow
+    state["slow"] = kept
     return warn
 
 
