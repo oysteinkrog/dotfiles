@@ -188,7 +188,6 @@ if [ -n "$native_linux" ]; then
     .config/voxtype/config.toml
     .config/voxtype/auto-enter-apps
     .config/systemd/user/dotoold.service.d
-    .config/hesuvi-fir
     .config/autostart/wezterm.desktop
     .config/autostart/agenda.desktop
     .config/autostart/buildqueue.desktop
@@ -232,8 +231,6 @@ if [ -n "$native_linux" ]; then
     .config/systemd/user/shader-wallpaper-theme-sync.path
     .config/systemd/user/shader-wallpaper-theme-sync.service
     .local/bin/streamcam-mic-enable
-    .local/bin/hesuvi
-    .local/share/applications/hesuvi.desktop
     .local/bin/streamcam-mic-resume-watch
     .local/bin/cass-maintenance.sh
     .local/bin/cass
@@ -257,11 +254,20 @@ if [ -n "$native_linux" ]; then
       link_one "$conf" "$HOME/.config/pipewire/filter-chain.conf.d/$(basename "$conf")"
     done
   fi
-  if [ -f "$host_dir/hesuvi.json" ]; then
+  # romklang (virtual surround and headphone EQ, github.com/oysteinkrog/romklang).
+  # Life's setup/work-repos.sh clones it to ~/projects/romklang.
+  if [ -x "$HOME/projects/romklang/install.sh" ]; then
     echo ""
-    echo "=== Linking the HeSuVi defaults for $host ==="
-    # Output device, HRIR and headphone EQ the hesuvi tool starts from (state.json overrides).
-    link_one "$host_dir/hesuvi.json" "$HOME/.config/hesuvi/defaults.json"
+    echo "=== Linking romklang ==="
+    "$HOME/projects/romklang/install.sh"
+    # Tracked headphone FIR filters (KZ ZSX AutoEq).
+    link_one "$dir/.config/romklang-fir" "$HOME/.config/romklang/fir"
+  fi
+  if [ -f "$host_dir/romklang.json" ]; then
+    echo ""
+    echo "=== Linking the romklang defaults for $host ==="
+    # Output device, HRIR and headphone EQ romklang starts from (state.json overrides).
+    link_one "$host_dir/romklang.json" "$HOME/.config/romklang/defaults.json"
   fi
   if [ -f "$host_dir/voxtype.toml" ]; then
     echo ""

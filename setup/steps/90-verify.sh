@@ -36,14 +36,15 @@ for conf in "${HOST_PIPEWIRE_CONFS[@]}"; do
   fi
   pw_check_conf "$l" "systemctl --user restart filter-chain; journalctl --user -u filter-chain"
 done
-# HeSuVi convolver (the hesuvi tool). The stable sink in filter-chain.conf.d feeds it.
-if [ -e "$HOME/.config/hesuvi/defaults.json" ]; then
-  if [ -d "$HOME/.local/share/hesuvi/hrir" ]; then ok "hesuvi HRIR data"
-  else fail "no HeSuVi data in ~/.local/share/hesuvi (hesuvi import <HeSuVi install dir>)"; fi
-  if [ -e "$HOME/.config/pipewire/hesuvi-eq.conf" ]; then
-    pw_check_conf "$HOME/.config/pipewire/hesuvi-eq.conf" "systemctl --user restart hesuvi-eq; journalctl --user -u hesuvi-eq"
+# romklang convolver (github.com/oysteinkrog/romklang). The stable sink in
+# filter-chain.conf.d feeds it.
+if [ -e "$HOME/.config/romklang/defaults.json" ]; then
+  if [ -d "$HOME/.local/share/romklang/hrir" ]; then ok "romklang HRIR data"
+  else fail "no HeSuVi data in ~/.local/share/romklang (romklang import <HeSuVi install dir>)"; fi
+  if [ -e "$HOME/.config/pipewire/romklang.conf" ]; then
+    pw_check_conf "$HOME/.config/pipewire/romklang.conf" "systemctl --user restart romklang; journalctl --user -u romklang"
   else
-    fail "~/.config/pipewire/hesuvi-eq.conf missing (systemctl --user enable --now hesuvi-eq)"
+    fail "~/.config/pipewire/romklang.conf missing (systemctl --user enable --now romklang)"
   fi
 fi
 # install.sh supports two layouts: ~/.claude linked whole, or a real dir with items linked.
