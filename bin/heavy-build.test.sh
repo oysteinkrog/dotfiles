@@ -1238,6 +1238,18 @@ check "untracked cap off: four scopes hold back 8 GiB (got '$out')" '[[ $out == 
 out=$(printf '%s\n' "$UC_F" "$UC_W" | ADM_UNTCAP=4 adm 0000000999500000000-2-m 0 1 12)
 check "untracked cap 4: the 28 GiB build starts (got '$out')" '[[ $out == start\|* ]]'
 check "untracked cap: the HEAVY_BUILD_UNT_GROW_CAP_GIB default is 4" 'grep -q "^  setting HEAVY_BUILD_UNT_GROW_CAP_GIB 4$" "$HB"'
+# 2026-11-05: leaked licence mocks (a few MB, hours old) held 4 GiB to come.
+# A small scope (UNT_SMALL_NOT_JOB) older than 600 s charges none; a fresh one
+# and a big one keep theirs. jobd tests/test_untcap.py has the same cases.
+UO_F=$(for n in 0 1 2 3; do echo "F run-p$n-i1.scope $((4 << 20)) 1000000 700 0 -"; done)
+UO_R="R b1 999000 2 1 1003000 $((2 << 30)) - 0 normal - cargo-test"  # not alone, so no solo pass
+UO_W33='W 0000000999500000000-2-m 999500 normal 33 1 60 -'
+out=$(printf '%s\n' "$UO_R" "$UO_F" "$UC_W" | ADM_UNTCAP=0 ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
+check "untracked old: four old small scopes charge nothing (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$UO_R" "$UC_F" "$UC_W" | ADM_UNTCAP=0 ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
+check "untracked old: fresh small scopes keep 8 GiB (got '$out')" '[[ $out == wait\|memory:*"8.0 still to come"* ]]'
+out=$(printf '%s\n' "$UO_R" "F run-p9-i1.scope $((1536 << 20)) 1000000 700 0 -" "$UO_F" "$UO_W33" | ADM_UNTCAP=0 ADM_UNTSMALL=1 adm 0000000999500000000-2-m 0 1 12)
+check "untracked old: an old big scope keeps its 2 GiB (got '$out')" '[[ $out == wait\|memory:*"2.0 still to come"* ]]'
 # Critical drain (HEAVY_BUILD_CRIT_DRAIN_SECS, 2026-10-30): a critical build
 # that waited 15 min holds back new high, normal and low builds, not critical ones.
 CD_C='W 0000000998000000000-1-c 998000 critical 38 2 600 -'
