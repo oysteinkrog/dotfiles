@@ -514,6 +514,35 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     rc, ctx, _ = run(claude("cargo test", 360, str(sup), sid="s22"), e)
     check("dirty submodule is not a small change", ctx == "Command took 6 min.", ctx)
 
+    # 23. --manifest-path points the snapshot at the tested repo.
+    e = env("st23")
+    run(
+        claude(
+            f"cargo test --manifest-path {repo}/Cargo.toml", 5, str(plain), sid="s23"
+        ),
+        e,
+    )
+    snaps = json.loads((tmp / "st23" / "s23.json").read_text())["snapshots"]
+    check("--manifest-path sets the build folder", str(repo) in snaps, snaps)
+
+    # 24. A submodule moved to another clean commit is not a small change.
+    (sub / "a.txt").write_text("".join(f"u {i}\n" for i in range(100)))
+    subprocess.run([*gs, "-C", str(sub), "commit", "-qam", "u"], check=True)
+    subprocess.run(
+        [*gs, "-C", str(sup / "mod"), "checkout", "-q", "--", "."], check=True
+    )
+    e = env("st24")
+    run(claude("cargo test", 20, str(sup), sid="s24"), e, now=T - 600)
+    subprocess.run(
+        [*gs, "-C", str(sup / "mod"), "-c", "protocol.file.allow=always", "pull", "-q"],
+        check=True,
+        capture_output=True,
+    )
+    rc, ctx, _ = run(claude("cargo test", 360, str(sup), sid="s24"), e)
+    check(
+        "new submodule commit is not a small change", ctx == "Command took 6 min.", ctx
+    )
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)
