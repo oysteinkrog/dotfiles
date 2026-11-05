@@ -85,6 +85,8 @@ SUB_VALUE_OPTS = {
 }
 DIRTY_SUB = ":dirty-submodule"
 DIR_OPTS = {"-C", "--prefix", "--cwd", "--dir"}
+FILE_OPTS = {"--manifest-path", "--project"}
+PROJECT_EXTS = (".sln", ".slnx", ".csproj", ".fsproj", ".vbproj", "Cargo.toml")
 QUEUE_HEADS = {"heavy-build", "job"}
 HB_VALUE_OPTS = {
     "--class",
@@ -236,14 +238,26 @@ def classify(command, cwd):
 
 
 def dir_option(bd, tokens, cwd):
-    """The folder a `-C`, `--prefix`, `--cwd` or `--dir` option names."""
-    for i, t in enumerate(tokens[:-1]):
-        if t in DIR_OPTS:
-            return bd.seg_mod.resolve_dir(bd.expand(tokens[i + 1]), cwd)
-    for t in tokens:
+    """The folder the build really runs in.
+
+    Follows `-C`, `--prefix`, `--cwd` and `--dir`, the folder of a
+    `--manifest-path` or `--project` file, and the folder of a project or
+    solution file given as an argument (dotnet test path/App.sln).
+    """
+    for i, t in enumerate(tokens):
         k, eq, v = t.partition("=")
-        if eq and k in DIR_OPTS and v:
-            return bd.seg_mod.resolve_dir(bd.expand(v), cwd)
+        if eq and v and k in DIR_OPTS | FILE_OPTS:
+            name, val = k, v
+        elif t in DIR_OPTS | FILE_OPTS and i + 1 < len(tokens):
+            name, val = t, tokens[i + 1]
+        elif t.endswith(PROJECT_EXTS) and not t.startswith("-"):
+            name, val = "--project", t
+        else:
+            continue
+        path = bd.seg_mod.resolve_dir(bd.expand(val), cwd)
+        if name in FILE_OPTS and not os.path.isdir(path):
+            return os.path.dirname(path)
+        return path
     return cwd
 
 
@@ -474,7 +488,14 @@ def changed_lines(top, old_tree, new_tree):
     if old_tree == new_tree:
         return 0
     total = 0
-    for line in git(top, "diff", "--numstat", old_tree, new_tree).splitlines():
+    out = git(top, "diff", "--raw", "--numstat", old_tree, new_tree)
+    for line in out.splitlines():
+        if line.startswith(":"):
+            # A changed submodule commit (mode 160000) hides an unknown
+            # amount of source change behind a one-line gitlink.
+            if "160000" in line.split("\t", 1)[0].split()[:2]:
+                return None
+            continue
         parts = line.split("\t", 2)
         if len(parts) == 3:
             if not (parts[0].isdigit() and parts[1].isdigit()):
