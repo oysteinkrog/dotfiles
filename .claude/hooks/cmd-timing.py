@@ -207,6 +207,7 @@ def classify(command, cwd):
     label = None
     build_cwd = cwd
     queue_cwds = []
+    detached = []
     stack = []
     for raw in bd.seg_mod.split_segments(command, blanked):
         body = raw.strip()
@@ -221,6 +222,8 @@ def classify(command, cwd):
                 tokens = shlex.split(seg, comments=True)
             except ValueError:
                 tokens = None
+        if seg:
+            detached.extend(detached_in(bd, seg, cwd))
         if tokens and tokens[0] == "cd":
             target = tokens[1] if len(tokens) > 1 else os.path.expanduser("~")
             if target != "-":
@@ -235,7 +238,43 @@ def classify(command, cwd):
         for _ in range(closed):
             if stack:
                 cwd = stack.pop()
-    return label, build_cwd, queue_cwds
+    return label, build_cwd, queue_cwds, detached
+
+
+DETACH_RE = re.compile(
+    r"(?:^|[\s;&|(<`$])((?:\S*/)?(?:job\s+submit|heavy-build)\b[^;&|)`\n]*)"
+)
+
+
+def detached_in(bd, seg, cwd):
+    """Detached queue submits in one segment, as [(label, build folder, cwd)].
+
+    Matches `job submit --detach ... -- CMD` and `heavy-build --detach ...`
+    anywhere in the segment, so `id=$(job submit --detach -- ...)` and
+    `read id log ex < <(job submit --detach ...)` count too.
+    """
+    found = []
+    for m in DETACH_RE.finditer(seg):
+        try:
+            tokens = shlex.split(m.group(1), comments=True)
+        except ValueError:
+            # Cut off inside a quoted string, as in `bash -lc 'job submit ...'`.
+            tokens = m.group(1).replace("'", " ").replace('"', " ").split()
+        if not tokens:
+            continue
+        opts = tokens[: tokens.index("--")] if "--" in tokens else tokens
+        if "--detach" not in opts:
+            continue
+        label = None
+        run_cwd = cwd
+        try:
+            label = classify_tokens(bd, tokens, cwd)
+            if label:
+                run_cwd = dir_option(bd, unwrap_queue(tokens), cwd)
+        except Exception:
+            label = None
+        found.append((label, run_cwd, cwd))
+    return found
 
 
 def cmake_source(build_dir):
@@ -411,6 +450,157 @@ def jobd_split(cwd, t0, t1):
         wait += total - ran
         n += 1
     return wait, run, n, seen
+
+
+# --- detached jobd jobs ---------------------------------------------------------
+
+RID_RE = re.compile(r"\b(\d{19}-\d+-[0-9a-f]{8})\b")
+JOBD_DB = os.environ.get("CMD_TIMING_JOBD_DB") or os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}",
+    "jobd.state",
+    "jobd.db",
+)
+JOBD_LOGS = os.environ.get("CMD_TIMING_JOBD_LOGS") or os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+    "jobd",
+    "logs",
+)
+PENDING_MAX = 2 * 86400
+FOOTER_TAIL = 8192
+# `jobd: waited 12 s, ran 340 s` or `jobd: wait=12 run=340` (seconds; a
+# trailing `min` unit is also read).
+FOOTER_WAIT_RE = re.compile(r"\bwait(?:ed)?\s*[=:]?\s*([\d.]+)\s*(min|m|s)?\b")
+FOOTER_RUN_RE = re.compile(r"\b(?:ran|run)\s*[=:]?\s*([\d.]+)\s*(min|m|s)?\b")
+
+
+def response_text(response):
+    """The text output of a tool call, for Claude Code and Codex payloads."""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        parts = []
+        for k in ("stdout", "output", "aggregated_output", "formatted_output"):
+            v = response.get(k)
+            if isinstance(v, str):
+                parts.append(v)
+        return "\n".join(parts)
+    return ""
+
+
+def jobd_db():
+    import sqlite3
+
+    return sqlite3.connect(f"file:{JOBD_DB}?mode=ro", uri=True, timeout=0.5)
+
+
+def find_submitted(cwds, t0, t1):
+    """Request ids jobd took from these folders between t0 and t1."""
+    if not cwds:
+        return []
+    db = jobd_db()
+    try:
+        rows = db.execute(
+            "select id, cwd from requests where submitted between ? and ? "
+            "order by submitted",
+            (t0 - 2, t1 + 2),
+        ).fetchall()
+    finally:
+        db.close()
+    return [rid for rid, c in rows if c in cwds]
+
+
+def times_from_db(rid):
+    """(submitted, ended, run_secs) from jobd's database, or None."""
+    db = jobd_db()
+    try:
+        r = db.execute(
+            "select submitted, ended from requests where id = ?", (rid,)
+        ).fetchone()
+        if not r or r[0] is None or r[1] is None:
+            return None
+        sub, end = float(r[0]), float(r[1])
+        run = 0.0
+        for st, en in db.execute(
+            "select started, ended from attempts where request = ? and started is not null",
+            (rid,),
+        ):
+            run += max(0.0, float(en if en is not None else end) - float(st))
+    finally:
+        db.close()
+    total = max(0.0, end - sub)
+    return sub, end, min(run, total)
+
+
+def secs_of(m):
+    v = float(m.group(1))
+    return v * 60 if m.group(2) in ("min", "m") else v
+
+
+def split_from_footer(log):
+    """(wait, run) from a `jobd:` line at the end of the job log, or None."""
+    with open(log, "rb") as f:
+        f.seek(0, 2)
+        f.seek(max(0, f.tell() - FOOTER_TAIL))
+        tail = f.read().decode("utf-8", "replace")
+    for line in reversed(tail.splitlines()):
+        if not line.startswith("jobd:"):
+            continue
+        w, r = FOOTER_WAIT_RE.search(line), FOOTER_RUN_RE.search(line)
+        if w and r:
+            return secs_of(w), secs_of(r)
+    return None
+
+
+def job_paths(rid, text):
+    """The log and exit file `job submit --detach` printed for rid."""
+    m = re.search(re.escape(rid) + r"\s+(\S+\.log)\s+(\S+\.exit)", text)
+    if m:
+        return m.group(1), m.group(2)
+    return os.path.join(JOBD_LOGS, rid + ".log"), os.path.join(JOBD_LOGS, rid + ".exit")
+
+
+def finish_times(job, exit_mtime):
+    """(wait or None, run, total, end) for a finished job.
+
+    jobd's database first, then the `jobd:` footer in the log, then the time
+    from submit to the exit file, all of it counted as run time.
+    """
+    with contextlib.suppress(Exception):
+        t = times_from_db(job["id"])
+        if t:
+            sub, end, run = t
+            return (end - sub) - run, run, end - sub, end
+    total = max(0.0, exit_mtime - job["submit"])
+    with contextlib.suppress(Exception):
+        split = split_from_footer(job["log"])
+        if split:
+            wait, run = split
+            return wait, run, wait + run, exit_mtime
+    return None, total, total, exit_mtime
+
+
+def exit_code(path):
+    try:
+        with open(path) as f:
+            return f.read(64).strip().split()[0]
+    except (OSError, IndexError):
+        return None
+
+
+def pending_mark(sid):
+    return STATE / "pending" / safe(sid)
+
+
+def set_pending_mark(sid, on):
+    p = pending_mark(sid)
+    try:
+        if on:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+        else:
+            p.unlink()
+    except OSError:
+        pass
 
 
 # --- working tree snapshot ----------------------------------------------------
@@ -594,6 +784,7 @@ def prune():
     cut = time.time() - PRUNE_SECS
     old = list(STATE.glob("*.json")) + list(STATE.glob("*.lock"))
     old += list(STATE.glob("index.*")) + list(STATE.glob("start/*/*"))
+    old += list(STATE.glob("pending/*"))
     for p in old:
         try:
             if p.stat().st_mtime < cut:
@@ -639,33 +830,57 @@ def elapsed_of(payload):
 
 
 def post_tool_use(payload):
+    """Return (text for the agent or None, records for notes.jsonl)."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
-        return None
+        return None, []
     command = tool_input.get("command") or tool_input.get("cmd")
     if isinstance(command, list):
-        command = shlex.join(str(c) for c in command)
+        # Codex exec form: ["bash", "-lc", "CMD"] runs CMD.
+        if (
+            len(command) == 3
+            and os.path.basename(str(command[0])) in ("bash", "sh", "zsh")
+            and command[1] in ("-c", "-lc")
+        ):
+            command = str(command[2])
+        else:
+            command = shlex.join(str(c) for c in command)
     if not isinstance(command, str) or not command.strip():
-        return None
-    if isinstance(tool_input, dict) and tool_input.get("run_in_background"):
-        return None
-    # A foreground call that hit its time limit and moved to the background
-    # is still running, so its time so far says nothing about the build.
-    response = payload.get("tool_response")
-    if isinstance(response, dict) and response.get("backgroundTaskId"):
-        return None
-    elapsed = elapsed_of(payload)
-    if elapsed is None:
-        return None
+        return None, []
+    sid = payload.get("session_id")
     cwd = tool_input.get("workdir") or payload.get("cwd") or os.getcwd()
+    # A background call, or a foreground call that hit its time limit and
+    # moved to the background, is still running: its time so far says
+    # nothing. Detached jobs it finished are still reported.
+    response = payload.get("tool_response")
+    background = bool(tool_input.get("run_in_background")) or (
+        isinstance(response, dict) and bool(response.get("backgroundTaskId"))
+    )
+    elapsed = None if background else elapsed_of(payload)
     t1 = now()
-    t0 = t1 - elapsed
+    notes, records, submitted = [], [], set()
+    if elapsed is not None:
+        notes, records, submitted = timed_notes(payload, command, cwd, elapsed, t1)
+    try:
+        jn, jr = finish_jobs(sid, cwd, t1, submitted)
+        notes += jn
+        records += jr
+    except Exception:
+        pass
+    if not notes:
+        return None, records
+    return " ".join(notes), records
 
+
+def timed_notes(payload, command, cwd, elapsed, t1):
+    """Notes on the command just run, and the jobs it submitted detached."""
+    t0 = t1 - elapsed
     label = None
     run_cwd = cwd
     queue_cwds = []
+    detached = []
     try:
-        label, run_cwd, queue_cwds = classify(command, cwd)
+        label, run_cwd, queue_cwds, detached = classify(command, cwd)
     except Exception:
         label = None
 
@@ -701,13 +916,153 @@ def post_tool_use(payload):
         else:
             notes.append(f"Command took {fmt(elapsed)}.")
 
-    if label:
+    submitted = set()
+    warn = None
+    if detached:
+        # The job runs later, so its time is judged when it ends. Only the
+        # working tree is recorded now.
+        try:
+            submitted = record_jobs(payload, command, detached, t0, t1)
+        except Exception:
+            submitted = set()
+    elif label:
         warn = track_build(payload, label, run_cwd or cwd, run_secs, t1)
         if warn:
             notes.append(warn)
-    if not notes:
-        return None
-    return " ".join(notes)
+    records = []
+    if notes:
+        records.append(
+            record(payload, cwd, "command", label, elapsed, bool(warn), None, t1)
+        )
+    return notes, records, submitted
+
+
+def record(payload, cwd, kind, label, secs, warned, job, t1, **extra):
+    r = {
+        "ts": round(t1, 3),
+        "session": payload.get("session_id"),
+        "cwd": cwd,
+        "kind": kind,
+        "class": label,
+        "secs": round(secs, 1),
+        "warned": warned,
+        "job": job,
+    }
+    r.update(extra)
+    return r
+
+
+def record_jobs(payload, command, detached, t0, t1):
+    """Save the jobs this command submitted with --detach as pending."""
+    text = response_text(payload.get("tool_response"))
+    ids = list(dict.fromkeys(RID_RE.findall(text)))
+    if not ids:
+        with contextlib.suppress(Exception):
+            ids = find_submitted({d[2] for d in detached}, t0, t1)
+    if not ids:
+        return set()
+    sid = payload.get("session_id")
+    path = STATE / f"{safe(sid)}.json"
+    with locked(path) as ok:
+        if not ok:
+            return set()
+        state = load(path)
+        labelled = [d for d in detached if d[0]]
+        small = update_snapshot(state, labelled[0][1]) if labelled else None
+        pending = state.setdefault("pending", {})
+        for i, rid in enumerate(ids):
+            if rid in pending:
+                continue
+            label, run_cwd, _ = detached[min(i, len(detached) - 1)]
+            log, ex = job_paths(rid, text)
+            try:
+                sub = int(rid.split("-", 1)[0]) / 1e9
+            except ValueError:
+                sub = t1
+            pending[rid] = {
+                "id": rid,
+                "submit": sub,
+                "label": label,
+                "cwd": run_cwd,
+                "cmd": command[:300],
+                "small": small if label else None,
+                "log": log,
+                "exit": ex,
+            }
+        try:
+            save(path, state)
+        except OSError:
+            return set()
+    set_pending_mark(sid, True)
+    return set(ids)
+
+
+def finish_jobs(sid, cwd, t1, skip):
+    """Report detached jobs of this session that have ended, once each."""
+    if not pending_mark(sid).exists():
+        return [], []
+    path = STATE / f"{safe(sid)}.json"
+    notes, records = [], []
+    with locked(path) as ok:
+        if not ok:
+            return [], []
+        state = load(path)
+        pending = state.get("pending") or {}
+        for rid in list(pending):
+            job = pending[rid]
+            if rid in skip:
+                continue
+            try:
+                mtime = os.stat(job["exit"]).st_mtime
+            except OSError:
+                if t1 - job.get("submit", 0) > PENDING_MAX:
+                    del pending[rid]
+                continue
+            except (KeyError, TypeError):
+                del pending[rid]
+                continue
+            del pending[rid]
+            wait, run, total, _ = finish_times(job, mtime)
+            label = job.get("label")
+            warn = None
+            if label:
+                warn = slow_check(state, label, run, t1, job.get("small"))
+            if total < REPORT_SECS and not warn:
+                continue
+            code = exit_code(job["exit"])
+            what = label or "command"
+            ended = f"ended with exit {code}" if code is not None else "ended"
+            if wait is not None:
+                text = (
+                    f"Job {rid} ({what}) {ended} after {fmt(total)}: "
+                    f"{fmt(wait)} waiting in the jobd queue, {fmt(run)} running."
+                )
+            else:
+                text = f"Job {rid} ({what}) {ended} after {fmt(total)} since submit."
+            notes.append(text)
+            if warn:
+                notes.append(warn)
+            records.append(
+                record(
+                    {"session_id": sid},
+                    cwd,
+                    "job",
+                    label,
+                    total,
+                    bool(warn),
+                    rid,
+                    t1,
+                    run=round(run, 1),
+                    wait=None if wait is None else round(wait, 1),
+                )
+            )
+        state["pending"] = pending
+        try:
+            save(path, state)
+        except OSError:
+            pass
+    set_pending_mark(sid, bool(pending))
+    return notes, records
 
 
 def track_build(payload, label, cwd, run_secs, t1):
@@ -715,29 +1070,37 @@ def track_build(payload, label, cwd, run_secs, t1):
     with locked(path) as ok:
         if not ok:
             return None
-        return track_build_locked(path, label, cwd, run_secs, t1)
+        state = load(path)
+        small = update_snapshot(state, cwd)
+        warn = slow_check(state, label, run_secs, t1, small)
+        try:
+            save(path, state)
+        except OSError:
+            pass
+        return warn
 
 
-def track_build_locked(path, label, cwd, run_secs, t1):
-    state = load(path)
+def update_snapshot(state, cwd):
+    """Record the working tree of cwd; return lines changed since the last."""
     try:
         top, snap = snapshot(cwd)
     except Exception:
         # The tree may have changed without a record, so no earlier
         # snapshot can stand in for the previous run any more.
-        top, snap = None, None
         state["snapshots"] = {}
-
+        return None
     small = None
-    if top and snap:
-        prev = (state.get("snapshots") or {}).get(top)
-        if isinstance(prev, str) and prev:
-            try:
-                small = changed_lines(top, prev, snap)
-            except Exception:
-                small = None
-        state.setdefault("snapshots", {})[top] = snap
+    prev = (state.get("snapshots") or {}).get(top)
+    if isinstance(prev, str) and prev:
+        try:
+            small = changed_lines(top, prev, snap)
+        except Exception:
+            small = None
+    state.setdefault("snapshots", {})[top] = snap
+    return small
 
+
+def slow_check(state, label, run_secs, t1, small):
     slow = [r for r in state.get("slow", []) if t1 - r["end"] <= REPEAT_WINDOW]
     warn = None
     if run_secs >= SLOW_SECS:
@@ -764,11 +1127,28 @@ def track_build_locked(path, label, cwd, run_secs, t1):
                 "Run the full suite once at the end, when the narrow run passes."
             )
     state["slow"] = slow
-    try:
-        save(path, state)
-    except OSError:
-        pass
     return warn
+
+
+NOTES_MAX = int(os.environ.get("CMD_TIMING_NOTES_MAX") or 10 * 1024 * 1024)
+
+
+def append_notes(records):
+    """Append records to notes.jsonl; keep one old file past NOTES_MAX."""
+    if not records:
+        return
+    path = STATE / "notes.jsonl"
+    with contextlib.suppress(OSError):
+        STATE.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            if path.stat().st_size > NOTES_MAX:
+                os.replace(path, STATE / "notes.jsonl.1")
+        data = "".join(json.dumps(r) + "\n" for r in records).encode()
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
 
 
 def main():
@@ -782,7 +1162,9 @@ def main():
         return 0
     if event not in ("PostToolUse", "PostToolUseFailure"):
         return 0
-    text = post_tool_use(payload)
+    text, records = post_tool_use(payload)
+    with contextlib.suppress(Exception):
+        append_notes(records)
     if text:
         print(
             json.dumps(

@@ -571,6 +571,340 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     rc, ctx, _ = run(claude("npm ci", 360, str(repo), sid="s28"), e)
     check("npm ci is not a build", ctx == "Command took 6 min.", ctx)
 
+    # --- detached jobd jobs (job submit --detach) ---
+    import sqlite3
+
+    jlogs = tmp / "jobd-logs"
+    jlogs.mkdir()
+    jdb = tmp / "jobd.db"
+    db = sqlite3.connect(jdb)
+    db.executescript(
+        "create table requests (id text primary key, argv text, cwd text,"
+        " submitted real, ended real, state text);"
+        "create table attempts (id text primary key, request text,"
+        " started real, ended real);"
+    )
+    db.commit()
+
+    def jenv(state, **kw):
+        e = env(state)
+        e.update(CMD_TIMING_JOBD_DB=str(jdb), CMD_TIMING_JOBD_LOGS=str(jlogs), **kw)
+        return e
+
+    def job_id(sub, n):
+        return f"{int(sub * 1e9)}-{1000 + n}-{n:08x}"
+
+    def submit_out(rid):
+        return f"{rid} {jlogs}/{rid}.log {jlogs}/{rid}.exit\n"
+
+    def finish(rid, end, code="0", log=""):
+        (jlogs / f"{rid}.log").write_text(log)
+        ex = jlogs / f"{rid}.exit"
+        ex.write_text(code + "\n")
+        os.utime(ex, (end, end))
+
+    def db_row(rid, cwd, sub, end, starts):
+        db.execute(
+            "insert into requests values (?, '[]', ?, ?, ?, ?)",
+            (rid, cwd, sub, end, "done" if end else "waiting"),
+        )
+        for i, (a, b) in enumerate(starts):
+            db.execute(
+                "insert into attempts values (?, ?, ?, ?)", (f"{rid}-a{i}", rid, a, b)
+            )
+        db.commit()
+
+    def notes_of(state):
+        p = tmp / state / "notes.jsonl"
+        if not p.exists():
+            return []
+        return [json.loads(x) for x in p.read_text().splitlines()]
+
+    def pending_of(state, sid):
+        p = tmp / state / f"{sid}.json"
+        return json.loads(p.read_text()).get("pending", {}) if p.exists() else {}
+
+    def with_out(payload, out):
+        payload["tool_response"] = {"stdout": out}
+        return payload
+
+    poll = "until [ -f {x} ]; do sleep 20; done"
+
+    # J1. Detached cargo test after a 3-line change, waited for by a poll
+    # loop: the job note gives jobd's wait/run split and the slow-loop
+    # warning fires; both land in notes.jsonl.
+    e = jenv("sj1")
+    src.write_text("".join(f"base {i}\n" for i in range(100)))
+    run(claude("cargo test", 20, str(repo), sid="j1"), e, now=T - 3000)
+    src.write_text("".join(f"base {i}{'y' if i < 3 else ''}\n" for i in range(100)))
+    sub = T - 1600
+    rid = job_id(sub, 1)
+    rc, ctx, _ = run(
+        with_out(
+            claude(
+                "job submit --detach -- cargo test --workspace", 1, str(repo), sid="j1"
+            ),
+            submit_out(rid),
+        ),
+        e,
+        now=sub + 1,
+    )
+    check("detached submit is silent", ctx == "", ctx)
+    pend = pending_of("sj1", "j1")
+    check(
+        "detached submit is recorded",
+        rid in pend
+        and pend[rid]["label"] == "cargo test"
+        and pend[rid]["small"] == 6
+        and pend[rid]["exit"] == f"{jlogs}/{rid}.exit",
+        pend,
+    )
+    check("pending marker is set", (tmp / "sj1" / "pending" / "j1").exists())
+    db_row(rid, str(repo), sub, sub + 1560, [(sub + 1200, sub + 1560)])
+    finish(rid, sub + 1560, code="100")
+    rc, ctx, _ = run(
+        claude(poll.format(x=f"{jlogs}/{rid}.exit"), 1500, str(repo), sid="j1"), e
+    )
+    check(
+        "ended job reports the jobd split",
+        f"Job {rid} (cargo test) ended with exit 100 after 26 min: "
+        "20 min waiting in the jobd queue, 6 min running." in ctx,
+        ctx,
+    )
+    check(
+        "ended job feeds the slow-loop check",
+        "Slow test loop: cargo test ran 6 min after a change of only 6 lines" in ctx,
+        ctx,
+    )
+    check("marker is cleared", not (tmp / "sj1" / "pending" / "j1").exists())
+    recs = notes_of("sj1")
+    jobrec = [r for r in recs if r["kind"] == "job"]
+    check(
+        "notes.jsonl has the job record",
+        len(jobrec) == 1
+        and jobrec[0]["job"] == rid
+        and jobrec[0]["warned"] is True
+        and jobrec[0]["class"] == "cargo test"
+        and jobrec[0]["session"] == "j1"
+        and jobrec[0]["secs"] == 1560
+        and jobrec[0]["run"] == 360,
+        recs,
+    )
+    check(
+        "notes.jsonl has the command record",
+        any(r["kind"] == "command" and r["secs"] == 1500 for r in recs),
+        recs,
+    )
+
+    # J2. The job is reported once.
+    rc, ctx, _ = run(claude(f"job wait {rid}", 40, str(repo), sid="j1"), e, now=T + 5)
+    check("job is reported once", "Job " not in ctx, ctx)
+
+    # J3. Not ended yet: no note, still pending, and a short plain command
+    # still reaches Python (it would otherwise take the bash fast path).
+    e = jenv("sj3")
+    sub = T - 400
+    rid3 = job_id(sub, 3)
+    run(
+        with_out(
+            claude("job submit --detach -- cargo build", 1, str(plain), sid="j3"),
+            submit_out(rid3),
+        ),
+        e,
+        now=sub + 1,
+    )
+    rc, ctx, _ = run(claude("ls", 1, str(plain), sid="j3"), e)
+    check("running job gives no note", ctx == "", ctx)
+    check("running job stays pending", rid3 in pending_of("sj3", "j3"))
+    finish(rid3, T - 10)
+    rc, ctx, _ = run(claude("ls", 1, str(plain), sid="j3"), e)
+    check(
+        "short plain command reports the ended job",
+        ctx
+        == f"Job {rid3} (cargo build) ended with exit 0 after 6 min 30 s since submit.",
+        ctx,
+    )
+
+    # J4. No database row: the jobd: footer in the log gives the split.
+    for n, footer, want in [
+        (
+            4,
+            "jobd: waited 400 s, ran 290 s",
+            "6 min 40 s waiting in the jobd queue, 4 min 50 s running",
+        ),
+        (
+            41,
+            "jobd: wait=60 run=630",
+            "1 min waiting in the jobd queue, 10 min 30 s running",
+        ),
+    ]:
+        e = jenv(f"sj{n}")
+        sub = T - 700
+        r = job_id(sub, n)
+        run(
+            with_out(
+                claude("job submit --detach -- cargo test", 1, str(plain), sid="j4"),
+                submit_out(r),
+            ),
+            e,
+            now=sub + 1,
+        )
+        finish(r, T - 5, log=f"test result: ok\n{footer}\n")
+        rc, ctx, _ = run(claude(f"tail {jlogs}/{r}.log", 1, str(plain), sid="j4"), e)
+        check(f"footer {footer!r} gives the split", want in ctx, ctx)
+
+    # J5. Without a split the whole time since submit counts as run time,
+    # so two slow detached runs within 30 min warn.
+    e = jenv("sj5")
+    for n, (sub, end) in enumerate([(T - 1500, T - 1100), (T - 800, T - 400)]):
+        r = job_id(sub, 50 + n)
+        run(
+            with_out(
+                claude(
+                    "job submit --detach -- dotnet test A.sln", 1, str(plain), sid="j5"
+                ),
+                submit_out(r),
+            ),
+            e,
+            now=sub + 1,
+        )
+        finish(r, end)
+        rc, ctx, _ = run(
+            claude(f"job wait {r}", 400, str(plain), sid="j5"), e, now=end + 1
+        )
+    check(
+        "second slow detached job warns",
+        "Slow test loop: dotnet test ran 6 min 40 s, and it is slow run 2 in the last 30 min"
+        in ctx,
+        ctx,
+    )
+
+    # J6. Output piped away: the id comes from jobd's database, by folder and
+    # submit time.
+    e = jenv("sj6")
+    sub = T - 900
+    rid6 = job_id(sub, 6)
+    db_row(rid6, str(plain), sub + 0.5, None, [])
+    run(
+        claude(
+            "job submit --detach -- cargo test >/dev/null 2>&1", 2, str(plain), sid="j6"
+        ),
+        e,
+        now=sub + 2,
+    )
+    check("id found in jobd's database", rid6 in pending_of("sj6", "j6"))
+
+    # J7. Command substitution and other forms are detected.
+    e = jenv("sj7")
+    sub = T - 100
+    (plain / "sub").mkdir(exist_ok=True)
+    for n, cmd in enumerate(
+        [
+            "id=$(job submit --detach -- cargo test | cut -d' ' -f1); echo $id",
+            "read id log ex < <(job submit --detach -- cargo nextest run); echo $id",
+            "cd sub && ~/.local/bin/job submit --class app-run --detach -- make test",
+            "job submit --detach -- cargo test 2>&1 | tail -1",
+        ]
+    ):
+        r = job_id(sub, 70 + n)
+        run(
+            with_out(claude(cmd, 1, str(plain), sid=f"j7{n}"), r + "\n"), e, now=sub + 1
+        )
+        pend = pending_of("sj7", f"j7{n}")
+        check(
+            f"detached form {n} is detected with a class",
+            r in pend and bool(pend[r].get("label")),
+            (cmd, pend),
+        )
+
+    # J7b. A foreground submit is not a detached job.
+    e = jenv("sj7b")
+    r = job_id(sub, 79)
+    run(
+        with_out(
+            claude("job submit -- cargo test", 1, str(plain), sid="j7b"), r + "\n"
+        ),
+        e,
+        now=sub + 1,
+    )
+    check("foreground submit is not pending", not pending_of("sj7b", "j7b"))
+
+    # J8. A job under 30 s is cleared without a note.
+    e = jenv("sj8")
+    sub = T - 20
+    r8 = job_id(sub, 8)
+    run(
+        with_out(
+            claude("job submit --detach -- cargo check", 1, str(plain), sid="j8"),
+            submit_out(r8),
+        ),
+        e,
+        now=sub + 1,
+    )
+    finish(r8, T - 5)
+    rc, ctx, _ = run(claude("ls", 1, str(plain), sid="j8"), e)
+    check("short job gives no note", ctx == "", ctx)
+    check("short job is cleared", not pending_of("sj8", "j8"))
+
+    # J9. A job that never ends is dropped after 2 days.
+    e = jenv("sj9")
+    sub = T - 3 * 86400
+    r9 = job_id(sub, 9)
+    run(
+        with_out(
+            claude("job submit --detach -- cargo test", 1, str(plain), sid="j9"),
+            submit_out(r9),
+        ),
+        e,
+        now=sub + 1,
+    )
+    run(claude("ls", 1, str(plain), sid="j9"), e)
+    check(
+        "stale pending job is dropped",
+        not pending_of("sj9", "j9") and not (tmp / "sj9" / "pending" / "j9").exists(),
+    )
+
+    # J10. Codex: no duration_ms, the output is a plain string.
+    e = jenv("sj10")
+    sub = T - 50
+    r10 = job_id(sub, 10)
+    pre = {
+        "session_id": "j10",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "shell",
+        "tool_input": {"command": ["bash", "-lc", "job submit --detach -- cargo test"]},
+        "tool_use_id": "call_1",
+        "cwd": str(plain),
+    }
+    run(pre, e, now=sub)
+    post = dict(pre, hook_event_name="PostToolUse", tool_response=submit_out(r10))
+    run(post, e, now=sub + 1)
+    check("Codex detached submit is recorded", r10 in pending_of("sj10", "j10"))
+
+    # J11. notes.jsonl rotates past its cap.
+    e = jenv("sj11", CMD_TIMING_NOTES_MAX="200")
+    for i in range(4):
+        run(claude("ls -la", 45, str(plain), sid="j11"), e, now=T + i)
+    n1 = tmp / "sj11" / "notes.jsonl"
+    n2 = tmp / "sj11" / "notes.jsonl.1"
+    check(
+        "notes.jsonl rotates",
+        n2.exists() and n1.stat().st_size <= 600,
+        (n1.stat().st_size, n2.exists()),
+    )
+
+    # J12. A plain command over 30 s logs one record with warned false.
+    recs = notes_of("sj11")
+    check(
+        "plain note record",
+        bool(recs)
+        and recs[-1]["kind"] == "command"
+        and recs[-1]["warned"] is False
+        and recs[-1]["class"] is None
+        and recs[-1]["job"] is None,
+        recs,
+    )
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)
