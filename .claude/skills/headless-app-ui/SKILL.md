@@ -38,6 +38,9 @@ screen was locked.
 - Each instance needs its own `XDG_CACHE_HOME`, set before KWin or the app starts
   (`headless-scope.sh` does this for you). A shared `~/.cache/ksycoca6_*` file makes
   the real KWin rebuild it on its main thread and freezes the desktop (2026-11-03).
+- `headless-scope.sh` starts `dbus-run-session` with a session bus that has no system
+  D-Bus services (no portal, no keyring), and turns core dumps off in the scope. Set
+  `HEADLESS_SCOPE_SYSTEM_SERVICES=1` to get the normal bus back.
 - Stop only what you started: your own Xvfb or compositor, broker and wineserver,
   by the PID you recorded. Never `pkill wine`, `pkill kwin_wayland` or
   `pkill Xvfb`. The real desktop runs `kwin_wayland --socket wayland-0`, and other
