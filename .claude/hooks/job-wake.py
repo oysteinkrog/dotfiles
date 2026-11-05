@@ -145,6 +145,26 @@ def has_tty(pid):
     return False
 
 
+# Claude CLI options that take no value, as they appear before --input-format.
+BOOL_FLAGS = {
+    "-p",
+    "--print",
+    "--verbose",
+    "-c",
+    "--continue",
+    "-d",
+    "--debug",
+    "--dangerously-skip-permissions",
+    "--allow-dangerously-skip-permissions",
+    "--strict-mcp-config",
+    "--bare",
+    "--include-partial-messages",
+    "--replay-user-messages",
+    "--fork-session",
+    "--ide",
+}
+
+
 def classify_argv(argv, tty):
     """Session kind from a claude argv. Only options before a bare `--`
     count, so prompt text after it cannot pass for a flag. A combined short
@@ -155,11 +175,20 @@ def classify_argv(argv, tty):
     printing = any(
         a == "--print" or (re.match(r"^-[A-Za-z]+$", a) and "p" in a) for a in opts
     )
-    stream = any(
-        a == "--input-format=stream-json"
-        or (a == "--input-format" and opts[i + 1 : i + 2] == ["stream-json"])
-        for i, a in enumerate(opts)
-    )
+    # The last --input-format wins. It counts only when the token before it
+    # is not an option that may take it as its value (--system-prompt X).
+    fmt_at, value = 0, None
+    for i, a in enumerate(opts):
+        if a.startswith("--input-format="):
+            fmt_at, value = i, a.split("=", 1)[1]
+        elif a == "--input-format":
+            fmt_at, value = i, (opts[i + 1] if i + 1 < len(opts) else None)
+    stream = value == "stream-json"
+    if stream and fmt_at > 0:
+        prev = opts[fmt_at - 1]
+        if prev.startswith("-") and "=" not in prev and prev not in BOOL_FLAGS:
+            if not re.match(r"^-[A-Za-z]+$", prev):
+                return "unknown"
     if printing:
         return "async" if stream else "print"
     if stream:
@@ -261,15 +290,15 @@ def log_lines(path):
         with f:
             f.seek(0, 2)
             size = f.tell()
-            f.seek(max(0, size - 64 * 1024))
-            return f.read().decode("utf8", "replace").splitlines()
+            off = max(0, size - 64 * 1024)
+            f.seek(off)
+            return f.read(size - off).decode("utf8", "replace").splitlines()
     except OSError:
         return []
 
 
-def report(job, code, waited, tail_lines=TAIL_LINES, width=300):
+def report(job, code, waited, lines, tail_lines=TAIL_LINES, width=300):
     rid, log, _exit, cmd = job
-    lines = log_lines(log)
     lines = [CTRL.sub("", ln) for ln in lines]
     # jobd appends its footer last, so only trailing "jobd: " lines count.
     n = len(lines)
@@ -537,22 +566,29 @@ def main(rec):
     timed_out = False
     first = None  # (code, exit mtime) of the first job to end
     bad_since = {}
+    bad_notes = []
     while pending:
         for job in list(pending):
             got = read_exit(job[2])
             if got == "bad":
                 t0 = bad_since.setdefault(job[0], time.monotonic())
                 if time.monotonic() - t0 > BAD_EXIT_SECS:
-                    # Not a write in progress: give up quietly (fail open).
-                    rec["outcome"] = "error"
+                    # Not a write in progress: stop watching this job.
+                    pending.remove(job)
                     rec["error"] = "unreadable exit file"
-                    return 0
+                    note = (
+                        "job-wake could not read the exit file of job %s, so it stopped "
+                        "watching it. Use `job wait %s`." % (job[0], job[0])
+                    )
+                    bad_notes.append(note)
                 continue
             if got is not None:
                 code, mtime = got
                 pending.remove(job)
-                msgs.append(report(job, code, time.monotonic() - start))
-                inbox_msgs.append(report(job, code, time.monotonic() - start, 8, 160))
+                lines = log_lines(job[1])
+                waited = time.monotonic() - start
+                msgs.append(report(job, code, waited, lines))
+                inbox_msgs.append(report(job, code, waited, lines, 8, 160))
                 if first is None or (code != 0 and first[0] == 0):
                     first = (code, mtime)
                 failed = failed or code != 0
@@ -587,6 +623,12 @@ def main(rec):
             break
         time.sleep(min(POLL_SECS, left))
     rec["waited_s"] = round(time.monotonic() - start, 1)
+    if not msgs:
+        # Only unreadable exit files: nothing useful to say (fail open).
+        rec["outcome"] = "error"
+        return 0
+    msgs += bad_notes
+    inbox_msgs += bad_notes
     if first is not None:
         rec["exit_code"] = first[0]
         rec["exit_to_wake_s"] = round(max(0.0, time.time() - first[1]), 1)

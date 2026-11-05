@@ -1,5 +1,6 @@
 """Tests for job-wake.sh / job-wake.py. Run: python3 job-wake.test.py"""
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -382,7 +383,6 @@ w = e.wakes()
 check("bad JSON logged as error", len(w) == 1 and w[0]["outcome"] == "error", w)
 
 # --- review round 1 regressions ---
-import importlib.util
 
 spec = importlib.util.spec_from_file_location(
     "jw", str(Path(__file__).with_name("job-wake.py"))
@@ -490,6 +490,51 @@ e.state.mkdir()
 os.mkfifo(e.state / "wakes.jsonl")
 rc, err, secs = run(e.env(), e.payload(e.job(code=0)), timeout=15)
 check("FIFO wake log: no hang", rc == 2 and secs < 5, (rc, secs))
+
+# --- review round 2 regressions ---
+cases2 = [
+    (
+        [C, "-p", "--system-prompt", "--input-format=stream-json", "hi"],
+        False,
+        "unknown",
+    ),
+    (
+        [C, "-p", "--input-format", "stream-json", "--input-format", "text"],
+        False,
+        "print",
+    ),
+    (
+        [
+            C,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "-p",
+        ],
+        False,
+        "async",
+    ),
+    ([C, "-p", "--model", "x", "--input-format", "stream-json"], False, "async"),
+]
+for argv, tty, want in cases2:
+    got = jw.classify_argv(argv, tty)
+    check("classify %s -> %s" % (argv[1:], want), got == want, got)
+
+# one good job and one with an unreadable exit file: the good result still wakes
+e = Env()
+RID2 = "1793900000000000000-222-abcd5678"
+out = e.job(code=0) + e.job(rid=RID2, code=None)
+(e.logs / f"{RID2}.exit").mkdir()
+rc, err, secs = run(e.env(JOB_WAKE_BAD_EXIT_SECS="0.5"), e.payload(out))
+check(
+    "bad exit file does not hide other results",
+    rc == 2
+    and "succeeded with exit 0" in err
+    and "could not read the exit file of job " + RID2 in err,
+    (rc, err),
+)
 
 print("\n%d failure(s)" % failures)
 raise SystemExit(1 if failures else 0)
