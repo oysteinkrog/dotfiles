@@ -9,6 +9,9 @@ from pathlib import Path
 DEFAULTS = {
     "my_name": "Øystein",
     "notify": True,
+    # Seconds a call may be gone before its recording ends. Rejoining the same app
+    # within this window continues the same recording instead of starting a new one.
+    "rejoin_window_s": 180,
     "summary": True,
     "summary_model": "sonnet",
     # Words Whisper should spell right: product names, colleagues, jargon.

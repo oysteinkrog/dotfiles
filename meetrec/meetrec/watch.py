@@ -445,19 +445,38 @@ class Watcher:
                 s = self.sessions.get(group)
                 app: str | None = group
                 from_history = False
-                if group == "chrome" and s is None and g.mic_streams.get(group):
-                    app, from_history = self.browser_app(now)
-                active = bool(g.mic_streams.get(group)) and (s is not None or bool(app))
+                if group == "chrome" and g.mic_streams.get(group):
+                    # A recording session keeps Chrome. A new session, or one waiting
+                    # in its rejoin window, must pass the call check again.
+                    if s is None or not s.recorders:
+                        app, from_history = self.browser_app(now)
+                    if s is not None and not s.recorders and app != s.app:
+                        app = None
+                active = bool(g.mic_streams.get(group)) and bool(
+                    (s is not None and s.recorders) or app
+                )
                 if not active:
                     self.pending.pop(group, None)
                     self.suppressed.discard(group)
                 if s:
                     if active:
+                        if now - s.last_seen > STOP_AFTER_S:
+                            log.info(
+                                "%s: back after %.0f s, continuing %s",
+                                s.app,
+                                now - s.last_seen,
+                                s.dir.name,
+                            )
                         s.last_seen = now
                         s.sync(g)
-                    elif now - s.last_seen > STOP_AFTER_S:
+                    elif now - s.last_seen > max(
+                        STOP_AFTER_S, self.cfg.get("rejoin_window_s", 180)
+                    ):
                         del self.sessions[group]
                         self.finish(s)
+                    elif now - s.last_seen > STOP_AFTER_S:
+                        # In the rejoin window: record nothing until the call is back.
+                        s.sync(Graph())
                     else:
                         s.sync(g)
                     continue

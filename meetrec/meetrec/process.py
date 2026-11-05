@@ -639,6 +639,8 @@ def redo(out: Path) -> Path:
     if raw.is_dir() and any(raw.glob("*.flac")):
         for f in raw.iterdir():
             if f.suffix == ".flac":
+                if f.stat().st_size == 0:  # a stream that never got audio
+                    continue
                 audio, _ = sf.read(f, dtype="int16")
                 (q / f"{f.stem}.pcm").write_bytes(audio.astype("<i2").tobytes())
             elif f.is_file():
@@ -673,6 +675,80 @@ def redo(out: Path) -> Path:
     out.rename(history / f"{out.name} (replaced {stamp})")
     new.rename(out)
     return out
+
+
+def merge(outs: list[Path]) -> Path:
+    """Join finished recordings of one call (e.g. after leaving and rejoining) into one.
+
+    The raw streams of every folder go into one recording, placed on the first
+    folder's clock, and that is transcribed again. The old folders move to .history/.
+    """
+    if len(outs) < 2:
+        raise SystemExit("merge needs at least two recording folders")
+    starts = []
+    for out in outs:
+        session = json.loads((out / "session.json").read_text())
+        if not any((out / "raw").glob("*.flac")):
+            raise SystemExit(f"{out} has no raw streams, so it cannot be merged")
+        start = session.get("start") or time.mktime(
+            time.strptime(session["date"], "%Y-%m-%d %H:%M")
+        )
+        starts.append((start, session["app"], out))
+    starts.sort()
+    t0, app = starts[0][0], starts[0][1]
+    root = config.root()
+    q = root / ".redo" / starts[0][2].name
+    if q.exists():
+        shutil.rmtree(q)
+    q.mkdir(parents=True)
+    end = t0
+    for start, _, out in starts:
+        shift = start - t0
+        raw = out / "raw"
+        for meta_path in raw.glob("*-*-*.json"):
+            flac = meta_path.with_suffix(".flac")
+            # A stream that closed before any audio arrived is saved as an empty file.
+            if not flac.exists() or flac.stat().st_size == 0:
+                continue
+            m = json.loads(meta_path.read_text())
+            m["offset_s"] += shift
+            stem = f"{m['role']}-{m['node']}-{int(m['offset_s'] * 1000):09d}"
+            audio, rate = sf.read(flac, dtype="int16")
+            (q / f"{stem}.pcm").write_bytes(audio.astype("<i2").tobytes())
+            (q / f"{stem}.json").write_text(json.dumps(m, indent=1))
+            end = max(end, start + m["offset_s"] - shift + len(audio) / rate)
+        # Event logs carry wall-clock times, so they join by plain concatenation.
+        for name in ("events.jsonl", "live.jsonl"):
+            if (raw / name).exists():
+                with open(q / name, "a") as f:
+                    f.write((raw / name).read_text())
+    (q / "meta.json").write_text(
+        json.dumps(
+            {
+                "app": app,
+                "start": t0,
+                "end": end,
+                "merged_from": [o.name for _, _, o in starts],
+            },
+            indent=2,
+        )
+    )
+    # Move the parts aside first, so the merged call takes the first part's name.
+    history = root / ".history"
+    history.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d %H%M%S")
+    moved = []
+    for _, _, out in starts:
+        dest = history / f"{out.name} (merged {stamp})"
+        out.rename(dest)
+        moved.append((dest, out))
+    try:
+        new = process(q)
+    except BaseException:
+        for dest, out in moved:
+            dest.rename(out)
+        raise
+    return new
 
 
 def relabel(
