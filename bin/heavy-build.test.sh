@@ -3368,9 +3368,24 @@ check "jobd: inside a jobd job it runs at once, not through jobd (rc $rc)" '(( r
 rm -rf -- "$T/proc/self"
 jb HEAVY_BUILD_BACKEND=other -- true
 check "jobd: another backend value is refused with exit 2 (rc $rc)" '(( rc == 2 )) && grep -q "HEAVY_BUILD_BACKEND must be jobd or heavy-build" "$T/out"'
+jb -- true
+check "local queue: no backend anywhere runs here and logs local-queue-used reason=not-configured (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/job.calls ]] && grep -q "event=local-queue-used reason=not-configured " "$T/state/heavy-build/shadow.log"'
+# heavy-build.conf HEAVY_BUILD_BACKEND=jobd is the machine's choice: while jobd
+# answers, a caller cannot pick the local queue (manager-machine, 2026-11-05).
 echo HEAVY_BUILD_BACKEND=jobd >> "$T/config/heavy-build.conf"
 jb -- true
-check "jobd: the conf file cannot turn it on (rc $rc)" '(( rc == 0 )) && [[ ! -e $T/job.calls ]]'
+check "jobd conf: no caller backend still goes to jobd (rc $rc)" '(( rc == 42 )) && grep -qx "submit -- true" "$T/job.calls" && grep -qx HEAVY_BUILD_BACKEND=jobd "$T/job.env"'
+check "jobd conf: and logs env-ignored for the unset backend" 'grep -q "event=env-ignored name=HEAVY_BUILD_BACKEND value=\"unset\"" "$T/state/heavy-build/shadow.log"'
+jb HEAVY_BUILD_BACKEND=heavy-build -- true
+check "jobd conf: HEAVY_BUILD_BACKEND=heavy-build is ignored (rc $rc)" '(( rc == 42 )) && grep -qx "submit -- true" "$T/job.calls" && grep -q "event=env-ignored name=HEAVY_BUILD_BACKEND value=\"heavy-build\"" "$T/state/heavy-build/shadow.log"'
+jb HEAVY_BUILD_ACTIVE=1 -- true
+check "jobd conf: HEAVY_BUILD_ACTIVE outside a build is ignored (rc $rc)" '(( rc == 42 )) && ! grep -q HEAVY_BUILD_ACTIVE "$T/job.env" && grep -q "event=env-ignored name=HEAVY_BUILD_ACTIVE " "$T/state/heavy-build/shadow.log"'
+jb HEAVY_BUILD_FORCE=1 -- true
+check "jobd conf: a variable jobd does not read is dropped, not refused, when the caller did not ask for jobd (rc $rc)" '(( rc == 42 )) && ! grep -q HEAVY_BUILD_FORCE "$T/job.env" && grep -q "event=env-ignored name=HEAVY_BUILD_FORCE " "$T/state/heavy-build/shadow.log"'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_FORCE=1 -- true
+check "jobd conf: asked for jobd by the caller, such a variable is still refused (rc $rc)" '(( rc == 2 ))'
+jb PING=69 -- true
+check "jobd conf: jobd down, so the local queue runs it and logs reason=jobd-down (rc $rc)" '(( rc == 0 )) && grep -q "event=local-queue-used reason=jobd-down " "$T/state/heavy-build/shadow.log"'
 teardown2
 
 # jobd jobs as load: running_lines lists job-<x>.service units as J lines,

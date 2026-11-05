@@ -691,12 +691,16 @@
 # each, their current memory plus 2 GiB still to come, and their average
 # cores; an idle one (under 0.05 cores) only holds its memory. They show in
 # the untracked= field of live.log.
-# HEAVY_BUILD_BACKEND=jobd in the caller's environment (off by default; the
-# conf file cannot set it) hands the command to jobd with `job submit`
+# HEAVY_BUILD_BACKEND=jobd hands the command to jobd with `job submit`
 # instead of this queue, with --class, --ready-file and --wait-timeout passed
-# on. A HEAVY_BUILD_* variable jobd does not read is refused with exit 2.
+# on. Set in heavy-build.conf it is the machine's choice: then a caller's
+# HEAVY_BUILD_BACKEND (unset or heavy-build) or HEAVY_BUILD_ACTIVE outside a
+# build does not pick this queue while jobd answers, and a HEAVY_BUILD_*
+# variable jobd does not read is dropped (event=env-ignored). When the caller
+# itself sets HEAVY_BUILD_BACKEND=jobd, such a variable is refused with exit 2.
 # When the job client is missing or `job ping` fails, heavy-build says so on
-# one line and uses its own queue. HB_JOB_CMD names another client (tests).
+# one line and uses its own queue. Every use of this queue logs
+# event=local-queue-used with the reason. HB_JOB_CMD names another client (tests).
 #
 # It sets no target dir or build dir. ~/.cargo/config.toml sets
 # build.build-dir; see ~/.claude/CLAUDE.md "Builds".
@@ -867,15 +871,40 @@ fi
 #   this queue as usual. After the exec there is no way back: job submit
 #   exits 75 both when jobd went away and when a job gave up.
 JOBD_VARS=" ACTIVE AGENT ALLOW_RERUN APP_CPU_QUOTA APP_MEM_HIGH_GIB BACKEND CLASS CPU_BUDGET DOTNET_MAXCPU EST_NONFILE EST_ONE_ROW_GIB KEY LANES LOW_CARGO_JOBS MAX_JOBS MIN_SWAP_ROOM_GIB MODE MONOREPO NONFILE_PAD_PCT OWN_EST POLL PRIORITY READY_FILE REASON SESSION SESSION_PID SOLO_MEM_GIB TIMEOUT WAIT WAIT_TIMEOUT WINE_FALLBACK_PCT WINE_PREFIX "
-case ${HEAVY_BUILD_BACKEND:-} in
-  ''|heavy-build) ;;
+declare -gA ENV_IGNORED=()
+# The machine's backend (heavy-build.conf, last line wins) and what the caller asked.
+conf_backend=$(sed -n 's/^[[:space:]]*HEAVY_BUILD_BACKEND[[:space:]]*=[[:space:]]*\([a-z-]*\).*/\1/p' "$CONF" 2>/dev/null | tail -1)
+backend=${HEAVY_BUILD_BACKEND:-} local_reason=
+forced=
+if [[ $conf_backend == jobd && -z $adopt_t ]]; then
+  if [[ $backend != jobd ]]; then
+    ENV_IGNORED[HEAVY_BUILD_BACKEND]="value=\"$(b=${HEAVY_BUILD_BACKEND-unset}; echo "${b//[^[:alnum:]._-]/?}")\" why=\"heavy-build.conf picks jobd\""
+    backend=jobd forced=1
+  fi
+  if [[ -n ${HEAVY_BUILD_ACTIVE:-} ]]; then
+    ENV_IGNORED[HEAVY_BUILD_ACTIVE]="value=\"${HEAVY_BUILD_ACTIVE//[^[:alnum:]._-]/?}\" why=\"not inside a build, and heavy-build.conf picks jobd\""
+    unset HEAVY_BUILD_ACTIVE
+    forced=1
+  fi
+fi
+case $backend in
+  '') local_reason=not-configured ;;
+  heavy-build) local_reason=asked ;;
   jobd)
-    if [[ -z ${HEAVY_BUILD_ACTIVE:-} && -z $adopt_t ]]; then
+    if [[ -n ${HEAVY_BUILD_ACTIVE:-} ]]; then local_reason=active-set
+    elif [[ -n $adopt_t ]]; then local_reason=adopted
+    else
       bad=
       for v in ${!HEAVY_BUILD_@}; do
         [[ $JOBD_VARS == *" ${v#HEAVY_BUILD_} "* ]] || bad+=" $v"
       done
-      if [[ -n $bad ]]; then
+      if [[ -n $bad && -n $forced ]]; then
+        # The caller did not ask for jobd, so these were meant for this queue.
+        for v in $bad; do
+          ENV_IGNORED[$v]="value=\"${!v//[^[:alnum:]._-]/?}\" why=\"jobd does not read it\""
+          unset "$v"
+        done
+      elif [[ -n $bad ]]; then
         say "HEAVY_BUILD_BACKEND=jobd: jobd does not support$bad, so nothing was submitted. Unset$bad, or unset HEAVY_BUILD_BACKEND to use heavy-build's own queue."
         exit 2
       fi
@@ -883,9 +912,20 @@ case ${HEAVY_BUILD_BACKEND:-} in
       [[ -n $job_cmd ]] || job_cmd=$HOME/projects/job-system/bin/job
       if [[ ! -x $job_cmd ]]; then
         say "warning: HEAVY_BUILD_BACKEND=jobd, but the job client ($job_cmd) is missing; using heavy-build's own queue"
+        local_reason=jobd-client-missing
       elif ! timeout 10 "$job_cmd" ping 2>/dev/null; then
         say "warning: HEAVY_BUILD_BACKEND=jobd, but jobd does not answer (job ping); using heavy-build's own queue"
+        local_reason=jobd-down
       else
+        # Logged here, as jobd never sees these: the log file read_conf would pick.
+        hb_log=$STATE/shadow.log
+        [[ $(sed -n 's/^[[:space:]]*HEAVY_BUILD_MODE[[:space:]]*=[[:space:]]*//p' "$CONF" 2>/dev/null | tail -1) == live ]] && hb_log=$STATE/live.log
+        for v in "${!ENV_IGNORED[@]}"; do
+          say "ignored $v from the caller: ${ENV_IGNORED[$v]}"
+          mkdir -p "$STATE" 2>/dev/null && printf '%(%Y-%m-%dT%H:%M:%S%z)T mode=jobd job=- event=env-ignored name=%s %s session=%s agent=%s\n' \
+            -1 "$v" "${ENV_IGNORED[$v]}" "${HEAVY_BUILD_SESSION:--}" "${HEAVY_BUILD_AGENT:--}" >> "$hb_log" 2>/dev/null
+        done
+        [[ -n $forced ]] && export HEAVY_BUILD_BACKEND=jobd
         job_args=(submit)
         [[ -n $CLASS_ARG ]] && job_args+=(--class "$CLASS_ARG")
         [[ -n $READY_FILE ]] && job_args+=(--ready-file "$READY_FILE")
@@ -4226,6 +4266,7 @@ else
     log_line "event=env-ignored name=$k ${ENV_IGNORED[$k]} cmd=\"$cmdline\""
     say "ignored $k from the caller: ${ENV_IGNORED[$k]}"
   done
+  log_line "event=local-queue-used reason=${local_reason:-unknown} cmd=\"$cmdline\""
   if [[ -n $keys_note ]]; then
     log_line "$keys_note keys=$keys_csv cmd=\"$cmdline\""
     say "lock key not split by AgentOutputSuffix: this tree has no suffix blocks ($SPLIT_MARK)"
