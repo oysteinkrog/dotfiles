@@ -252,6 +252,13 @@
             "type": "command",
             "command": "bash ~/.claude/hooks/cmd-timing.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/job-wake.sh",
+            "asyncRewake": true,
+            "rewakeMessage": "Detached job finished (job-wake hook):",
+            "timeout": 11000
           }
         ]
       }
