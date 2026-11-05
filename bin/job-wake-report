@@ -19,7 +19,9 @@ import statistics
 import sys
 
 STATE = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-WAKES = os.path.join(os.environ.get("JOB_WAKE_STATE") or os.path.join(STATE, "job-wake"), "wakes.jsonl")
+WAKES = os.path.join(
+    os.environ.get("JOB_WAKE_STATE") or os.path.join(STATE, "job-wake"), "wakes.jsonl"
+)
 EVENTS = os.path.join(STATE, "jobd", "events.log")
 NOTES = os.path.join(STATE, "cmd-timing", "notes.jsonl")
 LONG_FG_JOB = 60  # s: a foreground tool call that sat on a job this long
@@ -40,7 +42,7 @@ def parse_when(s, now):
 def iso_ts(s):
     try:
         return datetime.datetime.fromisoformat(s).timestamp()
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -57,8 +59,10 @@ def read_jsonl(paths, since, until, ts_of):
                     d = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(d, dict):
+                    continue
                 t = ts_of(d)
-                if t is not None and since <= t <= until:
+                if isinstance(t, (int, float)) and t == t and since <= t <= until:
                     d["_t"] = t
                     out.append(d)
     return out
@@ -79,7 +83,9 @@ def job_ends(ids):
                 continue
             m = re.match(r"(\S+) request=(\S+) event=end", line)
             if m and m.group(2) in ids:
-                t = iso_ts(m.group(1).replace("+0100", "+01:00").replace("+0200", "+02:00"))
+                t = iso_ts(
+                    m.group(1).replace("+0100", "+01:00").replace("+0200", "+02:00")
+                )
                 if t is not None:
                     ends[m.group(2)] = t
     return ends
@@ -105,21 +111,42 @@ def main():
     since = parse_when(a.since, now)
     until = parse_when(a.until, now) if a.until else now
 
-    wakes = read_jsonl([WAKES + ".1", WAKES], since, until, lambda d: iso_ts(d.get("ts")))
+    wakes = read_jsonl(
+        [WAKES + ".1", WAKES], since, until, lambda d: iso_ts(d.get("ts"))
+    )
     notes = read_jsonl([NOTES], since, until, lambda d: d.get("ts"))
 
-    ends = job_ends({w["job_id"] for w in wakes if w.get("job_id") and "exit_to_wake_s" not in w})
+    ends = job_ends(
+        {
+            w["job_id"]
+            for w in wakes
+            if w.get("job_id")
+            and "exit_to_wake_s" not in w
+            and w.get("outcome") in ("woke", "direct-delivered")
+        }
+    )
     delays = []
     for w in wakes:
         d = w.get("exit_to_wake_s")
-        if d is None and w.get("job_id") in ends and w.get("outcome") in ("woke", "direct-delivered"):
+        if not isinstance(d, (int, float)):
+            d = None
+        if (
+            d is None
+            and w.get("job_id") in ends
+            and w.get("outcome") in ("woke", "direct-delivered")
+        ):
             d = max(0.0, w["_t"] - ends[w["job_id"]])
         if d is not None and w.get("outcome") in ("woke", "direct-delivered"):
             w["_delay"] = d
             delays.append(d)
 
     by_outcome = collections.Counter(w.get("outcome", "?") for w in wakes)
-    sub = [w for w in wakes if w.get("submitted_by") == "subagent" and w.get("outcome") not in ("skipped-nojob",)]
+    sub = [
+        w
+        for w in wakes
+        if w.get("submitted_by") == "subagent"
+        and w.get("outcome") not in ("skipped-nojob",)
+    ]
     sub_delivered = sum(1 for w in sub if w.get("delivered"))
 
     sessions = collections.defaultdict(lambda: collections.Counter())
@@ -136,10 +163,20 @@ def main():
             sess_delay[s].append(w["_delay"])
     for n in notes:
         s = (n.get("session") or "?")[:8]
-        if n.get("kind") == "job" and n.get("source") == "cmd-timing" and (n.get("secs") or 0) >= LONG_FG_JOB:
+        secs = n.get("secs") if isinstance(n.get("secs"), (int, float)) else 0
+        n["secs"] = secs
+        if (
+            n.get("kind") == "job"
+            and n.get("source") == "cmd-timing"
+            and secs >= LONG_FG_JOB
+        ):
             sessions[s]["fg_job_waits"] += 1
             sessions[s]["fg_job_secs"] += int(n.get("secs") or 0)
-        elif n.get("kind") == "command" and not n.get("class") and (n.get("secs") or 0) >= LONG_CMD:
+        elif (
+            n.get("kind") == "command"
+            and not n.get("class")
+            and (n.get("secs") or 0) >= LONG_CMD
+        ):
             sessions[s]["long_cmds"] += 1
 
     if a.json:
@@ -151,7 +188,10 @@ def main():
                 "subagent_wakes": len(sub),
                 "subagent_direct_delivered": sub_delivered,
                 "median_exit_to_wake_s": median(delays),
-                "sessions": {k: dict(v, median_delay_s=median(sess_delay[k])) for k, v in sessions.items()},
+                "sessions": {
+                    k: dict(v, median_delay_s=median(sess_delay[k]))
+                    for k, v in sessions.items()
+                },
             },
             sys.stdout,
             indent=1,
@@ -167,20 +207,58 @@ def main():
     print("Hook decisions: %d" % len(wakes))
     for k, v in by_outcome.most_common():
         print("  %-18s %d" % (k, v))
-    print("Subagent submits: %d, delivered straight to the teammate: %d" % (len(sub), sub_delivered))
-    print("Delay from job end to wake: median %s, max %s (%d wakes)" % (
-        fmt_s(median(delays)), fmt_s(max(delays) if delays else None), len(delays)))
+    print(
+        "Subagent submits: %d, delivered straight to the teammate: %d"
+        % (len(sub), sub_delivered)
+    )
+    print(
+        "Delay from job end to wake: median %s, max %s (%d wakes)"
+        % (fmt_s(median(delays)), fmt_s(max(delays) if delays else None), len(delays))
+    )
     print()
-    print("Per session (fg waits = tool calls that sat >= %d s on a jobd job;" % LONG_FG_JOB)
+    print(
+        "Per session (fg waits = tool calls that sat >= %d s on a jobd job;"
+        % LONG_FG_JOB
+    )
     print("long cmds = other commands >= %d s, possible poll loops):" % LONG_CMD)
-    print("  %-9s %5s %5s %5s %5s %5s %8s %9s %6s" % (
-        "session", "wakes", "subag", "deliv", "tmout", "skipP", "delay", "fg waits", "long"))
-    rows = sorted(sessions.items(), key=lambda kv: -(kv[1]["wakes"] * 1000 + kv[1]["fg_job_waits"]))
+    print(
+        "  %-9s %5s %5s %5s %5s %5s %8s %9s %6s"
+        % (
+            "session",
+            "wakes",
+            "subag",
+            "deliv",
+            "tmout",
+            "skipP",
+            "delay",
+            "fg waits",
+            "long",
+        )
+    )
+    rows = sorted(
+        sessions.items(),
+        key=lambda kv: -(kv[1]["wakes"] * 1000 + kv[1]["fg_job_waits"]),
+    )
     for s, c in rows:
-        fg = "%d/%dm" % (c["fg_job_waits"], c["fg_job_secs"] // 60) if c["fg_job_waits"] else "0"
-        print("  %-9s %5d %5d %5d %5d %5d %8s %9s %6d" % (
-            s, c["wakes"], c["subagent"], c["delivered"], c["timeout"], c["skipped-p"],
-            fmt_s(median(sess_delay[s])), fg, c["long_cmds"]))
+        fg = (
+            "%d/%dm" % (c["fg_job_waits"], c["fg_job_secs"] // 60)
+            if c["fg_job_waits"]
+            else "0"
+        )
+        print(
+            "  %-9s %5d %5d %5d %5d %5d %8s %9s %6d"
+            % (
+                s,
+                c["wakes"],
+                c["subagent"],
+                c["delivered"],
+                c["timeout"],
+                c["skipped-p"],
+                fmt_s(median(sess_delay[s])),
+                fg,
+                c["long_cmds"],
+            )
+        )
     if not rows:
         print("  (nothing in this window)")
     return 0
