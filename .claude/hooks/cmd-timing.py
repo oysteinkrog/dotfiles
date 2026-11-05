@@ -85,6 +85,7 @@ SUB_VALUE_OPTS = {
 }
 DIRTY_SUB = ":dirty-submodule"
 DIR_OPTS = {"-C", "--prefix", "--cwd", "--dir"}
+CMAKE_DIR_OPTS = {"--build", "--test-dir"}
 FILE_OPTS = {"--manifest-path", "--project"}
 PROJECT_EXTS = (".sln", ".slnx", ".csproj", ".fsproj", ".vbproj", "Cargo.toml")
 QUEUE_HEADS = {"heavy-build", "job"}
@@ -237,6 +238,18 @@ def classify(command, cwd):
     return label, build_cwd, queue_cwds
 
 
+def cmake_source(build_dir):
+    """The source folder of a CMake build folder, from its CMakeCache.txt."""
+    try:
+        with open(os.path.join(build_dir, "CMakeCache.txt"), errors="replace") as f:
+            for line in f:
+                if line.startswith("CMAKE_HOME_DIRECTORY:"):
+                    return line.split("=", 1)[1].strip() or build_dir
+    except OSError:
+        pass
+    return build_dir
+
+
 def dir_option(bd, tokens, cwd):
     """The folder the build really runs in.
 
@@ -246,15 +259,17 @@ def dir_option(bd, tokens, cwd):
     """
     for i, t in enumerate(tokens):
         k, eq, v = t.partition("=")
-        if eq and v and k in DIR_OPTS | FILE_OPTS:
+        if eq and v and k in DIR_OPTS | FILE_OPTS | CMAKE_DIR_OPTS:
             name, val = k, v
-        elif t in DIR_OPTS | FILE_OPTS and i + 1 < len(tokens):
+        elif t in DIR_OPTS | FILE_OPTS | CMAKE_DIR_OPTS and i + 1 < len(tokens):
             name, val = t, tokens[i + 1]
         elif t.endswith(PROJECT_EXTS) and not t.startswith("-"):
             name, val = "--project", t
         else:
             continue
         path = bd.seg_mod.resolve_dir(bd.expand(val), cwd)
+        if name in CMAKE_DIR_OPTS:
+            return cmake_source(path)
         if name in FILE_OPTS and not os.path.isdir(path):
             return os.path.dirname(path)
         return path
@@ -493,7 +508,7 @@ def changed_lines(top, old_tree, new_tree):
         if line.startswith(":"):
             # A changed submodule commit (mode 160000) hides an unknown
             # amount of source change behind a one-line gitlink.
-            if "160000" in line.split("\t", 1)[0].split()[:2]:
+            if "160000" in line[1:].split()[:2]:
                 return None
             continue
         parts = line.split("\t", 2)

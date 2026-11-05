@@ -543,6 +543,22 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         "new submodule commit is not a small change", ctx == "Command took 6 min.", ctx
     )
 
+    # 25. cmake --build on an outside build folder snapshots the source repo.
+    bdir = tmp / "cmbuild"
+    bdir.mkdir()
+    (bdir / "CMakeCache.txt").write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={repo}\n")
+    e = env("st25")
+    run(claude(f"cmake --build {bdir}", 5, str(plain), sid="s25"), e)
+    snaps = json.loads((tmp / "st25" / "s25.json").read_text())["snapshots"]
+    check("cmake --build uses the source repo", str(repo) in snaps, snaps)
+
+    # 26. Removing a submodule is not a small change.
+    e = env("st26")
+    run(claude("cargo test", 20, str(sup), sid="s26"), e, now=T - 600)
+    subprocess.run([*gs, "-C", str(sup), "rm", "-q", "-f", "mod"], check=True)
+    rc, ctx, _ = run(claude("cargo test", 360, str(sup), sid="s26"), e)
+    check("removed submodule is not a small change", ctx == "Command took 6 min.", ctx)
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)
