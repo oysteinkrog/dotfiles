@@ -298,6 +298,28 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         ctx,
     )
 
+    # 5j. Two queue jobs ran in parallel: queue time exceeds elapsed, no split.
+    t2 = T - 210
+    s8 = int((t2 + 1) * 1e9)
+    r8, r9 = f"{s8}-4949-aaaa0008", f"{s8}-5050-aaaa0009"
+    events.write_text(
+        f"{ts(t2 + 1)} request={r8} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t2 + 1)} request={r9} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t2 + 2)} attempt={r8}-a{int(t2 + 2)} request={r8} event=start\n"
+        f"{ts(t2 + 2)} attempt={r9}-a{int(t2 + 2)} request={r9} event=start\n"
+        f"{ts(T - 1)} request={r8} event=end exit=0 reason=ok\n"
+        f"{ts(T - 1)} request={r9} event=end exit=0 reason=ok\n"
+    )
+    rc, ctx, _ = run(
+        claude(
+            "heavy-build -- cargo test -p a & heavy-build -- cargo test -p b; wait",
+            210,
+            str(plain),
+        ),
+        env("st5j"),
+    )
+    check("parallel queue jobs give no split", ctx == "Command took 3 min 30 s.", ctx)
+
     # 6. Non-build long command: report, no warn.
     e = env("st6")
     run(claude("sleep 400", 400, str(repo)), e, now=T - 600)
@@ -435,6 +457,18 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         "npm --prefix web test is a test run",
         (tmp / "st18" / "s18.json").exists(),
     )
+
+    # 19. A cd inside ( ... ) does not change the folder after it.
+    e = env("st19")
+    run(claude("(cd / && true); cargo test", 5, str(repo), sid="s19"), e)
+    snaps = json.loads((tmp / "st19" / "s19.json").read_text())["snapshots"]
+    check("subshell cd is scoped", str(repo) in snaps, snaps)
+
+    # 20. go -C names the build folder.
+    e = env("st20")
+    run(claude(f"go -C {repo} test ./...", 5, str(plain), sid="s20"), e)
+    snaps = json.loads((tmp / "st20" / "s20.json").read_text())["snapshots"]
+    check("go -C sets the build folder", str(repo) in snaps, snaps)
 
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
