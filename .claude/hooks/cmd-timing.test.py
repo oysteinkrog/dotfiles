@@ -684,6 +684,7 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         len(jobrec) == 1
         and jobrec[0]["job"] == rid
         and jobrec[0]["warned"] is True
+        and jobrec[0]["source"] == "cmd-timing"
         and jobrec[0]["class"] == "cargo test"
         and jobrec[0]["session"] == "j1"
         and jobrec[0]["secs"] == 1560
@@ -792,6 +793,45 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         "Slow test loop: dotnet test ran 6 min 40 s, and it is slow run 2 in the last 30 min"
         in ctx,
         ctx,
+    )
+
+    # J4b. The real jobd footer, with jobd's own slow-loop line: its split is
+    # used, our warning is not repeated, and the record says source=jobd.
+    e = jenv("sj4b")
+    src.write_text("".join(f"base {i}\n" for i in range(100)))
+    run(claude("cargo test", 20, str(repo), sid="j4b"), e, now=T - 3000)
+    src.write_text("".join(f"base {i}{'z' if i < 2 else ''}\n" for i in range(100)))
+    sub = T - 800
+    r4b = job_id(sub, 48)
+    run(
+        with_out(
+            claude("job submit --detach -- cargo test", 1, str(repo), sid="j4b"),
+            submit_out(r4b),
+        ),
+        e,
+        now=sub + 1,
+    )
+    finish(
+        r4b,
+        T - 10,
+        log="test result: ok\n"
+        "jobd: waited 29 s in queue, ran 12 min 26 s, exit 0 (wait=29 run=746)\n"
+        "jobd: Slow test loop: cargo test ran 12 min 26 s after a change of only "
+        "4 lines since the last build or test. For the next iteration, run "
+        "something narrower first.\n",
+    )
+    rc, ctx, _ = run(claude("ls", 1, str(repo), sid="j4b"), e)
+    check(
+        "real footer gives the split",
+        "29 s waiting in the jobd queue, 12 min 26 s running." in ctx,
+        ctx,
+    )
+    check("jobd's warning is not repeated", "Slow test loop" not in ctx, ctx)
+    rec = [r for r in notes_of("sj4b") if r["kind"] == "job"]
+    check(
+        "jobd warning is logged with source=jobd",
+        len(rec) == 1 and rec[0]["source"] == "jobd" and rec[0]["warned"] is True,
+        rec,
     )
 
     # J5b. Two slow jobs that ended 40 min apart, both collected by one
