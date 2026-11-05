@@ -202,5 +202,62 @@ check "entry is stamped by this server" '[ "$(jq -r .mux "$f")" = "$NEW" ]'
 check "session is in the live list" 'grep -qx nosf "$S/live"'
 check "the recording is logged" 'grep -q "recorded nosf .*Claude pid $cpid in pane 3 had no entry with its pid" "$S/events.log"'
 
+# --- 9. late sessions go back to their old places, not to the end in id order
+# (2026-11-05: the mux server crashed after a reboot, 22 Claudes outlived it,
+# and snapshot appended them sorted by session id)
+setup late-order
+mkdir -p "$H/.local/bin" "$T/bin"
+# old server: claude c3, shell xpeng, claude a1, shell life, claude b2
+{
+  echo "mux $OLD"
+  printf '0\t0\tclaude\t%s\tc3\t\n' "$H/projects/life"
+  printf '0\t1\tshell\t%s\t\t\n' "$H/projects/xpeng"
+  printf '0\t2\tclaude\t%s\ta1\t\n' "$H/projects/life"
+  printf '0\t3\tshell\t%s\t\t\n' "$H/projects/life"
+  printf '0\t4\tclaude\t%s\tb2\t\n' "$H/projects/life"
+} > "$S/panes.used"
+for e in "c3 0" "a1 2" "b2 4"; do
+  set -- $e; entry "$1" "$H/projects/life" "$2" "$OLD"
+  f=$(ls "$S/sessions/$1"@*.json); jq --arg m "$OLD" '.late = $m' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+done
+# the new server already has the two shell tabs plan reopened
+jq -n --arg x "$H/projects/xpeng" --arg l "$H/projects/life" \
+  '[{window_id:0,tab_id:0,pane_id:0,cwd:("file://"+$x),tty_name:"/dev/pts/fake0"},
+    {window_id:0,tab_id:1,pane_id:1,cwd:("file://"+$l),tty_name:"/dev/pts/fake1"}]' > "$T/mux.json"
+cat > "$H/.local/bin/frankenterm-gui" <<EOF
+#!/usr/bin/env python3
+import json, sys
+st = "$T/mux.json"
+tabs = json.load(open(st))
+a = sys.argv[2:]
+def opt(n): return a[a.index(n) + 1]
+if a[0] == "list":
+    print(json.dumps(tabs))
+elif a[0] == "spawn":
+    n = max([t["pane_id"] for t in tabs] + [-1]) + 1
+    tabs.append({"window_id": int(opt("--window-id")), "tab_id": n, "pane_id": n,
+                 "cwd": "file://" + opt("--cwd"), "tty_name": "/dev/pts/fake%d" % n,
+                 "cmd": a[-1]})
+    print(n)
+elif a[0] == "move-tab":
+    t = next(t for t in tabs if t["tab_id"] == int(opt("--tab-id")))
+    w = [x for x in tabs if x["window_id"] == t["window_id"] and x is not t]
+    w.insert(int(opt("--index")), t)
+    rest = iter(w)
+    tabs = [next(rest) if x["window_id"] == t["window_id"] else x for x in tabs]
+json.dump(tabs, open(st, "w"))
+EOF
+chmod +x "$H/.local/bin/frankenterm-gui"
+# the server is up and the machine is not stopping, whatever this machine says
+printf '#!/bin/sh\ncase "$*" in *is-system-running*) echo running ;; *is-active*) echo active ;; esac\n' > "$T/bin/systemctl"
+chmod +x "$T/bin/systemctl"
+PATH=$T/bin:$PATH HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW \
+  CLAUDE_PERSIST_BIN=/usr/bin/claude CLAUDE_TAB_RUN_BIN=/nonexistent \
+  bash "$T/hooks/claude-persist.sh" snapshot
+order=$(jq -r '.[] | if .cmd then (.cmd | capture("--resume\\\\? (?<s>[a-z0-9]+)").s) else (.cwd | sub(".*/"; "")) end' "$T/mux.json" | paste -sd' ')
+check "three late sessions spawned" '[ "$(jq "[.[] | select(.cmd)] | length" "$T/mux.json")" = 3 ]'
+check "tabs are in the old order" '[ "$order" = "c3 xpeng a1 life b2" ]'
+check "placement is logged" 'grep -q "late a1@.*resumed in pane .* at tab 2 (old place 2)" "$S/events.log"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
