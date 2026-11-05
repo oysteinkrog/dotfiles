@@ -470,6 +470,50 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     snaps = json.loads((tmp / "st20" / "s20.json").read_text())["snapshots"]
     check("go -C sets the build folder", str(repo) in snaps, snaps)
 
+    # 21. A call that moved to the background after its time limit: silent.
+    p21 = claude("cargo test", 120, str(plain), sid="s21")
+    p21["tool_response"] = {"stdout": "", "backgroundTaskId": "bg1"}
+    rc, ctx, out = run(p21, env("st21"))
+    check(
+        "auto-backgrounded call is silent",
+        out == "" and not (tmp / "st21" / "s21.json").exists(),
+        out,
+    )
+
+    # 22. Edits inside a dirty submodule are not a small change.
+    sub = tmp / "subsrc"
+    sub.mkdir()
+    gs = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*gs, "init", "-q", str(sub)], check=True)
+    (sub / "a.txt").write_text("".join(f"s {i}\n" for i in range(100)))
+    subprocess.run([*gs, "-C", str(sub), "add", "."], check=True)
+    subprocess.run([*gs, "-C", str(sub), "commit", "-qm", "s"], check=True)
+    sup = tmp / "super"
+    sup.mkdir()
+    subprocess.run([*gs, "init", "-q", str(sup)], check=True)
+    subprocess.run(
+        [
+            *gs,
+            "-C",
+            str(sup),
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            str(sub),
+            "mod",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run([*gs, "-C", str(sup), "commit", "-qm", "add mod"], check=True)
+    e = env("st22")
+    run(claude("cargo test", 20, str(sup), sid="s22"), e, now=T - 600)
+    (sup / "mod" / "a.txt").write_text("".join(f"t {i}\n" for i in range(100)))
+    rc, ctx, _ = run(claude("cargo test", 360, str(sup), sid="s22"), e)
+    check("dirty submodule is not a small change", ctx == "Command took 6 min.", ctx)
+
     # 10. Garbage input: exit 0, no output.
     rc, ctx, out = run("not json", env("st10"))
     check("bad input fails open", rc == 0 and out == "", out)
