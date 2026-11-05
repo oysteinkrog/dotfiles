@@ -44,8 +44,15 @@ job submit --detach -- tools/wine/run-tests.sh SwingCatalyst.Test.Unit.Core
 job wait <request id>     # follow the output; returns the job's exit code
 ```
 
-Wait for the exit file with a Bash `run_in_background` until-loop or a
-`Monitor`. Run `job submit` from the directory the build needs, as with
+**After a detached submit, end the turn or do other work. Do not poll.** The
+`job-wake` hook (`~/.claude/hooks/job-wake.py`) watches the exit file and wakes
+the session when the job ends, with the exit code, the `jobd:` footer and, on
+failure, the last 20 log lines. It needs `job submit --detach` in its own
+foreground Bash call (not `run_in_background`), one job per call; it wakes at
+the first failure and gives up after 3 h. The wake always goes to the main
+session: a subagent that submits gets no wake itself, so a subagent should
+return the job id and let its parent wait. Plain `claude -p` gets no wake;
+there, use `job wait <id>`. Run `job submit` from the directory the build needs, as with
 heavy-build. `--class app-run`, `--ready-file` and `--wait-timeout` work as in
 heavy-build. A wrapper script that runs Wine or MC on its own prefix must
 declare it with `HEAVY_BUILD_WINE_PREFIX=<prefix path>` in the submit environment, or
