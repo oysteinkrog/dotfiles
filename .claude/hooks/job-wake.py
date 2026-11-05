@@ -79,6 +79,10 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 JOB_LINE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,127}) (/\S+\.log) (/\S+\.exit)\s*$", re.M
 )
+FOOTER = re.compile(
+    r"^jobd: waited [0-9hmin s]+ in queue, ran [0-9hmin s]+, exit -?\d+ "
+    r"\(wait=[0-9.]+ run=[0-9.]+\)$"
+)
 CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -300,9 +304,10 @@ def log_lines(path):
 def report(job, code, waited, lines, tail_lines=TAIL_LINES, width=300):
     rid, log, _exit, cmd = job
     lines = [CTRL.sub("", ln) for ln in lines]
-    # jobd appends its footer last, so only trailing "jobd: " lines count.
+    # jobd appends its footer last, so only trailing lines count, and only in
+    # jobd's own fixed shape: job output could print a "jobd: " line too.
     n = len(lines)
-    while n and lines[n - 1].startswith("jobd: ") and len(lines) - n < 5:
+    while n and FOOTER.match(lines[n - 1]) and len(lines) - n < 5:
         n -= 1
     footer, body = lines[n:], lines[:n]
     status = "succeeded" if code == 0 else "FAILED"
