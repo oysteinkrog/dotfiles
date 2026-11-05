@@ -3264,8 +3264,11 @@ END {
     }
   }
   cdrainw = 0
+  # A critical build held only by a lock key of a running build gains nothing
+  # from a drain (2026-11-05, as in jobd: a kpp build waited on a tree key
+  # held by its own MC run, and the drain held every other start).
   if (critdrain > 0) for (i = 1; i <= nw; i++)
-    if (w_pr[i] == "critical" && now - w_arr[i] >= critdrain && (!cdrainw || w_arr[i] < w_arr[cdrainw] || (w_arr[i] == w_arr[cdrainw] && w_id[i] < w_id[cdrainw]))) cdrainw = i
+    if (w_pr[i] == "critical" && now - w_arr[i] >= critdrain && clash(w_keys[i], w_cls[i] == "app-run") == "" && (!cdrainw || w_arr[i] < w_arr[cdrainw] || (w_arr[i] == w_arr[cdrainw] && w_id[i] < w_id[cdrainw]))) cdrainw = i
   for (o = 1; o <= nw; o++) {
     i = ord[o]
     # The high-cap is a share rule, not a resource limit (2026-11-03): while
