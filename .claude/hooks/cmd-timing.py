@@ -83,6 +83,7 @@ SUB_VALUE_OPTS = {
     "-w",
     "--workspace",
 }
+DIRTY_SUB = ":dirty-submodule"
 DIR_OPTS = {"-C", "--prefix", "--cwd", "--dir"}
 QUEUE_HEADS = {"heavy-build", "job"}
 HB_VALUE_OPTS = {
@@ -436,7 +437,30 @@ def snapshot(cwd):
             tmp.unlink()
         except OSError:
             pass
+    if submodule_dirty(top):
+        tree += DIRTY_SUB
     return top, tree
+
+
+def submodule_dirty(top):
+    """True when a submodule has uncommitted changes to tracked files.
+
+    The tree only records a submodule's commit, so edits inside it are
+    invisible to the line count.
+    """
+    try:
+        if os.path.getsize(os.path.join(top, ".gitmodules")) == 0:
+            return False
+    except OSError:
+        return False
+    out = git(top, "status", "--porcelain=v2", "-uno", "--ignore-submodules=untracked")
+    for line in out.splitlines():
+        parts = line.split(" ", 3)
+        if parts[0] in ("1", "2") and len(parts) > 2:
+            sub = parts[2]
+            if sub.startswith("S") and len(sub) == 4 and sub[2] == "M":
+                return True
+    return False
 
 
 def changed_lines(top, old_tree, new_tree):
@@ -445,6 +469,8 @@ def changed_lines(top, old_tree, new_tree):
     Returns None when a binary file changed, since its size in lines is
     unknown and must not count as a small change.
     """
+    if old_tree.endswith(DIRTY_SUB) or new_tree.endswith(DIRTY_SUB):
+        return None
     if old_tree == new_tree:
         return 0
     total = 0
@@ -574,6 +600,11 @@ def post_tool_use(payload):
     if not isinstance(command, str) or not command.strip():
         return None
     if isinstance(tool_input, dict) and tool_input.get("run_in_background"):
+        return None
+    # A foreground call that hit its time limit and moved to the background
+    # is still running, so its time so far says nothing about the build.
+    response = payload.get("tool_response")
+    if isinstance(response, dict) and response.get("backgroundTaskId"):
         return None
     elapsed = elapsed_of(payload)
     if elapsed is None:
