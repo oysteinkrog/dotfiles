@@ -142,10 +142,8 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
 
     # 4. Two 6 min runs within 30 min: second warns.
     e = env("st4")
-    rc, ctx1, _ = run(
-        claude("heavy-build -- dotnet test Foo.sln", 370, str(plain)), e, now=T - 900
-    )
-    rc, ctx2, _ = run(claude("heavy-build -- dotnet test Foo.sln", 365, str(plain)), e)
+    rc, ctx1, _ = run(claude("dotnet test Foo.sln", 370, str(plain)), e, now=T - 900)
+    rc, ctx2, _ = run(claude("dotnet test Foo.sln", 365, str(plain)), e)
     check("first 6 min run only reports", ctx1 == "Command took 6 min 10 s.", ctx1)
     check(
         "second 6 min run within 30 min warns",
@@ -199,6 +197,78 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
     )
     check("long wait, short run does not warn", "Slow test loop" not in ctx, ctx)
 
+    # 5c. A retried job counts both attempts as run time.
+    rid2 = f"{sub_ns}-4343-abcd5678"
+    a1, a2 = f"{rid2}-a{int(t0 + 11)}", f"{rid2}-a{int(t0 + 261)}"
+    events.write_text(
+        f"{ts(t0 + 1)} request={rid2} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t0 + 11)} attempt={a1} request={rid2} event=start worker=home\n"
+        f"{ts(t0 + 251)} attempt={a1} request={rid2} event=route-failed worker=home\n"
+        f"{ts(t0 + 261)} attempt={a2} request={rid2} event=start\n"
+        f"{ts(T)} request={rid2} event=end exit=0 reason=ok\n"
+    )
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), env("st5c"))
+    check(
+        "retried job sums both attempts",
+        ctx.startswith(
+            "Command took 6 min 40 s: 20 s waiting in the jobd queue, 6 min 19 s running."
+        ),
+        ctx,
+    )
+
+    # 5d. An absolute path to heavy-build is still a queue call.
+    rc, ctx, _ = run(
+        claude("/usr/local/bin/heavy-build -- cargo test", 400, str(plain)),
+        env("st5d"),
+    )
+    check(
+        "absolute heavy-build path gets the split",
+        "waiting in the jobd queue" in ctx,
+        ctx,
+    )
+
+    # 5e. Two jobs from the same folder but one queue call: no split, no warn.
+    rid3 = f"{sub_ns}-4444-abcd9999"
+    events.write_text(
+        events.read_text()
+        + f"{ts(t0 + 2)} request={rid3} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(t0 + 2)} attempt={rid3}-a{int(t0 + 2)} request={rid3} event=start\n"
+        f"{ts(T - 1)} request={rid3} event=end exit=0 reason=ok\n"
+    )
+    e = env("st5e")
+    run(claude("heavy-build -- cargo test", 400, str(plain)), e, now=T - 600)
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), e)
+    check(
+        "ambiguous jobs give no split and no warning",
+        ctx == "Command took 6 min 40 s.",
+        ctx,
+    )
+
+    # 5f. Queue call with no matching jobd events: never warn on elapsed time.
+    events.write_text("")
+    e = env("st5f")
+    run(claude("heavy-build -- cargo test", 400, str(plain)), e, now=T - 600)
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), e)
+    check(
+        "queue call without events does not warn",
+        ctx == "Command took 6 min 40 s.",
+        ctx,
+    )
+
+    # 5g. Wait with no attempt at all (cancelled in the queue) is all wait.
+    rid4 = f"{sub_ns}-4545-abcd0000"
+    events.write_text(
+        f"{ts(t0 + 1)} request={rid4} event=submit class=cargo-test prio=normal cwd={plain} argv0=cargo\n"
+        f"{ts(T)} request={rid4} event=end exit=75 reason=cancel\n"
+    )
+    rc, ctx, _ = run(claude("heavy-build -- cargo test", 400, str(plain)), env("st5g"))
+    check(
+        "job that never started is all wait",
+        ctx
+        == "Command took 6 min 40 s: 6 min 39 s waiting in the jobd queue, 0 s running.",
+        ctx,
+    )
+
     # 6. Non-build long command: report, no warn.
     e = env("st6")
     run(claude("sleep 400", 400, str(repo)), e, now=T - 600)
@@ -244,6 +314,49 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         "Codex start/stop timing reports",
         ctx == "Command took 50 s." and not left,
         f"{ctx} {left}",
+    )
+
+    # 12. The build's own folder is used, not the folder after a later cd.
+    e = env("st12")
+    cmd = f"cd {repo} && cargo test; cd /"
+    run(claude(cmd, 20, str(plain)), e, now=T - 600)
+    src.write_text(src.read_text().replace("other 5\n", "changed 5\n"))
+    rc, ctx, _ = run(claude(cmd, 360, str(plain)), e)
+    check("build folder is taken at the build segment", "Slow test loop" in ctx, ctx)
+
+    # 13. A changed binary file is not a small change.
+    blob = repo / "data.bin"
+    blob.write_bytes(bytes(range(256)) * 4)
+    git_c = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git_c, "add", "data.bin"], check=True)
+    subprocess.run([*git_c, "commit", "-qm", "bin"], check=True)
+    e = env("st13")
+    run(claude("cargo test", 20, str(repo)), e, now=T - 600)
+    blob.write_bytes(bytes(reversed(range(256))) * 400)
+    rc, ctx, _ = run(claude("cargo test", 360, str(repo)), e)
+    check("binary change does not count as small", ctx == "Command took 6 min.", ctx)
+
+    # 14. Fast path: tool_response before tool_input still records the build.
+    e = env("st14")
+    raw = (
+        '{"session_id":"s14","hook_event_name":"PostToolUse","tool_name":"Bash",'
+        '"tool_response":{"stdout":"ok"},"tool_input":{"command":"cargo test"},'
+        f'"cwd":"{repo}","duration_ms":1000}}'
+    )
+    run(raw, e)
+    check(
+        "field order does not skip build tracking", (tmp / "st14" / "s14.json").exists()
+    )
+
+    # 15. Fast path: a duration_ms inside the tool output is not used.
+    raw = (
+        '{"session_id":"s15","hook_event_name":"PostToolUse","tool_name":"Bash",'
+        '"tool_input":{"command":"ls"},"tool_response":{"duration_ms":1},'
+        f'"cwd":"{plain}","duration_ms":60000}}'
+    )
+    rc, ctx, _ = run(raw, env("st15"))
+    check(
+        "nested duration_ms does not hide the report", ctx == "Command took 1 min.", ctx
     )
 
     # 10. Garbage input: exit 0, no output.
