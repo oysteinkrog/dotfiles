@@ -572,14 +572,27 @@ def footer_secs(line, key):
     return sum(float(v) * UNIT_SECS[u] for v, u in DUR_PART_RE.findall(m.group(1)))
 
 
-def split_from_footer(log):
-    """(wait, run) from a `jobd:` line at the end of the job log, or None."""
+def log_tail(log):
     with open(log, "rb") as f:
         f.seek(0, 2)
         f.seek(max(0, f.tell() - FOOTER_TAIL))
-        tail = f.read().decode("utf-8", "replace")
+        return f.read().decode("utf-8", "replace")
+
+
+def jobd_warned(log):
+    """True when jobd already put a slow-loop warning in the job log."""
+    try:
+        tail = log_tail(log)
+    except OSError:
+        return False
+    return any(x.startswith("jobd: Slow test loop") for x in tail.splitlines())
+
+
+def split_from_footer(log):
+    """(wait, run) from a `jobd:` line at the end of the job log, or None."""
+    tail = log_tail(log)
     for line in reversed(tail.splitlines()):
-        if not line.startswith("jobd:"):
+        if not line.startswith("jobd:") or line.startswith("jobd: Slow"):
             continue
         wait, run = footer_secs(line, "wait"), footer_secs(line, "run")
         if wait is not None and run is not None:
@@ -1070,7 +1083,14 @@ def finish_jobs(sid, cwd, t1, skip):
             warn = None
             if label:
                 warn = slow_check(state, label, run, end, job.get("small"), now_t=t1)
-            if total < REPORT_SECS and not warn:
+            # jobd writes the same advice into the job log; the agent that
+            # reads the log should not get it twice.
+            source = "cmd-timing"
+            if jobd_warned(job.get("log") or ""):
+                source = "jobd"
+                warn = None
+            warned = bool(warn) or source == "jobd"
+            if total < REPORT_SECS and not warned:
                 continue
             code = exit_code(job["exit"])
             what = label or "command"
@@ -1092,9 +1112,10 @@ def finish_jobs(sid, cwd, t1, skip):
                     "job",
                     label,
                     total,
-                    bool(warn),
+                    warned,
                     rid,
                     t1,
+                    source=source,
                     run=round(run, 1),
                     wait=None if wait is None else round(wait, 1),
                 )
