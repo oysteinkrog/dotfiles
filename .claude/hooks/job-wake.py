@@ -10,7 +10,21 @@ background and exits 2, and Claude Code then wakes the model with our stderr.
 Registered with "asyncRewake": true. Claude Code runs it in the background
 only in an interactive session or one with streaming input (the SDK). In plain
 `claude -p` it would run as a normal blocking hook and hold up the tool call
-for the whole job, so there we exit 0 at once (see headless_print()).
+for the whole job, so there we exit 0 at once. When the session type cannot be
+proven, the hook waits at most JOB_WAKE_UNPROVEN_SECS (30 s), so a wrong guess
+blocks a tool call for 30 s, never for hours (see session_kind()).
+
+Claude Code 2.1.318 delivers an asyncRewake wake to the main session only,
+never to the subagent whose tool call started the hook. When that subagent is
+an in-process teammate, the hook also writes the result straight into its team
+inbox (~/.claude/teams/<team>/inboxes/<name>.json), the same file and lock that
+SendMessage uses; the teammate's idle loop reads it within about 0.5 s. See
+deliver_to_inbox(). For a plain subagent there is no inbox, so the main
+session is asked to forward the result.
+
+Every decision is logged as one JSON line to
+~/.local/state/job-wake/wakes.jsonl (rotated at 10 MB); bin/job-wake-report
+reads it.
 
 Never fails closed: any error, or output that has no job line, exits 0
 silently. The one exception is the wait cap (JOB_WAKE_MAX_SECS, 3 h): then it
@@ -18,12 +32,15 @@ wakes the agent with a note, so an agent that ended its turn is not left
 waiting for a wake that never comes.
 """
 
+import datetime
+import errno
 import json
 import os
 import re
 import stat
 import sys
 import time
+import uuid
 
 CAP_SECS = 10800  # 3 h; the hook's "timeout" in settings.json is a little longer
 
@@ -37,22 +54,55 @@ def env_num(name, default, lo, hi):
 
 
 MAX_SECS = env_num("JOB_WAKE_MAX_SECS", CAP_SECS, 1, CAP_SECS)
+UNPROVEN_SECS = env_num("JOB_WAKE_UNPROVEN_SECS", 30, 1, 120)
 POLL_SECS = env_num("JOB_WAKE_POLL_SECS", 5, 0.2, 30)
 TAIL_LINES = 20
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
 # JOB_WAKE_LOGS is for tests only: a fake jobd log dir.
 LOGS = os.path.realpath(
-    os.environ.get("JOB_WAKE_LOGS")
-    or os.path.join(
-        os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
-        "jobd",
-        "logs",
-    )
+    os.environ.get("JOB_WAKE_LOGS") or os.path.join(STATE_HOME, "jobd", "logs")
 )
+WAKE_LOG = os.path.join(
+    os.environ.get("JOB_WAKE_STATE") or os.path.join(STATE_HOME, "job-wake"),
+    "wakes.jsonl",
+)
+WAKE_LOG_MAX = 10 * 1024 * 1024
+CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+# Sender name for direct inbox delivery. It must not be a teammate's name:
+# Claude Code marks a message whose sender claims to be a teammate as forged.
+SENDER = "jobd-hook"
+INBOX_TEXT_MAX = 3800
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 # `job submit --detach` prints: <request id> <log file> <exit file>
 JOB_LINE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,127}) (/\S+\.log) (/\S+\.exit)\s*$", re.M
 )
 CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def clean(v, n=80):
+    return CTRL.sub("", str(v or ""))[:n]
+
+
+def log_event(rec):
+    """Append one JSON line to the wake log. Never raises."""
+    try:
+        rec = dict({"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}, **rec)
+        line = (json.dumps(rec, separators=(",", ":")) + "\n").encode()
+        os.makedirs(os.path.dirname(WAKE_LOG), exist_ok=True)
+        try:
+            if os.stat(WAKE_LOG).st_size > WAKE_LOG_MAX:
+                os.replace(WAKE_LOG, WAKE_LOG + ".1")
+        except FileNotFoundError:
+            pass
+        fd = os.open(WAKE_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception:
+        pass
 
 
 def response_text(response):
@@ -67,39 +117,58 @@ def response_text(response):
     return ""
 
 
-def runs_async():
-    """True only when the nearest claude ancestor is known to run asyncRewake
-    hooks in the background: an interactive session, or print mode with
-    --input-format stream-json (the SDK). In plain `claude -p` the hook would
-    block the tool call, so anything unknown counts as not async."""
+def proc_argv_ppid(pid):
+    with open("/proc/%d/cmdline" % pid, "rb") as f:
+        argv = [a.decode("utf8", "replace") for a in f.read().split(b"\0") if a]
+    with open("/proc/%d/stat" % pid) as f:
+        ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+    return argv, ppid
+
+
+def has_tty(pid):
+    for fd in (0, 1, 2):
+        try:
+            t = os.readlink("/proc/%d/fd/%d" % (pid, fd))
+        except OSError:
+            continue
+        if t.startswith("/dev/pts/") or re.match(r"^/dev/tty\d*$", t):
+            return True
+    return False
+
+
+def session_kind():
+    """How the nearest claude ancestor runs asyncRewake hooks.
+
+    "async": known to run them in the background: an interactive session (no
+    -p and a terminal on stdin, stdout or stderr), or print mode with
+    --input-format stream-json (the SDK).
+    "print": plain `claude -p`: the hook would block the tool call.
+    "unknown": no claude ancestor found, or no -p but no terminal either.
+    JOB_WAKE_TEST_KIND overrides it, for tests only."""
+    forced = os.environ.get("JOB_WAKE_TEST_KIND")
+    if forced in ("async", "print", "unknown"):
+        return forced
     pid = os.getppid()
     for _ in range(16):
         try:
-            with open("/proc/%d/cmdline" % pid, "rb") as f:
-                argv = [a.decode("utf8", "replace") for a in f.read().split(b"\0") if a]
-            with open("/proc/%d/stat" % pid) as f:
-                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            argv, ppid = proc_argv_ppid(pid)
         except (OSError, ValueError, IndexError):
-            return False
+            return "unknown"
         if argv and (
             os.path.basename(argv[0]) == "claude" or "/claude/versions/" in argv[0]
         ):
-            if "-p" not in argv and "--print" not in argv:
-                return True
             for i, a in enumerate(argv):
-                if a == "--input-format=stream-json":
-                    return True
-                if (
-                    a == "--input-format"
-                    and i + 1 < len(argv)
-                    and argv[i + 1] == "stream-json"
+                if a == "--input-format=stream-json" or (
+                    a == "--input-format" and argv[i + 1 : i + 2] == ["stream-json"]
                 ):
-                    return True
-            return False
+                    return "async"
+            if "-p" in argv or "--print" in argv:
+                return "print"
+            return "async" if has_tty(pid) else "unknown"
         if ppid <= 1:
-            return False
+            return "unknown"
         pid = ppid
-    return False
+    return "unknown"
 
 
 def trusted(rid, log, exitf):
@@ -112,10 +181,10 @@ def trusted(rid, log, exitf):
     )
 
 
-def open_regular(path):
+def open_regular(path, flags=os.O_RDONLY):
     """Open a regular file without following a symlink, or return None."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
     try:
@@ -140,12 +209,14 @@ def fmt(secs):
 
 
 def read_exit(path):
+    """(exit code, mtime) of an exit file, or None while it is missing."""
     f = open_regular(path)
     if f is None:
         return None
     try:
         with f:
-            return int(f.read(32).strip())
+            mtime = os.fstat(f.fileno()).st_mtime
+            return int(f.read(32).strip()), mtime
     except (OSError, ValueError):
         return None
 
@@ -202,36 +273,206 @@ def submitted_cmd(command):
     return text[:200]
 
 
-def main():
+CMD_CLASSES = [
+    ("cargo", r"\bcargo\b"),
+    ("dotnet", r"\bdotnet\b"),
+    ("wine-tests", r"run-tests\.sh"),
+    ("build-script", r"\bbuild\.(?:sh|cmd)\b"),
+    ("localbuild", r"\blocalbuild\b"),
+    ("cmake-ninja", r"\b(?:cmake|ninja)\b"),
+    ("sleep", r"^sleep\b"),
+]
+
+
+def cmd_class(cmd):
+    for name, pat in CMD_CLASSES:
+        if re.search(pat, cmd):
+            return name
+    return "other"
+
+
+def teammate_of(payload):
+    """(name, team, inbox path) when the submitting agent is an in-process
+    teammate whose team and inbox can be found, else None.
+
+    Claude Code writes <transcript dir>/<session id>/subagents/
+    agent-<agent id>.meta.json with taskKind, name and teamName."""
+    agent_id = str(payload.get("agent_id") or "")
+    sid = str(payload.get("session_id") or "")
+    tpath = str(payload.get("transcript_path") or "")
+    if not (SAFE_ID.match(agent_id) and SAFE_ID.match(sid) and tpath.startswith("/")):
+        return None
+    meta_path = os.path.join(
+        os.path.dirname(tpath), sid, "subagents", "agent-%s.meta.json" % agent_id
+    )
+    f = open_regular(meta_path)
+    if f is None:
+        return None
+    with f:
+        meta = json.loads(f.read(65536))
+    if not isinstance(meta, dict) or meta.get("taskKind") != "in_process_teammate":
+        return None
+    name, team = meta.get("name"), meta.get("teamName")
+    if not (
+        isinstance(name, str)
+        and isinstance(team, str)
+        and SAFE_NAME.match(name)
+        and SAFE_NAME.match(team)
+        and name != SENDER
+    ):
+        return None
+    team_dir = os.path.join(CLAUDE_DIR, "teams", team)
+    f = open_regular(os.path.join(team_dir, "config.json"))
+    if f is None:
+        return None
+    with f:
+        config = json.loads(f.read(4 * 1024 * 1024))
+    members = config.get("members") if isinstance(config, dict) else None
+    if not any(
+        isinstance(m, dict)
+        and m.get("name") == name
+        and m.get("backendType") == "in-process"
+        for m in members or []
+    ):
+        return None
+    inboxes = os.path.join(team_dir, "inboxes")
+    if not os.path.isdir(inboxes) or os.path.islink(inboxes):
+        return None
+    return name, team, os.path.join(inboxes, name + ".json")
+
+
+def take_lock(lock, deadline):
+    """mkdir lock, the same scheme as Claude Code's proper-lockfile: a lock
+    directory older than 10 s counts as stale and is removed."""
+    delay = 0.005
+    while True:
+        try:
+            os.mkdir(lock, 0o755)
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - os.lstat(lock).st_mtime > 10:
+                    os.rmdir(lock)
+                    continue
+            except OSError:
+                pass
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(delay)
+        delay = min(delay * 2, 0.1)
+
+
+def deliver_to_inbox(inbox, text, summary):
+    """Append one message to a teammate's inbox under its lock, the way
+    SendMessage writes it. True on success, never raises."""
+    lock = inbox + ".lock"
+    try:
+        try:
+            fd = os.open(inbox, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            os.write(fd, b"[]")
+            os.close(fd)
+        except FileExistsError:
+            pass
+        if not take_lock(lock, time.monotonic() + 3):
+            return False
+        try:
+            f = open_regular(inbox)
+            if f is None:
+                return False
+            with f:
+                raw = f.read(16 * 1024 * 1024)
+            messages = json.loads(raw.decode("utf8")) if raw.strip() else []
+            if not isinstance(messages, list):
+                return False
+            messages.append(
+                {
+                    "from": SENDER,
+                    "text": text,
+                    "summary": summary,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z"),
+                    "msgV": 1,
+                    "msg_id": str(uuid.uuid4()),
+                    "type": "message",
+                    "read": False,
+                }
+            )
+            tmp = "%s.job-wake.%d.tmp" % (inbox, os.getpid())
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            try:
+                os.write(fd, json.dumps(messages, indent=2, ensure_ascii=False).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.replace(tmp, inbox)
+            except OSError:
+                os.unlink(tmp)
+                raise
+            return True
+        finally:
+            try:
+                os.rmdir(lock)
+            except OSError:
+                pass
+    except Exception:
+        return False
+
+
+def main(rec):
     payload = json.load(sys.stdin)
     if payload.get("tool_name") != "Bash":
         return 0
     tin = payload.get("tool_input") or {}
     command = tin.get("command") or ""
-    if (
-        "job submit" not in command
-        or "--detach" not in command
-        or tin.get("run_in_background")
-    ):
+    if "job submit" not in command or "--detach" not in command:
+        return 0
+    agent_id = clean(payload.get("agent_id"))
+    rec.update(
+        session=clean(payload.get("session_id")),
+        cwd=clean(payload.get("cwd"), 300),
+        cmd_class=cmd_class(submitted_cmd(command)),
+        submitted_by="subagent" if agent_id else "main",
+    )
+    if agent_id:
+        rec.update(agent_id=agent_id, agent_type=clean(payload.get("agent_type")))
+    if tin.get("run_in_background"):
+        rec["outcome"] = "skipped-bg"
         return 0
     jobs = [
         (m.group(1), m.group(2), m.group(3), CTRL.sub("", submitted_cmd(command)))
         for m in JOB_LINE.finditer(response_text(payload.get("tool_response")))
         if trusted(m.group(1), m.group(2), m.group(3))
     ]
-    if not jobs or not runs_async():
+    if not jobs:
+        rec["outcome"] = "skipped-nojob"
         return 0
+    rec["job_id"] = jobs[0][0]
+    if len(jobs) > 1:
+        rec["job_ids"] = [j[0] for j in jobs]
+    kind = session_kind()
+    rec["session_kind"] = kind
+    if kind == "print":
+        rec["outcome"] = "skipped-p"
+        return 0
+    cap = MAX_SECS if kind == "async" else min(UNPROVEN_SECS, MAX_SECS)
 
     start = time.monotonic()
     pending = list(jobs)
     msgs = []
     failed = False
+    timed_out = False
+    first = None  # (code, exit mtime) of the first job to end
     while pending:
         for job in list(pending):
-            code = read_exit(job[2])
-            if code is not None:
+            got = read_exit(job[2])
+            if got is not None:
+                code, mtime = got
                 pending.remove(job)
                 msgs.append(report(job, code, time.monotonic() - start))
+                if first is None or (code != 0 and first[0] == 0):
+                    first = (code, mtime)
                 failed = failed or code != 0
         if not pending:
             break
@@ -243,35 +484,77 @@ def main():
                 % ", ".join(j[0] for j in pending)
             )
             break
-        left = MAX_SECS - (time.monotonic() - start)
+        left = cap - (time.monotonic() - start)
         if left <= 0:
+            timed_out = True
+            why = (
+                ""
+                if kind == "async"
+                else " because it could not prove this session runs it in the background"
+            )
             for job in pending:
                 msgs.append(
-                    "Detached job %s has not finished after %s; the job-wake hook stopped waiting. "
+                    "Detached job %s has not finished after %s; the job-wake hook stopped waiting%s. "
                     "Check it with `job queue` or `job wait %s`. Command: %s"
-                    % (job[0], fmt(MAX_SECS), job[0], job[3])
+                    % (job[0], fmt(cap), why, job[0], job[3])
                 )
             break
         time.sleep(min(POLL_SECS, left))
-    # Claude Code 2.1.318 delivers the wake to the main session, never to the
-    # subagent whose tool call started this hook (tested 2026-11-05). Say who
-    # submitted, so the main session can pass it on.
-    agent_id = CTRL.sub("", str(payload.get("agent_id") or ""))[:80]
+    rec["waited_s"] = round(time.monotonic() - start, 1)
+    if first is not None:
+        rec["exit_code"] = first[0]
+        rec["exit_to_wake_s"] = round(max(0.0, time.time() - first[1]), 1)
+    rec["outcome"] = "timeout" if timed_out else "woke"
+
     if agent_id:
-        agent_type = CTRL.sub("", str(payload.get("agent_type") or "?"))[:80]
-        msgs.append(
-            "This job was submitted by subagent %s (type %s), not by you. If that "
-            "subagent is still running or waiting, forward this result to it with "
-            "SendMessage; it does not get this message itself." % (agent_id, agent_type)
-        )
+        mate = None
+        try:
+            mate = teammate_of(payload)
+        except Exception:
+            mate = None
+        delivered = False
+        if mate:
+            name, team, inbox = mate
+            rec.update(agent_name=name, team=team)
+            text = "\n\n".join(msgs)
+            if len(text) > INBOX_TEXT_MAX:
+                text = text[: INBOX_TEXT_MAX - 40] + "\n[cut; read the log file above]"
+            summary = msgs[0].splitlines()[0][:200] if msgs else "Detached job update"
+            delivered = deliver_to_inbox(
+                inbox,
+                text + "\n\n(Sent by the job-wake hook, not by a teammate.)",
+                summary,
+            )
+        agent_type = clean(payload.get("agent_type") or "?")
+        if delivered:
+            rec["outcome"] = "direct-delivered" if not timed_out else "timeout"
+            rec["delivered"] = True
+            msgs.append(
+                "This job was submitted by teammate %s (agent %s, type %s), not by you. "
+                "The job-wake hook already put this result in that teammate's inbox, "
+                "so do not forward it." % (mate[0], agent_id, agent_type)
+            )
+        else:
+            who = "%s (agent %s)" % (mate[0], agent_id) if mate else agent_id
+            msgs.append(
+                "This job was submitted by subagent %s (type %s), not by you. If that "
+                "subagent is still running or waiting, forward this result to it with "
+                "SendMessage; it does not get this message itself." % (who, agent_type)
+            )
     sys.stderr.write("\n\n".join(msgs) + "\n")
     return 2
 
 
 if __name__ == "__main__":
+    rec = {}
     try:
-        sys.exit(main())
-    except SystemExit:
-        raise
-    except BaseException:
-        sys.exit(0)
+        rc = main(rec)
+    except BaseException as e:
+        if isinstance(e, SystemExit):
+            raise
+        rec["outcome"] = "error"
+        rec["error"] = type(e).__name__
+        rc = 0
+    if rec.get("outcome"):
+        log_event(rec)
+    sys.exit(rc)
