@@ -1103,7 +1103,9 @@ def finish_jobs(sid, cwd, t1, skip):
         try:
             save(path, state)
         except OSError:
-            pass
+            # Nothing was consumed, so report nothing now; a later call
+            # tries again.
+            return [], []
         set_pending_mark(sid, bool(pending))
     return notes, records
 
