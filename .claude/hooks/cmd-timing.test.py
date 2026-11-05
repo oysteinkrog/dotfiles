@@ -603,10 +603,10 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         ex.write_text(code + "\n")
         os.utime(ex, (end, end))
 
-    def db_row(rid, cwd, sub, end, starts):
+    def db_row(rid, cwd, sub, end, starts, argv=("cargo", "test")):
         db.execute(
-            "insert into requests values (?, '[]', ?, ?, ?, ?)",
-            (rid, cwd, sub, end, "done" if end else "waiting"),
+            "insert into requests values (?, ?, ?, ?, ?, ?)",
+            (rid, json.dumps(list(argv)), cwd, sub, end, "done" if end else "waiting"),
         )
         for i, (a, b) in enumerate(starts):
             db.execute(
@@ -733,6 +733,21 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
             "6 min 40 s waiting in the jobd queue, 4 min 50 s running",
         ),
         (
+            42,
+            "jobd: waited 2 min in queue, ran 4 min 39 s, exit 0",
+            "2 min waiting in the jobd queue, 4 min 39 s running",
+        ),
+        (
+            43,
+            "jobd: waited 1 h 2 min in queue, ran 3 min, exit 1",
+            "1 h 2 min waiting in the jobd queue, 3 min running",
+        ),
+        (
+            44,
+            "jobd: waited 2 min in queue, ran 4 min 39 s, exit 0 wait_s=125.5 run_s=280",
+            "2 min 6 s waiting in the jobd queue, 4 min 40 s running",
+        ),
+        (
             41,
             "jobd: wait=60 run=630",
             "1 min waiting in the jobd queue, 10 min 30 s running",
@@ -779,6 +794,28 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         ctx,
     )
 
+    # J5b. Two slow jobs that ended 40 min apart, both collected by one
+    # later call, are not repeat runs.
+    e = jenv("sj5b")
+    jobs5b = [(T - 3600, T - 3200), (T - 1000, T - 600)]
+    for n, (sub, end) in enumerate(jobs5b):
+        run(
+            with_out(
+                claude("job submit --detach -- cargo build", 1, str(plain), sid="j5b"),
+                submit_out(job_id(sub, 55 + n)),
+            ),
+            e,
+            now=sub + 1,
+        )
+    for n, (sub, end) in enumerate(jobs5b):
+        finish(job_id(sub, 55 + n), end)
+    rc, ctx, _ = run(claude("ls", 1, str(plain), sid="j5b"), e)
+    check(
+        "jobs ended 40 min apart do not warn",
+        ctx.count("Job ") == 2 and "Slow test loop" not in ctx,
+        ctx,
+    )
+
     # J6. Output piped away: the id comes from jobd's database, by folder and
     # submit time.
     e = jenv("sj6")
@@ -793,6 +830,45 @@ with tempfile.TemporaryDirectory(dir=base) as tmp:
         now=sub + 2,
     )
     check("id found in jobd's database", rid6 in pending_of("sj6", "j6"))
+
+    # J6b. Two matching requests for one detached submit (another agent in
+    # the same folder): take none. A request with other words is not ours.
+    e = jenv("sj6b")
+    sub = T - 950
+    plain2 = tmp / "plain2"
+    plain2.mkdir()
+    db_row(job_id(sub, 61), str(plain2), sub + 0.2, None, [])
+    db_row(job_id(sub, 62), str(plain2), sub + 0.4, None, [])
+    run(
+        claude(
+            "job submit --detach -- cargo test >/dev/null", 2, str(plain2), sid="j6b"
+        ),
+        e,
+        now=sub + 2,
+    )
+    check("ambiguous database match is not taken", not pending_of("sj6b", "j6b"))
+    e = jenv("sj6c")
+    sub = T - 960
+    plain3 = tmp / "plain3"
+    plain3.mkdir()
+    db_row(job_id(sub, 63), str(plain3), sub + 0.2, None, [], argv=("make", "all"))
+    r64 = job_id(sub, 64)
+    db_row(r64, str(plain3), sub + 0.4, None, [], argv=("cargo", "test", "-p", "a b"))
+    run(
+        claude(
+            "job submit --detach -- cargo test -p 'a b' >/dev/null",
+            2,
+            str(plain3),
+            sid="j6c",
+        ),
+        e,
+        now=sub + 2,
+    )
+    check(
+        "database match uses the command words",
+        list(pending_of("sj6c", "j6c")) == [r64],
+        pending_of("sj6c", "j6c"),
+    )
 
     # J7. Command substitution and other forms are detected.
     e = jenv("sj7")
