@@ -474,6 +474,78 @@ pane_rows() {
   done < <(jq -r '.[] | [.window_id, .pane_id, (.tty_name // ""), (.cwd // "")] | @tsv' <<<"$listing" 2>/dev/null)
 }
 
+# The place (0-based) that the pane $2 of the old server $1 had in that
+# server's tab order, from panes.used (the panes file plan used, in tab order).
+# Falls back to the row of Claude session $3. Prints 1000000 when unknown, so
+# the tab goes after every tab whose place is known.
+old_slot() {
+  local mux=$1 pane=$2 sid=$3 s=""
+  if [ "$(head -1 "$PANES.used" 2>/dev/null)" = "mux $mux" ]; then
+    s=$(awk -F'\t' -v p="$pane" -v sid="$sid" '
+      NR == 1 { next }
+      p != "" && $2 == p { print NR - 2; found = 1; exit }
+      $3 == "claude" && $5 == sid && bysid == "" { bysid = NR - 2 }
+      END { if (!found && bysid != "") print bysid }' "$PANES.used")
+  fi
+  printf '%s\n' "${s:-1000000}"
+}
+
+# Match the panes of this server (pane_rows output on stdin) to the rows of the
+# old server's panes file $1, and print "<pane> TAB <old place>" for each match.
+# Claude and opencode panes match by session id; a shell matches the first
+# unclaimed old row in the same folder that came back as a shell (a shell, an
+# other program, or a Claude with no entry), and a fresh opencode an old
+# opencode row in the same folder with no session id.
+pane_slots() {
+  awk -F'\t' '
+    FILENAME == ARGV[1] { if (FNR == 1) next; i = FNR - 2; ok[i] = $3; oc[i] = $4; oa[i] = $5; n = i + 1; next }
+    { m++; cp[m] = $2; ck[m] = $3; cc[m] = $4; ca[m] = $5 }
+    END {
+      for (j = 1; j <= m; j++) if ((ck[j] == "claude" || ck[j] == "opencode") && ca[j] != "")
+        for (i = 0; i < n; i++) if (!(i in used) && ok[i] == ck[j] && oa[i] == ca[j]) { used[i] = 1; got[j] = i; break }
+      for (pass = 1; pass <= 2; pass++)
+        for (j = 1; j <= m; j++) {
+          if (j in got) continue
+          for (i = 0; i < n; i++) {
+            if ((i in used) || oc[i] != cc[j]) continue
+            if (ck[j] == "shell" || ck[j] == "other") {
+              if (pass == 1 && ok[i] != "shell" && ok[i] != "other") continue
+              if (pass == 2 && ok[i] != "claude") continue
+            } else if (ck[j] == "opencode") {
+              if (pass == 2 || ok[i] != "opencode" || oa[i] != "") continue
+            } else continue
+            used[i] = 1; got[j] = i; break
+          }
+        }
+      for (j = 1; j <= m; j++) if (j in got) print cp[j] "\t" got[j]
+    }' "$1" -
+}
+
+# Where a tab with old place $1 belongs, given the mux listing (`cli list
+# --json`) on stdin and the name $2 of an array mapping pane id to old place.
+# Prints "<window id> TAB <tab index>": right after the last tab whose old place
+# is lower, else at the first tab whose old place is higher. With no known
+# neighbour it prints the first window and an empty index (leave it at the end).
+tab_target() {
+  local want=$1 p
+  local -n slots_=$2
+  awk -F'\t' -v want="$want" '
+    FILENAME == ARGV[1] { slot[$1] = $2; next }
+    {
+      w = $1; t = $2; p = $3; k = w SUBSEP t
+      if (!(k in idx)) { idx[k] = cnt[w]++; m++; key[m] = k; win[m] = w; if (first == "") first = w }
+      if ((p in slot) && (!(k in ts) || slot[p] + 0 < ts[k])) ts[k] = slot[p] + 0
+    }
+    END {
+      pw = ""
+      for (j = 1; j <= m; j++) if ((key[j] in ts) && ts[key[j]] < want + 0) { pw = win[j]; pi = idx[key[j]] }
+      if (pw != "") { print pw "\t" pi + 1; exit }
+      for (j = 1; j <= m; j++) if ((key[j] in ts) && ts[key[j]] > want + 0) { print win[j] "\t" idx[key[j]]; exit }
+      print first "\t"
+    }' <(for p in "${!slots_[@]}"; do printf '%s\t%s\n' "$p" "${slots_[$p]}"; done) \
+       <(jq -r '.[] | [.window_id, .tab_id, .pane_id] | @tsv' 2>/dev/null)
+}
+
 # Save the mux server's tab order: a header line with the server's id, then
 # <window id> TAB <pane id> per pane, in tab order. Ask the server's own socket,
 # not a GUI's (a GUI numbers panes its own way). Keep the old file when the
@@ -620,7 +692,13 @@ snapshot() {
   # stamp is the old server's, and nothing else would bring it back. On
   # 2026-10-12 kpp had to be resumed by hand. A session that Claude moved to its
   # background daemon is still running under another pid: drop that entry.
-  local late lsid window_id="" lcmd lpane
+  #
+  # Each one goes back to its place in the old server's tab order, not to the
+  # end of the window. On 2026-11-05 the mux server crashed 7 minutes after a
+  # reboot, 22 sessions came back late, and they were appended in the order of
+  # their session ids, which scrambled the tabs.
+  local late lsid lcmd lpane lslot lw lidx ltab lrow lf
+  local -a late_rows=()
   for f in "$SESS_DIR"/*.json; do
     [ -z "$stopping" ] || break
     [ -e "$f" ] || continue
@@ -632,15 +710,38 @@ snapshot() {
       echo "$(date -Is) late $(basename "$f" .json): not resumed, restamped or still running elsewhere" >> "$STATE_DIR/events.log"
       continue
     fi
-    lcmd=$(resume_cmd "$f") || { mv "$f" "$STATE_DIR/restored/"; continue; }
-    [ -n "$window_id" ] || window_id=$(jq -r '.[0].window_id // empty' <<<"$listing")
-    mv "$f" "$STATE_DIR/restored/"
-    if lpane=$(spawn_tab "$window_id" "$(jq -r .cwd "$STATE_DIR/restored/$(basename "$f")")" "$lcmd"); then
-      echo "$(date -Is) late $(basename "$f" .json): resumed in pane $lpane, its Claude outlived mux $late" >> "$STATE_DIR/events.log"
-    else
-      echo "$(date -Is) late $(basename "$f" .json): spawn failed" >> "$STATE_DIR/events.log"
-    fi
+    late_rows+=("$(old_slot "$late" "$(jq -r '.pane // empty' "$f")" "$lsid")"$'\t'"$f")
   done
+  if [ ${#late_rows[@]} -gt 0 ]; then
+    # The old tab order, and where the tabs of this server sit in it.
+    local -A slot_of=()
+    local sp_ ss_
+    if [ -f "$PANES.used" ]; then
+      while IFS=$'\t' read -r sp_ ss_; do slot_of[$sp_]=$ss_; done \
+        < <(pane_slots "$PANES.used" <<<"$prow")
+    fi
+    while IFS= read -r lrow; do
+      lslot=${lrow%%$'\t'*}; lf=${lrow#*$'\t'}
+      late=$(jq -r '.late // empty' "$lf")
+      lcmd=$(resume_cmd "$lf") || { mv "$lf" "$STATE_DIR/restored/"; continue; }
+      # The window and position to put it in: after the tab that came before it
+      # in the old order, else before the one that came after it.
+      lw="" lidx=""
+      IFS=$'\t' read -r lw lidx < <(ft list --json 2>/dev/null | tab_target "$lslot" slot_of)
+      mv "$lf" "$STATE_DIR/restored/"
+      lf="$STATE_DIR/restored/$(basename "$lf")"
+      if lpane=$(spawn_tab "$lw" "$(jq -r .cwd "$lf")" "$lcmd"); then
+        slot_of[$lpane]=$lslot
+        if [ -n "$lidx" ]; then
+          ltab=$(ft list --json 2>/dev/null | jq -r --argjson p "$lpane" '.[] | select(.pane_id == $p) | .tab_id' | head -1)
+          [ -n "$ltab" ] && ft move-tab --tab-id "$ltab" --index "$lidx" >/dev/null 2>&1 || lidx="end (move failed)"
+        fi
+        echo "$(date -Is) late $(basename "$lf" .json): resumed in pane $lpane at tab ${lidx:-end} (old place $lslot), its Claude outlived mux $late" >> "$STATE_DIR/events.log"
+      else
+        echo "$(date -Is) late $(basename "$lf" .json): spawn failed" >> "$STATE_DIR/events.log"
+      fi
+    done < <(printf '%s\n' "${late_rows[@]}" | sort -s -t$'\t' -k1,1n)
+  fi
 
   # Drop ended markers once their Claude process is gone.
   for em in "$STATE_DIR"/ended/*; do
