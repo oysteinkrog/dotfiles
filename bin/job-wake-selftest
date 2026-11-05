@@ -4,7 +4,7 @@
 Starts a throwaway interactive claude in a private tmux server, in a fresh
 folder under /var/tmp/claude with project settings only. The lead (sonnet)
 spawns a haiku teammate "builder" that runs
-`job submit --detach --est 0.1,0.1,25 -- sleep 20` and goes idle. PASS means:
+`job submit --detach --est 0.1,0.1,45 -- sleep 30` and goes idle. PASS means:
 the hook logged direct-delivered, the builder's transcript holds a message
 from jobd-hook, the builder replied to the lead, and the lead did not
 forward anything with SendMessage.
@@ -17,6 +17,9 @@ Usage: job-wake-selftest [--no-bump] [--timeout SECS] [--keep]
 """
 
 import argparse
+import datetime
+import shlex
+import uuid
 import glob
 import json
 import os
@@ -35,7 +38,7 @@ CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude"
 
 PROMPT = """This is an automated test of a hook. Do exactly this and nothing else.
 Use the Agent tool once, with name "builder", subagent_type "general-purpose", model "haiku", and this prompt:
-"Run this Bash command once, in the foreground: job submit --detach --est 0.1,0.1,25 -- sleep 20 . Then end your turn. Do not poll, wait, sleep, loop or run job wait. Later you will get a message that the job finished. When it arrives, call SendMessage to team-lead with the text 'builder got: ' followed by the first line of that message, then end your turn."
+"Run this Bash command once, in the foreground: job submit --detach --est 0.1,0.1,45 -- sleep 30 . Then end your turn. Do not poll, wait, sleep, loop or run job wait. Later you will get a message that the job finished. When it arrives, call SendMessage to team-lead with the text 'builder got: ' followed by the first line of that message, then end your turn."
 After spawning it, end your turn. If a hook later wakes you about the job, reply only 'lead woken'. Never send anything to builder yourself."""
 
 
@@ -43,10 +46,78 @@ def sh(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
 
 
-def claude_version():
-    out = sh("claude", "--version").stdout
-    m = re.search(r"(\d+\.\d+\.\d+)", out)
+VERSION_RE = re.compile(r"/claude/versions/(\d+\.\d+\.\d+)$")
+
+
+def claude_version(binary):
+    m = VERSION_RE.search(binary)
+    if m:
+        return m.group(1)
+    m = re.search(r"(\d+\.\d+\.\d+)", sh(binary, "--version").stdout)
     return m.group(1) if m else None
+
+
+def running_version(sock):
+    """Version of the claude process inside the tmux pane, from its binary."""
+    pid = sh(
+        "tmux", "-L", sock, "list-panes", "-t", "t", "-F", "#{pane_pid}"
+    ).stdout.strip()
+    for p in [pid] + sh("pgrep", "-P", pid).stdout.split():
+        try:
+            m = VERSION_RE.search(os.readlink("/proc/%s/exe" % p))
+        except (OSError, ValueError):
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def pids_using(path):
+    """Processes whose command line or working folder mentions path."""
+    out = []
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) == os.getpid():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % p, "rb") as f:
+                cmd = f.read().decode("utf8", "replace")
+            cwd = os.readlink("/proc/%s/cwd" % p)
+        except OSError:
+            continue
+        if path in cmd or cwd == path or cwd.startswith(path + "/"):
+            out.append(p)
+    return out
+
+
+def wait_for_exit(path, secs):
+    deadline = time.monotonic() + secs
+    while pids_using(path) and time.monotonic() < deadline:
+        time.sleep(0.5)
+
+
+def ts(d):
+    try:
+        return datetime.datetime.fromisoformat(
+            d["timestamp"].replace("Z", "+00:00")
+        ).timestamp()
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def idle_gap(sub_transcript):
+    """Seconds between the builder's last entry before the jobd-hook message
+    and that message. A long gap means the builder was idle, not mid-turn."""
+    prev = None
+    for d in read_jsonl(sub_transcript):
+        if 'teammate_id="jobd-hook"' in json.dumps(d, ensure_ascii=False).replace(
+            '\\"', '"'
+        ):
+            t = ts(d)
+            return None if t is None or prev is None else t - prev
+        t = ts(d)
+        if t is not None:
+            prev = t
+    return None
 
 
 def read_jsonl(path):
@@ -100,8 +171,13 @@ def main():
     )
     a = ap.parse_args()
 
-    version = claude_version()
-    print("Claude Code version: %s" % version)
+    found = shutil.which("claude")
+    if not found:
+        print("FAIL: claude is not on PATH")
+        return 1
+    binary = os.path.realpath(found)
+    version = claude_version(binary)
+    print("Claude Code version: %s (%s)" % (version, binary))
     os.makedirs("/var/tmp/claude", exist_ok=True)
     work = tempfile.mkdtemp(prefix="job-wake-selftest-", dir="/var/tmp/claude")
     sock = "jwselftest-%d" % os.getpid()
@@ -135,13 +211,15 @@ def main():
     with open(os.path.join(work, "prompt.txt"), "w") as f:
         f.write(PROMPT)
 
-    lead_sid = lead_transcript = None
+    lead_sid = str(uuid.uuid4())
+    lead_transcript = None
     ok = False
     evidence = []
     try:
         cmd = (
-            "claude --setting-sources project,local --dangerously-skip-permissions "
-            "--model sonnet --strict-mcp-config"
+            "%s --session-id %s --setting-sources project,local "
+            "--dangerously-skip-permissions --model sonnet --strict-mcp-config"
+            % (shlex.quote(binary), lead_sid)
         )
         r = sh(
             "tmux",
@@ -195,6 +273,10 @@ def main():
                 )
                 return 1
             time.sleep(1)
+        running = running_version(sock)
+        if running != version:
+            print("FAIL: tmux runs claude %s, expected %s" % (running, version))
+            return 1
         sh(
             "tmux",
             "-L",
@@ -214,11 +296,8 @@ def main():
         deadline = time.monotonic() + a.timeout
         while time.monotonic() < deadline:
             for d in read_jsonl(payloads):
-                if not lead_sid and d.get("session_id"):
-                    lead_sid, lead_transcript = (
-                        d["session_id"],
-                        d.get("transcript_path"),
-                    )
+                if not lead_transcript and d.get("session_id") == lead_sid:
+                    lead_transcript = d.get("transcript_path")
             for w in read_jsonl(os.path.join(state, "wakes.jsonl")):
                 if w.get("job_id"):
                     wake = w
@@ -258,6 +337,13 @@ def main():
             evidence.append(
                 "builder transcript has a message from jobd-hook: %s" % builder_got
             )
+            gap = idle_gap(sub)
+            idle = gap is not None and gap >= 10
+            evidence.append(
+                "builder was idle before the message: %s (%s s since its last entry)"
+                % (idle, None if gap is None else round(gap, 1))
+            )
+            builder_got = builder_got and idle
         forwards = sendmessage_to_builder(lead_transcript) if lead_transcript else -1
         evidence.append("lead SendMessage calls to builder: %d" % forwards)
         evidence.append(
@@ -274,6 +360,12 @@ def main():
             evidence.append("last screen:\n" + pane())
     finally:
         sh("tmux", "-L", sock, "kill-server")
+        if not ok:
+            # Do not leave the test job in jobd's queue.
+            for d in read_jsonl(payloads):
+                out = json.dumps(d.get("tool_response") or "")
+                for rid in re.findall(r"(\d{19}-\d+-[0-9a-f]{8}) /", out):
+                    sh("job", "cancel", rid)
         tmux_dir = os.path.join(
             os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.getuid()
         )
@@ -281,15 +373,19 @@ def main():
             os.unlink(os.path.join(tmux_dir, sock))
         except OSError:
             pass
+        # claude and its hooks may still be exiting and writing into the
+        # folder; wait for them (this script started them) before removing it.
+        wait_for_exit(work, 30)
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)
-            if lead_transcript and lead_sid:
-                proj = os.path.dirname(lead_transcript)
-                projects = os.path.join(CLAUDE_DIR, "projects")
-                if os.path.dirname(
-                    proj
-                ) == projects and "job-wake-selftest" in os.path.basename(proj):
+            projects = os.path.join(CLAUDE_DIR, "projects")
+            for t in glob.glob(
+                os.path.join(projects, "*job-wake-selftest*", lead_sid + ".jsonl")
+            ):
+                proj = os.path.dirname(t)
+                if os.path.dirname(proj) == projects:
                     shutil.rmtree(proj, ignore_errors=True)
+            if lead_sid:
                 team = os.path.join(CLAUDE_DIR, "teams", "session-" + lead_sid[:8])
                 try:
                     with open(os.path.join(team, "config.json")) as f:
