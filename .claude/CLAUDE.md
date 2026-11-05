@@ -245,8 +245,8 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
 
 The lab PC is the Windows machine `trd-lab-pc` at `192.168.1.143` on the office LAN (not on
 Tailscale). It used to be called Hawk; Windows still reports that name until it is
-renamed, and the jobd worker id is `hawk` until job-system renames it. Never call it Hawk in
-new text. Log in with **`ssh trd-lab-pc`** (old aliases `labpc` and `hawk` still work), which uses the key `~/.ssh/labpc_ed25519`; sshd there
+renamed. The jobd worker id is `trd-lab-pc` (`hawk` still works as an alias). Never call it
+Hawk in new text. Log in with **`ssh labpc`** (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), which uses the key `~/.ssh/labpc_ed25519`; sshd there
 accepts keys only. The shell is Windows, so wrap commands in `powershell -NoProfile -Command`.
 To deploy a build or pull logs, load `lab-deploy`.
 
