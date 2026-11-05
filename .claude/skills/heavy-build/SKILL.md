@@ -187,9 +187,10 @@ Leave `HEAVY_BUILD_PRIORITY` unset.
 - `low` for builds that can wait.
 - `critical` comes from `~/.config/machine/sessions.toml` (a critical session, or a
   grove lane it owns or works in). It cannot be set by hand.
-- Order is high, then critical, then normal, then low, with two age rules:
+- Order is critical, then high, then normal, then low (critical before high since
+  2026-11-05), with two age rules:
   - A critical build that has waited 30 min (`HEAVY_BUILD_CRIT_AGE_SECS`, 1800) goes
-    ahead of high builds. When it is first in line and does not fit, nothing passes it,
+    ahead of other critical builds. When it is first in line and does not fit, nothing passes it,
     high builds included, until its cores and job slot are free. While it waits for
     memory, other critical builds that fit may still pass it.
   - A normal or low build that has waited 60 min (the aging slot) goes ahead of other

@@ -154,16 +154,16 @@
 # pressure checks above, for builds of 2 cores or more); its reason starts
 # "idle-start:". On 2026-10-26 23:27 to 23:38 a 7.8 GiB build waited with
 # 7.0 GiB available and nothing running, and 10 builds waited behind it.
-# Order is priority, then
-# arrival. A build whose lock key is busy is skipped and keeps its place.
+# Order is priority (critical, high, normal, low; critical before high since
+# 2026-11-05, Oystein, at manager-machine's request), then arrival. A build whose lock key is busy is skipped and keeps its place.
 # Writer preference: no build with a tree:<top>#<suffix> key that is behind
 # the first waiter with the plain key tree:<top> in order starts until the
 # plain one has started (reason writer:). Suffixed builds ahead of it in
 # order, and suffixed builds already running, go on as usual; the plain build
 # waits only for the running ones. Builds in other trees are not affected.
 # Aged critical builds: a critical build that has waited
-# HEAVY_BUILD_CRIT_AGE_SECS (default 1800, 0 turns it off) ranks ahead of high
-# builds, the oldest first. Once it has also waited HEAVY_BUILD_STARVE seconds
+# HEAVY_BUILD_CRIT_AGE_SECS (default 1800, 0 turns it off) ranks ahead of
+# other critical builds, the oldest first. Once it has also waited HEAVY_BUILD_STARVE seconds
 # and is first in order without fitting, the starve rule holds every build
 # behind it, high builds too, so the cores and job slots it needs come free.
 # One exception: while that aged critical head waits for memory (memory or
@@ -3179,9 +3179,9 @@ $1 == "W" {
   # waited that long is the head like a normal build.
   w_lowskip[nw] = (w_low[nw] && !(lowheadsecs > 0 && now - $3 >= lowheadsecs))
   if (p == "low" && !lownostarve && now - $3 >= lowage) p = "normal"
-  w_pr[nw] = p; w_rank[nw] = (p == "high") ? 0 : (p == "critical") ? 1 : (p == "low") ? 3 : 2
+  w_pr[nw] = p; w_rank[nw] = (p == "critical") ? 0 : (p == "high") ? 1 : (p == "low") ? 3 : 2
   if (w_low[nw] && now - $3 >= lowage2) w_rank[nw] = 2
-  # An aged critical build (waited critage seconds) goes ahead of high ones.
+  # An aged critical build (waited critage seconds) goes ahead of other critical ones.
   w_caged[nw] = (p == "critical" && critage > 0 && now - $3 >= critage)
   if (w_caged[nw]) w_rank[nw] = -1
   w_mem[nw] = $5 + 0; w_cores[nw] = $6 + 0; w_wall[nw] = $7 + 0; w_keys[nw] = $8; w_cls[nw] = $9
