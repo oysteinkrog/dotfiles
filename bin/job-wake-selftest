@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""End-to-end test of job-wake inbox delivery for the installed Claude Code.
+
+Starts a throwaway interactive claude in a private tmux server, in a fresh
+folder under /var/tmp/claude with project settings only. The lead (sonnet)
+spawns a haiku teammate "builder" that runs
+`job submit --detach --est 0.1,0.1,25 -- sleep 20` and goes idle. PASS means:
+the hook logged direct-delivered, the builder's transcript holds a message
+from jobd-hook, the builder replied to the lead, and the lead did not
+forward anything with SendMessage.
+
+On PASS the claude version is added to job-wake.validated-versions (commit
+it yourself), unless --no-bump. Everything it starts or writes is removed at
+the end: the tmux server, the folder, the session transcripts and the team.
+
+Usage: job-wake-selftest [--no-bump] [--timeout SECS] [--keep]
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+HOOKS = os.path.join(HOME, ".dotfiles", ".claude", "hooks")
+HOOK_SH = os.path.join(HOOKS, "job-wake.sh")
+VALIDATED = os.path.join(HOOKS, "job-wake.validated-versions")
+CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
+
+PROMPT = """This is an automated test of a hook. Do exactly this and nothing else.
+Use the Agent tool once, with name "builder", subagent_type "general-purpose", model "haiku", and this prompt:
+"Run this Bash command once, in the foreground: job submit --detach --est 0.1,0.1,25 -- sleep 20 . Then end your turn. Do not poll, wait, sleep, loop or run job wait. Later you will get a message that the job finished. When it arrives, call SendMessage to team-lead with the text 'builder got: ' followed by the first line of that message, then end your turn."
+After spawning it, end your turn. If a hook later wakes you about the job, reply only 'lead woken'. Never send anything to builder yourself."""
+
+
+def sh(*args, **kw):
+    return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def claude_version():
+    out = sh("claude", "--version").stdout
+    m = re.search(r"(\d+\.\d+\.\d+)", out)
+    return m.group(1) if m else None
+
+
+def read_jsonl(path):
+    out = []
+    try:
+        with open(path, encoding="utf8", errors="replace") as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return out
+
+
+def file_has(path, needle):
+    try:
+        with open(path, encoding="utf8", errors="replace") as f:
+            return needle in f.read()
+    except OSError:
+        return False
+
+
+def sendmessage_to_builder(lead_transcript):
+    n = 0
+    for d in read_jsonl(lead_transcript):
+        msg = d.get("message") if isinstance(d, dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for c in content if isinstance(content, list) else []:
+            if (
+                isinstance(c, dict)
+                and c.get("type") == "tool_use"
+                and c.get("name") == "SendMessage"
+                and "builder" in json.dumps(c.get("input", {}))
+            ):
+                n += 1
+    return n
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--no-bump", action="store_true", help="do not add the version on PASS"
+    )
+    ap.add_argument(
+        "--timeout", type=int, default=900, help="seconds to wait for the result"
+    )
+    ap.add_argument(
+        "--keep", action="store_true", help="keep the test folder and session files"
+    )
+    a = ap.parse_args()
+
+    version = claude_version()
+    print("Claude Code version: %s" % version)
+    os.makedirs("/var/tmp/claude", exist_ok=True)
+    work = tempfile.mkdtemp(prefix="job-wake-selftest-", dir="/var/tmp/claude")
+    sock = "jwselftest-%d" % os.getpid()
+    state = os.path.join(work, "state")
+    payloads = os.path.join(work, "payloads.jsonl")
+    os.makedirs(os.path.join(work, ".claude"))
+    with open(os.path.join(work, "dump.sh"), "w") as f:
+        f.write("#!/usr/bin/env bash\n{ cat; echo; } >> %s\nexit 0\n" % payloads)
+    settings = {
+        "hooks": {
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "bash %s/dump.sh" % work},
+                        {
+                            "type": "command",
+                            "command": "JOB_WAKE_STATE=%s JOB_WAKE_ASSUME_VALIDATED=1 bash %s"
+                            % (state, HOOK_SH),
+                            "asyncRewake": True,
+                            "rewakeMessage": "Detached job finished (job-wake hook):",
+                            "timeout": a.timeout + 60,
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+    with open(os.path.join(work, ".claude", "settings.json"), "w") as f:
+        json.dump(settings, f, indent=1)
+    with open(os.path.join(work, "prompt.txt"), "w") as f:
+        f.write(PROMPT)
+
+    lead_sid = lead_transcript = None
+    ok = False
+    evidence = []
+    try:
+        cmd = (
+            "claude --setting-sources project,local --dangerously-skip-permissions "
+            "--model sonnet --strict-mcp-config"
+        )
+        r = sh(
+            "tmux",
+            "-L",
+            sock,
+            "new-session",
+            "-d",
+            "-s",
+            "t",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "-c",
+            work,
+            cmd,
+        )
+        if r.returncode:
+            print("FAIL: could not start tmux: %s" % r.stderr.strip())
+            return 1
+
+        def pane():
+            return sh("tmux", "-L", sock, "capture-pane", "-p", "-t", "t").stdout
+
+        def keys(*k):
+            sh("tmux", "-L", sock, "send-keys", "-t", "t", *k)
+
+        def choose(label):
+            # Move the dialog cursor onto the option, then confirm. The
+            # default option in these dialogs is "No, exit".
+            for _ in range(6):
+                if re.search(r"❯\s*" + re.escape(label), pane()):
+                    keys("Enter")
+                    return
+                keys("Down")
+                time.sleep(0.4)
+
+        # Get past the start-up dialogs to the prompt.
+        deadline = time.monotonic() + 90
+        while True:
+            p = pane()
+            if "Yes, I accept" in p:
+                choose("Yes, I accept")
+            elif "Yes, I trust this folder" in p:
+                choose("Yes, I trust this folder")
+            elif "bypass permissions on" in p:
+                break
+            if time.monotonic() > deadline:
+                print(
+                    "FAIL: claude did not reach its prompt in 90 s. Last screen:\n" + p
+                )
+                return 1
+            time.sleep(1)
+        sh(
+            "tmux",
+            "-L",
+            sock,
+            "load-buffer",
+            "-b",
+            "p",
+            os.path.join(work, "prompt.txt"),
+        )
+        sh("tmux", "-L", sock, "paste-buffer", "-b", "p", "-t", "t")
+        time.sleep(1)
+        keys("Enter")
+        print("Prompt sent; waiting up to %d s for the job and the wake." % a.timeout)
+
+        wake = None
+        reply = False
+        deadline = time.monotonic() + a.timeout
+        while time.monotonic() < deadline:
+            for d in read_jsonl(payloads):
+                if not lead_sid and d.get("session_id"):
+                    lead_sid, lead_transcript = (
+                        d["session_id"],
+                        d.get("transcript_path"),
+                    )
+            for w in read_jsonl(os.path.join(state, "wakes.jsonl")):
+                if w.get("job_id"):
+                    wake = w
+            if (
+                wake
+                and lead_transcript
+                and file_has(lead_transcript, "builder got: Detached job")
+            ):
+                reply = True
+                break
+            if wake and wake.get("outcome") not in ("direct-delivered", "woke"):
+                break
+            time.sleep(3)
+        time.sleep(3)
+
+        if not wake:
+            evidence.append("no job-wake decision with a job id was logged")
+        else:
+            evidence.append(
+                "hook outcome: %s, agent %s, exit %s, %s s from job end to wake"
+                % (
+                    wake.get("outcome"),
+                    wake.get("agent_name"),
+                    wake.get("exit_code"),
+                    wake.get("exit_to_wake_s"),
+                )
+            )
+        builder_got = False
+        if wake and lead_transcript and wake.get("agent_id"):
+            sub = os.path.join(
+                os.path.dirname(lead_transcript),
+                lead_sid,
+                "subagents",
+                "agent-%s.jsonl" % wake["agent_id"],
+            )
+            builder_got = file_has(sub, 'teammate_id=\\"jobd-hook\\"')
+            evidence.append(
+                "builder transcript has a message from jobd-hook: %s" % builder_got
+            )
+        forwards = sendmessage_to_builder(lead_transcript) if lead_transcript else -1
+        evidence.append("lead SendMessage calls to builder: %d" % forwards)
+        evidence.append(
+            "builder replied to the lead (builder got: Detached job ...): %s" % reply
+        )
+        ok = bool(
+            wake
+            and wake.get("outcome") == "direct-delivered"
+            and builder_got
+            and reply
+            and forwards == 0
+        )
+        if not ok:
+            evidence.append("last screen:\n" + pane())
+    finally:
+        sh("tmux", "-L", sock, "kill-server")
+        tmux_dir = os.path.join(
+            os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.getuid()
+        )
+        try:
+            os.unlink(os.path.join(tmux_dir, sock))
+        except OSError:
+            pass
+        if not a.keep:
+            shutil.rmtree(work, ignore_errors=True)
+            if lead_transcript and lead_sid:
+                proj = os.path.dirname(lead_transcript)
+                projects = os.path.join(CLAUDE_DIR, "projects")
+                if os.path.dirname(
+                    proj
+                ) == projects and "job-wake-selftest" in os.path.basename(proj):
+                    shutil.rmtree(proj, ignore_errors=True)
+                team = os.path.join(CLAUDE_DIR, "teams", "session-" + lead_sid[:8])
+                try:
+                    with open(os.path.join(team, "config.json")) as f:
+                        if json.load(f).get("leadSessionId") == lead_sid:
+                            shutil.rmtree(team, ignore_errors=True)
+                except (OSError, ValueError):
+                    pass
+                for d in glob.glob(
+                    os.path.join(CLAUDE_DIR, "tasks", "*%s*" % lead_sid)
+                ):
+                    shutil.rmtree(d, ignore_errors=True)
+
+    print("\n".join(evidence))
+    if not ok:
+        print("FAIL")
+        return 1
+    print("PASS")
+    if version and not a.no_bump:
+        try:
+            with open(VALIDATED) as f:
+                have = {ln.strip() for ln in f}
+        except OSError:
+            have = set()
+        if version not in have:
+            with open(VALIDATED, "a") as f:
+                f.write(version + "\n")
+            print("Added %s to %s. Commit it." % (version, VALIDATED))
+        else:
+            print("%s was already listed as validated." % version)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
