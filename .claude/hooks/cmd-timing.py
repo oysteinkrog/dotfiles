@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -82,6 +83,7 @@ SUB_VALUE_OPTS = {
     "-w",
     "--workspace",
 }
+DIR_OPTS = {"-C", "--prefix", "--cwd", "--dir"}
 QUEUE_HEADS = {"heavy-build", "job"}
 HB_VALUE_OPTS = {
     "--class",
@@ -190,37 +192,58 @@ def classify_tokens(bd, tokens, cwd):
 
 
 def classify(command, cwd):
-    """Return (label, cwd of that build segment, number of queue segments).
+    """Return (label, folder of that build, folders of the queue calls).
 
-    label is the first build or test the command runs, or None.
+    label is the first build or test the command runs, or None. A `cd`
+    inside `( ... )` ends with the subshell. A directory option such as
+    `go -C dir` or `npm --prefix dir` sets the build folder.
     """
     bd = build_detect()
     blanked = bd.seg_mod.blank_data_regions(command)
     label = None
     build_cwd = cwd
-    queued = 0
+    queue_cwds = []
+    stack = []
     for raw in bd.seg_mod.split_segments(command, blanked):
-        seg = raw.strip().lstrip("({ ").rstrip(")} ").strip()
-        if not seg:
-            continue
-        try:
-            tokens = shlex.split(seg, comments=True)
-        except ValueError:
-            continue
-        if not tokens:
-            continue
-        if tokens[0] == "cd":
+        body = raw.strip()
+        opened = len(body) - len(body.lstrip("( "))
+        stack.extend([cwd] * body[:opened].count("("))
+        tail = body.rstrip(") ")
+        closed = body[len(tail) :].count(")")
+        seg = body.lstrip("({ ").rstrip(")} ").strip()
+        tokens = None
+        if seg:
+            try:
+                tokens = shlex.split(seg, comments=True)
+            except ValueError:
+                tokens = None
+        if tokens and tokens[0] == "cd":
             target = tokens[1] if len(tokens) > 1 else os.path.expanduser("~")
             if target != "-":
                 cwd = bd.seg_mod.resolve_dir(bd.expand(target), cwd)
-            continue
-        if is_queue(bd, tokens):
-            queued += 1
-        found = classify_tokens(bd, tokens, cwd)
-        if found and not label:
-            label = found
-            build_cwd = cwd
-    return label, build_cwd, queued
+        elif tokens:
+            if is_queue(bd, tokens):
+                queue_cwds.append(cwd)
+            found = classify_tokens(bd, tokens, cwd)
+            if found and not label:
+                label = found
+                build_cwd = dir_option(bd, tokens, cwd)
+        for _ in range(closed):
+            if stack:
+                cwd = stack.pop()
+    return label, build_cwd, queue_cwds
+
+
+def dir_option(bd, tokens, cwd):
+    """The folder a `-C`, `--prefix`, `--cwd` or `--dir` option names."""
+    for i, t in enumerate(tokens[:-1]):
+        if t in DIR_OPTS:
+            return bd.seg_mod.resolve_dir(bd.expand(tokens[i + 1]), cwd)
+    for t in tokens:
+        k, eq, v = t.partition("=")
+        if eq and k in DIR_OPTS and v:
+            return bd.seg_mod.resolve_dir(bd.expand(v), cwd)
+    return cwd
 
 
 def is_queue(bd, tokens):
@@ -360,16 +383,25 @@ def jobd_split(cwd, t0, t1):
 
 
 def git(cwd, *args, env=None):
-    p = subprocess.run(
+    """Run git with a time limit that also stops any filter it started."""
+    p = subprocess.Popen(
         ["git", "--no-optional-locks", "-C", cwd, *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=GIT_TIMEOUT,
         env=env,
+        start_new_session=True,
     )
+    try:
+        out, err = p.communicate(timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGKILL)
+        p.communicate()
+        raise
     if p.returncode != 0:
-        raise RuntimeError(p.stderr)
-    return p.stdout
+        raise RuntimeError(err)
+    return out
 
 
 def snapshot(cwd):
@@ -552,9 +584,9 @@ def post_tool_use(payload):
 
     label = None
     run_cwd = cwd
-    queued = 0
+    queue_cwds = []
     try:
-        label, run_cwd, queued = classify(command, cwd)
+        label, run_cwd, queue_cwds = classify(command, cwd)
     except Exception:
         label = None
 
@@ -565,15 +597,19 @@ def post_tool_use(payload):
     run_secs = elapsed
     if elapsed >= REPORT_SECS:
         split = None
-        if queued:
+        if queue_cwds:
             run_secs = 0.0
             try:
-                wait, run, n, seen = jobd_split(run_cwd or cwd, t0, t1)
-                # More jobs from the folder than queue calls means another
-                # session used it at the same time, and a job still running
-                # means ours is not done: in both cases do not guess.
-                if 0 < n == seen <= queued:
-                    split = (wait, run)
+                # Only one queue folder is searched, so calls from several
+                # folders get no split.
+                if len(set(queue_cwds)) == 1:
+                    wait, run, n, seen = jobd_split(queue_cwds[0], t0, t1)
+                    # More jobs from the folder than queue calls means another
+                    # session used it at the same time, a job still running
+                    # means ours is not done, and more queue time than elapsed
+                    # time means jobs ran in parallel: do not guess.
+                    if 0 < n == seen <= len(queue_cwds) and wait + run <= elapsed + 2:
+                        split = (wait, run)
             except Exception:
                 split = None
         if split:
@@ -608,7 +644,10 @@ def track_build_locked(path, label, cwd, run_secs, t1):
     try:
         top, snap = snapshot(cwd)
     except Exception:
+        # The tree may have changed without a record, so no earlier
+        # snapshot can stand in for the previous run any more.
         top, snap = None, None
+        state["snapshots"] = {}
 
     small = None
     if top and snap:
