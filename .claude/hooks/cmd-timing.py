@@ -22,6 +22,8 @@ JSON file per session, pruned after 3 days. Never blocks: any error exits 0
 with no output.
 """
 
+import contextlib
+import fcntl
 import importlib.util
 import json
 import os
@@ -37,6 +39,9 @@ SLOW_SECS = 300
 SMALL_DIFF_LINES = 20
 REPEAT_WINDOW = 1800
 PRUNE_SECS = 3 * 86400
+PRUNE_EVERY = 3600
+GIT_TIMEOUT = 3
+LOCK_WAIT = 2.0
 
 STATE = Path(
     os.environ.get("CMD_TIMING_STATE")
@@ -171,10 +176,15 @@ def classify_tokens(bd, tokens, cwd):
 
 
 def classify(command, cwd):
-    """Return (label, cwd after any cd) when the command runs a build or test."""
+    """Return (label, cwd of that build segment, number of queue segments).
+
+    label is the first build or test the command runs, or None.
+    """
     bd = build_detect()
     blanked = bd.seg_mod.blank_data_regions(command)
     label = None
+    build_cwd = cwd
+    queued = 0
     for raw in bd.seg_mod.split_segments(command, blanked):
         seg = raw.strip().lstrip("({ ").rstrip(")} ").strip()
         if not seg:
@@ -190,22 +200,31 @@ def classify(command, cwd):
             if target != "-":
                 cwd = bd.seg_mod.resolve_dir(bd.expand(target), cwd)
             continue
+        if is_queue(bd, tokens):
+            queued += 1
         found = classify_tokens(bd, tokens, cwd)
         if found and not label:
             label = found
-    return label, cwd
+            build_cwd = cwd
+    return label, build_cwd, queued
 
 
-def uses_queue(command):
-    return bool(
-        re.search(r"(^|[\s;&|(])(heavy-build|job\s+(submit|run))(\s|$)", command)
-    )
+def is_queue(bd, tokens):
+    _, rest = bd.strip(tokens)
+    if not rest:
+        return False
+    head = os.path.basename(rest[0])
+    if head == "heavy-build":
+        return True
+    return head == "job" and len(rest) > 1 and rest[1] in ("submit", "run")
 
 
 # --- jobd queue split ---------------------------------------------------------
 
-EV_RE = re.compile(r"^(\S+) .*?request=(\S+) event=(\w+)")
+EV_RE = re.compile(r"^(\S+) (?:attempt=(\S+) )?request=(\S+) event=([\w-]+)")
 TS_FMT = "%Y-%m-%dT%H:%M:%S%z"
+TAIL_BLOCK = 256 * 1024
+TAIL_MAX = 8 * 1024 * 1024
 
 
 def parse_ts(s):
@@ -215,70 +234,98 @@ def parse_ts(s):
 
 
 def tail_lines(path, since):
-    """Lines of the log from roughly `since` on, reading backwards in blocks."""
+    """Lines of the log from about `since` on.
+
+    Reads backwards one block at a time, each block once, and stops at
+    TAIL_MAX bytes. Returns None when the window is longer than that.
+    """
+    chunks = []
     with open(path, "rb") as f:
         f.seek(0, 2)
-        end = f.tell()
-        pos = end
-        block = 256 * 1024
-        data = b""
+        pos = f.tell()
+        read = 0
         while pos > 0:
-            pos = max(0, pos - block)
+            n = min(TAIL_BLOCK, pos)
+            pos -= n
             f.seek(pos)
-            data = f.read(end - pos)
-            first = data.split(b"\n", 2)
-            if pos == 0 or len(first) < 3:
-                if pos == 0:
-                    break
-                continue
-            m = EV_RE.match(first[1].decode("utf-8", "replace"))
-            if m and parse_ts(m.group(1)) < since:
+            chunks.append(f.read(n))
+            read += n
+            if pos == 0:
                 break
-    lines = data.decode("utf-8", "replace").splitlines()
+            # Check the first whole line in what we have so far.
+            head = b"".join(reversed(chunks)).split(b"\n", 2)
+            if len(head) == 3:
+                m = re.match(rb"^(\S+) ", head[1])
+                try:
+                    if m and parse_ts(m.group(1).decode()) < since:
+                        break
+                except ValueError:
+                    pass
+            if read >= TAIL_MAX:
+                return None
+    lines = b"".join(reversed(chunks)).decode("utf-8", "replace").splitlines()
     return lines if pos == 0 else lines[1:]
 
 
-def jobd_split(command, cwd, t0, t1):
-    """Return (wait_secs, run_secs, n_jobs) for jobd requests this command made."""
+def jobd_split(cwd, t0, t1):
+    """Return (wait_secs, run_secs, n_jobs) for jobd requests from this cwd.
+
+    Run time is the sum over attempts, so a retried job counts all the time
+    it ran. An attempt ends at its last logged event, or at the request end.
+    """
+    lines = tail_lines(JOBD_EVENTS, t0 - 10)
+    if lines is None:
+        return 0.0, 0.0, 0
     reqs = {}
-    for line in tail_lines(JOBD_EVENTS, t0 - 10):
+    for line in lines:
         m = EV_RE.match(line)
         if not m:
             continue
-        ts_s, rid, ev = m.groups()
-        r = reqs.setdefault(rid, {})
+        ts_s, att, rid, ev = m.groups()
+        try:
+            ts = parse_ts(ts_s)
+        except ValueError:
+            continue
+        r = reqs.setdefault(rid, {"attempts": {}})
         if ev == "submit":
             cm = re.search(r" cwd=(.*?) argv0=", line)
             r["cwd"] = cm.group(1) if cm else ""
             try:
                 r["submit"] = int(rid.split("-", 1)[0]) / 1e9
             except ValueError:
-                r["submit"] = parse_ts(ts_s)
-        elif ev == "start":
-            am = re.search(r"attempt=\S+-a(\d+) ", line)
-            r["start"] = float(am.group(1)) if am else parse_ts(ts_s)
+                r["submit"] = ts
         elif ev == "end":
-            r["end"] = parse_ts(ts_s)
+            r["end"] = ts
+        if att:
+            a = r["attempts"].setdefault(att, {})
+            if ev == "start":
+                am = re.search(r"-a(\d+)$", att)
+                a["start"] = float(am.group(1)) if am else ts
+            a["last"] = ts
     wait = run = 0.0
     n = 0
     for r in reqs.values():
         sub = r.get("submit")
         if sub is None or sub < t0 - 1 or sub > t1 + 1:
             continue
-        if r.get("end", t1) > t1 + 2:
+        end = r.get("end")
+        if end is None or end > t1 + 2:
             continue
         rc = r.get("cwd", "")
-        if not rc or not (
-            rc == cwd or (cwd and rc.startswith(cwd.rstrip("/") + "/")) or rc in command
-        ):
+        if not rc or not (rc == cwd or (cwd and rc.startswith(cwd.rstrip("/") + "/"))):
             continue
-        start = r.get("start")
-        end = r.get("end", t1)
-        if start is None:
-            wait += max(0.0, end - sub)
-        else:
-            wait += max(0.0, start - sub)
-            run += max(0.0, end - start)
+        ran = 0.0
+        atts = sorted(
+            (a for a in r["attempts"].values() if "start" in a),
+            key=lambda a: a["start"],
+        )
+        for i, a in enumerate(atts):
+            stop = end if i == len(atts) - 1 else max(a["last"], a["start"])
+            ran += max(0.0, stop - a["start"])
+        total = max(0.0, end - sub)
+        ran = min(ran, total)
+        run += ran
+        wait += total - ran
         n += 1
     return wait, run, n
 
@@ -291,7 +338,7 @@ def git(cwd, *args, env=None):
         ["git", "--no-optional-locks", "-C", cwd, *args],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=GIT_TIMEOUT,
         env=env,
     )
     if p.returncode != 0:
@@ -321,7 +368,7 @@ def snapshot(cwd):
             ["cp", "--reflink=auto", index, str(tmp)],
             check=True,
             capture_output=True,
-            timeout=10,
+            timeout=GIT_TIMEOUT,
         )
         env = dict(os.environ, GIT_INDEX_FILE=str(tmp))
         git(top, "add", "-u", env=env)
@@ -335,16 +382,20 @@ def snapshot(cwd):
 
 
 def changed_lines(top, old_tree, new_tree):
-    """Lines added plus lines removed between two snapshot trees."""
+    """Lines added plus lines removed between two snapshot trees.
+
+    Returns None when a binary file changed, since its size in lines is
+    unknown and must not count as a small change.
+    """
     if old_tree == new_tree:
         return 0
     total = 0
     for line in git(top, "diff", "--numstat", old_tree, new_tree).splitlines():
         parts = line.split("\t", 2)
         if len(parts) == 3:
-            a = int(parts[0]) if parts[0].isdigit() else 1
-            d = int(parts[1]) if parts[1].isdigit() else 1
-            total += a + d
+            if not (parts[0].isdigit() and parts[1].isdigit()):
+                return None
+            total += int(parts[0]) + int(parts[1])
     return total
 
 
@@ -362,6 +413,31 @@ def load(path):
         return {}
 
 
+@contextlib.contextmanager
+def locked(path):
+    """Hold an exclusive lock on path.lock for up to LOCK_WAIT seconds.
+
+    Yields True when locked, False when the wait ran out. Parallel tool calls
+    in one session would otherwise lose each other's updates.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(f"{path}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    yield False
+                    return
+                time.sleep(0.02)
+        yield True
+    finally:
+        os.close(fd)
+
+
 def save(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
@@ -370,8 +446,22 @@ def save(path, data):
 
 
 def prune():
+    """Delete state older than PRUNE_SECS, at most once per PRUNE_EVERY."""
+    mark = STATE / ".pruned"
+    try:
+        if time.time() - mark.stat().st_mtime < PRUNE_EVERY:
+            return
+    except OSError:
+        pass
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        mark.touch()
+    except OSError:
+        return
     cut = time.time() - PRUNE_SECS
-    for p in list(STATE.glob("*.json")) + list(STATE.glob("start/*/*")):
+    old = list(STATE.glob("*.json")) + list(STATE.glob("*.lock"))
+    old += list(STATE.glob("index.*")) + list(STATE.glob("start/*/*"))
+    for p in old:
         try:
             if p.stat().st_mtime < cut:
                 p.unlink()
@@ -431,19 +521,26 @@ def post_tool_use(payload):
 
     label = None
     run_cwd = cwd
+    queued = 0
     try:
-        label, run_cwd = classify(command, cwd)
+        label, run_cwd, queued = classify(command, cwd)
     except Exception:
         label = None
 
     notes = []
+    # Time that counts toward a slow-run warning. When the command went
+    # through the queue and the wait cannot be split out, the elapsed time
+    # may be mostly queue wait, so it does not count.
     run_secs = elapsed
     if elapsed >= REPORT_SECS:
         split = None
-        if uses_queue(command):
+        if queued:
+            run_secs = 0.0
             try:
-                wait, run, n = jobd_split(command, run_cwd or cwd, t0, t1)
-                if n:
+                wait, run, n = jobd_split(run_cwd or cwd, t0, t1)
+                # More matching jobs than queue calls means another session
+                # used the same folder at the same time: do not guess.
+                if 0 < n <= queued:
                     split = (wait, run)
             except Exception:
                 split = None
@@ -468,6 +565,13 @@ def post_tool_use(payload):
 
 def track_build(payload, label, cwd, run_secs, t1):
     path = STATE / f"{safe(payload.get('session_id'))}.json"
+    with locked(path) as ok:
+        if not ok:
+            return None
+        return track_build_locked(path, label, cwd, run_secs, t1)
+
+
+def track_build_locked(path, label, cwd, run_secs, t1):
     state = load(path)
     try:
         top, snap = snapshot(cwd)
@@ -524,6 +628,7 @@ def main():
         return 0
     if event == "PreToolUse":
         pre_tool_use(payload)
+        prune()
         return 0
     if event not in ("PostToolUse", "PostToolUseFailure"):
         return 0
@@ -539,8 +644,7 @@ def main():
                 }
             )
         )
-    if int(now()) % 50 == 0:
-        prune()
+    prune()
     return 0
 
 
