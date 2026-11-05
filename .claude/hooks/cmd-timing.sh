@@ -12,8 +12,18 @@ if [[ $input == *'"hook_event_name":"PostToolUse'* || $input == *'"hook_event_na
   # Claude Code sends duration_ms at the top level. Codex does not, so it
   # always goes to Python. Only trust the fast path when there is exactly one
   # duration_ms and the command comes before the tool output.
+  # A start file from PreToolUse means a Codex call: any duration_ms in it
+  # is nested in the tool output, so Python must handle it.
+  state=${CMD_TIMING_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/cmd-timing}
+  started=0
+  if [[ $input =~ \"session_id\":[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
+    sid=${BASH_REMATCH[1]}
+    if [[ $input =~ \"tool_use_id\":[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
+      [[ -e $state/start/$sid/${BASH_REMATCH[1]} ]] && started=1
+    fi
+  fi
   rest=${input#*\"duration_ms\"}
-  if [[ $rest != "$input" && $rest != *\"duration_ms\"* ]] &&
+  if ((started == 0)) && [[ $rest != "$input" && $rest != *\"duration_ms\"* ]] &&
     [[ $input =~ \"duration_ms\":[[:space:]]*([0-9]+) ]]; then
     ms=${BASH_REMATCH[1]}
     cmdpart=${input%%\"tool_response\"*}

@@ -70,6 +70,18 @@ SUB_HEADS = {
     "xcodebuild": None,
     "bazel": {"build", "test"},
 }
+# Options before the subcommand that take a value, such as `npm --prefix web
+# test` or `go -C backend test`.
+SUB_VALUE_OPTS = {
+    "-C",
+    "--prefix",
+    "--filter",
+    "-F",
+    "--dir",
+    "--cwd",
+    "-w",
+    "--workspace",
+}
 QUEUE_HEADS = {"heavy-build", "job"}
 HB_VALUE_OPTS = {
     "--class",
@@ -163,10 +175,12 @@ def classify_tokens(bd, tokens, cwd):
             return head
         if head == "cmake":
             return "cmake --build" if "--build" in args else None
-        sub = next((a for a in args if not a.startswith("-")), None)
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            i += 2 if args[i] in SUB_VALUE_OPTS else 1
+        sub = args[i] if i < len(args) else None
         if sub in subs:
             if sub == "run":
-                i = args.index("run")
                 script = args[i + 1] if i + 1 < len(args) else ""
                 if not re.search(r"test|build", script):
                     return None
@@ -252,8 +266,8 @@ def tail_lines(path, since):
             read += n
             if pos == 0:
                 break
-            # Check the first whole line in what we have so far.
-            head = b"".join(reversed(chunks)).split(b"\n", 2)
+            # Check the first whole line inside the block just read.
+            head = chunks[-1].split(b"\n", 2)
             if len(head) == 3:
                 m = re.match(rb"^(\S+) ", head[1])
                 try:
@@ -268,14 +282,17 @@ def tail_lines(path, since):
 
 
 def jobd_split(cwd, t0, t1):
-    """Return (wait_secs, run_secs, n_jobs) for jobd requests from this cwd.
+    """Return (wait_secs, run_secs, n_ended, n_seen) for jobs from this cwd.
+
+    n_seen counts every job submitted from the folder in the window, ended
+    or not, so the caller can tell when another session shared the folder.
 
     Run time is the sum over attempts, so a retried job counts all the time
     it ran. An attempt ends at its last logged event, or at the request end.
     """
     lines = tail_lines(JOBD_EVENTS, t0 - 10)
     if lines is None:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, 0
     reqs = {}
     for line in lines:
         m = EV_RE.match(line)
@@ -301,18 +318,22 @@ def jobd_split(cwd, t0, t1):
             if ev == "start":
                 am = re.search(r"-a(\d+)$", att)
                 a["start"] = float(am.group(1)) if am else ts
+            elif ev == "route-failed":
+                a["failed"] = ts
             a["last"] = ts
     wait = run = 0.0
     n = 0
+    seen = 0
     for r in reqs.values():
         sub = r.get("submit")
         if sub is None or sub < t0 - 1 or sub > t1 + 1:
             continue
-        end = r.get("end")
-        if end is None or end > t1 + 2:
-            continue
         rc = r.get("cwd", "")
         if not rc or not (rc == cwd or (cwd and rc.startswith(cwd.rstrip("/") + "/"))):
+            continue
+        seen += 1
+        end = r.get("end")
+        if end is None or end > t1 + 2:
             continue
         ran = 0.0
         atts = sorted(
@@ -320,14 +341,19 @@ def jobd_split(cwd, t0, t1):
             key=lambda a: a["start"],
         )
         for i, a in enumerate(atts):
-            stop = end if i == len(atts) - 1 else max(a["last"], a["start"])
+            if "failed" in a:
+                stop = a["failed"]
+            elif i == len(atts) - 1:
+                stop = end
+            else:
+                stop = a["last"]
             ran += max(0.0, stop - a["start"])
         total = max(0.0, end - sub)
         ran = min(ran, total)
         run += ran
         wait += total - ran
         n += 1
-    return wait, run, n
+    return wait, run, n, seen
 
 
 # --- working tree snapshot ----------------------------------------------------
@@ -427,6 +453,7 @@ def locked(path):
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.utime(fd)  # keeps prune() away from a live lock file
                 break
             except BlockingIOError:
                 if time.monotonic() > deadline:
@@ -507,7 +534,11 @@ def elapsed_of(payload):
 
 def post_tool_use(payload):
     tool_input = payload.get("tool_input") or {}
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command") or tool_input.get("cmd")
+    if isinstance(command, list):
+        command = shlex.join(str(c) for c in command)
     if not isinstance(command, str) or not command.strip():
         return None
     if isinstance(tool_input, dict) and tool_input.get("run_in_background"):
@@ -515,7 +546,7 @@ def post_tool_use(payload):
     elapsed = elapsed_of(payload)
     if elapsed is None:
         return None
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = tool_input.get("workdir") or payload.get("cwd") or os.getcwd()
     t1 = now()
     t0 = t1 - elapsed
 
@@ -537,10 +568,11 @@ def post_tool_use(payload):
         if queued:
             run_secs = 0.0
             try:
-                wait, run, n = jobd_split(run_cwd or cwd, t0, t1)
-                # More matching jobs than queue calls means another session
-                # used the same folder at the same time: do not guess.
-                if 0 < n <= queued:
+                wait, run, n, seen = jobd_split(run_cwd or cwd, t0, t1)
+                # More jobs from the folder than queue calls means another
+                # session used it at the same time, and a job still running
+                # means ours is not done: in both cases do not guess.
+                if 0 < n == seen <= queued:
                     split = (wait, run)
             except Exception:
                 split = None
