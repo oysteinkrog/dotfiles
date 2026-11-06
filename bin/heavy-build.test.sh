@@ -537,6 +537,10 @@ out=$(est tinykey cargo-check)
 check "own history: never under 1 GiB (got '$out')" '[[ $out == "1.0 history,mem=key-own" ]]'
 : > "$E/hist"
 for i in $(seq 1 20); do row cargo-check "other$i" "$i" 0 ok; done
+for i in 1 2 3; do row cargo-check nfgood 4 0 ok; done
+for i in 1 2; do printf '1\tcargo-check\tnfgood\t10\t20\t%d\t1\tfail\t-\t-\t-\t-\t%d\n' $(( 4 * G )) $(( 3 * G )) >> "$E/hist"; done
+out=$(est nfgood cargo-check)
+check "own history: failed runs with a non-file peak do not drop the good runs without one, 1.2 x 4 = 4.8 (got '$out')" '[[ $out == "4.8 history,mem=key-own" ]]'
 printf '1\tcargo-check\tonetiny\t10\t20\t%d\t0\tok\n' $(( G / 2 )) >> "$E/hist"
 out=$(est onetiny cargo-check)
 check "own history, one run: 2 x 0.5 GiB gives the 2 GiB minimum (got '$out')" '[[ $out == "2.0 history,mem=key-own-one" ]]'

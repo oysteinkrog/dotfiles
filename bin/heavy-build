@@ -1486,7 +1486,7 @@ estimate() {
       # kmf/cmf: kept when non-file rows replace the others. OOM-killed runs
       # are always kept.
       # kme: the run ended well (exit 0, or an app run stopped at its end).
-      if ($3 == k) { kmn++; kmp[kmn] = pk; kmf[kmn] = (nf || oom); kms[kmn] = strong; kme[kmn] = ($7 == 0 || ($2 == "app-run" && $8 == "stopped")); knf += nf }
+      if ($3 == k) { kmn++; kmp[kmn] = pk; kmf[kmn] = (nf || oom); kms[kmn] = strong; kme[kmn] = ($7 == 0 || ($2 == "app-run" && $8 == "stopped")); knf += (nf && kme[kmn]) }
       # Group estimate: runs of this class from the same repo (column 15) or
       # session (column 14 before "/") in the last grpwin seconds. g?max is
       # the highest peak, g?ok the runs with exit 0, g?new the newest run,
