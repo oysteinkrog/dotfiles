@@ -1492,7 +1492,7 @@ estimate() {
         split($14, gw, "/")
         if (sess != "-" && sess != "" && gw[1] == sess) { if (pk + 0 > gsmax) gsmax = pk + 0; gsok += ($7 == 0); if ($1 + 0 > gsnew) gsnew = $1 + 0; gsveto += strong }
       }
-      if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cnf += nf }
+      if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cmw[cmn] = $4; cnf += nf }
       if ($2 == c && ffirst && pk != "NA") fmp[++fmn] = pk
       if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk; sms[smn] = strong }
       if (oom) next
@@ -1504,7 +1504,7 @@ estimate() {
       # stay): for the key from its first such run, for the class from its
       # fifth.
       if (knf >= 1) { n = 0; for (i = 1; i <= kmn; i++) if (kmf[i]) { kmp[++n] = kmp[i]; kms[n] = kms[i] }; kmn = n }
-      if (cnf >= 5) { n = 0; for (i = 1; i <= cmn; i++) if (cmf[i]) cmp[++n] = cmp[i]; cmn = n }
+      if (cnf >= 5) { n = 0; for (i = 1; i <= cmn; i++) if (cmf[i]) { cmp[++n] = cmp[i]; cmw[n] = cmw[i] }; cmn = n }
       split(t, d, " "); mem = d[1]; cores = d[2]; wall = d[3]; floor = d[4] + 0
       src = (c == "other" || c == "cargo-build" || c == "build-sh") ? "default" : "class"
       msrc = src
@@ -1529,13 +1529,32 @@ estimate() {
           i = int(fpct / 100 * m) + 1; if (i > m) i = m; cmem = p[i] / 1073741824
         }
       }
+      # Short-run pool (Oystein, 2026-11-06): a filtered run expected to take
+      # under 120 s (median of its key last 5 walls) takes the fallback
+      # percentile from class runs that also took under 120 s. jobd
+      # estimate.py does the same (SHORT_SECS), and also uses its loose key.
+      if (filt && smn < 5 && kn >= 1) {
+        n = 0
+        for (i = (kn > 5 ? kn - 4 : 1); i <= kn; i++) ew[++n] = kw[i]
+        srt(ew, n)
+        if (ew[int((n + 1) / 2)] + 0 < 120) {
+          m = 0
+          for (i = 1; i <= cmn; i++) if (cmp[i] != "NA" && cmw[i] + 0 < 120) sq[++m] = cmp[i]
+          if (m >= 5) {
+            lo = (m > 50 ? m - 49 : 1); n = 0
+            for (i = lo; i <= m; i++) sp[++n] = sq[i]
+            srt(sp, n)
+            i = int(fpct / 100 * n) + 1; if (i > n) i = n; cmem = sp[i] / 1073741824; msrc = "short-p90"
+          }
+        }
+      }
       if (filt) {
         if (smn >= 5) {
           srt(smp, smn); i = int(0.9 * smn) + 1; if (i > smn) i = smn
           mem = smp[i] / 1073741824; msrc = "sig-p90"
           if (smn >= 10 && floor > 4) floor = 4
         } else {
-          mem = cmem; if (msrc == "class-p90") msrc = "class-p" fpct
+          mem = cmem; if (msrc == "class-p90") msrc = "class-p" fpct; else if (msrc == "short-p90") msrc = "short-p" fpct
           mx = top(smp, sms, 1, smn)
           if (mx >= 0 && mx / 1073741824 > mem) { mem = mx / 1073741824; msrc = bounded ? "sig-max-one" : "sig-max" }
         }
@@ -1558,7 +1577,7 @@ estimate() {
       # Own history: a key with 2 or more runs with a peak is estimated at
       # 1.2 x its highest peak of its last 10 runs (at least 1 GiB) when that
       # is below the class estimate or floor.
-      if (ownest == 1 && kmn >= 2 && msrc ~ /^(class|class-p[0-9]+|floor)$/) {
+      if (ownest == 1 && kmn >= 2 && msrc ~ /^(class|class-p[0-9]+|short-p[0-9]+|floor)$/) {
         no = 0
         for (i = (kmn > 10 ? kmn - 9 : 1); i <= kmn; i++) if (kmp[i] != "NA") no++
         mx = top(kmp, kms, (kmn > 10 ? kmn - 9 : 1), kmn)
@@ -1569,7 +1588,7 @@ estimate() {
       }
       # One own run (HEAVY_BUILD_OWN_EST_ONE=1, as in jobd): 2 x its peak, at
       # least 2 GiB, when that is below the class estimate or floor.
-      else if (ownest == 1 && ownone == 1 && kmn >= 1 && msrc ~ /^(class|class-p[0-9]+|floor)$/) {
+      else if (ownest == 1 && ownone == 1 && kmn >= 1 && msrc ~ /^(class|class-p[0-9]+|short-p[0-9]+|floor)$/) {
         mx = top(kmp, kms, (kmn > 10 ? kmn - 9 : 1), kmn)
         if (mx > 0) {
           own = 2 * mx / 1073741824; if (own < 2) own = 2
