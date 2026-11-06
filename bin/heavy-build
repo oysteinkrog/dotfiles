@@ -1493,7 +1493,7 @@ estimate() {
         if (sess != "-" && sess != "" && gw[1] == sess) { if (pk + 0 > gsmax) gsmax = pk + 0; gsok += ($7 == 0); if ($1 + 0 > gsnew) gsnew = $1 + 0; gsveto += strong }
       }
       if ($2 == c) { cmn++; cmp[cmn] = pk; cmf[cmn] = (nf || oom); cmw[cmn] = $4; cnf += nf }
-      if ($2 == c && ffirst && pk != "NA") fmp[++fmn] = pk
+      if ($2 == c && ffirst && pk != "NA") { fmp[++fmn] = pk; fmw[fmn] = $4 }
       if (s != "" && $12 == s && $1 + 0 >= now - swin && pk != "NA") { smn++; smp[smn] = pk; sms[smn] = strong }
       if (oom) next
       if ($3 == k) { kn++; kw[kn] = $4; kc[kn] = $5 }
@@ -1544,7 +1544,7 @@ estimate() {
             lo = (m > 50 ? m - 49 : 1); n = 0
             for (i = lo; i <= m; i++) sp[++n] = sq[i]
             srt(sp, n)
-            i = int(fpct / 100 * n) + 1; if (i > n) i = n; cmem = sp[i] / 1073741824; msrc = "short-p90"
+            i = int(fpct / 100 * n) + 1; if (i > n) i = n; cmem = sp[i] / 1073741824; msrc = "short-p90"; shortp = 1
           }
         }
       }
@@ -1623,7 +1623,12 @@ estimate() {
       # estimate (repo-max, session-max): that rule keeps a new worktree of
       # a small repo off the class figure (af85602).
       if (firston == 1 && kmn == 0 && fmn >= 5 && msrc !~ /^(repo|session)-max$/) {
-        m = 0; for (i = (fmn > 50 ? fmn - 49 : 1); i <= fmn; i++) fp[++m] = fmp[i]
+        # With the short-run pool, first runs that also took under 120 s (at
+        # least 5 of them, else all first runs), as jobd estimate.py does.
+        ns = 0; if (shortp) for (i = 1; i <= fmn; i++) if (fmw[i] + 0 < 120) fs[++ns] = fmp[i]
+        m = 0
+        if (ns >= 5) { for (i = (ns > 50 ? ns - 49 : 1); i <= ns; i++) fp[++m] = fs[i] }
+        else { for (i = (fmn > 50 ? fmn - 49 : 1); i <= fmn; i++) fp[++m] = fmp[i] }
         srt(fp, m); i = int(0.9 * m) + 1; if (i > m) i = m
         if (fp[i] / 1073741824 > mem) { mem = fp[i] / 1073741824; msrc = "first-p90" }
       }
