@@ -1,0 +1,122 @@
+#!/bin/bash
+# support-video: read a Slack bug video as frames plus a transcript.
+# Usage: support-video [--frames N] [--no-asr] [--asr-long] [--keep] <file id | file permalink | message permalink>
+#        support-video --clean <id>
+set -euo pipefail
+
+ROOT=/var/tmp/claude/support-videos
+ASR=$HOME/.claude/skills/transcribe-meeting/scripts/asr_fw.py
+FRAMES=12; DO_ASR=1; ASR_LONG=0; KEEP=0
+
+die() { echo "support-video: $*" >&2; exit 1; }
+
+# Slack GET with the bot token. The token goes to curl on stdin, never on the command line.
+slack_get() { # method, then curl --data-urlencode args
+  local method=$1; shift
+  with-secrets SLACK_BOT_TOKEN -- sh -c '
+    m=$1; shift
+    printf "header = \"Authorization: Bearer %s\"\n" "$SLACK_BOT_TOKEN" |
+      curl -sS -K - -G "https://slack.com/api/$m" "$@"' sh "$method" "$@"
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --frames) FRAMES=${2:?--frames needs a number}; shift 2 ;;
+    --no-asr) DO_ASR=0; shift ;;
+    --asr-long) ASR_LONG=1; shift ;;
+    --keep) KEEP=1; shift ;;
+    --clean)
+      id=${2:?--clean needs a file id}
+      [[ $id =~ ^F0[A-Z0-9]{8,}$ ]] || die "not a file id: $id"
+      if [ -d "$ROOT/$id" ]; then rm -r -- "$ROOT/$id"; echo "removed $ROOT/$id"; else echo "nothing to remove at $ROOT/$id"; fi
+      exit 0 ;;
+    -h|--help) sed -n 2,4p "$0"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) ARG=$1; shift ;;
+  esac
+done
+[ -n "${ARG:-}" ] || die "give a file id or Slack permalink"
+[[ $FRAMES =~ ^[0-9]+$ && $FRAMES -ge 1 ]] || die "--frames must be a positive number"
+
+if [[ $ARG =~ (F0[A-Z0-9]{8,}) ]]; then
+  FID=${BASH_REMATCH[1]}
+elif [[ $ARG =~ /archives/([A-Z0-9]+)/p([0-9]{10})([0-9]{6}) ]]; then
+  CH=${BASH_REMATCH[1]}; TS=${BASH_REMATCH[2]}.${BASH_REMATCH[3]}
+  # A reply permalink carries thread_ts; use replies for it, history otherwise.
+  if [[ $ARG =~ thread_ts=([0-9.]+) ]]; then
+    R=$(slack_get conversations.replies --data-urlencode "channel=$CH" --data-urlencode "ts=${BASH_REMATCH[1]}" \
+        --data-urlencode "latest=$TS" --data-urlencode "oldest=$TS" --data-urlencode inclusive=true --data-urlencode limit=1)
+  else
+    R=$(slack_get conversations.history --data-urlencode "channel=$CH" --data-urlencode "latest=$TS" \
+        --data-urlencode "oldest=$TS" --data-urlencode inclusive=true --data-urlencode limit=1)
+  fi
+  [ "$(jq -r .ok <<<"$R")" = true ] || die "slack error: $(jq -r .error <<<"$R")"
+  FID=$(jq -r '[.messages[0].files[]? | select((.mimetype // "") | startswith("video/"))][0].id // empty' <<<"$R")
+  [ -n "$FID" ] || die "no video file on that message"
+else
+  die "cannot find a file id or message permalink in: $ARG"
+fi
+
+INFO=$(slack_get files.info --data-urlencode "file=$FID")
+[ "$(jq -r .ok <<<"$INFO")" = true ] || die "files.info failed: $(jq -r .error <<<"$INFO")"
+URL=$(jq -r '.file.url_private_download // .file.url_private // empty' <<<"$INFO")
+EXT=$(jq -r '.file.filetype // "mp4"' <<<"$INFO")
+NAME=$(jq -r '.file.name // ""' <<<"$INFO")
+[ -n "$URL" ] || die "file has no download url"
+
+DIR=$ROOT/$FID
+mkdir -p "$DIR"; chmod 700 "$ROOT" "$DIR"
+VID=$DIR/video.$EXT
+
+CODE=$(with-secrets SLACK_BOT_TOKEN -- sh -c '
+  printf "header = \"Authorization: Bearer %s\"\n" "$SLACK_BOT_TOKEN" |
+    curl -sS -K - -L -o "$2" -w "%{http_code}" "$1"' sh "$URL" "$VID")
+[ "$CODE" = 200 ] || die "download failed, http $CODE"
+if head -c 256 "$VID" | grep -qi '<html\|<!doctype'; then
+  rm -f -- "$VID"; die "got an HTML page instead of a video (login page or missing files:read scope)"
+fi
+
+FDUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VID")
+DUR=${FDUR%.*}; DUR=${DUR:-0}
+RES=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$VID" | head -1)
+[ -n "$RES" ] || die "no video stream in $VID"
+HAS_AUDIO=no
+[ -n "$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$VID")" ] && HAS_AUDIO=yes
+
+# faster-whisper breaks on PyAV 15 or newer (metadata_errors), hence the av pin in the ASR call below.
+# One frame from the middle of each of N equal slices.
+FRAME_LIST=()
+for ((i = 0; i < FRAMES; i++)); do
+  T=$(awk -v d="$FDUR" -v i="$i" -v n="$FRAMES" 'BEGIN{printf "%.2f", d*(i+0.5)/n}')
+  S=${T%.*}; OUT=$(printf '%s/frame-%02dm%02ds.jpg' "$DIR" $((S / 60)) $((S % 60)))
+  ffmpeg -y -v error -ss "$T" -i "$VID" -frames:v 1 -vf scale=1280:-2 -q:v 3 "$OUT" </dev/null || true
+  [ -s "$OUT" ] && FRAME_LIST+=("$OUT")
+done
+
+TRANSCRIPT=
+NOTE=
+if [ "$HAS_AUDIO" = yes ] && [ $DO_ASR = 1 ]; then
+  if [ "$DUR" -gt 600 ] && [ $ASR_LONG = 0 ]; then
+    NOTE="video is over 10 minutes, ASR skipped (use --asr-long to run it anyway)"
+  else
+    ffmpeg -y -v error -i "$VID" -vn -ac 1 -ar 16000 "$DIR/audio.wav" </dev/null
+    if UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu UV_INDEX_STRATEGY=unsafe-best-match \
+       uv run --with "av<14" "$ASR" "$DIR/audio.wav" "$DIR/asr.json" small >"$DIR/asr.log" 2>&1; then
+      jq -r '.segments[] | (.start|floor) as $s | "[\("00" + ($s/60|floor|tostring) | .[-2:]):\("00" + ($s%60|tostring) | .[-2:])] \(.text)"' \
+        "$DIR/asr.json" >"$DIR/transcript.txt"
+      TRANSCRIPT=$DIR/transcript.txt
+      [ -s "$TRANSCRIPT" ] || { echo "(no speech detected)" >"$TRANSCRIPT"; NOTE="no speech detected (audio track is silent or has no voice)"; }
+    else
+      NOTE="ASR failed, see $DIR/asr.log"
+    fi
+  fi
+fi
+
+echo "file:       $FID ${NAME:+($NAME)}"
+echo "duration:   ${FDUR%.*}s  resolution: $RES  has-audio: $HAS_AUDIO"
+echo "folder:     $DIR"
+echo "frames (${#FRAME_LIST[@]}):"; printf '  %s\n' "${FRAME_LIST[@]}"
+[ -n "$TRANSCRIPT" ] && echo "transcript: $TRANSCRIPT"
+[ -n "$NOTE" ] && echo "note:       $NOTE"
+if [ $KEEP = 1 ]; then echo "kept:       $DIR"
+else echo "reminder:   support videos can hold customer data. When done: support-video --clean $FID"; fi
