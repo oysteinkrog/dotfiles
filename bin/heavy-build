@@ -3436,6 +3436,17 @@ END {
     # away. The limit is never sooner than now + bfloor.
     bl = shadow; if (bfloor > 0 && now + bfloor > bl) bl = now + bfloor
     if (now + 1.5 * w_wall[i] > bl) { why[i] = sprintf("behind: it would not end before %s can start, in about %d min", w_id[headi], (shadow - now) / 60); continue }
+    # Backfill must never delay the head (2026-11-06): when the head waits
+    # only for memory that young builds may still take (it fits with nothing
+    # still to come), a build may pass it only if the head would still fit
+    # beside the to-come charge of this build.
+    if (why[headi] ~ /^memory:/) {
+      bc = w_mem[i] * ((memctl ? (mcnewfull > 0 ? 100 : tcpct) : tcpct)) / 100
+      if (why_not(headi, T_n, T_cpu, 0, T_held, avail, T_high) == "" && why_not(headi, T_n, T_cpu, bc, T_held, avail, T_high) != "") {
+        why[i] = sprintf("backfill-hold: %s waits only for memory that young builds may still take, and the %.1f GiB to-come charge of this build would keep it out", w_id[headi], bc)
+        continue
+      }
+    }
     if (now + 1.5 * w_wall[i] > shadow) { pick(i); why[i] = sprintf("backfill: it fits and is short (about %d s), so %s starts at most %d s later", w_wall[i], w_id[headi], bfloor); continue }
     pick(i); why[i] = "backfill: it fits and should end before " w_id[headi] " can start"
   }
