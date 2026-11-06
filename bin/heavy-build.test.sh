@@ -2299,6 +2299,25 @@ out=$(printf '%s\n' 'R y1 999910 8 2 1000600 1073741824 - 0 normal -' "$W_4" | A
 check "memctl on: at 90 s it is charged 50%, 13 - 3 - 2 >= 6, so it starts (got '$out')" '[[ $out == start\|fits:* ]]'
 out=$(printf '%s\n' 'R o2 999000 20 2 999500 1073741824 - 0 normal -' "$W_4" | ADM_MC=1 ADM_MEMINFO=<(mi 13) adm 0000000999000000000-1-n 0 1 12)
 check "memctl on: an old build is expected to take nothing more (got '$out')" '[[ $out == start\|fits:* ]]'
+# Backfill must never delay the head (2026-11-06). Replay of 13:29:25: the high
+# e82b9266 (8.7 GiB, charged 50%) saw 11.2 GiB available and 2.3 still to come,
+# so it missed the 6 GiB target by 1.45 but fit with nothing still to come;
+# a 2 GiB short build must not pass it.
+mik() { printf 'MemAvailable: %d kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' "$1"; }
+BF_Y='R y1 999970 2.3 1 1000600 0 - 0 normal - cargo-test'
+BF_H='W 0000000999940000000-1-e82b9266 999940 high 8.7 2 600 -'
+BF_ME='W 0000000999990000000-2-71b3096c 999990 normal 2 1 30 -'
+bfadm() { ADM_MC=1 ADM_STARVEFIX=1 ADM_BFLOOR=120 ADM_MEMINFO=<(mik "$1") adm "$2" 0 1 12; }
+out=$(printf '%s\n' "$BF_Y" "$BF_H" "$BF_ME" | bfadm 11744051 0000000999990000000-2-71b3096c)
+check "backfill-hold: replay 13:29:25 holds the 2 GiB backfill (got '$out')" '[[ $out == "wait|backfill-hold: 0000000999940000000-1-e82b9266 waits only for memory that young builds may still take, and the 2.0 GiB to-come charge of this build would keep it out|"* ]]'
+out=$(printf '%s\n' "$BF_H" "$BF_ME" | bfadm 11534336 0000000999940000000-1-e82b9266)
+check "backfill-hold: with the young build gone the head starts at 11.0 GiB (got '$out')" '[[ $out == start\|* ]]'
+out=$(printf '%s\n' "$BF_Y" "$BF_H" "${BF_ME/ 2 1 30 / 0.5 1 30 }" | bfadm 11744051 0000000999990000000-2-71b3096c)
+check "backfill-hold: a 0.5 GiB charge leaves the head room once young builds settle, so it passes (got '$out')" '[[ $out == start\|backfill* ]]'
+out=$(printf '%s\n' "$BF_Y" "$BF_H" "${BF_ME/ 2 1 30 / 1 1 30 }" | bfadm 11744051 0000000999990000000-2-71b3096c)
+check "backfill-hold: a 1 GiB charge would keep the head out, so it waits (got '$out')" '[[ $out == wait\|backfill-hold:* ]]'
+out=$(printf '%s\n' "$BF_Y" "$BF_H" "$BF_ME" | bfadm 10695475 0000000999990000000-2-71b3096c)
+check "backfill-hold: a head held by memory in use is not guarded (got '$out')" '[[ $out == start\|backfill* ]]'
 out=$(printf '%s\n' "$RUN_OLD4" "$W_1" "$W_H1" | ADM_MC=1 ADM_MCHARMAGO=30 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-1-n 0 1 12)
 check "memctl on: the brake holds a normal build, clock held (got '$out')" '[[ $out == wait\|pressure:\ memory\ controller\ brake*\|1 ]]'
 out=$(printf '%s\n' "$RUN_OLD4" "$W_1" "$W_H1" | ADM_MC=1 ADM_MCHARMAGO=30 ADM_MEMINFO=<(mi 20) adm 0000000999000000000-3-h 0 1 12)
