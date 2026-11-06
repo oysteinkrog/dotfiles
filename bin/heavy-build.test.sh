@@ -767,6 +767,25 @@ check "sig: under 5 sig runs, a sig peak under the class p75 keeps the p75 (got 
 rows wine-run-tests big 21 sigB
 out=$(est newkey wine-run-tests sigB 1)
 check "sig: under 5 sig runs, the highest sig peak wins when over the p75 (got '$out')" '[[ $out == "21.0 class-history,mem=sig-max" ]]'
+# Short-run pool (Oystein, 2026-11-06): a filtered run whose key took under
+# 120 s takes the fallback percentile from class runs under 120 s only.
+# jobd tests/test_short_pool.py has the same rule. classrows take 10 s each.
+roww() {  # class key peak_gib sig wall_s
+  awk -v c="$1" -v k="$2" -v p="$3" -v s="$4" -v w="$5" -v now="$EPOCHSECONDS" -v G="$G" 'BEGIN {
+    printf "%d\t%s\t%s\t%d\t20\t%d\t0\tok\t%d\t%d\t-\t%s\n", now - 60, c, k, w, p * G, 24 * G, 22 * G, s }' >> "$E/hist"
+}
+: > "$E/hist"; classrows
+for i in $(seq 1 20); do roww wine-run-tests "L$i" 21 other 300; done
+roww wine-run-tests shortk 5 other 40
+out=$(OWN_EST=0 est shortk wine-run-tests sigC 1)
+check "short pool: a key that took 40 s gets the p75 of short runs only (got '$out')" '[[ $out == "15.0 history,mem=short-p75" ]]'
+: > "$E/hist"; classrows
+for i in $(seq 1 20); do roww wine-run-tests "L$i" 21 other 300; done
+roww wine-run-tests longk 5 other 400
+out=$(OWN_EST=0 est longk wine-run-tests sigC 1)
+check "short pool: a key that took 400 s keeps the class p75 (got '$out')" '[[ $out == "21.0 history,mem=class-p75" ]]'
+# Back to the fixture the next checks use.
+: > "$E/hist"; classrows; rows wine-run-tests big 12 sigB; rows wine-run-tests big 21 sigB
 out=$(est big wine-run-tests)
 check "sig: a full-suite run keeps the key peak over the class p90 (got '$out')" '[[ $out == "21.0 history,mem=key" ]]'
 out=$(est big wine-run-tests sigB 0)
