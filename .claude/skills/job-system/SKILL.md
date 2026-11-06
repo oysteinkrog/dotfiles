@@ -90,6 +90,25 @@ it skips the line and starts at once while fewer than 3 such jobs run, its
 lock key is free, the pressure level is not `pause` and memory allows. It is
 charged 1 GiB and 1 core. The `JOBD_INTERACTIVE_*` settings are in the README.
 
+### GPU memory (VRAM)
+
+jobd charges each job the VRAM its command used before (the 90th percentile of
+its past runs). A job that starts must leave 4 GiB of VRAM free for the
+desktop. Tell jobd what your job needs:
+
+- A job that does not use the GPU: pass `--est-vram 0` to `job submit`. It is
+  then charged no VRAM. For a job that is not MotionCatalyst,
+  `CUDA_VISIBLE_DEVICES=-1` does the same.
+- **MotionCatalyst under Wine: never set `CUDA_VISIBLE_DEVICES=-1`.** MC
+  crashes at startup with it (vkCreateDevice exception 0xc0000005, seen
+  2026-11-06). For an MC run that does no GPU work, use `--est-vram 0`.
+- A GPU job that knows its need: `--est-vram <GiB>`, for example
+  `job submit --class app-run --est-vram 6 -- <cmd>`. jobd charges that value
+  in place of the history. If an earlier run of the same command declared the
+  same or less and used more, jobd charges that run's real peak instead.
+  `events.log` shows `event=vram-peak declared_gib= peak_gib= over=1` when a
+  run used more than it declared.
+
 ## 5. Logs
 
 | File | Contents |
