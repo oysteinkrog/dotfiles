@@ -15,6 +15,17 @@ MONO = f"{HOME}/work/desktop/master"
 
 B, W, OK = "block", "warn", "allow"
 
+# Wrapper scripts for the bare systemd-run cases (2026-11-06).
+FIX = tempfile.mkdtemp(prefix="build-guard-test-", dir="/var/tmp/claude")
+for name, body in (
+    ("runmc.sh", "#!/usr/bin/env bash\nexport WINEDEBUG=fixme-all\nexec wine MotionCatalyst.exe -d 'Z:\\x'\n"),
+    ("queued.sh", "#!/usr/bin/env bash\nexec job submit --class app-run -- wine MotionCatalyst.exe\n"),
+    ("indirect.sh", "#!/bin/sh\nset -e\nif true; then\n  wine64 foo.exe\nfi\n"),
+    ("echoes.sh", "#!/bin/sh\necho starting wine and cargo build\nexec python3 x.py\n"),
+    ("plain.sh", "#!/usr/bin/env bash\n# not wine, not cargo build\nexec python3 -m http.server\n"),
+):
+    Path(FIX, name).write_text(body)
+
 # (command, cwd, expected)
 cases = [
     # --- wrapped builds: allowed, no warning ---
@@ -29,6 +40,44 @@ cases = [
     ),
     ("CARGO_TARGET_DIR=/var/tmp/claude/ft-x heavy-build cargo test", CWD, OK),
     ("heavy-build localbuild build frankenterm", CWD, OK),
+    # --- bare systemd-run around a build, Wine or MC: blocked (2026-11-06) ---
+    (f"systemd-run --user --unit lane17078-runmc --collect {FIX}/runmc.sh", CWD, B),
+    (f"systemd-run --user --unit=x bash {FIX}/runmc.sh", CWD, B),
+    ("systemd-run --user --unit x --same-dir wine MotionCatalyst.exe", CWD, B),
+    ("systemd-run --user --unit=x --collect -E WINEPREFIX=/p wine64 foo.exe", CWD, B),
+    ("systemd-run --user --scope --slice=builds.slice nice -n 10 cargo build --release", CWD, B),
+    ("systemd-run --user --scope -p MemoryMax=8G tools/wine/run-tests.sh X", MONO, B),
+    ("systemd-run --user --unit=x bash -c 'cd src && dotnet test X.csproj'", CWD, B),
+    ("systemd-run --user --unit=x ~/work/desktop/master/tools/wine/headless-mc.sh start one", CWD, B),
+    ("systemd-run --user --unit=x -- ninja -C build", CWD, B),
+    ("systemd-run --user --unit=x cmake --build build", CWD, B),
+    ("timeout 600 systemd-run --user --scope ./build.sh test", CWD, B),
+    ("cd /var/tmp && systemd-run --user --unit=x --collect MotionCatalyst-cli.exe import-takes", CWD, B),
+    ("systemd-run --user --unit=x bash -c 'echo heavy-build ok; exec wine foo.exe'", CWD, B),
+    ("systemd-run --user --unit=x cargo +stable build", CWD, B),
+    ("systemd-run --user --unit=x cargo --offline build", CWD, B),
+    (f"systemd-run --user --unit=x --working-directory={FIX} bash runmc.sh", CWD, B),
+    (f"systemd-run --user --unit=x {FIX}/indirect.sh", CWD, B),
+    # --- systemd-run that goes through the queue, or runs no build: allowed ---
+    ("systemd-run --user --scope printf '%s\\n' wine", CWD, OK),
+    (f"systemd-run --user --unit=x {FIX}/echoes.sh", CWD, OK),
+    ("systemd-run --user --unit=hb-x --collect --same-dir heavy-build cargo test", CWD, OK),
+    (
+        "systemd-run --user --unit=hb-t-1 --collect --same-dir --quiet -E PATH -E HOME "
+        """bash -c 'heavy-build "$@" > "$0.log" 2>&1; echo $? > "$0.exit"' "$d/run" cargo test""",
+        CWD,
+        OK,
+    ),
+    (f"systemd-run --user --unit=x job submit --class app-run -- {FIX}/runmc.sh", CWD, OK),
+    (f"systemd-run --user --unit=x {FIX}/queued.sh", CWD, OK),
+    (f"systemd-run --user --unit=x {FIX}/plain.sh", CWD, OK),
+    ("systemd-run --user --slice=builds.slice --scope nice -n 10 ffmpeg -i a.mp4 b.mp4", CWD, OK),
+    ("systemd-run --user --slice=builds.slice --scope nice -n 10 python3 render.py", CWD, OK),
+    ("systemd-run --user --scope -p MemoryMax=4G python3 -m pytest", CWD, OK),
+    (f"systemd-run --user --unit=x {FIX}/runmc.sh # noqa: build-guard", CWD, OK),
+    ('echo "systemd-run --user --unit=x wine foo.exe"', CWD, OK),
+    ("systemctl --user status jobd", CWD, OK),
+    ("journalctl --user -u lane17078-runmc -n 20", CWD, OK),
     # --- light cargo commands: allowed, no warning ---
     ("cargo fmt", CWD, OK),
     ("cargo fmt --check", CWD, OK),
@@ -310,7 +359,15 @@ def main():
             fails += 1
             print(f"FAIL pin warning lacks {want!r}")
 
-    total = len(cases) + len(bg_cases) + 3 + 6 + 1 + 2 + 3 + 4
+    # The block message names the queue commands.
+    err = run("systemd-run --user --unit=x wine foo.exe", CWD).stderr
+    for want in ("job submit --class app-run", "heavy-build --class app-run", "noqa: build-guard"):
+        if want not in err:
+            fails += 1
+            print(f"FAIL bare systemd-run message lacks {want!r}")
+    shutil.rmtree(FIX, ignore_errors=True)
+
+    total = len(cases) + len(bg_cases) + 3 + 6 + 1 + 2 + 3 + 4 + 3
     print(f"{total - fails}/{total} correct")
     sys.exit(1 if fails else 0)
 

@@ -10,6 +10,10 @@
 #   tmp          clone, worktree add or a heavy build in /tmp, which is tmpfs.
 #   grove_lane   `git worktree add` from the monorepo to a path outside grove's
 #                work_dir (the old ~/lane-wt pattern).
+#   bare_systemd_run  `systemd-run` (unit or --scope) that runs a build, Wine,
+#                MotionCatalyst or headless-mc.sh without heavy-build or
+#                `job submit`/`job run`, so jobd never checks its memory. A
+#                wrapper script is read too. Oystein chose block, 2026-11-06.
 #
 # Warns, without blocking:
 #   no_wrapper   a heavy cargo or dotnet command, build.cmd/build.sh or the
@@ -45,7 +49,7 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null) || cwd=
 background=$(printf '%s' "$payload" | jq -r 'if .tool_input.run_in_background == true then 1 else 0 end' 2>/dev/null) || background=0
 
 # Cheap pre-filter so most Bash calls never start python.
-if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|run-tests\.sh|heavy-build|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
+if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|run-tests\.sh|heavy-build|systemd-run|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
   exit 0
 fi
 if [[ $command == *"noqa: build-guard"* ]]; then
@@ -95,6 +99,24 @@ Command: $detail
 Worktrees of the monorepo go through grove, so grove can list and remove them:
   grove new --ephemeral --ttl 3d <tag>      (lands in <work_dir>/.scratch/<tag>)
   grove done <tag>                          (when the work is merged)
+EOF
+      ;;
+    bare_systemd_run)
+      cat >&2 <<EOF
+BLOCKED: systemd-run starts a build or app run outside the job queue.
+
+Command: $detail
+
+A job started by a bare systemd-run skips jobd's memory check, so it can push
+the desktop into swap. Run it through the queue instead:
+  headless MC:     heavy-build --class app-run -- headless-mc.sh start <name> ...
+  other MC or Wine app runs:
+                   job submit --class app-run --detach -- <your script or command>
+  builds and tests: heavy-build <command>
+                   (long ones: job submit --detach -- <command>)
+A systemd unit around the queued command is fine, for example
+  systemd-run --user --unit=<name> --collect --same-dir heavy-build <command>
+See ~/.claude/CLAUDE.md, "Builds". If this is deliberate, append # noqa: build-guard.
 EOF
       ;;
     *)
