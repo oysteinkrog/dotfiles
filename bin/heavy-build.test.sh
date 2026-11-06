@@ -502,7 +502,24 @@ check "estimate: with HEAVY_BUILD_OWN_EST=0, key history (max 3) below the class
 # Own history (2026-10-23): a key with 2 or more runs gets 1.2 x its own max
 # when that is below the class estimate.
 out=$(est lowkey cargo-check)
-check "own history: 2 runs, max 3 GiB, gives 1.2 x 3 = 3.6 instead of the class p90 (got '$out')" '[[ $out == "3.6 history,mem=key-own" ]]'
+check "own history: one good run (2 GiB) and one failed (3 GiB) gives 2 x 2 = 4, the failed peak only a floor (got '$out')" '[[ $out == "4.0 history,mem=key-own-one" ]]'
+row cargo-check twook 2 0 ok
+row cargo-check twook 3 0 ok
+out=$(est twook cargo-check)
+check "own history: 2 good runs, max 3 GiB, gives 1.2 x 3 = 3.6 instead of the class p90 (got '$out')" '[[ $out == "3.6 history,mem=key-own" ]]'
+row cargo-check failfloor 1 0 ok
+row cargo-check failfloor 1 0 ok
+row cargo-check failfloor 5 2 fail
+out=$(est failfloor cargo-check)
+check "own history: a failed 5 GiB run is a floor over 1.2 x 1 (got '$out')" '[[ $out == "5.0 history,mem=key-own" ]]'
+row cargo-check onlyfail 3 1 fail
+row cargo-check onlyfail 3 1 fail
+out=$(est onlyfail cargo-check)
+check "own history: only failed runs keep the class p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+row app-run appstop 2 143 stopped
+row app-run appstop 3 143 stopped
+out=$(est appstop app-run)
+check "own history: an app run stopped at its end is a good run (got '$out')" '[[ $out == *" history,mem=key-own" ]]'
 row cargo-check onekey 2 0 ok
 out=$(OWN_EST_ONE=0 est onekey cargo-check)
 check "own history: with HEAVY_BUILD_OWN_EST_ONE=0 a key with 1 run keeps the class p90 (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
@@ -513,7 +530,7 @@ check "own history, one run: HEAVY_BUILD_OWN_EST=0 turns it off too (got '$out')
 row cargo-check bigown 15 0 ok
 row cargo-check bigown 16 0 ok
 out=$(est bigown cargo-check)
-check "own history: 1.2 x 16 = 19.2 is above the class p90, so the class p90 (18) stays (got '$out')" '[[ $out == "18.0 history,mem=class-p90" ]]'
+check "own history: 1.2 x 16 = 19.2 is above the class p90, so the class p90 (17 with the rows above) stays (got '$out')" '[[ $out == "17.0 history,mem=class-p90" ]]'
 row cargo-check tinykey 0 0 ok
 row cargo-check tinykey 0 0 ok
 out=$(est tinykey cargo-check)
@@ -528,10 +545,10 @@ out=$(est onebig cargo-check)
 check "own history, one run: a lone 10 GiB peak counts as the 8 GiB one-row limit, so 2 x 8 = 16 (got '$out')" '[[ $out == "16.0 history,mem=key-own-one" ]]'
 row cargo-check onefail 3 1 fail
 out=$(est onefail cargo-check)
-check "own history, one run: a failed run counts too (got '$out')" '[[ $out == "6.0 history,mem=key-own-one" ]]'
+check "own history, one run: a failed run alone keeps the class p90 (got '$out')" '[[ $out == *",mem=class-p90" ]]'
 row cargo-check oneoom 3 137 fail
 out=$(est oneoom cargo-check)
-check "own history, one run: an OOM-killed run counts as 1.25 x its peak, so 2 x 3.75 = 7.5 (got '$out')" '[[ $out == "7.5 class-history,mem=key-own-one" ]]'
+check "own history, one run: an OOM-killed run alone keeps the class p90 (got '$out')" '[[ $out == *",mem=class-p90" ]]'
 row wine-run-tests wone 4 0 ok
 out=$(est wone wine-run-tests)
 check "own history, one run: 2 x 4 = 8 is above the 6 GiB class figure, so that stays (got '$out')" '[[ $out == "6.0 history,mem=class" ]]'
