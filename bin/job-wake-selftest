@@ -159,6 +159,7 @@ def sendmessage_to_builder(lead_transcript):
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--no-bump", action="store_true", help="do not add the version on PASS"
