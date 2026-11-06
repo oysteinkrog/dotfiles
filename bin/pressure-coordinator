@@ -180,6 +180,9 @@ DEFAULTS: dict[str, float] = {
     "slow_swap_room_gib": 24,
     "pause_swap_room_gib": 12,
     "pause_mem_avail_gib": 2,
+    # Slow floor (2026-11-06): MemAvailable under this gives slow at any
+    # presence, 0 is off. Leaving slow needs twice this (hysteresis).
+    "slow_mem_avail_gib": 4,
     # MemAvailable needed to leave pause; 0 means twice pause_mem_avail_gib
     # (the old behaviour).
     "recover_mem_avail_gib": 0,
@@ -598,6 +601,9 @@ class Coordinator:
         ge("swapin", f"{p}_swapin", "disk swap-in", " pages/s")
         ge("majfault", f"{p}_majfault", "major faults", "/s")
         ge("io_full", f"{p}_io_full", "io full avg10", "%")
+        sa = c["slow_mem_avail_gib"]
+        if lvl == 1 and sa > 0 and avail < sa / scale:
+            out.append(f"MemAvailable {avail:.1f} GiB (slow floor)")
         room = float(s["swap_room_gib"])
         if scale < 1:
             if room <= c["recover_swap_room_gib"]:
@@ -1120,6 +1126,24 @@ def self_test() -> int:
         run_for(co, 3300.0, 25, chrome_full=12)
         check("away file expires too far ahead: ignored", lvl(co) == "slow", co.reason)
         away_file.unlink()
+
+        # 6c. Slow floor: MemAvailable under 4 GiB is slow with every PSI
+        # signal at 0, away or not; it leaves slow only above 8 GiB.
+        for away_on in (False, True):
+            if away_on:
+                away_file.write_text("HEAVY_BUILD_MAX_JOBS=11\nexpires=9000\n")
+            co = fresh()
+            t = run_for(co, 8000.0, 20, avail_gib=3.5)
+            check(
+                f"slow floor (away={away_on}): 3.5 GiB for 20 s is slow",
+                lvl(co) == "slow" and "slow floor" in co.reason,
+                co.reason,
+            )
+            t = run_for(co, t, 70, avail_gib=6)
+            check(f"slow floor (away={away_on}): 6 GiB holds slow", lvl(co) == "slow", co.reason)
+            t = run_for(co, t, 70, avail_gib=12)
+            check(f"slow floor (away={away_on}): 12 GiB leaves slow", lvl(co) == "normal", co.reason)
+            away_file.unlink(missing_ok=True)
 
         # 7. Swap room under 12 GiB: pause at once.
         co = fresh()
