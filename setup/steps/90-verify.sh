@@ -41,10 +41,13 @@ done
 if [ -e "$HOME/.config/romklang/defaults.json" ]; then
   if [ -d "$HOME/.local/share/romklang/hrir" ]; then ok "romklang HRIR data"
   else fail "no HeSuVi data in ~/.local/share/romklang (romklang import <HeSuVi install dir>)"; fi
-  if [ -e "$HOME/.config/pipewire/romklang.conf" ]; then
-    pw_check_conf "$HOME/.config/pipewire/romklang.conf" "systemctl --user restart romklang; journalctl --user -u romklang"
+  # Two convolver slots take turns; check the current one's config.
+  rk_slot=$(cat "$HOME/.local/share/romklang/slot" 2>/dev/null || echo a)
+  rk_conf="$HOME/.config/pipewire/romklang-$rk_slot.conf"
+  if [ -e "$rk_conf" ]; then
+    pw_check_conf "$rk_conf" "systemctl --user restart romklang; journalctl --user -u romklang@$rk_slot"
   else
-    fail "~/.config/pipewire/romklang.conf missing (systemctl --user enable --now romklang)"
+    fail "$rk_conf missing (systemctl --user enable --now romklang)"
   fi
 fi
 # install.sh supports two layouts: ~/.claude linked whole, or a real dir with items linked.
