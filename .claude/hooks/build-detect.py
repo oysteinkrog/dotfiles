@@ -397,6 +397,15 @@ def guarded_cmd(tokens, cwd, depth=0):
         return f"{hit} (in {path})" if hit else None
     if head in WINE_HEADS or head.startswith("MotionCatalyst"):
         return head
+    # MC launchers, whatever runs them (python3, bash or direct): on
+    # 2026-11-06 kpp ran `systemd-run --scope python3 take_driven_rig.py
+    # launch`, which starts headless MC outside jobd.
+    for k, t in enumerate(rest):
+        b = os.path.basename(t)
+        if b == "take_driven_rig.py" and "launch" in rest[k + 1 :]:
+            return "take_driven_rig.py launch"
+        if "headless-mc" in b:
+            return b
     label = is_heavy_in(rest, cwd)
     if label:
         return label

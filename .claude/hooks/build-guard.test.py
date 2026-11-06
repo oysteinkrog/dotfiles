@@ -58,7 +58,12 @@ cases = [
     ("systemd-run --user --unit=x cargo --offline build", CWD, B),
     (f"systemd-run --user --unit=x --working-directory={FIX} bash runmc.sh", CWD, B),
     (f"systemd-run --user --unit=x {FIX}/indirect.sh", CWD, B),
+    ("systemd-run --user --scope --slice=builds.slice python3 /k/tools/qa/hive/take_driven_rig.py launch --take-index 0 x /h", CWD, B),
+    ("systemd-run --user --unit=x python3 tools/wine/headless-mc.py start one", CWD, B),
     # --- systemd-run that goes through the queue, or runs no build: allowed ---
+    ("systemd-run --user --scope python3 /k/tools/qa/hive/take_driven_rig.py list", CWD, OK),
+    ("systemd-run --user --unit=x job submit --class app-run -- python3 take_driven_rig.py launch x", CWD, OK),
+    ("python3 tools/qa/hive/take_driven_rig.py launch x", CWD, OK),
     ("systemd-run --user --scope printf '%s\\n' wine", CWD, OK),
     (f"systemd-run --user --unit=x {FIX}/echoes.sh", CWD, OK),
     ("systemd-run --user --unit=hb-x --collect --same-dir heavy-build cargo test", CWD, OK),
