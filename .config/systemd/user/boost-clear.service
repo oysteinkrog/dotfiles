@@ -1,0 +1,7 @@
+[Unit]
+Description=Clear a stuck Normal-zone watermark boost (boost-clear)
+
+[Service]
+Type=oneshot
+# Runtime only. Rewrites vm.watermark_scale_factor with its current value via sudo -n sysctl.
+ExecStart=%h/bin/boost-clear

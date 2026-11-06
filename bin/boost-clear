@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# boost-clear: clear a stuck Normal-zone watermark boost (runtime only).
+# Run by boost-clear.timer every 30 s. When kswapd is hopeless (node_unreclaimable 1)
+# nothing clears the boost, so the min watermark sits at free memory and every
+# allocation direct-reclaims. Rewriting vm.watermark_scale_factor with its current
+# value zeroes the boost. No setting value changes.
+# Usage: boost-clear [--dry-run]
+set -u
+DIR=/var/tmp/claude/hb-fullmem
+STATE=$DIR/boost-clear.state   # lines: first=<epoch cond first true>, last_clear=<epoch>
+LOG=$DIR/actions.log
+THRESH=262144   # pages, 1 GiB
+HOLD=120        # s the condition must hold, also min gap between clears
+dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+mkdir -p "$DIR"
+now=$(date +%s)
+first=; last=
+if [ -r "$STATE" ]; then
+  first=$(sed -n 's/^first=//p' "$STATE"); last=$(sed -n 's/^last_clear=//p' "$STATE")
+fi
+save() { printf 'first=%s\nlast_clear=%s\n' "$1" "$2" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"; }
+say() { [ $dry = 1 ] && echo "dry-run: $*"; return 0; }
+
+unrec=$(awk '/node_unreclaimable:/{if($2==1)f=1} END{print f+0}' /proc/zoneinfo)
+boost=$(awk '/zone +Normal/{z=1;next} /zone/{z=0} z&&$1=="boost"{print $2;exit}' /proc/zoneinfo)
+boost=${boost:-0}
+
+if [ "$unrec" = 1 ] && [ "$boost" -gt "$THRESH" ]; then
+  :
+else
+  say "condition false (unreclaimable=$unrec boost=$boost)"
+  if [ -n "$first" ] && [ $dry = 0 ]; then save "" "$last"; fi
+  exit 0
+fi
+if [ -z "$first" ]; then
+  say "condition true, first sighting (boost=$boost)"
+  if [ $dry = 0 ]; then save "$now" "$last"; fi
+  exit 0
+fi
+if [ $((now - first)) -lt $HOLD ]; then
+  say "condition true for $((now - first)) s, need $HOLD"
+  exit 0
+fi
+if [ -n "$last" ] && [ $((now - last)) -lt $HOLD ]; then
+  say "last clear $((now - last)) s ago, need $HOLD"
+  exit 0
+fi
+wsf=$(sysctl -n vm.watermark_scale_factor)
+[ -n "$wsf" ] || exit 1
+psi=$(awk '$1=="some"{split($3,a,"=");s=a[2]} $1=="full"{split($3,a,"=");f=a[2]} END{printf "some avg60 %s%% full %s%%",s,f}' /proc/pressure/memory)
+msg="vm.watermark_scale_factor rewritten $wsf->$wsf (boost clear; boost $boost pages, node_unreclaimable $unrec, mem $psi). No setting changed. (boost-clear timer)"
+if [ $dry = 1 ]; then
+  echo "dry-run: would run: sudo -n sysctl -w vm.watermark_scale_factor=$wsf"
+  echo "dry-run: would log: $msg"
+  exit 0
+fi
+if sudo -n sysctl -w "vm.watermark_scale_factor=$wsf" >/dev/null; then
+  echo "$(date -Is) $msg" >> "$LOG"
+  save "$now" "$now"
+else
+  echo "$(date -Is) boost-clear FAILED sysctl rewrite (boost $boost) (boost-clear timer)" >> "$LOG"
+  exit 1
+fi
