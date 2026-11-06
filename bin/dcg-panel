@@ -44,9 +44,11 @@ PANEL_LOG = HOME / ".local/share/dcg/panel.jsonl"
 BLOCKED_LOG = HOME / ".local/share/dcg/blocked.log"
 
 MEMBERS = [
-    {"name": "haiku", "provider": "anthropic", "model": "claude-haiku-5-5"},
-    {"name": "sonnet", "provider": "anthropic", "model": "claude-sonnet-5-5"},
-    {"name": "luna", "provider": "openai", "model": "gpt-6-luna"},
+    # Oystein, 2026-11-07: Astra, Fable and Opus 5.5 only. Haiku, Sonnet and Luna were the
+    # first panel; Luna was the lone "no" on 515 of 779 two-to-one votes.
+    {"name": "astra", "provider": "openai", "model": "gpt-6-astra"},
+    {"name": "fable", "provider": "anthropic", "model": "claude-fable-5-1"},
+    {"name": "opus", "provider": "anthropic", "model": "claude-opus-5-5"},
 ]
 MEMBER_TIMEOUT_S = 25
 MAX_CMD_CHARS = 6000
@@ -264,7 +266,7 @@ def ask_member(member: dict, prompt: str, keys: dict) -> dict:
                 {
                     "model": member["model"],
                     # The 5.5 models think before answering; 200 tokens ran out mid-thought.
-                    "max_tokens": 4000,
+                    "max_tokens": 8000,
                     "thinking": {"type": "enabled", "budget_tokens": 2000},
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": prompt}],
@@ -293,8 +295,12 @@ def ask_member(member: dict, prompt: str, keys: dict) -> dict:
                 for c in o.get("content", []) or []
                 if c.get("type") == "output_text"
             )
-        m = re.search(r"\{.*\}", text, re.S)
-        vote = json.loads(m.group(0)) if m else {}
+        # Take the first complete JSON object and ignore any text after it. A greedy
+        # regex broke on trailing text and on a "}" inside the reason (2026-11-07 review).
+        start = text.find("{")
+        vote = json.JSONDecoder().raw_decode(text[start:])[0] if start >= 0 else {}
+        if not isinstance(vote, dict):
+            vote = {}
         verdict = vote.get("verdict") if vote.get("verdict") in ("allow", "deny", "ask") else "ask"
         reason = str(vote.get("reason", "")).strip()[:300] or "(no reason given)"
     except Exception as e:  # noqa: BLE001 - any failure is a vote to ask
