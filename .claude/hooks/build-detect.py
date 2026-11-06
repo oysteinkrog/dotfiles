@@ -13,6 +13,14 @@ cwd from BUILD_GUARD_CWD. Prints one line per finding,
                       tmpfs, so every byte there is RAM.
   block grove_lane    git worktree add from a grove repo (the monorepo) to a
                       path outside grove's work_dir. Use grove new --ephemeral.
+  block bare_systemd_run  `systemd-run` (unit or --scope) that runs a build,
+                      Wine, MotionCatalyst or headless-mc.sh without
+                      heavy-build or `job submit`/`job run`. Such a job skips
+                      jobd's memory check. A wrapper script given to
+                      systemd-run is read (comment lines dropped) and counts
+                      when it runs one of those. Oystein chose block,
+                      2026-11-06, after `systemd-run --user --unit
+                      lane17078-runmc ... 17078-runmc.sh` ran MC outside jobd.
   warn  no_wrapper    a heavy cargo or dotnet command, build.cmd/build.sh or
                       the monorepo's tools/wine/run-tests.sh, that does not run under heavy-build or the old
                       `flock ... systemd-run` rule.
@@ -295,6 +303,123 @@ def git_common_dir(path):
     )
 
 
+# systemd-run options that take a separate value token.
+SYSTEMD_RUN_VALUE_OPTS = {
+    "-u", "--unit", "-p", "--property", "--slice", "--description", "-E",
+    "--setenv", "--working-directory", "--uid", "--gid", "--nice",
+    "--service-type", "--on-active", "--on-boot", "--on-startup",
+    "--on-unit-active", "--on-unit-inactive", "--on-calendar", "-M",
+    "--machine", "-H", "--host", "--path-property", "--socket-property",
+    "--timer-property", "--capsule", "-C", "--json", "--expand-environment",
+}  # fmt: skip
+SCRIPT_READ_MAX = 256 * 1024
+WINE_HEADS = {"wine", "wine64", "wine64-preloader", "headless-mc.sh"}
+# Shell words that can come before a command on a script line.
+LEAD_WORDS = {"then", "do", "else", "elif", "if", "while", "until", "!", "{", "(", "time"}
+
+
+def systemd_run_inner(args):
+    """args follow `systemd-run`. Returns (command tokens, working directory
+    from --working-directory/-d or None)."""
+    wd = None
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--":
+            return args[i + 1 :], wd
+        if t.startswith("--working-directory="):
+            wd = t.split("=", 1)[1]
+        elif t == "--working-directory" and i + 1 < len(args):
+            wd = args[i + 1]
+        if not t.startswith("-") or t == "-":
+            return args[i:], wd
+        i += 2 if t in SYSTEMD_RUN_VALUE_OPTS else 1
+    return [], wd
+
+
+def script_text(path, cwd):
+    """The text of a wrapper script, or None when PATH is not a script file."""
+    full = os.path.normpath(os.path.join(cwd or "", expand(path)))
+    try:
+        if not os.path.isfile(full) or os.path.getsize(full) > SCRIPT_READ_MAX:
+            return None
+        with open(full, "rb") as f:
+            head = f.read(SCRIPT_READ_MAX)
+    except OSError:
+        return None
+    if b"\0" in head:
+        return None  # a binary, not a script
+    text = head.decode("utf-8", "replace")
+    if not (text.startswith("#!") or full.endswith(".sh")):
+        return None
+    return text
+
+
+def guarded_text(text, cwd, depth):
+    """The first command in shell TEXT that a bare systemd-run must not run."""
+    if depth > 3:
+        return None
+    blanked = seg_mod.blank_data_regions(text)
+    for raw in seg_mod.split_segments(text, blanked):
+        stripped = raw.strip().lstrip("({ ").rstrip(")} ").strip()
+        if not stripped:
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=True)
+        except ValueError:
+            continue
+        hit = guarded_cmd(tokens, cwd, depth)
+        if hit:
+            return hit
+    return None
+
+
+def guarded_cmd(tokens, cwd, depth=0):
+    """What TOKENS (one command) runs outside the queue, or None. A command
+    that is heavy-build or `job submit`/`job run` is queued and fine."""
+    _, rest = strip(tokens)
+    while rest and rest[0] in LEAD_WORDS:
+        _, rest = strip(rest[1:])
+    if not rest:
+        return None
+    head = os.path.basename(rest[0])
+    if head == "heavy-build" or (head == "job" and rest[1:2] in (["submit"], ["run"])):
+        return None
+    if head in SHELLS:
+        for j, a in enumerate(rest[1:], 1):
+            if a == "-c" or (a.startswith("-") and not a.startswith("--") and "c" in a):
+                return guarded_text(rest[j + 1], cwd, depth + 1) if j + 1 < len(rest) else None
+        path = script_head(rest)
+        if path is rest[0]:
+            return None
+        body = script_text(path, cwd)
+        hit = body and guarded_text(body, cwd, depth + 1)
+        return f"{hit} (in {path})" if hit else None
+    if head in WINE_HEADS or head.startswith("MotionCatalyst"):
+        return head
+    label = is_heavy_in(rest, cwd)
+    if label:
+        return label
+    if head == "ninja" and not {"--version", "-h", "--help"} & set(rest):
+        return "ninja"
+    if head == "cmake" and "--build" in rest:
+        return "cmake --build"
+    if "/" in rest[0]:
+        body = script_text(rest[0], cwd)
+        hit = body and guarded_text(body, cwd, depth + 1)
+        return f"{hit} (in {rest[0]})" if hit else None
+    return None
+
+
+def bare_systemd_run(rest, cwd):
+    """rest starts with systemd-run. Returns what it runs outside the queue,
+    or None when it runs nothing guarded or goes through heavy-build/job."""
+    inner, wd = systemd_run_inner(rest[1:])
+    if wd:
+        cwd = os.path.normpath(os.path.join(cwd or "", expand(wd)))
+    return guarded_cmd(inner, cwd) if inner else None
+
+
 def check_segment(seg, tokens, cwd, findings, grove):
     assigns, rest = strip(tokens)
     if not rest and not assigns:
@@ -343,6 +468,12 @@ def check_segment(seg, tokens, cwd, findings, grove):
 
     if head == "heavy-build" and BACKGROUND:
         findings.append(("warn", "background", seg.strip()))
+
+    if head == "systemd-run":
+        hit = bare_systemd_run(rest, cwd)
+        if hit:
+            findings.append(("block", "bare_systemd_run", f"{hit}: {seg.strip()}"))
+            return cwd
 
     if head in LOCKED_HEADS:
         # Still check a build dir override written after the wrapper.
