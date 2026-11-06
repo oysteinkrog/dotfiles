@@ -209,6 +209,9 @@ fi
 #     See https://github.com/anthropics/claude-code/issues/42485
 # The bridge has no --dangerously-skip-permissions either; --permission-mode is
 # the equivalent for the sessions it spawns, and it has to follow the subcommand.
+# No Agent Hub channel flag here: the bridge has no --channels option, and the
+# sessions it spawns are headless (--print --sdk-url) with a fixed argument list
+# that passes no channel on (checked in Claude Code 2.1.319).
 case "${1:-}" in
   rc|remote-control)
     sub="$1"; shift
@@ -345,8 +348,16 @@ export NODE_EXTRA_CA_CERTS="$CA"
 
 # Launch as a CHILD (not exec) so the trap can tear down this session's shim when
 # Claude exits. LD_PRELOAD is inherited by the child.
+# The Agent Hub channel flag, so hub messages arrive by live push. The helper
+# prints nothing for -p/--print, when --channels is already given, or when
+# AGENT_HUB_CHANNEL=0. --channels takes a list of values, so it goes first,
+# where --settings follows it: a prompt right after it would be read as a channel.
+CHANNEL=()
+CHANNEL_ARGS="${CLAUDE_CHANNEL_ARGS_BIN:-$HOME/bin/claude-channel-args}"
+if [ -x "$CHANNEL_ARGS" ]; then mapfile -t CHANNEL < <("$CHANNEL_ARGS" "$@"); fi
+
 set +e
-"${LAUNCH[@]}" --settings "$OVERRIDE_SETTINGS" $SKIP "$@"
+"${LAUNCH[@]}" "${CHANNEL[@]}" --settings "$OVERRIDE_SETTINGS" $SKIP "$@"
 rc=$?
 set -e
 exit $rc   # with a session shim, the trap stops it on exit

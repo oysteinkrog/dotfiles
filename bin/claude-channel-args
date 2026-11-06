@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# claude-channel-args: print the Agent Hub channel flag for a Claude Code
+# session, one argument per line, so Agent Hub messages arrive by live push.
+#
+#   claude-channel-args [CLAUDE ARGS...]
+#
+# Pass the arguments the launcher is about to give Claude. It prints
+#   --channels
+#   plugin:agent-hub@agent-hub-plugins
+# or nothing at all when the flag must not be added:
+#   * AGENT_HUB_CHANNEL=0 (or off, false, no): the one switch that turns the
+#     channel off for every launcher;
+#   * the arguments already hold --channels;
+#   * it is a headless run (-p, --print): a print session cannot run a channel;
+#   * the first argument is a subcommand (rc, mcp, plugin, doctor, ...): a
+#     session flag in front of a subcommand breaks it.
+#
+# Every launcher that starts the binary directly uses this: the fish `claude`
+# function, aiolos-rc and claude-persist.sh. AGENT_HUB_CHANNEL_SPEC replaces the
+# channel name, for a test or a different marketplace.
+
+set -u
+
+case "${AGENT_HUB_CHANNEL:-1}" in
+  0|off|false|no) exit 0 ;;
+esac
+
+case "${1:-}" in
+  rc|remote-control|agents|auth|auto-mode|doctor|gateway|import|install|mcp|plugin|plugins|project|sandbox|setup-token|ultrareview|update|upgrade)
+    exit 0 ;;
+esac
+
+for a in "$@"; do
+  case "$a" in
+    --) break ;;
+    --channels|--channels=*|-p|--print) exit 0 ;;
+  esac
+done
+
+printf '%s\n' --channels "${AGENT_HUB_CHANNEL_SPEC:-plugin:agent-hub@agent-hub-plugins}"

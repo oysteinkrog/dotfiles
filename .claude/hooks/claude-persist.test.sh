@@ -259,5 +259,24 @@ check "three late sessions spawned" '[ "$(jq "[.[] | select(.cmd)] | length" "$T
 check "tabs are in the old order" '[ "$order" = "c3 xpeng a1 life b2" ]'
 check "placement is logged" 'grep -q "late a1@.*resumed in pane .* at tab 2 (old place 2)" "$S/events.log"'
 
+# --- the Agent Hub channel flag on a bare resume
+setup channel
+entry ch1 "$H/projects/life" 0 "$OLD"
+f=$(ls "$S/sessions/"ch1@*.json)
+resume() {
+  HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_BIN=/usr/bin/claude \
+    CLAUDE_CHANNEL_ARGS_BIN=$HERE/../../bin/claude-channel-args \
+    bash "$T/hooks/claude-persist.sh" resume-cmd "$f"
+}
+out=$(resume)
+check "bare resume gets the channel flag before --resume" \
+  'printf "%s\n" "$out" | grep -qF "/usr/bin/claude --channels plugin:agent-hub@agent-hub-plugins --resume ch1"'
+out=$(AGENT_HUB_CHANNEL=0 resume)
+check "AGENT_HUB_CHANNEL=0 leaves it out" \
+  'printf "%s\n" "$out" | grep -qF "/usr/bin/claude --resume ch1" && ! printf "%s\n" "$out" | grep -q -- --channels'
+out=$(HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_BIN=/usr/bin/claude \
+  CLAUDE_CHANNEL_ARGS_BIN=/nonexistent bash "$T/hooks/claude-persist.sh" resume-cmd "$f")
+check "no helper installed: resume as before" 'printf "%s\n" "$out" | grep -qF "/usr/bin/claude --resume ch1"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

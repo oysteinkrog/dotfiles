@@ -57,6 +57,8 @@ AIOLOS_RC="$HOME/.config/aiolos-rc/aiolos-rc"
 TAB_RUN="${CLAUDE_TAB_RUN_BIN:-$HOME/bin/claude-tab-run}"
 # full path: at boot the mux server may not have ~/.local/bin on PATH
 CLAUDE_BIN="${CLAUDE_PERSIST_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
+# Prints the Agent Hub channel flag (see that script; AGENT_HUB_CHANNEL=0 turns it off)
+CHANNEL_ARGS="${CLAUDE_CHANNEL_ARGS_BIN:-$HOME/bin/claude-channel-args}"
 
 # Claude's project folder name for a cwd: every non-alphanumeric char becomes '-'.
 project_slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
@@ -861,6 +863,11 @@ resume_cmd_inner() {
     cmd+=" CLAUDE_BIN=$(printf '%q' "$CLAUDE_BIN") $(printf '%q' "$AIOLOS_RC") --no-pin"
   else
     cmd+=" $(printf '%q' "$CLAUDE_BIN")"
+    # aiolos-rc adds the Agent Hub channel flag by itself; the bare binary
+    # needs it here. --resume follows, which ends the flag's list of values.
+    if [ -x "$CHANNEL_ARGS" ]; then
+      while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <("$CHANNEL_ARGS")
+    fi
   fi
   cmd+=" --resume $(printf '%q' "$(jq -r .session_id "$f")")"
   while IFS= read -r a; do cmd+=" $(printf '%q' "$a")"; done < <(jq -r '.flags[]' "$f")

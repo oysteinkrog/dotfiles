@@ -90,7 +90,16 @@ function claude --description 'Claude Code (native install + WSL1 p_align patch 
                 return 1
             end
         end
-        set cmd --dangerously-skip-permissions $argv
+        # The Agent Hub channel flag, so hub messages arrive by live push.
+        # claude-channel-args prints nothing for -p/--print, when --channels
+        # is already given, or when AGENT_HUB_CHANNEL=0. --channels takes a
+        # list of values, so it must be followed by another flag, never by
+        # the caller's arguments: a prompt there would be read as a channel.
+        set -l channel
+        if test -x "$HOME/bin/claude-channel-args"
+            set channel ("$HOME/bin/claude-channel-args" $argv)
+        end
+        set cmd $channel --dangerously-skip-permissions $argv
     end
 
     # Non-ELF (script shim): run directly.
