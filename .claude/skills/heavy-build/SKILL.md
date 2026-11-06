@@ -175,6 +175,11 @@ An app run is capped at 8 CPU threads (CPUQuota 800%); to raise it, set
 `HEAVY_BUILD_APP_CPU_QUOTA` (in percent, 0 for no cap) in the environment or in
 `~/.config/heavy-build.conf`.
 
+For an MC run that does no GPU work, use `job submit --class app-run --est-vram 0 -- <cmd>`.
+Never set `CUDA_VISIBLE_DEVICES=-1` for MotionCatalyst under Wine: MC crashes
+at startup with it (vkCreateDevice exception 0xc0000005, 2026-11-06). The
+`job-system` skill has the VRAM rules.
+
 ## 9. Priority
 
 Leave `HEAVY_BUILD_PRIORITY` unset.
