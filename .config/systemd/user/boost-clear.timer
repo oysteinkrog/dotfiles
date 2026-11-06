@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a stuck watermark boost every 30 s (boost-clear)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
