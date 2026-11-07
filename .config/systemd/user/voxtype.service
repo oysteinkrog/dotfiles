@@ -15,6 +15,10 @@ ExecStart=/usr/lib/voxtype-local/voxtype daemon
 Restart=on-failure
 RestartSec=5
 Environment=XDG_RUNTIME_DIR=%t
+# The warm worker runs about 37 threads (ONNX Runtime pools). With glibc's default
+# of one 64 MB malloc arena per thread it held 1.6 GB of arenas out of 4.2 GB RSS
+# (2026-11-07). Two arenas are enough for this workload.
+Environment=MALLOC_ARENA_MAX=2
 # Dictation comes before everything else Oystein runs, builds and agents included.
 # session.slice (cpu.weight 1000) is the top user slice, above app.slice (500),
 # claude.slice (80) and builds.slice (20); the worker and the popup are children
