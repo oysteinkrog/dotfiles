@@ -146,10 +146,10 @@ move. Rules, all hard:
   `trd-lab-pc` (the lab PC, renamed from Hawk on 2026-11-05; `hawk` still works as
   an alias for now). rigel and vega are not approved.
 - No job may read golf take files or athlete data on a worker.
-- Lab PC: never during a Laben booking (`job status trd-lab-pc` shows it; never pass
-  `--force`). Weekdays 07:00 to 18:00 need Oystein's yes for each run
-  (`--lab-ok` records that he said yes). Never overlap someone's testing on
-  the lab PC.
+- Lab PC: use it freely, any day and any hour, when Laben is not booked. Do not
+  ask Oystein first (Oystein, 2026-11-07). Never run during a Laben booking
+  (`job status trd-lab-pc` shows it; never pass `--force`). Never overlap
+  someone's testing on the lab PC. `--lab-ok` is no longer needed.
 - Home: its guard holds jobs back while the machine is busy (`frozen` in
   `job status home`). That is normal; do not work around it.
 - Forward environment variables with `-e NAME`, never a secret.
