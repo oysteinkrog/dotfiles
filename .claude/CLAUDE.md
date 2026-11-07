@@ -77,6 +77,19 @@ same gate on anything about to reach a person and hands back findings on failure
   reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
   multiple-choice or clarifying question, and for open questions too, so there is a clear
   input affordance.
+- **Ask the oracles before you ask Oystein, and never stall on him.** Oystein, 2026-11-07:
+  when you are unsure about a decision, ask the oracle panel first (Astra, plus Fable for
+  high-stakes or contested calls, as in "Multi-agent work" below). If they all agree, act on
+  that answer, say what you decided and why, and do not ask him. Ask him only when the
+  oracles disagree, when the choice is his by nature (product direction, spending beyond a
+  task's normal cost, anything irreversible or outward-facing that the rules above do not
+  already allow), or when he asked to decide it himself. While a question to him is open,
+  keep every other line of work moving; never stop all progress to wait for his answer.
+- **Translate new strings without asking.** Oystein, 2026-11-07: a PR that adds user-facing
+  strings runs the paid translation for its own new keys and commits them, so the blocking
+  localization check passes. This needs no approval. One limit stays: while a feature wave
+  is still changing its English text, batch the translation at the end of the wave, so no
+  string is paid for twice.
 
 ## No time estimates
 
