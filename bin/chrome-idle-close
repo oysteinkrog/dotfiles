@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """chrome-idle-close: close an idle Chrome profile when memory is tight.
 
-Run by chrome-idle-close.timer once a minute. A profile (personal or work) is
-closed only when both hold:
+Run by chrome-idle-close.timer once a minute. A profile (personal, work or
+default) is closed only when both hold:
   1. No window of that profile has had focus for IDLE_MIN minutes (15).
   2. Memory is tight: swap used is over SWAP_PCT (60%) of SwapTotal, or
-     one heavy-build job has waited for memory, swap or interactive memory
-     pressure for HB_MIN_WAIT seconds (600) and still waits (its job file is
-     still in the heavy-build queue dir and no start line came after the
-     first wait).
+     one jobd job has waited for memory for HB_MIN_WAIT seconds (600) and
+     still waits: `job queue` lists it as waiting, its first memory wait in
+     jobd's live.log is that old, its latest wait reason is still memory,
+     and no start line came after the first wait. Memory reasons are
+     "memory:", "pressure:" naming memory and "interactive:" naming memory
+     pressure. Waits for lock keys, starve order, cores, VRAM or "behind"
+     do not count. (heavy-build hands every job to jobd since 2026-10-29.)
      Or Oystein is away: presence-detect has said "away" for AWAY_MIN
      minutes (chrome_away_min in ~/.config/presence.conf, default 60, 0
      turns it off). Remote does not count. Approved 2026-10-26.
@@ -73,11 +76,12 @@ STATE_DIR = Path(
 MODE_FILE = Path(
     os.environ.get("CHROME_IDLE_MODE_FILE", HOME / ".config/chrome-idle/mode")
 )
-# heavy-build writes live.log in live mode and shadow.log in shadow mode.
-HB_LOG_DIR = HOME / ".local/state/heavy-build"
-HB_LOG_ENV = os.environ.get("CHROME_IDLE_HB_LOG")
-# One file per waiting or running job, named by job id.
-HB_QUEUE_ENV = os.environ.get("CHROME_IDLE_HB_QUEUE")
+# jobd writes one line per scheduling decision here.
+JOBD_LOG = Path(
+    os.environ.get("CHROME_IDLE_JOBD_LOG", HOME / ".local/state/jobd/live.log")
+)
+# Prints {"jobs": [{"id": ..., "state": "waiting" | "running", ...}]}.
+JOB_QUEUE_CMD = os.environ.get("CHROME_IDLE_JOB_QUEUE_CMD", "job queue").split()
 PROC = Path(os.environ.get("CHROME_IDLE_PROC", "/proc"))
 KWIN_PLUGIN = "chrome-idle-focus"
 KWIN_SCRIPT = Path(os.path.realpath(__file__)).with_name("chrome-idle-focus.kwin.js")
@@ -86,24 +90,38 @@ POLICY_DIR = Path(
     os.environ.get("CHROME_IDLE_POLICY_DIR", "/etc/opt/chrome/policies/managed")
 )
 
-# Data folder, profile folder and window class per profile. These match
-# ~/.local/bin/chrome-personal and ~/.local/bin/chrome-work.
+# Data folder, profile folder and window class per profile. personal and work
+# match ~/.local/bin/chrome-personal and ~/.local/bin/chrome-work. default is
+# Chrome started without --class (the plain launcher): same data folder as
+# work, window class google-chrome, systemd unit app-com.google.Chrome@*.
+# Only one Chrome can own a data folder, so work and default never run at the
+# same time; the main process's --class tells them apart. default has no
+# fixed profile folder: Chrome opens the ones Local State names.
 PROFILES = {
     "personal": {
         "data_dir": str(HOME / ".config/google-chrome-personal"),
         "profile_dir": "Profile 1",
         "class": "chrome-personal",
+        "cgroup": "app-chrome\\x2dpersonal@",
     },
     "work": {
         "data_dir": str(HOME / ".config/google-chrome"),
         "profile_dir": "Profile 1",
         "class": "chrome-work",
+        "cgroup": "app-chrome\\x2dwork@",
+    },
+    "default": {
+        "data_dir": str(HOME / ".config/google-chrome"),
+        "profile_dir": None,
+        "class": "google-chrome",
+        "cgroup": "app-com.google.Chrome@",
     },
 }
 DEFAULT_DATA_DIR = str(HOME / ".config/google-chrome")
+DEFAULT_CLASS = "google-chrome"
 
-HB_LINE = re.compile(r'^(\S+) mode=\S+ job=(\S+) decision=(\w+) reason="([a-z-]+)')
-HB_ACTUAL = re.compile(r" actual=(\w+)")
+JOBD_LINE = re.compile(r'^(\S+) mode=\S+ job=(\S+) decision=(\w+) reason="([^"]*)"')
+JOBD_ACTUAL = re.compile(r" actual=(\w+)")
 FOCUS_LINE = re.compile(r"chrome-idle-focus pid=(-?\d+) class=(\S*)")
 
 
@@ -120,6 +138,12 @@ def read_cmdline(pid: int) -> list[str]:
         # Chrome rewrites its process title into one space-joined string.
         # Split before each " --" so "--profile-directory=Profile 1" survives.
         argv = re.split(r" (?=--)", argv[0])
+    if len(argv) >= 1 and " " in argv[0] and argv[0].startswith("/"):
+        # A rewritten title with plain arguments before any "--" flag, such
+        # as "/opt/google/chrome/chrome https://...". URLs hold no spaces.
+        head = argv[0].split(" ")
+        if os.path.basename(head[0]) == "chrome":
+            argv = [a for a in head if a] + argv[1:]
     return argv
 
 
@@ -140,10 +164,34 @@ def data_dir_of(argv: list[str]) -> str | None:
     return DEFAULT_DATA_DIR
 
 
-def profile_of_data_dir(data_dir: str | None) -> str | None:
-    for name, p in PROFILES.items():
-        if data_dir == p["data_dir"]:
-            return name
+def class_of(argv: list[str]) -> str | None:
+    for a in argv[1:]:
+        if a.startswith("--class="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def profile_of_argv(argv: list[str]) -> str | None:
+    """Profile of a Chrome command line, or None.
+
+    A data folder used by one profile decides alone. For the shared default
+    folder, --class picks work or default. A helper process (--type=) carries
+    no --class, so it gets None and the caller looks at the cgroup or the
+    parent instead.
+    """
+    dd = data_dir_of(argv)
+    if dd is None:
+        return None
+    names = [n for n, p in PROFILES.items() if p["data_dir"] == dd]
+    if len(names) <= 1:
+        return names[0] if names else None
+    cls = class_of(argv)
+    if cls is None and any(a.startswith("--type=") for a in argv):
+        return None
+    cls = cls or DEFAULT_CLASS
+    for n in names:
+        if PROFILES[n]["class"] == cls:
+            return n
     return None
 
 
@@ -153,15 +201,16 @@ def profile_of_pid(pid: int, wclass: str = "") -> str | None:
     The window belongs to Chrome's main browser process. Chrome moves that
     process into its own app-com.google.Chrome-<pid>.scope, so the cgroup
     names the profile only for the helper processes. So check, in order: the
-    cgroup (app-chrome\\x2d<profile>@...service), the --user-data-dir on the
-    command line, and the window class Chrome sets from --class.
+    cgroup (app-chrome\\x2d<profile>@...service, or app-com.google.Chrome@
+    for the default profile), the command line, and the window class Chrome
+    sets from --class.
     """
     if pid > 0:
         cg = read_cgroup(pid)
-        for name in PROFILES:
-            if f"app-chrome\\x2d{name}@" in cg:
+        for name, p in PROFILES.items():
+            if p["cgroup"] in cg:
                 return name
-        prof = profile_of_data_dir(data_dir_of(read_cmdline(pid)))
+        prof = profile_of_argv(read_cmdline(pid))
         if prof:
             return prof
     for name, p in PROFILES.items():
@@ -201,7 +250,7 @@ def main_pids() -> dict[str, int]:
         dd = data_dir_of(argv)
         if dd is None or any(a.startswith("--type=") for a in argv):
             continue
-        prof = profile_of_data_dir(dd)
+        prof = profile_of_argv(argv)
         if prof and prof not in found:
             found[prof] = int(entry.name)
     return found
@@ -238,12 +287,32 @@ def restore_setting(name: str) -> int | None:
     if policy is not None:
         return policy
     p = PROFILES[name]
-    prefs = Path(p["data_dir"]) / p["profile_dir"] / "Preferences"
+    dirs = [p["profile_dir"]] if p["profile_dir"] else opened_profile_dirs(p["data_dir"])
+    values = []
+    for d in dirs:
+        prefs = Path(p["data_dir"]) / d / "Preferences"
+        try:
+            value = json.loads(prefs.read_text()).get("session", {})
+        except (OSError, ValueError):
+            return None
+        values.append(value.get("restore_on_startup"))
+    # Every profile Chrome has open must restore its tabs.
+    bad = [v for v in values if v != 1]
+    return bad[0] if bad else 1
+
+
+def opened_profile_dirs(data_dir: str) -> list[str]:
+    """Profile folders a Chrome started without --profile-directory opens:
+    Local State's last_active_profiles, else last_used, else Default."""
     try:
-        value = json.loads(prefs.read_text()).get("session", {})
-    except (OSError, ValueError):
-        return None
-    return value.get("restore_on_startup")
+        prof = json.loads((Path(data_dir) / "Local State").read_text())["profile"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["Default"]
+    active = prof.get("last_active_profiles")
+    if isinstance(active, list) and active and all(isinstance(a, str) for a in active):
+        return active
+    used = prof.get("last_used")
+    return [used] if isinstance(used, str) and used else ["Default"]
 
 
 def parent_pid(pid: int) -> int:
@@ -346,42 +415,29 @@ def swap_pct(meminfo: str | None = None) -> float:
     return 100.0 * (total - vals.get("SwapFree", 0)) / total
 
 
-def hb_log_path() -> Path:
-    """The heavy-build log to read: CHROME_IDLE_HB_LOG, else the newest of
-    live.log and shadow.log (the mode decides which one heavy-build writes)."""
-    if HB_LOG_ENV:
-        return Path(HB_LOG_ENV)
-    found = []
-    for name in ("live.log", "shadow.log"):
-        p = HB_LOG_DIR / name
-        try:
-            found.append((p.stat().st_mtime, p))
-        except OSError:
-            pass
-    return max(found)[1] if found else HB_LOG_DIR / "live.log"
-
-
-def hb_queue_dir() -> Path:
-    if HB_QUEUE_ENV:
-        return Path(HB_QUEUE_ENV)
-    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return Path(run) / "heavy-build.queue"
-
-
-def hb_queued_jobs() -> set[str] | None:
-    """Job ids still in heavy-build's queue dir, or None if it cannot be read."""
+def job_queue_waiting() -> set[str] | None:
+    """Ids of jobs jobd lists as waiting, or None if `job queue` fails."""
     try:
-        return {p.name for p in hb_queue_dir().iterdir()}
-    except OSError:
+        r = subprocess.run(
+            JOB_QUEUE_CMD, capture_output=True, text=True, timeout=10
+        )
+        jobs = json.loads(r.stdout)["jobs"] if r.returncode == 0 else None
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         return None
+    if not isinstance(jobs, list):
+        return None
+    return {
+        str(j["id"])
+        for j in jobs
+        if isinstance(j, dict) and j.get("state") == "waiting" and "id" in j
+    }
 
 
-def read_hb_tail() -> str:
-    """The last HB_TAIL_BYTES of the heavy-build log. A job logs one wait line
-    per decision change, so a long wait may be a single old line: read by
-    bytes, not by age."""
+def read_jobd_tail() -> str:
+    """The last HB_TAIL_BYTES of jobd's live.log. A job may log few wait
+    lines over a long wait, so read by bytes, not by age."""
     try:
-        with hb_log_path().open("rb") as f:
+        with JOBD_LOG.open("rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
             f.seek(max(0, size - HB_TAIL_BYTES))
@@ -399,50 +455,66 @@ def parse_ts(stamp: str) -> float:
         return 0.0
 
 
+def is_memory_reason(reason: str) -> bool:
+    """True when jobd's main wait reason (the part before the first ';') is
+    about memory. Later parts such as "not interactive: mem estimate ..."
+    only explain the priority and do not count."""
+    head = reason.split(";", 1)[0].strip()
+    kind, _, rest = head.partition(":")
+    if kind == "memory":
+        return True
+    if kind == "pressure":
+        return "memory" in rest
+    if kind == "interactive":
+        return "memory pressure" in rest
+    return False
+
+
 def hb_memory_waits(
-    now: float, text: str | None = None, queued: set[str] | None = None
+    now: float, text: str | None = None, waiting: set[str] | None = None
 ) -> int:
-    """Number of heavy-build jobs stuck waiting for memory.
+    """Number of jobd jobs stuck waiting for memory.
 
-    A job counts when its first wait line with reason memory, swap or
-    interactive is at least HB_MIN_WAIT seconds old, it has no start line since
-    that first wait, and it is still in the queue dir. heavy-build logs a wait
-    line only when a job's decision or reason changes, so a job that still
-    waits may have no recent line. If the queue dir cannot be read, fall back
-    to a memory wait line in the last HB_WINDOW seconds. Short waits happen all
-    the time and do not count.
-
-    Shadow lines carry actual=<what really happened> next to the decision
-    heavy-build would take, so actual wins when present.
+    A job counts when its first memory wait line (after its last start) is
+    at least HB_MIN_WAIT seconds old, its latest wait line still gives a
+    memory reason, no start line came after that first wait, and `job queue`
+    still lists it as waiting. If `job queue` fails, fall back to a memory
+    wait line in the last HB_WINDOW seconds. Short waits happen all the time
+    and do not count. The name keeps "hb" so the log field stays stable.
     """
     if text is None:
-        text = read_hb_tail()
-    if queued is None:
-        queued = hb_queued_jobs()
+        text = read_jobd_tail()
+    if waiting is None:
+        waiting = job_queue_waiting()
     first: dict[str, float] = {}
     latest: dict[str, float] = {}
-    started: set[str] = set()
+    still_memory: dict[str, bool] = {}
     for line in text.splitlines():
-        m = HB_LINE.match(line)
+        m = JOBD_LINE.match(line)
         if not m:
             continue
         ts = parse_ts(m.group(1))
         job, decision, reason = m.group(2), m.group(3), m.group(4)
-        a = HB_ACTUAL.search(line)
+        a = JOBD_ACTUAL.search(line)
         if a:
             decision = a.group(1)
         if decision == "start":
+            first.pop(job, None)
+            latest.pop(job, None)
+            still_memory.pop(job, None)
+        elif decision == "wait":
+            mem = is_memory_reason(reason)
+            if mem:
+                first.setdefault(job, ts)
+                latest[job] = ts
             if job in first:
-                started.add(job)
-        elif decision == "wait" and reason in ("memory", "swap", "interactive"):
-            first.setdefault(job, ts)
-            latest[job] = ts
+                still_memory[job] = mem
     return sum(
         1
         for job, t0 in first.items()
-        if job not in started
+        if still_memory.get(job)
         and now - t0 >= HB_MIN_WAIT
-        and (job in queued if queued is not None else now - latest[job] <= HB_WINDOW)
+        and (job in waiting if waiting is not None else now - latest[job] <= HB_WINDOW)
     )
 
 
@@ -720,7 +792,7 @@ def run(mode: str, status: bool) -> int:
             )
             print(
                 f"memory: {mem_note} (swap limit {SWAP_PCT:.0f}%, "
-                f"heavy-build memory wait {HB_MIN_WAIT:.0f} s)"
+                f"jobd memory wait {HB_MIN_WAIT:.0f} s)"
             )
             print(
                 f"active window: pid={active.get('pid')} class={active.get('class')} "
