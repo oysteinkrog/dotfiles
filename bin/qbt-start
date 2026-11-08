@@ -1,0 +1,16 @@
+#!/bin/sh
+# Start the qBittorrent download client in its own capped unit.
+# Why (2026-11-08): it was started by hand inside builds.slice, grew to 8 GB RAM
+# plus 28 GB swap, filled the builds' swap budget and paused every build.
+# Rules from Oystein: no long seeding, never count against builds.
+#   - runs in app.slice, never builds.slice
+#   - memory capped (MemoryHigh 1G, MemoryMax 2G, swap 1G)
+#   - stops itself after QBT_MAX_HOURS (default 12)
+#   - the profile stops each torrent as soon as it completes (ratio 0, seed 0 min)
+set -eu
+hours=${QBT_MAX_HOURS:-12}
+exec systemd-run --user --unit=qbt-obscura --slice=app.slice --collect \
+  -p MemoryHigh=1G -p MemoryMax=2G -p MemorySwapMax=1G \
+  -p RuntimeMaxSec="${hours}h" -p Nice=5 -p IOSchedulingClass=idle \
+  /usr/bin/qbittorrent-nox --profile=/var/tmp/qbt/profile \
+  --webui-port=18080 --torrenting-port=51413
