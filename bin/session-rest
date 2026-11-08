@@ -291,6 +291,12 @@ def is_claude_proc(argv: list[str]) -> bool:
     return False
 
 
+def is_agent_hub_channel(argv: list[str]) -> bool:
+    """The agent-hub plugin channel process that every session started with
+    --channels plugin:agent-hub runs. It is idle plumbing, not work."""
+    return any(os.path.basename(w) == "agent-hub-channel" for w in argv[:2])
+
+
 def chunked_reclaim(cg: Path, target: int, cfg: dict) -> dict:
     """Reclaim up to target bytes from cg in chunk_mb steps. Before each step
     stop when claude.slice memory pressure (some avg10) is at max_slice_psi or
@@ -530,7 +536,11 @@ class Pass:
             return "cannot read cgroup.procs"
         for p in pids:
             argv = self.sys.cmdline(p)
-            if is_claude_proc(argv) or cvr.Monitor.is_mcp(None, argv, configured):
+            if (
+                is_claude_proc(argv)
+                or is_agent_hub_channel(argv)
+                or cvr.Monitor.is_mcp(None, argv, configured)
+            ):
                 continue
             return " ".join(argv)[:80]
         return None
