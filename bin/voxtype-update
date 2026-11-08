@@ -152,6 +152,13 @@ fi
 waited=$(( NOW - $(cat "$STATE/pending-since") ))
 why="${ready:+new build $want }${changed:+config changed }"
 
+# A stopped voxtype.service is left stopped: `ytring switch ytring` stops it while ytring
+# dictates, and starting it here would stop ytring (the two units conflict). The update
+# waits until voxtype runs again.
+if ! systemctl --user is-active --quiet voxtype.service; then
+  say "voxtype.service is not running (ytring may be dictating); waiting ($why)"
+  exit 0
+fi
 status=$("$VX" status 2>/dev/null || echo unknown)
 if [ "$status" != idle ]; then say "voxtype is $status; waiting ($why)"; exit 0; fi
 away=""
