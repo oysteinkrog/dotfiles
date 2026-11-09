@@ -45,6 +45,57 @@ def test_name_prefix_is_not_a_match():
     assert not cps.problems([".claude/skills/xf-tools/SKILL.md"], NAMES, blobs({}))
 
 
+def test_same_content_anywhere_is_refused():
+    p = "notes/copied.md"
+    assert cps.problems([p], NAMES, blobs({}), lambda _: "abc", {"abc"})
+
+
+def test_other_content_passes_blob_check():
+    p = "notes/mine.md"
+    assert not cps.problems([p], NAMES, blobs({}), lambda _: "def", {"abc"})
+
+
+def test_jsm_db_names_are_read():
+    names = cps.jsm_names()
+    if cps.JSM_DB.exists():
+        assert "cass" in names and len(names) > 100
+
+
+def test_pre_push_refuses_paid_file_in_older_commit():
+    import os
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir="/var/tmp") as d:
+
+        def git(*a):
+            return subprocess.run(
+                ["git", "-C", d, *a], capture_output=True, check=True, text=True
+            ).stdout.strip()
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        os.makedirs(f"{d}/.claude/skills/beads-br")
+        open(f"{d}/.claude/skills/beads-br/SKILL.md", "w").write("x")
+        git("add", "-A")
+        git("commit", "-qm", "paid", "--no-verify")
+        git("rm", "-rq", ".claude/skills/beads-br")
+        open(f"{d}/ok.txt", "w").write("ok")
+        git("add", "-A")
+        git("commit", "-qm", "clean tip", "--no-verify")
+        tip = git("rev-parse", "HEAD")
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            found = cps.check_push(
+                "", [f"refs/heads/master {tip} refs/heads/master {cps.ZERO}"]
+            )
+        finally:
+            os.chdir(cwd)
+        assert any("beads-br" in f for f in found), found
+
+
 def test_shipped_list_has_all_148():
     assert len(cps.banned_names()) == 148
 

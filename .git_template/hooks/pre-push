@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Refuse a push that carries paid jeffreys-skills.md skill content in any
+# commit it sends, not only the tip. See check-paid-skills.py.
+# Git passes: $1 = remote name, $2 = URL; stdin = one line per ref update.
+hook_dir="$(dirname "$0")"
+exec python3 "$hook_dir/check-paid-skills.py" --pre-push "$1"
