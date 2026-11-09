@@ -266,3 +266,22 @@ bin/logs/
 .claude/skills/franken-markdown/
 .claude/skills/make-me-a-dashboard/
 .claude/skills/ocr-with-distributed-workers/
+
+# Added 2026-11-09: jsm owns these folders now. The free flywheel copy is no longer tracked.
+.claude/skills/agent-mail/
+.claude/skills/beads-workflow/
+.claude/skills/caam/
+.claude/skills/cass/
+.claude/skills/csctf/
+.claude/skills/dcg/
+.claude/skills/ghostty/
+.claude/skills/giil/
+.claude/skills/ntm/
+.claude/skills/planning-workflow/
+.claude/skills/slb/
+.claude/skills/ssh/
+.claude/skills/supabase/
+.claude/skills/ubs/
+.claude/skills/vercel/
+.claude/skills/wezterm/
+.claude/skills/wrangler/
