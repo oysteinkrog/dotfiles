@@ -1,0 +1,40 @@
+# Tripwire: fail (and email the owner) if paid jeffreys-skills.md skill
+# content reaches any branch of this public repo. GitHub cannot block a push
+# here (push rulesets need an org-owned repo), so this only detects. The real
+# block is the local pre-push hook in .git_template/hooks.
+name: paid-skills tripwire
+
+on:
+  push:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan all branches and their full history
+        run: |
+          git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*'
+          list=.git_template/hooks/paid-skills.txt
+          bad=0
+          names=$(grep -v '^#' "$list" | sed '/^$/d')
+          paths=$(git log --remotes=origin --format= --name-only | sort -u)
+          for n in $names; do
+            hit=$(printf '%s\n' "$paths" | grep -F ".claude/skills/$n/" | head -3)
+            if [ -n "$hit" ]; then echo "::error::paid skill '$n' in history: $hit"; bad=1; fi
+          done
+          st=$(printf '%s\n' "$paths" | grep -E '^\.claude/skills/.*SELF-TEST\.md$' | head -5)
+          if [ -n "$st" ]; then echo "::error::vendor SELF-TEST.md in history: $st"; bad=1; fi
+          for b in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do
+            m=$(git grep -l 'jeffreys-skills\.md' "$b" -- .claude/skills | head -3)
+            if [ -n "$m" ]; then echo "::error::vendor mention on $b: $m"; bad=1; fi
+          done
+          exit $bad
