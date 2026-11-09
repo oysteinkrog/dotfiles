@@ -278,7 +278,8 @@ def mem_available() -> int:
 
 def is_claude_proc(argv: list[str]) -> bool:
     """A Claude process or its launcher: the claude binary (any version, any
-    mode such as daemon, bg-pty-host or bg-spare), claude-tab-run or aiolos-rc."""
+    mode such as daemon, bg-pty-host or bg-spare), claude-tab-run or aiolos-rc,
+    and the agent-hub channel process every session now starts."""
     if not argv:
         return True  # gone already
     words = argv[:2]
@@ -288,6 +289,8 @@ def is_claude_proc(argv: list[str]) -> bool:
             return True
         if base in ("claude-tab-run", "aiolos-rc"):
             return True
+    if os.path.basename(argv[0]) == "agent-hub-channel":
+        return True
     return False
 
 
