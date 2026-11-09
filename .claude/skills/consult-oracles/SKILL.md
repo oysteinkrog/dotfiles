@@ -22,8 +22,9 @@ Guard rails (from 2026-10-22 and 2026-10-24): high-effort Astra reviews on whole
 repos used up all three OpenAI accounts in about 90 minutes, and a reading cap
 written in the prompt did not hold. So Astra runs at `medium`, gets one bounded
 prompt of about 60k tokens with the excerpts pasted in, runs from an empty directory
-with its shell tools off, and at most 4 runs go at once. If any OpenAI account passes
-70% of its week before its reset, go back to Fable first.
+with its shell tools off, and at most 4 runs go at once. Go back to Fable first only
+when every routable OpenAI account is past 70% of its week (Oystein, 2026-11-09: aiolos
+fills one account before the next).
 
 ## Arguments
 

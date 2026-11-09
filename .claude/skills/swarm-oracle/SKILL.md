@@ -18,8 +18,9 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 > for a cross-provider opinion.
 >
 > Why: the three OpenAI accounts ended last week at about 26% to 31% with reset
-> credits unused, while four Claude accounts hit 100%. If any OpenAI account passes
-> 70% of its week before its reset, go back to Fable first.
+> credits unused, while four Claude accounts hit 100%. Go back to Fable first only when
+> every routable OpenAI account is past 70% of its week (Oystein, 2026-11-09: aiolos
+> fills one account before the next).
 >
 > Effort stays `medium`. Use `high` only for one high-stakes question, and say why.
 > Lesson from 2026-10-22: high-effort Astra reviews on whole repos used up all three

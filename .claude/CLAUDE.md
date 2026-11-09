@@ -210,8 +210,10 @@ These rules hold whether or not a skill is loaded:
   Why Astra first (Oystein, 2026-10-24): the Claude accounts were near their weekly limits
   while the three OpenAI accounts sat at 0% to 21% with reset credits unused. Astra never
   runs above `medium` effort without a reason, and never on the whole tree: on 2026-10-22
-  high-effort Astra reviews used up all three OpenAI accounts in about 90 minutes. If any
-  OpenAI account passes 70% of its week before its reset, go back to Fable first.
+  high-effort Astra reviews used up all three OpenAI accounts in about 90 minutes. Go back
+  to Fable first only when every routable OpenAI account is past 70% of its week before
+  its reset. aiolos sends all Astra calls to one account until it is used up, so a single
+  account past 70% is normal while another still has room (Oystein, 2026-11-09).
 
   Pull the strongest model in for the decision, not for the whole job, and keep its brief
   small. Do not reintroduce a `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one
