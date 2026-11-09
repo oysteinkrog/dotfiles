@@ -77,6 +77,19 @@ same gate on anything about to reach a person and hands back findings on failure
   reliably render as a prompt, so the turn just stalls. Use the tool for every yes/no,
   multiple-choice or clarifying question, and for open questions too, so there is a clear
   input affordance.
+- **Ask the oracles before you ask Oystein, and never stall on him.** Oystein, 2026-11-07:
+  when you are unsure about a decision, ask the oracle panel first (Astra, plus Fable for
+  high-stakes or contested calls, as in "Multi-agent work" below). If they all agree, act on
+  that answer, say what you decided and why, and do not ask him. Ask him only when the
+  oracles disagree, when the choice is his by nature (product direction, spending beyond a
+  task's normal cost, anything irreversible or outward-facing that the rules above do not
+  already allow), or when he asked to decide it himself. While a question to him is open,
+  keep every other line of work moving; never stop all progress to wait for his answer.
+- **Translate new strings without asking.** Oystein, 2026-11-07: a PR that adds user-facing
+  strings runs the paid translation for its own new keys and commits them, so the blocking
+  localization check passes. This needs no approval. One limit stays: while a feature wave
+  is still changing its English text, batch the translation at the end of the wave, so no
+  string is paid for twice.
 
 ## No time estimates
 
@@ -197,8 +210,10 @@ These rules hold whether or not a skill is loaded:
   Why Astra first (Oystein, 2026-10-24): the Claude accounts were near their weekly limits
   while the three OpenAI accounts sat at 0% to 21% with reset credits unused. Astra never
   runs above `medium` effort without a reason, and never on the whole tree: on 2026-10-22
-  high-effort Astra reviews used up all three OpenAI accounts in about 90 minutes. If any
-  OpenAI account passes 70% of its week before its reset, go back to Fable first.
+  high-effort Astra reviews used up all three OpenAI accounts in about 90 minutes. Go back
+  to Fable first only when every routable OpenAI account is past 70% of its week before
+  its reset. aiolos sends all Astra calls to one account until it is used up, so a single
+  account past 70% is normal while another still has room (Oystein, 2026-11-09).
 
   Pull the strongest model in for the decision, not for the whole job, and keep its brief
   small. Do not reintroduce a `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one
