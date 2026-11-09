@@ -6,7 +6,7 @@
 # `skills-sync` or `jsm`.
 #
 # Checks:
-#   - stale model pins: gpt-5.4, claude-fable-5 (bare), Opus 4.x, claude-sonnet-4-2*
+#   - stale model pins: gpt-5.4, claude-fable-5 (bare) or 5-1, Opus 4.x, claude-sonnet-4-2*
 #   - SKILL.md frontmatter not starting at line 1
 #   - two skills with identical SKILL.md bodies (text after frontmatter)
 #   - `codex exec ... --sandbox read-only` that is not an image (-i) call
@@ -97,7 +97,7 @@ mapfile -t FILES < <(
 
 # ── Stale model pins ────────────────────────────────────────────────────
 
-PIN_RE='gpt-5\.4(?![0-9])|claude-fable-5(?![-.0-9])|Opus 4\.|claude-sonnet-4-2'
+PIN_RE='gpt-5\.4(?![0-9])|claude-fable-5(?![-.0-9])|claude-fable-5-1(?![0-9])|Opus 4\.|claude-sonnet-4-2'
 if [[ ${#FILES[@]} -gt 0 ]]; then
     while IFS= read -r hit; do
         file="${hit%%:*}"; rest="${hit#*:}"; line="${rest%%:*}"

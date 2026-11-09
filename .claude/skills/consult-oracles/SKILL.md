@@ -9,8 +9,8 @@ context: fork
 
 Get expert analysis by consulting AI models. **GPT-6 Astra (`gpt-6-astra`, reached
 through the Codex CLI at effort `medium`) is the primary oracle and the default
-choice, used on its own.** Fable (a fresh subagent spawned with the `Agent` tool and
-`model: "fable"`) is the secondary oracle: add it for security reviews and contested
+choice, used on its own.** Fable 5.2 (`claude-fable-5-2`, a fresh subagent spawned
+with the `Agent` tool and `model: "fable"`, which resolves to 5.2) is the secondary oracle: add it for security reviews and contested
 calls (Astra's answer looks wrong, or two oracles disagree), or use it when Codex
 fails. Opus is the last fallback when both fail.
 
@@ -45,7 +45,7 @@ for one high-stakes question, and say why.
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
 | **GPT-6 Astra** (`gpt-6-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
-| **Fable** | Fresh subagent via `Agent` tool with `model: "fable"` | Secondary oracle. Add it for security reviews and contested calls (Astra looks wrong, or two oracles disagree), or use it when Codex fails |
+| **Fable 5.2** (`claude-fable-5-2`) | Fresh subagent via `Agent` tool with `model: "fable"` (the alias resolves to 5.2; checked 2026-11-09) | Secondary oracle. Add it for security reviews and contested calls (Astra looks wrong, or two oracles disagree), or use it when Codex fails |
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable and Astra both fail. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted and a GPT view is needed |
 | `gpt-5.6-sol` / `gpt-5.6-terra` | Codex CLI | Rarely; prior-generation GPT probe |

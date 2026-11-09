@@ -47,7 +47,7 @@ MEMBERS = [
     # Oystein, 2026-11-07: Astra, Fable and Opus 5.5 only. Haiku, Sonnet and Luna were the
     # first panel; Luna was the lone "no" on 515 of 779 two-to-one votes.
     {"name": "astra", "provider": "openai", "model": "gpt-6-astra"},
-    {"name": "fable", "provider": "anthropic", "model": "claude-fable-5-1"},
+    {"name": "fable", "provider": "anthropic", "model": "claude-fable-5-2"},
     {"name": "opus", "provider": "anthropic", "model": "claude-opus-5-5"},
 ]
 MEMBER_TIMEOUT_S = 25
