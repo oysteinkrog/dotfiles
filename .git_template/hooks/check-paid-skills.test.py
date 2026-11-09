@@ -45,8 +45,8 @@ def test_name_prefix_is_not_a_match():
     assert not cps.problems([".claude/skills/xf-tools/SKILL.md"], NAMES, blobs({}))
 
 
-def test_shipped_list_has_all_126():
-    assert len(cps.banned_names()) == 126
+def test_shipped_list_has_all_148():
+    assert len(cps.banned_names()) == 148
 
 
 if __name__ == "__main__":

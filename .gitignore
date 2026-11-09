@@ -259,3 +259,10 @@ bin/logs/
 
 # Anthropic skills synced by Claude Code. Local only.
 .claude/skills/synced/
+
+# Added 2026-11-09: jsm skills installed that day, untracked but not ignored.
+.claude/skills/dashboard-hub-onboarding/
+.claude/skills/doppler-sounds-for-geolocation/
+.claude/skills/franken-markdown/
+.claude/skills/make-me-a-dashboard/
+.claude/skills/ocr-with-distributed-workers/
