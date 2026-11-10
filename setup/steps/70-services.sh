@@ -28,6 +28,13 @@ units=(
   wine-test-prefix-prune.timer             # dotfiles: unused Wine test prefixes
   desktop-git-repack.timer                 # dotfiles: monorepo object store repack
   chrome-idle-close.timer                  # dotfiles: close an idle Chrome profile under pressure
+  boost-clear.timer                        # dotfiles: clear a stuck Normal-zone watermark boost
+  slice-memlog.timer                       # dotfiles: per-minute memory log by cgroup slice
+  desktop-cache-dirs.service               # dotfiles: tmpfs folders for monorepo mmap caches
+  desktop-master-sync.timer                # dotfiles: ~/work/desktop/master to if/master (skips local work)
+  grove-snap@desktop.timer                 # dotfiles: hourly read-only snaps of grove lanes
+  kwin-dpms-recover.service                # dotfiles: screens back when KWin fails to wake them
+  audio-stall-watchdog.service             # dotfiles: restart a USB mic or DAC that passes no audio
   # Claude Code sessions
   claude-persist-snapshot.timer            # dotfiles: mux tab order for session restore
   claude-throttle-log.timer                # dotfiles: logs MemoryHigh throttling
