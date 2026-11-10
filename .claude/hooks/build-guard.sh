@@ -32,6 +32,14 @@
 #                loops froze the desktop. heavy-build undoes pinning inside its
 #                scopes, but not outside them.
 #
+#   dotnet_dump  `wine ... dotnet-dump ...` (a memory dump of a .NET app under
+#                Wine, 4 to 6.6 GiB peak) run outside jobd. Skipped when the
+#                command has `job submit`, `job run` or heavy-build, sets
+#                SMOKE_DUMP_IN_JOB, or JOBD_JOB_ID is set (in the hook's env or
+#                in the command). INVOCATION_ID is NOT used from the hook's own
+#                env: Claude itself runs in a systemd unit, so it is always set.
+#                Never blocks. Approved by Oystein, 2026-11-10.
+#
 # Detection lives in build-detect.py, which reuses the shell segmentation in
 # grove-worktree-detect.py. Test matrix in build-guard.test.py. Run the tests
 # after any change to either file.
@@ -49,16 +57,25 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null) || cwd=
 background=$(printf '%s' "$payload" | jq -r 'if .tool_input.run_in_background == true then 1 else 0 end' 2>/dev/null) || background=0
 
 # Cheap pre-filter so most Bash calls never start python.
-if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|run-tests\.sh|heavy-build|systemd-run|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|while[[:space:]]+(:|true)'; then
+if ! printf '%s' "$command" | grep -qE 'cargo|dotnet|build\.(cmd|sh)|run-tests\.sh|heavy-build|systemd-run|BUILD_DIR|build-dir|clone|worktree|taskset|numactl|chrt|dotnet-dump|while[[:space:]]+(:|true)'; then
   exit 0
 fi
 if [[ $command == *"noqa: build-guard"* ]]; then
   exit 0
 fi
 
+dump_msg=
+if [[ $command == *wine* && $command == *dotnet-dump* \
+  && ! $command =~ (^|[^[:alnum:]_-])(job[[:space:]]+(submit|run)|heavy-build)([^[:alnum:]_-]|$) \
+  && $command != *SMOKE_DUMP_IN_JOB* && $command != *JOBD_JOB_ID=* \
+  && -z ${JOBD_JOB_ID:-} \
+  && ! $command =~ ^[[:space:]]*(echo|printf|rg|grep|cat|sed|git|ls|head|tail)[[:space:]] ]]; then
+  dump_msg="build-guard: dotnet-dump under Wine can use several GiB. Run it through jobd (job submit --detach, about 7 GiB for a full dump) so the queue counts its memory. This is a warning; the command still runs. To skip this warning on purpose, append \`# noqa: build-guard\`."
+fi
+
 out=$(BUILD_GUARD_COMMAND="$command" BUILD_GUARD_CWD="$cwd" BUILD_GUARD_BACKGROUND="$background" \
   timeout 10 python3 "$here/build-detect.py" 2>/dev/null) || exit 0
-[[ -n $out ]] || exit 0
+[[ -n $out || -n $dump_msg ]] || exit 0
 
 block=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "block"' | head -1)
 if [[ -n $block ]]; then
@@ -152,6 +169,10 @@ pin=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warn" && $2 == "cpu_pin"' | head
 if [[ -n $pin ]]; then
   [[ -n $msg ]] && msg+=" "
   msg+="build-guard: this command uses $pin. Do not pin work to CPUs, give it realtime priority or start busy loops on this desktop. On 2026-10-13 a test started 40 \`while :; do :; done\` loops pinned with taskset to CPUs 30 and 31. They starved the NVIDIA modeset kernel thread and KWin's output thread on those CPUs, and the desktop froze for seconds at a time. Let the scheduler spread the work; to load the CPU in a test, use a short loop that ends on its own, unpinned, under heavy-build. heavy-build sets pinned threads in its scopes back to all CPUs. The command was allowed this time. If this is deliberate, append \`# noqa: build-guard\`."
+fi
+if [[ -n $dump_msg ]]; then
+  [[ -n $msg ]] && msg+=" "
+  msg+="$dump_msg"
 fi
 if [[ -n $msg ]]; then
   jq -cn --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' 2>/dev/null || true

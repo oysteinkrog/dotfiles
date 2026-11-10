@@ -208,6 +208,16 @@ cases = [
     ("sed -n 1,20p tools/wine/run-tests.sh", MONO, OK),
     # --- heavy-build in the foreground: no background warning ---
     ("heavy-build --help", CWD, OK),
+    # --- dotnet-dump under Wine outside jobd: warned, not blocked (2026-11-10) ---
+    ("wine ~/.dotnet/dotnet.exe ~/tools/dotnet-dump.dll collect -p 1234 -o /var/tmp/x.dmp", CWD, W),
+    ("WINEPREFIX=/p wine dotnet.exe dotnet-dump collect --type Full -p 12", CWD, W),
+    ("job submit --detach -- wine dotnet.exe dotnet-dump.dll collect -p 12", CWD, OK),
+    ("job run --on home -- wine dotnet.exe dotnet-dump.dll collect -p 12", CWD, OK),
+    ("heavy-build wine dotnet.exe dotnet-dump.dll collect -p 12", CWD, OK),
+    ("SMOKE_DUMP_IN_JOB=1 wine dotnet.exe dotnet-dump.dll collect -p 12", CWD, OK),
+    ("wine dotnet.exe dotnet-dump.dll collect -p 12 # noqa: build-guard", CWD, OK),
+    ("dotnet-dump --help", CWD, OK),
+    ('git commit -m "wine dotnet-dump note" -- a.md', CWD, OK),
     # --- bypass ---
     ("CARGO_BUILD_BUILD_DIR=/var/tmp/x cargo test # noqa: build-guard", CWD, OK),
     # --- unrelated ---
