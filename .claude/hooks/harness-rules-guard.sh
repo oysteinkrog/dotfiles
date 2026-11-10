@@ -4,7 +4,7 @@
 #
 #   bv (no --robot-* flag)   opens the TUI and hangs the agent.
 #   am doctor fix            rewrites every MCP config back to port 8765 with
-#                            a bearer token, which breaks the agent-mail setup.
+#                            a bearer token, which breaks MCP configs. (agent-mail was retired 2026-11-10; the block stays.)
 #   cass index --semantic    holds whole conversations in memory while
 #                            embedding. `cass-gpu` is the same binary, so
 #                            `cass-gpu index --semantic` is blocked too.
@@ -63,11 +63,8 @@ BLOCKED: \`am doctor fix\`.
 Command: $detail
 
 It rewrites every MCP config back to port 8765 with a bearer token, which
-breaks the local agent-mail setup on port 4809.
-
-Use instead: load the \`agent-mail-ops\` skill, which owns repair of the
-service and its SQLite store. Health check:
-  curl -s http://127.0.0.1:4809/health
+breaks MCP server entries. agent-mail was retired on 2026-11-10, so there is
+nothing for it to repair on this machine.
 EOF
     ;;
   cass_semantic)

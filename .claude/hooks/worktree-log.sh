@@ -46,8 +46,6 @@ def owner():
         if s.get("sessionId") == sid:
             o.update(session_name=s.get("name"), claude_pid=s.get("pid"), proc_start=str(s.get("procStart")))
             break
-    try: o["agent_name"] = json.load(open(os.path.join(home, f".claude/agent-mail/identity-{sid}.json")))["name"]
-    except Exception: pass
     return {k: v for k, v in o.items() if v is not None}
 
 ops = list(worktree_ops(cmd))

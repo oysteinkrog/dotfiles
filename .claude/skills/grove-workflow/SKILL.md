@@ -214,7 +214,7 @@ merged-project done-candidates, `.archive` size). `--yes` auto-applies only
 the mechanically safe categories (1/4/5/6); unregistered worktrees are
 prompt-or-report only and non-worktree dirs are always report-only. Every
 destructive path re-checks dirty/unpushed state itself, applies a 48h
-liveness guard (mtime, `/proc/*/cwd`, agent-mail reservations), and logs
+liveness guard (mtime, `/proc/*/cwd`), and logs
 branch deletions to `.archive/deleted-branches.txt`. A full dry-run over
 ~90 worktrees takes ~8 minutes of drvfs I/O — schedule away from builds,
 and note it compares against local remote-tracking refs (it never fetches).

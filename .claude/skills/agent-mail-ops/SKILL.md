@@ -14,6 +14,9 @@ description: |
 allowed-tools: [Bash, Read, AskUserQuestion]
 ---
 
+> RETIRED 2026-11-10: the agent-mail service was removed from this machine. Do not use. Kept for history only.
+
+
 # agent-mail operations (Linux desktop)
 
 Scope: the service and its data on this machine. Using the mailbox as an agent

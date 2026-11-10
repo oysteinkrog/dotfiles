@@ -68,24 +68,16 @@ git status --short | grep '^??' | head -20
 Flag any untracked test files — teammates often write files but crash before committing.
 These need manual build/test/commit rescue.
 
-### 6. Stuck-task rescue (releases reservations too)
+### 6. Stuck-task rescue (checks half-done edits)
 
 A task is stuck when its `owner` points to a teammate that is no longer running.
 Rescue sequence:
 
 1. Identify stuck tasks: `in_progress` with owner = `<name>` where `<name>` is not
    in the set of running backgrounded Agents.
-2. **Release file reservations first**, then reset the task. A crashed teammate
-   leaves its `file_reservation_paths` entries locked, which blocks every other
-   teammate that needs those paths. Via the agent-mail MCP:
-
-   ```
-   # List reservations held by the crashed owner, then release:
-   mcp-agent-mail.release_file_reservations({
-     agent: "<crashed-owner>",
-     paths: [<their held paths>]
-   })
-   ```
+2. There are no file reservations to release (agent-mail was retired 2026-11-10). Check
+   `git status` for half-done edits from the crashed owner and commit or revert them
+   by pathspec before the next teammate starts.
 
 3. Reset the task so a fresh teammate can claim it:
 

@@ -22,12 +22,11 @@ When `TaskCreate` and `TeamCreate` are not available, skip the task list. The le
 assigns each bead directly by name: it binds `{BEAD_ID}` in the prompt, spawns one
 teammate per bead, and spawns the next bead's teammate when a completion notice arrives.
 
-**File coordination is the leader's job.** Subagent teammates get no agent-mail
-identity (the SessionStart hook registers only the parent session), so they cannot
-reserve files. The leader gives each running teammate one bead whose files no other
-running teammate touches, and chains beads that share a file with `blockedBy` (or
-`br dep add`) so they run one after another. A teammate that does have an agent-mail
-identity still reserves its files as an extra guard.
+**File coordination is the leader's job.** agent-mail was retired on 2026-11-10, so no
+teammate reserves files. The leader gives each running teammate one bead whose files no
+other running teammate touches, and chains beads that share a file with `blockedBy` (or
+`br dep add`) so they run one after another. Teammates commit with a pathspec. The leader
+and teammates talk through `SendMessage`.
 
 ## When to activate
 
@@ -54,15 +53,6 @@ Activate when the user says:
 #### 1. Pre-flight
 
 ```bash
-# Verify the live agent-mail server is reachable (rust rewrite, pm2-managed, NO auth).
-# Do NOT start any server here. On failure, the LEADER runs `pm2 restart mcp-agent-mail`
-# and re-checks http://127.0.0.1:4809/health before spawning.
-curl -sf http://127.0.0.1:4809/health > /dev/null 2>&1 && echo "Agent-mail: running" || echo "Agent-mail DOWN — run 'pm2 restart mcp-agent-mail', then re-check http://127.0.0.1:4809/health before spawning teammates."
-
-# agent-mail is registered once at user scope (~/.claude.json); subagents see it.
-# Never add it to the project .mcp.json: a second registration races for the same tools.
-claude mcp get mcp-agent-mail 2>&1 | grep -q 'User config' && echo "Agent-mail: user scope OK" || echo "Agent-mail not at user scope: claude mcp add --scope user --transport http mcp-agent-mail http://127.0.0.1:4809/mcp/"
-
 # Show what's ready
 bv -robot-next 2>/dev/null | jq '{id, title, score, unblocks, reasons}'
 
@@ -166,10 +156,9 @@ the files the bead names.
 1. Before editing, run `git diff --stat -- <your files>`. If a file already has
    uncommitted changes that are not yours, do not commit them. Stage only your own
    hunks (git-partial-stage skill) or stop and report it.
-2. File reservations are optional. If you have an agent-mail identity, call
-   `file_reservation_paths` for your files. If a file is reserved by someone else,
-   stop and report. If you have no identity or agent-mail errors, skip reservations
-   and say so in your report.
+2. There are no file reservations. Commit with a pathspec
+   (`git commit -m "..." -- <your files>`). If a file you need is being edited by
+   another teammate, stop and report it to the leader with `SendMessage`.
 
 ## Rules
 
@@ -207,7 +196,6 @@ the files the bead names.
    checkout, follow the repo's own guidance (monorepo: `AgentOutputSuffix`,
    `docs/dev/recovery.md`). Never pass `--no-dependencies`: it risks stale DLLs.
 6. If checks fail, fix and commit a follow-up with the same pathspec: git add <only your files> && git commit -m "..." -- <your files>. Never amend.
-7. If you reserved files, release them with release_file_reservations.
 8. Close: br close {BEAD_ID} --reason "<what changed, commit sha>"
 9. Mark your task completed: TaskUpdate({ taskId, status: "completed" })
 10. Report in your final message: bead id, commit sha(s), files changed, check
@@ -216,7 +204,7 @@ the files the bead names.
 Do NOT go idle or stop with a claimed task in an unfinished state (no idle-in-progress).
 A task is finished ONLY after commit → `br close {BEAD_ID}` → `TaskUpdate({ taskId,
 status: "completed" })`. If you cannot finish (blocked, out of budget), run the
-"On abort / shutdown" path below (release any reservations, `TaskUpdate({ taskId,
+"On abort / shutdown" path below (commit or revert half-done edits, `TaskUpdate({ taskId,
 owner: null, status: "pending" })`) and exit so the leader reclaims it — never leave
 it idle-in-progress.
 
@@ -226,7 +214,6 @@ Do NOT mark your task completed unless step 8 (br close) succeeded. Instead:
 1. If mid-edit: decide whether the partial work is worth keeping.
    - Keep: finish the write, commit, then follow the completion path above.
    - Discard: `git restore` the files; proceed to release step.
-2. If you reserved files, release them with release_file_reservations.
 3. TaskUpdate({ taskId, owner: null, status: "pending" }) — the leader will
    reclaim or reassign.
 4. Exit.
@@ -358,12 +345,11 @@ Agent({
 
 1. For each running backgrounded teammate, signal a stop via a fresh `Agent`
    instruction OR `TaskStop` if the harness supports interrupting by ID. Give
-   them the "On abort / shutdown" script from A.4 so they release any reservations
+   them the "On abort / shutdown" script from A.4 so they commit or revert half-done edits
    and return their task to `pending` (NOT completed — completed implies the
    bead was actually closed in `br`).
 2. Wait for notifications. If a teammate is truly stuck, `TaskStop({ taskId })`.
-3. Run the stuck-task rescue from `/swarm-status` to release orphaned file
-   reservations and reset any in-progress tasks whose owner is gone.
+3. Run the stuck-task rescue from `/swarm-status` to reset any in-progress tasks whose owner is gone.
 4. Report open beads:
 
 ```bash
@@ -377,8 +363,8 @@ bv -robot-next 2>/dev/null | jq '{id, title, unblocks}'
 If the user wants to reuse an existing team name:
 
 1. `TaskList` — find tasks whose `owner` points to a teammate that is no longer
-   running. For each, run the stuck-task rescue from `/swarm-status` (release
-   file reservations held by that owner + reset task to `pending`, `owner=null`).
+   running. For each, run the stuck-task rescue from `/swarm-status` (check
+   half-done edits by that owner + reset task to `pending`, `owner=null`).
 2. Drop completed tasks (`TaskUpdate({ status: "deleted" })`) if they'd pollute
    the next run's `TaskList` output.
 3. Optionally re-seed new beads that became ready since the last run.
