@@ -291,7 +291,6 @@ bin/logs/
 # new skill of your own, add a "!.claude/skills/<name>/" line. Never list a jsm skill.
 .claude/skills/*
 !.claude/skills/agent-fungibility/
-!.claude/skills/agent-mail-ops/
 !.claude/skills/agent-swarm-workflow/
 !.claude/skills/architecture-diagram/
 !.claude/skills/audit-choices/
