@@ -16,8 +16,7 @@ if [ -e "$repo/.git/index.lock" ] || [ -e "$(g rev-parse --git-dir)/index.lock" 
   echo "index.lock exists, skipping"; exit 0
 fi
 # Only a repack of this repo's object store matters. Its worktrees all live
-# under the parent folder; other repos (for example the agent-mail mailbox) run
-# their own maintenance.
+# under the parent folder; other repos run their own maintenance.
 root=$(dirname "$repo")
 for pid in $(pgrep -f "git.*(repack|gc|maintenance)"); do
   cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)

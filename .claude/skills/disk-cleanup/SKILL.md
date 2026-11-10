@@ -77,11 +77,10 @@ Cheap in-WSL fallbacks: `df -h`, `ls | wc -l`, depth-limited `du` under
 | `/tmp` loose top-level files | 22k files, 10G (8G >30d): `claude-edit-tracker-*.json{,.lock}`, `br-*-msg.txt`, stray logs | Covered by purge-scratchpads.sh (loose-file pass). Entry count alone slows every /tmp scan |
 | **Orphaned WSL distros** | Ubuntu-22.04 held 27G incl. its own stale 18G /tmp (removed 2026-08-27) | `wsl.exe -l -v` + `reg.exe query HKCU\...\Lxss /s` → for each unused distro: audit references (bare `wsl.exe` inherits the DEFAULT distro: pm2-resurrect.vbs, CASS-Maintenance task, launch-claude-tabs.sh), `wsl --set-default` first, inspect rootfs for unique data (sudo via DrvFs), then `wsl --unregister` (IRREVERSIBLE) + Remove-AppxPackage |
 | `desktop/master/.git` | 64G: 50G LFS store (SHARED — **keep**), 569M rr-cache | Only `git -C /c/work/desktop/master rerere gc`; objects had 0 garbage |
-| PM2 logs (`~/.pm2/logs`, `~/.config/pm2/logs`) | 11G of dead `better-ccflare-rs` logs found once; agent-mail error log grows | Delete logs of apps absent from `pm2 ls`. Long-term: `pm2 install pm2-logrotate`. `~/.pm2` = LEGACY home, `~/.config/pm2` = active |
+| PM2 logs (`~/.pm2/logs`, `~/.config/pm2/logs`) | 11G of dead `better-ccflare-rs` logs found once | Delete logs of apps absent from `pm2 ls`. Long-term: `pm2 install pm2-logrotate`. `~/.pm2` = LEGACY home, `~/.config/pm2` = active |
 | `~/.claude/projects` | 12–15G, 22.5k session .jsonl (~5.7G >30d) | **Report-only** — cass indexes these. Offer archive/compress, deletion is the user's call |
 | Package caches: `~/.rustup` 8.9G, `~/.cargo`, `~/.npm`, `~/.bun`, `~/go`, `~/.nvm`, `~/.gradle`, `~/.nuget` | 50k–260k files each (du times out — size with fastscan) | Regenerable: prune old rustup toolchains / nvm versions, `npm cache clean --force`, `go clean -modcache`. Keep `~/.cargo/bin` |
 | Migration/backup leftovers | `~/.claude-clean` 340M, `~/.claude-backeupbeforedotfiles` 13M, `~/OneDrive_Backup_*` 6.3G | Confirm superseded with user, then remove |
-| `~/.mcp_agent_mail_git_mailbox_repo` | 60k files | `git gc` inside it; see `~/bin/agent-mail-prune.sh` first |
 | Agent-isolation worktrees `<repo>/.claude/worktrees/agent-*` | usually zero; known vector | `find <repo>/.claude/worktrees -maxdepth 1 -name 'agent-*' -mtime +2`; grove gc cat. 5 covers desktop |
 
 D: has free space (~240G): for large-but-wanted data, **moving to /d is a
@@ -96,7 +95,6 @@ lower-risk alternative to deletion** — offer it.
 | `scripts/fastscan.py` (this skill) | Fast native enumeration (scandir + MFT engines); `scripts/mkntfs.py` regenerates the MFT-parser test image |
 | `~/bin/purge-stale-builds` | Stale motioncatalyst `BUILD*` dirs under /c/work (age-gated, `--dry-run`) |
 | `~/bin/grove-gc-weekly.sh` | Scheduled Sunday grove GC — check it's still landing before manual work |
-| `~/bin/agent-mail-prune.sh` | Agent-mail store pruning |
 | `pm2 flush <app>` / pm2-logrotate | PM2 log growth |
 
 ## Safety rules
@@ -121,7 +119,7 @@ lower-risk alternative to deletion** — offer it.
    not the ~15G tree — measure the target, and expect fastscan totals to
    exclude reparse points by design.
 8. **Regenerable caches are fair game; data is not.** Session transcripts
-   (`~/.claude/projects`, cass-indexed), agent-mail archive, `~/.cargo/bin`,
+   (`~/.claude/projects`, cass-indexed), `~/.cargo/bin`,
    anything under version control: report-only unless the user opts in.
 9. **`wsl --unregister` is irreversible** — always: repoint default distro,
    audit bare-`wsl.exe` callers (Startup .vbs, scheduled tasks, launch

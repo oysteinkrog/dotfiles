@@ -131,10 +131,6 @@
           "path": "skills/agent-fungibility",
           "hash": "411b1b71447bab961913010e9ba0e4ab5787cfdcd72ce2f26015c408d7ac635c"
         },
-        "agent-mail": {
-          "path": "skills/agent-mail",
-          "hash": "21c61cb0d819dbd07a6662873de6cf94f0110e589c17cb4db6af8f58fbeaa2d9"
-        },
         "agent-swarm-workflow": {
           "path": "skills/agent-swarm-workflow",
           "hash": "d3e36981ccba987a6b31ea04a7b68daf1033d05195e8d87e1c92ea6a97a10eba"

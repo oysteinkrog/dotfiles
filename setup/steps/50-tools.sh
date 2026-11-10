@@ -77,21 +77,6 @@ else
   "$HOME/.local/bin/localbuild" install plasma-login-manager || sudo pacman -S --noconfirm plasma-login-manager
 fi
 
-step "tools: agent mail (localbuilds recipe mcp-agent-mail)"
-# The pacman package mcp-agent-mail-local. agent-mail.service and older scripts use the
-# ~/.local/bin paths, so those are symlinks. See the recipe README before moving the pin.
-if pacman -Q mcp-agent-mail-local >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
-  ok "$(pacman -Q mcp-agent-mail-local)"
-else
-  "$HOME/.local/bin/localbuild" build mcp-agent-mail
-  "$HOME/.local/bin/localbuild" install mcp-agent-mail
-fi
-ln -sfn /usr/bin/am "$HOME/.local/bin/am"
-ln -sfn /usr/bin/mcp-agent-mail "$HOME/.local/bin/mcp-agent-mail"
-for alias in agent-mail agentmail mcp_agent_mail mcpagentmail; do
-  ln -sfn mcp-agent-mail "$HOME/.local/bin/$alias"
-done
-
 step "tools: krdp-local (localbuilds recipes freerdp, kpipewire, krdp)"
 # RDP sound, microphone and a streamed monitor that takes the client's size. Only on
 # machines that stream a monitor (HOST_KRDP_MONITOR). freerdp and kpipewire are private

@@ -13,7 +13,11 @@
     {
       "name": "flywheel-skills",
       "repo": "https://github.com/Dicklesworthstone/agent_flywheel_clawdbot_skills_and_integrations",
-      "skills_dir": "skills"
+      "skills_dir": "skills",
+      "exclude": [
+        "agent-mail",
+        "agent-mail-ops"
+      ]
     }
   ]
 }

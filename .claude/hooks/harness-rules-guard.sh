@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Bash. Blocks three commands that ~/.claude/CLAUDE.md
+# PreToolUse hook for Bash. Blocks two commands that ~/.claude/CLAUDE.md
 # lists as hard "never" rules for agents:
 #
 #   bv (no --robot-* flag)   opens the TUI and hangs the agent.
-#   am doctor fix            rewrites every MCP config back to port 8765 with
-#                            a bearer token, which breaks MCP configs. (agent-mail was retired 2026-11-10; the block stays.)
 #   cass index --semantic    holds whole conversations in memory while
 #                            embedding. `cass-gpu` is the same binary, so
 #                            `cass-gpu index --semantic` is blocked too.
 #
-# Allowed near-misses: `bv --robot-*`, `bv --help`, `am doctor` without fix,
-# plain `cass index` (also as `cass-gpu index`), and --help on any of them.
+# Allowed near-misses: `bv --robot-*`, `bv --help`, plain `cass index` (also as `cass-gpu index`), and --help on any of them.
 #
 # Detection lives in harness-rules-detect.py, which reuses the shell
 # segmentation in grove-worktree-detect.py, so a quoted mention inside another
@@ -27,7 +24,7 @@ payload=$(cat)
 command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)
 
 # Cheap pre-filter so most Bash calls never spawn python.
-if ! printf '%s' "$command" | grep -qE '(^|[^[:alnum:]_.-])(bv|am|cass|cass-gpu)([^[:alnum:]_.-]|$)'; then
+if ! printf '%s' "$command" | grep -qE '(^|[^[:alnum:]_.-])(bv|cass|cass-gpu)([^[:alnum:]_.-]|$)'; then
   exit 0
 fi
 
@@ -54,17 +51,6 @@ Use instead:
   bv --robot-triage         ranked triage as JSON
   bv --help                 the full list of --robot-* flags
   br ready / br show <id>   the plain CLI
-EOF
-    ;;
-  am_doctor_fix)
-    cat >&2 <<EOF
-BLOCKED: \`am doctor fix\`.
-
-Command: $detail
-
-It rewrites every MCP config back to port 8765 with a bearer token, which
-breaks MCP server entries. agent-mail was retired on 2026-11-10, so there is
-nothing for it to repair on this machine.
 EOF
     ;;
   cass_semantic)

@@ -146,6 +146,10 @@ sync_source() { # $1=name $2=force(0/1) $3=dryrun(0/1)
     local skill target lhash
     skill=$(basename "$rel")
     target="$SKILLS_DIR/$skill"
+    # Optional "exclude": ["skill", ...] in the source config keeps a skill out of the sync.
+    if jq -e --arg s "$skill" '(.exclude // []) | index($s) != null' <<<"$src" >/dev/null; then
+      note "  skip $skill: excluded in skills-sources.json"; continue
+    fi
     lhash=$(jq -r --arg n "$name" --arg s "$skill" '.sources[$n].skills[$s].hash // empty' "$LOCKFILE")
 
     if [ -d "$target" ]; then

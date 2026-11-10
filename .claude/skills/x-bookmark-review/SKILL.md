@@ -42,7 +42,7 @@ who it matters for: Initial Force (Swing Catalyst), his own setup and repos, or 
      - **Oystein's setup.** `~/.dotfiles` (Claude Code skills, hooks, agents, KDE and
        CachyOS setup), `~/src/localbuilds` (patched Wine, KWin, FrankenTerm, cass),
        `~/projects/grove`, `~/projects/tasklens`, `~/projects/aiolos`, agent tooling (beads,
-       agent-mail, cass, heavy-build).
+       cass, heavy-build).
      - Check whether something similar is already in use, so the review can say
        "we already have X, this adds Y" or "this replaces X".
 4. Append the entries to today's review file (create it with the frontmatter below).

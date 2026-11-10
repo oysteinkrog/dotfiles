@@ -163,5 +163,5 @@ move. Rules, all hard:
   the queue.
 - A job waits long: read its last line in `~/.local/state/jobd/live.log`; the
   reason uses heavy-build's wording.
-- Tell the job-system session (agent mail, or a cross-session message) about a
+- Tell the job-system session (with SendMessage) about a
   fault, with the request id.

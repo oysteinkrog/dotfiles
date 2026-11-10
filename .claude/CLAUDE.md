@@ -146,6 +146,7 @@ Rules, all hard:
 ## Multi-agent work
 
 Swarms run inside Claude Code via `Agent`, `SendMessage`, `TaskCreate` and `TeamCreate`.
+Sessions on this machine message each other with SendMessage; Agent Hub covers other machines.
 There is no external tmux manager.
 
 **Load the skill before spawning.** `swarm-agents` for a research, design, review or planning
@@ -227,14 +228,6 @@ These rules hold whether or not a skill is loaded:
   backports reviewed separately at high effort used 10.7M Astra tokens in one hour.
 - Tell teammates to read CLAUDE.md first, and name the files they will touch so two
   teammates never edit the same file.
-
-## Agent mail (retired)
-
-agent-mail was retired on 2026-11-10 (office desktop). Sessions on this machine message
-each other with `SendMessage`. Agent Hub covers other machines. File coordination relies on
-pathspec commits and the "one work unit, one commit" rule above. The old `agent-mail` and
-`agent-mail-ops` skills are kept for history only. `disabledMcpjsonServers` still lists
-`mcp-agent-mail`, so old repo `.mcp.json` entries stay ignored.
 
 ## Lab PC
 

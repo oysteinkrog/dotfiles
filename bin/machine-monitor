@@ -27,7 +27,6 @@
 #   DISK       free on / below 200/150 info, 100 warn, 75/60 crit, 5 GiB hysteresis.
 #   BTRFS      metadata >= 85% with < 2 GiB unallocated (every 5 min, no sudo).
 #   OOM        kernel OOM kills and systemd-oomd kills from the journal.
-#   AGENT_MAIL agent-mail.service state changes, new doctor/reclaimable entries.
 #   CASS       cass running without the CASS_AUTO_REFRESH=0 wrapper, or
 #              indexing outside its own unit.
 #   PROCS      gpg-agent 10/50, git 48/96, wine* and *.exe 200/400 processes.
@@ -48,7 +47,6 @@ MM_STATE=${MM_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/machine-monitor}
 MM_EVENTS=${MM_EVENTS:-$MM_STATE/events.log}
 MM_NOTIFY=${MM_NOTIFY:-1}
 MM_TICK=${MM_TICK:-15}
-MM_RECLAIMABLE=${MM_RECLAIMABLE:-$HOME/.mcp_agent_mail_git_mailbox_repo/doctor/reclaimable}
 MM_WATCHED_UNITS=${MM_WATCHED_UNITS:-cass-maintenance disk-guard cargo-target-prune build-sweep grove-gc}
 
 MM_SWAP_BANDS=${MM_SWAP_BANDS:-75 85}
@@ -369,21 +367,6 @@ check_oom() {
   return 0
 }
 
-check_agent_mail() {
-  local s prev rc rc0
-  s=$(mm_user_active agent-mail.service); prev=$(state_get am_state)
-  [[ -n $s ]] || s=unknown
-  if [[ -n $prev && $s != "$prev" ]]; then
-    local lvl=info; [[ $s != active ]] && lvl=warn
-    emit "$lvl" AGENT_MAIL "agent-mail.service now $s (was $prev)"
-  fi
-  state_set am_state "$s"
-  rc=$(find "$MM_RECLAIMABLE" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
-  rc0=$(state_get am_reclaimable "$rc")
-  (( rc > rc0 )) && emit warn AGENT_MAIL "new doctor/reclaimable entries: $rc0 -> $rc"
-  state_set am_reclaimable "$rc"
-}
-
 check_cass() {
   local pid comm args cg env_ok seen
   seen=" $(state_get cass_seen) "
@@ -602,7 +585,6 @@ main() {
   emit info START "machine-monitor started, pid $$"
   while true; do
     t=$(now)
-    check_agent_mail
     if (( n % 2 == 0 )); then
       check_swap; check_sunreclaim
       check_psi cpu PSI_CPU "$MM_PSI_CPU_BANDS" "$MM_PSI_CPU_HOLD" "$MM_PSI_CPU_AVG300" "$MM_PSI_CPU_HYST"

@@ -59,14 +59,9 @@ elif [ "$(realpath "$HOME/.claude/CLAUDE.md")" = "$(realpath "$DOTFILES/.claude/
 else
   fail "~/.claude is not the dotfiles .claude"
 fi
-if jq -e '.mcpServers["mcp-agent-mail"].url == "http://127.0.0.1:4809/mcp/"' "$HOME/.claude.json" >/dev/null 2>&1; then
-  ok "agent mail registered with Claude at user scope"
-else
-  fail "agent mail not registered with Claude (services step)"
-fi
 
 step "verify: commands"
-for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex claude cass am br docker tailscale frankenterm-gui localbuild; do
+for c in git gh fish nvim rg fd jq paru rustup cargo uv node npm codex claude cass br docker tailscale frankenterm-gui localbuild; do
   if have "$c"; then ok "$c"; else fail "$c not on PATH"; fi
 done
 case "$(realpath "$(command -v frankenterm-gui)")" in
@@ -76,15 +71,13 @@ esac
 "$HOME/.local/bin/localbuild" check
 
 step "verify: services"
-for u in agent-mail filter-chain frankenterm-mux app-dev.lizardbyte.app.Sunshine app-org.kde.krdpserver; do
+for u in filter-chain frankenterm-mux app-dev.lizardbyte.app.Sunshine app-org.kde.krdpserver; do
   if systemctl --user is-active -q "$u.service" 2>/dev/null; then ok "$u (user)"
   else warn "$u (user) not active"; fi
 done
 for u in docker tailscaled; do
   systemctl is-active -q "$u.service" && ok "$u" || warn "$u not active"
 done
-if curl -fsS -m 3 http://127.0.0.1:4809/health >/dev/null 2>&1; then ok "agent-mail answers on :4809"
-else warn "agent-mail /health on :4809 does not answer"; fi
 tailscale status >/dev/null 2>&1 && ok "tailscale logged in" || warn "tailscale not logged in: tailscale up"
 
 step "verify: voxtype"

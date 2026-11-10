@@ -1,10 +1,5 @@
 projects_base = "/home/oystein/work"
 
-[agent_mail]
-enabled = true
-url = "http://127.0.0.1:8765/api/"
-auto_register = true
-
 [agents]
 claude = "env -u CLAUDECODE -u CLAUDE_CODE_SESSION -u CLAUDE_CODE_ENTRY_POINT NODE_OPTIONS=\"--max-old-space-size=32768\" claude --dangerously-skip-permissions --strict-mcp-config{{if .Model}} --model {{shellQuote .Model}}{{end}}{{if .SystemPromptFile}} --system-prompt-file {{shellQuote .SystemPromptFile}}{{end}}"
 

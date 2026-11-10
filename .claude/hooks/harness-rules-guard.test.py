@@ -27,17 +27,8 @@ cases = [
     ("ls bv", False),
     ("cat <<EOF\nbv\nEOF", False),
     ("cat <<EOF\nbv\nEOF\nbv", True),
-    # --- am doctor fix: blocked ---
-    ("am doctor fix", True),
-    ("am doctor fix --yes", True),
-    ("am --verbose doctor fix", True),
-    ("pm2 status && am doctor fix", True),
-    # --- am: allowed ---
-    ("am doctor", False),
-    ("am doctor check", False),
-    ("am doctor fix --help", False),
-    ("am --help", False),
-    ('br update x --description "never run am doctor fix"', False),
+    # --- am is no longer special: the agent-mail binary is gone ---
+    ("am doctor fix", False),
     ("git am patch.mbox", False),
     # --- cass index --semantic: blocked ---
     ("cass index --semantic", True),

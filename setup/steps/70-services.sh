@@ -5,7 +5,6 @@ step "services"
 systemctl --user daemon-reload
 
 units=(
-  agent-mail.service                       # dotfiles: am serve-http on 127.0.0.1:4809
   filter-chain.service                     # pipewire: the EQ sink and mic filter
   app-org.kde.krdpserver.service           # krdp package
   cass-maintenance.timer                   # dotfiles: cass index + cm reflect every 30 min
@@ -106,18 +105,6 @@ for u in "${units[@]}"; do
     systemctl --user enable --now "$u" && ok "$u enabled and started"
   fi
 done
-
-# Agent mail is registered with Claude once, at user scope (never in a repo's .mcp.json).
-am_url=http://127.0.0.1:4809/mcp/
-if jq -e --arg u "$am_url" '.mcpServers["mcp-agent-mail"].url == $u' "$HOME/.claude.json" >/dev/null 2>&1; then
-  ok "agent mail registered with Claude"
-elif have claude; then
-  claude mcp remove --scope user mcp-agent-mail >/dev/null 2>&1 || true
-  claude mcp add --scope user --transport http mcp-agent-mail "$am_url" >/dev/null &&
-    ok "agent mail registered with Claude at user scope"
-else
-  warn "claude not installed; register agent mail later: claude mcp add --scope user --transport http mcp-agent-mail $am_url"
-fi
 
 # A stray alias link from an earlier manual setup duplicates the Sunshine unit.
 if [ -L "$HOME/.config/systemd/user/sunshine.service" ]; then

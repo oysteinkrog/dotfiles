@@ -12,7 +12,6 @@ pass=0 fail=0
 setup() {
   T=$ROOT/$1; mkdir -p "$T/proc/pressure" "$T/cg" "$T/state"
   export MM_PROC=$T/proc MM_CGROUP=$T/cg MM_STATE=$T/state MM_NOTIFY=0 MM_LIB=1
-  export MM_RECLAIMABLE=$T/reclaimable
   # shellcheck source=machine-monitor
   source "$SCRIPT" > /dev/null
   # Stubs: no real system calls.
@@ -195,14 +194,6 @@ test_oom_oomd_kill() {
   mm_journal() { [[ $2 == systemd-oomd.service ]] && printf '1005.0 h systemd-oomd[5]: Killed /user.slice/app.slice/chrome.scope due to memory pressure\n'; }
   MM_NOW=1030; check_oom; MM_NOW=1060; check_oom
   [[ $(nevents 'crit OOM systemd-oomd') == 1 ]]
-}
-
-# ---- agent-mail ----
-test_agent_mail_state_and_reclaimable() {
-  setup am
-  mkdir -p "$MM_RECLAIMABLE"; check_agent_mail
-  mm_user_active() { echo failed; }; touch "$MM_RECLAIMABLE/a"; check_agent_mail; check_agent_mail
-  [[ $(nevents 'warn AGENT_MAIL agent-mail.service now failed') == 1 && $(nevents 'reclaimable entries: 0 -> 1') == 1 ]]
 }
 
 # ---- cass ----
