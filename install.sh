@@ -232,6 +232,8 @@ if [ -n "$native_linux" ]; then
     .config/systemd/user/shader-wallpaper-theme-sync.service
     .local/bin/streamcam-mic-enable
     .local/bin/streamcam-mic-resume-watch
+    .local/bin/audio-stall-watchdog
+    .local/bin/mic-kick
     .local/bin/cass-maintenance.sh
     .local/bin/cass
     .local/bin/cass-memcheck
