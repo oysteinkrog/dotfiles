@@ -30,7 +30,6 @@ units=(
   chrome-idle-close.timer                  # dotfiles: close an idle Chrome profile under pressure
   boost-clear.timer                        # dotfiles: clear a stuck Normal-zone watermark boost
   slice-memlog.timer                       # dotfiles: per-minute memory log by cgroup slice
-  desktop-cache-dirs.service               # dotfiles: tmpfs folders for monorepo mmap caches
   desktop-master-sync.timer                # dotfiles: ~/work/desktop/master to if/master (skips local work)
   grove-snap@desktop.timer                 # dotfiles: hourly read-only snaps of grove lanes
   kwin-dpms-recover.service                # dotfiles: screens back when KWin fails to wake them
