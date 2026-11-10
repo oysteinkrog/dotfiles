@@ -253,11 +253,6 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
   editing, and release with `release_file_reservations` after committing. Find recipients
   with `list_agents` on the project key rather than guessing a name.
 
-**Book the lab PC for the time the runs need, never a whole night.** Oystein, 2026-11-10:
-other agents need the lab too. In Laben, book from the run plan (sessions times pairs, plus
-setup), with a short margin, and put a "no new run after" time in the event. Shorten the
-booking as soon as the runs end, and tell the next booking holder when you finish early.
-If more runs are needed, book a second slot later rather than holding the whole night.
 - `ToolSearch` `select:` matches only fully-qualified names such as
   `mcp__mcp-agent-mail__file_reservation_paths`. A bare tool name returns nothing, which
   reads as the server being down when it is not.
@@ -269,6 +264,12 @@ Tailscale). It used to be called Hawk; Windows was renamed to TRD-LAB-PC on 2026
 Hawk in new text. Log in with **`ssh labpc`** (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), which uses the key `~/.ssh/labpc_ed25519`; sshd there
 accepts keys only. The shell is Windows, so wrap commands in `powershell -NoProfile -Command`.
 To deploy a build or pull logs, load `lab-deploy`.
+
+**Book the lab PC for the time the runs need, never a whole night.** Oystein, 2026-11-10:
+other agents need the lab too. In Laben, book from the run plan (sessions times pairs, plus
+setup), with a short margin, and put a "no new run after" time in the event. Shorten the
+booking as soon as the runs end, and tell the next booking holder when you finish early.
+If more runs are needed, book a second slot later rather than holding the whole night.
 
 ## App windows from agents
 
