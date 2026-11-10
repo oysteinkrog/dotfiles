@@ -225,36 +225,16 @@ These rules hold whether or not a skill is loaded:
   in the PR. Different ids mean the pick needed conflict fixes: review only the hunks that
   differ (`git range-diff <orig>^! <pick>^!`), with a short brief. On 2026-10-17, S3
   backports reviewed separately at high effort used 10.7M Astra tokens in one hour.
-- Tell teammates to read CLAUDE.md first, and name the files they will touch so reservations
-  can prevent conflicts.
+- Tell teammates to read CLAUDE.md first, and name the files they will touch so two
+  teammates never edit the same file.
 
-## Agent mail
+## Agent mail (retired)
 
-The rust `mcp-agent-mail` runs as the systemd user unit `agent-mail.service` on `http://127.0.0.1:4809/mcp/`, localhost
-only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It answers on
-`/api/` as well, so older project configs keep working.
-
-- **Never run `am doctor fix`.** It rewrites every MCP config back to port 8765 with a bearer
-  token, which breaks this setup. To restart the service, or for anything wrong with it or
-  its SQLite store, load `agent-mail-ops`, which owns restart and repair. For using agent
-  mail as an agent, load `agent-mail`.
-- **agent-mail is registered once, at user scope** (since 2026-10-15):
-  `claude mcp add --scope user --transport http mcp-agent-mail http://127.0.0.1:4809/mcp/`,
-  stored in `~/.claude.json`. Subagents see it (tested). **Never add it to a repo's
-  `.mcp.json`**: two registrations of one server race for the same tool-namespace slot, and
-  tools then fail to appear at random. `~/.claude/settings.json` sets
-  `"disabledMcpjsonServers": ["mcp-agent-mail"]`, so an old repo or branch that still has
-  the entry is ignored. Remove the entry when you touch such a repo.
-- **Identity is automatic.** A SessionStart hook registers you and tells you your own name.
-  Do not register by hand and do not pick a name. The hook is non-blocking: when agent mail
-  is unreachable it says so and the turn continues, and it never restarts or repairs the
-  service itself.
-- **Coordination is still yours.** Reserve shared files with `file_reservation_paths` before
-  editing, and release with `release_file_reservations` after committing. Find recipients
-  with `list_agents` on the project key rather than guessing a name.
-- `ToolSearch` `select:` matches only fully-qualified names such as
-  `mcp__mcp-agent-mail__file_reservation_paths`. A bare tool name returns nothing, which
-  reads as the server being down when it is not.
+agent-mail was retired on 2026-11-10 (office desktop). Sessions on this machine message
+each other with `SendMessage`. Agent Hub covers other machines. File coordination relies on
+pathspec commits and the "one work unit, one commit" rule above. The old `agent-mail` and
+`agent-mail-ops` skills are kept for history only. `disabledMcpjsonServers` still lists
+`mcp-agent-mail`, so old repo `.mcp.json` entries stay ignored.
 
 ## Lab PC
 

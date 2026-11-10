@@ -123,10 +123,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/agent-mail-guard.sh"
-          },
-          {
-            "type": "command",
             "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
             "async": true
           },
@@ -289,10 +285,6 @@
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/agent-mail-guard.sh"
-          },
           {
             "type": "command",
             "command": "$HOME/.dotfiles/bin/aiolos-hook-forwarder",
