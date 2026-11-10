@@ -252,6 +252,12 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
 - **Coordination is still yours.** Reserve shared files with `file_reservation_paths` before
   editing, and release with `release_file_reservations` after committing. Find recipients
   with `list_agents` on the project key rather than guessing a name.
+
+**Book the lab PC for the time the runs need, never a whole night.** Oystein, 2026-11-10:
+other agents need the lab too. In Laben, book from the run plan (sessions times pairs, plus
+setup), with a short margin, and put a "no new run after" time in the event. Shorten the
+booking as soon as the runs end, and tell the next booking holder when you finish early.
+If more runs are needed, book a second slot later rather than holding the whole night.
 - `ToolSearch` `select:` matches only fully-qualified names such as
   `mcp__mcp-agent-mail__file_reservation_paths`. A bare tool name returns nothing, which
   reads as the server being down when it is not.
