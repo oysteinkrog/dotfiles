@@ -252,7 +252,6 @@ only, no bearer token. Health check: `curl -s http://127.0.0.1:4809/health`. It 
 - **Coordination is still yours.** Reserve shared files with `file_reservation_paths` before
   editing, and release with `release_file_reservations` after committing. Find recipients
   with `list_agents` on the project key rather than guessing a name.
-
 - `ToolSearch` `select:` matches only fully-qualified names such as
   `mcp__mcp-agent-mail__file_reservation_paths`. A bare tool name returns nothing, which
   reads as the server being down when it is not.
