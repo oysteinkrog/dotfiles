@@ -1,0 +1,69 @@
+#!/bin/bash
+# Restart a USB audio device that PipeWire holds open but that passes no audio.
+#
+# Fault seen 2026-11-04 to 2026-11-09 on the StreamCam mic and once on the
+# Audioengine D1: the ALSA stream says RUNNING, but its hw_ptr stands still, so
+# every app gets silence. Suspending and resuming the PipeWire node fixes it.
+# This loop watches hw_ptr once a second and does that restart by itself.
+#
+# Each line: ALSA card id, PCM folder, pactl list type, pactl suspend command.
+DEVICES="
+StreamCam pcm0c sources suspend-source
+D1 pcm0p sinks suspend-sink
+"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/audio-stall-watchdog"
+STALL_SECONDS=3      # unchanged hw_ptr for this long counts as a stall
+COOLDOWN_SECONDS=15  # wait after a restart before judging the device again
+mkdir -p "$STATE_DIR"
+
+declare -A last_ptr still_count cooldown_until
+
+restart_node() {
+  local card=$1 kind=$2 cmd=$3 node
+  node=$(pactl list short "$kind" | awk -v c="$card" '$2 ~ /^alsa_/ && $2 ~ c {print $2; exit}')
+  if [ -z "$node" ]; then
+    echo "stall on $card, but found no PipeWire node to restart"
+    return
+  fi
+  pactl "$cmd" "$node" 1
+  sleep 0.5
+  pactl "$cmd" "$node" 0
+  echo "restarted $node"
+}
+
+while sleep 1; do
+  now=$(date +%s)
+  while read -r card pcm kind cmd; do
+    [ -n "$card" ] || continue
+    status="/proc/asound/$card/$pcm/sub0/status"
+    state=""; ptr=""
+    if [ -r "$status" ]; then
+      state=$(awk '/^state:/{print $2}' "$status")
+      ptr=$(awk '/^hw_ptr/{print $3}' "$status")
+    fi
+    if [ "$state" != "RUNNING" ] || [ "$now" -lt "${cooldown_until[$card]:-0}" ]; then
+      last_ptr[$card]=""; still_count[$card]=0
+      continue
+    fi
+    if [ "$ptr" = "${last_ptr[$card]}" ]; then
+      still_count[$card]=$(( ${still_count[$card]:-0} + 1 ))
+    else
+      still_count[$card]=0
+    fi
+    last_ptr[$card]=$ptr
+    if [ "${still_count[$card]}" -ge "$STALL_SECONDS" ]; then
+      t=$(date +%Y%m%d-%H%M%S)
+      echo "stall on $card: hw_ptr stuck at $ptr for ${STALL_SECONDS}s, saving $STATE_DIR/$t-$card.txt"
+      {
+        cat "$status"
+        echo "--- kernel log, last 60 s"
+        journalctl -k --since -60s --no-pager 2>/dev/null | tail -40
+        echo "--- pipewire and wireplumber log, last 60 s"
+        journalctl --user --since -60s --no-pager _COMM=pipewire _COMM=wireplumber 2>/dev/null | tail -40
+      } >"$STATE_DIR/$t-$card.txt" 2>&1
+      restart_node "$card" "$kind" "$cmd"
+      last_ptr[$card]=""; still_count[$card]=0
+      cooldown_until[$card]=$(( $(date +%s) + COOLDOWN_SECONDS ))
+    fi
+  done <<<"$DEVICES"
+done

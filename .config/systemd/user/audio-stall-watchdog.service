@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart a USB audio device that runs but passes no audio
+After=pipewire.service wireplumber.service pipewire-pulse.service
+
+[Service]
+ExecStart=%h/.local/bin/audio-stall-watchdog
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=default.target

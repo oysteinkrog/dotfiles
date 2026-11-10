@@ -1,0 +1,8 @@
+#!/bin/sh
+# Restart the StreamCam mic in PipeWire: suspend, then resume the camera source.
+s=$(pactl list short sources | awk '/alsa_input.*StreamCam/{print $2; exit}')
+[ -n "$s" ] || { echo "mic-kick: StreamCam source not found" >&2; exit 1; }
+pactl suspend-source "$s" 1
+sleep 0.5
+pactl suspend-source "$s" 0
+echo "mic-kick: restarted $s"
