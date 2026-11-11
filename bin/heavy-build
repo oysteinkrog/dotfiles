@@ -2,7 +2,7 @@
 # heavy-build: run a heavy build or test in a memory-capped systemd scope in
 # builds.slice, once the build queue lets it start.
 #
-# Usage: heavy-build [--class app-run] [--ready-file PATH] [--wait-timeout S] [--] <cmd> [args...]
+# Usage: heavy-build [--class app-run] [--ready-file PATH] [--wait-timeout S] [--est MEM,CORES,WALL] [--] <cmd> [args...]
 #   heavy-build cargo test -p mux --lib
 #   heavy-build dotnet build Foo.sln
 #   heavy-build localbuild build frankenterm
@@ -630,6 +630,12 @@
 #   --wait-timeout SECONDS  HEAVY_BUILD_WAIT_TIMEOUT: gives up with exit 77
 #                           when not let in that many seconds after queueing,
 #                           holds included. HEAVY_BUILD_WAIT still applies.
+#   --est MEM,CORES,WALL    HEAVY_BUILD_EST: the job's own estimate (GiB,
+#                           cores, seconds), passed to jobd's job submit --est,
+#                           which checks it and keeps it. jobd only: this
+#                           queue ignores it (manager-office, 2026-11-11: a
+#                           headless MC start could not declare 4 GiB and was
+#                           charged the app p90, 6.4 GiB).
 #   --                      ends the options.
 # An app run differs from a build in these ways:
 # - MemoryHigh is HEAVY_BUILD_APP_MEM_HIGH_GIB (default 10), MemoryMax twice
@@ -735,6 +741,7 @@ fi
 CLASS_ARG=${HEAVY_BUILD_CLASS:-}
 READY_FILE=${HEAVY_BUILD_READY_FILE:-}
 WAIT_TIMEOUT=${HEAVY_BUILD_WAIT_TIMEOUT:-}
+EST_ARG=${HEAVY_BUILD_EST:-}
 dashdash=0
 while (( $# )); do
   case $1 in
@@ -744,6 +751,8 @@ while (( $# )); do
     --ready-file=*) READY_FILE=${1#--ready-file=}; shift ;;
     --wait-timeout) (( $# >= 2 )) || { echo "heavy-build: --wait-timeout needs seconds" >&2; exit 2; }; WAIT_TIMEOUT=$2; shift 2 ;;
     --wait-timeout=*) WAIT_TIMEOUT=${1#--wait-timeout=}; shift ;;
+    --est) (( $# >= 2 )) || { echo "heavy-build: --est needs MEM,CORES,WALL" >&2; exit 2; }; EST_ARG=$2; shift 2 ;;
+    --est=*) EST_ARG=${1#--est=}; shift ;;
     --) shift; dashdash=1; break ;;
     -*) echo "heavy-build: unknown option '$1'. Put -- before a command that starts with '-'. To see the queue, read ~/.local/state/heavy-build/live.log" >&2; exit 2 ;;
     *) break ;;
@@ -767,6 +776,10 @@ if [[ -n $CLASS_ARG && $CLASS_ARG != app-run ]]; then
 fi
 if [[ -n $WAIT_TIMEOUT && ! $WAIT_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
   echo "heavy-build: --wait-timeout (HEAVY_BUILD_WAIT_TIMEOUT) must be a whole number of seconds, not '$WAIT_TIMEOUT'" >&2
+  exit 2
+fi
+if [[ -n $EST_ARG && ! $EST_ARG =~ ^[0-9]+(\.[0-9]+)?,[0-9]+(\.[0-9]+)?,[0-9]+(\.[0-9]+)?$ ]]; then
+  echo "heavy-build: --est (HEAVY_BUILD_EST) takes MEM_GIB,CORES,WALL_S, for example 4,2,900, not '$EST_ARG'" >&2
   exit 2
 fi
 # A ready file from an earlier run must not read as admission for this one.
@@ -865,14 +878,14 @@ fi
 # queue. Not for a nested call (handled above, or HEAVY_BUILD_ACTIVE set) or
 # a waiter that re-executed itself (HB_ADOPT_TICKET). The job client is
 # HB_JOB_CMD, else `job` on PATH, else ~/projects/job-system/bin/job.
-# - --class, --ready-file and --wait-timeout go to job submit as the same
-#   options. Other HEAVY_BUILD_* variables reach jobd in the environment.
+# - --class, --ready-file, --wait-timeout and --est go to job submit as the
+#   same options. Other HEAVY_BUILD_* variables reach jobd in the environment.
 # - A HEAVY_BUILD_* variable jobd does not read (JOBD_VARS) is refused with
 #   exit 2, so it is never dropped without a word.
 # - When the client is missing or `job ping` fails, one warning line, then
 #   this queue as usual. After the exec there is no way back: job submit
 #   exits 75 both when jobd went away and when a job gave up.
-JOBD_VARS=" ACTIVE AGENT ALLOW_RERUN APP_CPU_QUOTA APP_MEM_HIGH_GIB BACKEND CLASS CPU_BUDGET DOTNET_MAXCPU EST_NONFILE EST_ONE_ROW_GIB KEY LANES LOW_CARGO_JOBS MAX_JOBS MIN_SWAP_ROOM_GIB MODE MONOREPO NONFILE_PAD_PCT OWN_EST POLL PRIORITY READY_FILE REASON SESSION SESSION_PID SOLO_MEM_GIB TIMEOUT WAIT WAIT_TIMEOUT WINE_FALLBACK_PCT WINE_PREFIX "
+JOBD_VARS=" ACTIVE AGENT ALLOW_RERUN APP_CPU_QUOTA APP_MEM_HIGH_GIB BACKEND CLASS CPU_BUDGET DOTNET_MAXCPU EST EST_NONFILE EST_ONE_ROW_GIB KEY LANES LOW_CARGO_JOBS MAX_JOBS MIN_SWAP_ROOM_GIB MODE MONOREPO NONFILE_PAD_PCT OWN_EST POLL PRIORITY READY_FILE REASON SESSION SESSION_PID SOLO_MEM_GIB TIMEOUT WAIT WAIT_TIMEOUT WINE_FALLBACK_PCT WINE_PREFIX "
 declare -gA ENV_IGNORED=()
 # The machine's backend (heavy-build.conf, last line wins) and what the caller asked.
 conf_backend=$(sed -n 's/^[[:space:]]*HEAVY_BUILD_BACKEND[[:space:]]*=[[:space:]]*\([a-z-]*\).*/\1/p' "$CONF" 2>/dev/null | tail -1)
@@ -932,6 +945,7 @@ case $backend in
         [[ -n $CLASS_ARG ]] && job_args+=(--class "$CLASS_ARG")
         [[ -n $READY_FILE ]] && job_args+=(--ready-file "$READY_FILE")
         [[ -n $WAIT_TIMEOUT ]] && job_args+=(--wait-timeout "$WAIT_TIMEOUT")
+        [[ -n $EST_ARG ]] && job_args+=(--est "$EST_ARG")
         exec "$job_cmd" "${job_args[@]}" -- "$@"
       fi
     fi ;;

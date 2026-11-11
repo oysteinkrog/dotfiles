@@ -3421,6 +3421,12 @@ check "jobd: the environment reaches job submit" 'grep -qx HEAVY_BUILD_PRIORITY=
 check "jobd: no ticket in heavy-build's own queue" '[[ -z $(ls "$T/run/heavy-build.queue") ]] && [[ ! -e $T/state/heavy-build/history.tsv ]]'
 jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_CLASS=app-run -- true
 check "jobd: the env form of --class is passed on as --class (rc $rc)" '(( rc == 42 )) && grep -qx "submit --class app-run -- true" "$T/job.calls"'
+jb HEAVY_BUILD_BACKEND=jobd -- --class app-run --est 4,2,900 -- bash run.sh
+check "jobd: --est is passed on to job submit (rc $rc)" '(( rc == 42 )) && grep -qx "submit --class app-run --est 4,2,900 -- bash run.sh" "$T/job.calls"'
+jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_EST=4.5,2,900 -- true
+check "jobd: HEAVY_BUILD_EST is passed on as --est, not refused (rc $rc)" '(( rc == 42 )) && grep -qx "submit --est 4.5,2,900 -- true" "$T/job.calls"'
+jb HEAVY_BUILD_BACKEND=jobd -- --est 4,two,900 -- true
+check "jobd: a malformed --est is refused with exit 2 before job submit (rc $rc)" '(( rc == 2 )) && [[ ! -e $T/job.calls ]] && grep -q "takes MEM_GIB,CORES,WALL_S" "$T/out"'
 jb HEAVY_BUILD_BACKEND=jobd HEAVY_BUILD_WINE_ORPHAN=stop HEAVY_BUILD_FORCE=1 -- true
 check "jobd: a variable jobd does not read is refused with exit 2 (rc $rc)" '(( rc == 2 )) && [[ ! -e $T/job.calls ]]'
 check "jobd: and the refusal names each one" 'grep -q "jobd does not support HEAVY_BUILD_FORCE HEAVY_BUILD_WINE_ORPHAN, so nothing was submitted" "$T/out"'
