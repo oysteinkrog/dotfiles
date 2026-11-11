@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""lane-trash-purge: delete the contents of ~/work/desktop/.trash slowly.
+
+lane-trash moves retired grove lanes into the trash folder. This deletes them
+in small batches so btrfs never has to commit one huge transaction. Deleting
+whole lanes at once froze the office desktop on 2026-11-11 (commits up to
+75 s, journald and Chrome stuck in D state).
+
+Rules:
+  * Deletes in batches of LANE_TRASH_BATCH files (default 200), sleeping
+    between batches.
+  * Waits while "some avg10" in /proc/pressure/io is above LANE_TRASH_PSI_MAX
+    (default 2.0), while presence is "here", and while grove holds its
+    machine lock (a lane copy or delete is running).
+  * Goes faster while presence is "away".
+  * Never follows a symlink and never leaves the trash folder: every
+    directory is opened relative to its parent with O_NOFOLLOW, and a
+    directory on another device (a mount or btrfs subvolume) is skipped.
+  * Skips names starting with "." (lane-trash is still retiring that lane),
+    and refuses to run while any mount point lies inside the trash.
+  * Logs one line per finished folder to ~/.local/state/lane-trash/purge.log.
+
+Usage: lane-trash-purge [--once]
+  --once  delete what is in the trash now, then exit (default: keep running
+          and look again every LANE_TRASH_IDLE seconds).
+
+Environment (tests override these):
+  LANE_TRASH_DIR            trash folder        (~/work/desktop/.trash)
+  LANE_TRASH_STATE_DIR      log folder          (~/.local/state/lane-trash)
+  LANE_TRASH_PSI_FILE       pressure file       (/proc/pressure/io)
+  LANE_TRASH_PSI_MAX        pause threshold     (2.0)
+  LANE_TRASH_PRESENCE_FILE  presence state JSON (~/.local/state/presence/state)
+  LANE_TRASH_GROVE_LOCK     grove machine lock  (~/.local/state/grove/copy.lock)
+  LANE_TRASH_BATCH          files per batch     (200)
+  LANE_TRASH_SLEEP          seconds between batches, presence remote/unknown (1.0)
+  LANE_TRASH_SLEEP_AWAY     seconds between batches, presence away (0.25)
+  LANE_TRASH_PAUSE_POLL     seconds between checks while paused (10)
+  LANE_TRASH_IDLE           seconds between looks at an empty trash (60)
+  LANE_TRASH_MAX_PAUSE      test hook: exit 3 after this many seconds paused
+"""
+
+import fcntl
+import json
+import os
+import stat
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+
+
+def env(name, default):
+    v = os.environ.get(name)
+    return v if v not in (None, "") else default
+
+
+TRASH = env("LANE_TRASH_DIR", os.path.join(HOME, "work/desktop/.trash"))
+STATE = env("LANE_TRASH_STATE_DIR", os.path.join(HOME, ".local/state/lane-trash"))
+PSI_FILE = env("LANE_TRASH_PSI_FILE", "/proc/pressure/io")
+PSI_MAX = float(env("LANE_TRASH_PSI_MAX", "2.0"))
+PRESENCE = env(
+    "LANE_TRASH_PRESENCE_FILE", os.path.join(HOME, ".local/state/presence/state")
+)
+GROVE_LOCK = env(
+    "LANE_TRASH_GROVE_LOCK", os.path.join(HOME, ".local/state/grove/copy.lock")
+)
+BATCH = max(1, int(env("LANE_TRASH_BATCH", "200")))
+SLEEP = float(env("LANE_TRASH_SLEEP", "1.0"))
+SLEEP_AWAY = float(env("LANE_TRASH_SLEEP_AWAY", "0.25"))
+PAUSE_POLL = float(env("LANE_TRASH_PAUSE_POLL", "10"))
+IDLE = float(env("LANE_TRASH_IDLE", "60"))
+MAX_PAUSE = float(env("LANE_TRASH_MAX_PAUSE", "0"))
+# A folder that failed is retried after this long, not in a tight loop.
+RETRY_AFTER = 3600.0
+
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def log(msg):
+    os.makedirs(STATE, exist_ok=True)
+    line = "%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), msg)
+    with open(os.path.join(STATE, "purge.log"), "a") as f:
+        f.write(line)
+    sys.stdout.write(line)
+    sys.stdout.flush()
+
+
+def psi_some_avg10():
+    """Return "some avg10" from the pressure file, or None if unreadable."""
+    try:
+        with open(PSI_FILE) as f:
+            for line in f:
+                if line.startswith("some "):
+                    for part in line.split():
+                        if part.startswith("avg10="):
+                            return float(part[6:])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def presence():
+    try:
+        with open(PRESENCE) as f:
+            return str(json.load(f).get("state", "unknown"))
+    except (OSError, ValueError, AttributeError):
+        return "unknown"
+
+
+class GroveLock:
+    """Try grove's machine lock without waiting, so a purge batch never runs
+    during a grove lane copy or delete. Released after each batch."""
+
+    def __init__(self):
+        self.fd = None
+
+    def try_take(self):
+        # Create the file if grove has not yet, so both always lock one inode.
+        try:
+            os.makedirs(os.path.dirname(GROVE_LOCK), exist_ok=True)
+            self.fd = os.open(
+                GROVE_LOCK, os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC, 0o644
+            )
+        except OSError:
+            return False  # cannot coordinate: wait rather than run blind
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            os.close(self.fd)
+            self.fd = None
+            return False
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+def wait_until_allowed(grove_lock):
+    """Block until a batch may run. Returns the sleep to use after it."""
+    paused_since = None
+    last_reason = None
+    while True:
+        reason = None
+        p = presence()
+        psi = psi_some_avg10()
+        if p == "here":
+            reason = "presence is here"
+        elif psi is not None and psi > PSI_MAX:
+            reason = "io pressure some avg10=%.2f > %.2f" % (psi, PSI_MAX)
+        elif not grove_lock.try_take():
+            reason = "grove machine lock is held"
+        if reason is None:
+            if paused_since is not None:
+                log(
+                    "resume after %.0fs paused (%s)"
+                    % (time.monotonic() - paused_since, last_reason)
+                )
+            pace = SLEEP_AWAY if p == "away" else SLEEP
+            # Halfway to the threshold: slow down instead of stopping.
+            if psi is not None and psi > PSI_MAX / 2:
+                pace *= 2
+            return pace
+        if paused_since is None:
+            paused_since = time.monotonic()
+            log("pause: %s" % reason)
+        last_reason = reason
+        if MAX_PAUSE and time.monotonic() - paused_since > MAX_PAUSE:
+            log("exit: paused longer than LANE_TRASH_MAX_PAUSE (%s)" % reason)
+            sys.exit(3)
+        time.sleep(PAUSE_POLL)
+
+
+class Stuck(Exception):
+    pass
+
+
+def removal_ops(root_fd, root_dev, name, counters):
+    """Yield once per unlink or rmdir while deleting root_fd/name.
+
+    Every directory is opened with O_NOFOLLOW relative to an already open
+    parent, so a symlink is never followed and nothing outside the trash is
+    reached even if the tree changes while we walk it.
+    """
+
+    # Stack entries: (parent_fd, name, fd, iterator over its entries)
+    def open_dir(parent_fd, n):
+        fd = os.open(n, DIR_FLAGS, dir_fd=parent_fd)
+        st = os.fstat(fd)
+        if st.st_dev != root_dev:
+            os.close(fd)
+            raise Stuck("%s is on another device (mount or subvolume); left alone" % n)
+        if not st.st_mode & stat.S_IWUSR or not st.st_mode & stat.S_IXUSR:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+        return fd
+
+    top = open_dir(root_fd, name)
+    stack = [(root_fd, name, top, os.scandir(top))]
+    try:
+        while stack:
+            parent_fd, dname, fd, it = stack[-1]
+            entry = next(it, None)
+            if entry is None:
+                it.close()
+                stack.pop()
+                os.close(fd)
+                os.rmdir(dname, dir_fd=parent_fd)
+                counters["dirs"] += 1
+                yield
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                child = open_dir(fd, entry.name)
+                stack.append((fd, entry.name, child, os.scandir(child)))
+                continue
+            try:
+                size = entry.stat(follow_symlinks=False).st_blocks * 512
+            except OSError:
+                size = 0
+            try:
+                os.unlink(entry.name, dir_fd=fd)
+            except FileNotFoundError:
+                continue
+            counters["files"] += 1
+            counters["bytes"] += size
+            yield
+    finally:
+        for _, _, fd, it in reversed(stack):
+            it.close()
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def mounts_under_trash():
+    """Mount points inside the trash, including bind mounts on the same
+    device, which the st_dev check cannot see."""
+    real = os.path.realpath(TRASH) + "/"
+    found = []
+    try:
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                mp = line.split()[4].encode().decode("unicode_escape")
+                if (mp + "/").startswith(real):
+                    found.append(mp)
+    except OSError:
+        pass
+    return found
+
+
+def open_trash():
+    """Open the trash folder itself, refusing a symlink."""
+    st = os.lstat(TRASH)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise SystemExit("lane-trash-purge: %s is not a plain folder" % TRASH)
+    return os.open(TRASH, DIR_FLAGS)
+
+
+def purge_entry(root_fd, root_dev, name, grove_lock):
+    counters = {"files": 0, "dirs": 0, "bytes": 0}
+    start = time.monotonic()
+    st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(st.st_mode):
+        # A stray file or symlink in the trash: remove the entry itself only,
+        # under the same pauses as everything else.
+        wait_until_allowed(grove_lock)
+        try:
+            os.unlink(name, dir_fd=root_fd)
+        finally:
+            grove_lock.release()
+        log(
+            "purged %s (not a folder) files=1 bytes=%d secs=0.0"
+            % (name, st.st_blocks * 512)
+        )
+        return
+    ops = removal_ops(root_fd, root_dev, name, counters)
+    done = False
+    while not done:
+        pace = wait_until_allowed(grove_lock)
+        try:
+            for _ in range(BATCH):
+                if next(ops, StopIteration) is StopIteration:
+                    done = True
+                    break
+        finally:
+            grove_lock.release()
+        if not done:
+            time.sleep(pace)
+    log(
+        "purged %s files=%d dirs=%d bytes=%d secs=%.1f"
+        % (
+            name,
+            counters["files"],
+            counters["dirs"],
+            counters["bytes"],
+            time.monotonic() - start,
+        )
+    )
+
+
+def run(once):
+    grove_lock = GroveLock()
+    failed = {}  # name -> monotonic time of the failure
+    while True:
+        root_fd = open_trash()
+        try:
+            root_dev = os.fstat(root_fd).st_dev
+            mounts = mounts_under_trash()
+            if mounts:
+                log(
+                    "refusing to purge: mount points inside the trash: %s"
+                    % ", ".join(mounts)
+                )
+                if once:
+                    return 1
+                time.sleep(RETRY_AFTER)
+                continue
+            now = time.monotonic()
+            # Names starting with "." are lanes lane-trash is still retiring.
+            names = sorted(
+                n
+                for n in os.listdir(root_fd)
+                if not n.startswith(".")
+                and (n not in failed or now - failed[n] > RETRY_AFTER)
+            )
+            for name in names:
+                try:
+                    purge_entry(root_fd, root_dev, name, grove_lock)
+                    failed.pop(name, None)
+                except (Stuck, OSError) as e:
+                    failed[name] = time.monotonic()
+                    log("stuck %s: %s (retry in %ds)" % (name, e, RETRY_AFTER))
+        finally:
+            os.close(root_fd)
+        if once:
+            return 1 if failed else 0
+        time.sleep(IDLE)
+
+
+def main():
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if args not in ([], ["--once"]):
+        print("usage: lane-trash-purge [--once]", file=sys.stderr)
+        return 2
+    os.makedirs(TRASH, exist_ok=True)
+    return run(once=bool(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

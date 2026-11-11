@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# lane-trash: retire a grove lane without deleting its files now.
+#
+# Why: `grove done --force` deletes every file of a lane at once. Four of
+# those at the same time froze the office desktop from 18:00 to 18:23 on
+# 2026-11-11 (btrfs commits up to 75 s, journald and Chrome in D state).
+# lane-trash instead renames the lane into ~/work/desktop/.trash (instant on
+# the same filesystem), then runs `grove done --force` on the now missing
+# folder, which only removes git's worktree metadata, the branch and the
+# registry entry. The lane-trash-purge service deletes the files later, slowly.
+#
+# Usage: lane-trash [--keep-local] [--keep-remote] [--dry-run] <tag>
+#
+# Saving the lane's work first (commit and push) is the caller's job.
+#
+# Environment (tests override these):
+#   LANE_TRASH_WORK_DIR      grove work_dir          (~/work/desktop)
+#   LANE_TRASH_MAIN_REPO     main checkout           ($WORK_DIR/master)
+#   LANE_TRASH_DIR           trash folder            ($WORK_DIR/.trash)
+#   LANE_TRASH_STATE_DIR     lock and log            (~/.local/state/lane-trash)
+#   LANE_TRASH_GROVE         grove binary            (grove)
+#   LANE_TRASH_GROVE_REPO    grove repo name         (desktop)
+#   LANE_TRASH_LOCK_WAIT     seconds to wait for the lock (900)
+#   LANE_TRASH_HOLD_SECS     test hook: hold the lock this long after taking it
+set -euo pipefail
+
+prog=lane-trash
+caller_pwd=$(pwd -P 2>/dev/null || echo /)
+die() { echo "$prog: $*" >&2; exit 1; }
+
+usage() {
+  sed -n '12,14p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-2}"
+}
+
+keep=()
+dry_run=0
+tag=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep-local|--keep-remote) keep+=("$1") ;;
+    --dry-run) dry_run=1 ;;
+    -h|--help) usage 0 ;;
+    --) shift; [ $# -eq 1 ] || usage; tag="$1" ;;
+    -*) die "unknown option $1" ;;
+    *) [ -z "$tag" ] || die "only one tag at a time"; tag="$1" ;;
+  esac
+  shift
+done
+[ -n "$tag" ] || usage
+
+# A tag is one path component: no slash, no "..", no leading dot or dash.
+[[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || die "bad tag '$tag'"
+[[ "$tag" != *..* ]] || die "bad tag '$tag'"
+
+work_dir=${LANE_TRASH_WORK_DIR:-$HOME/work/desktop}
+main_repo=${LANE_TRASH_MAIN_REPO:-$work_dir/master}
+trash_dir=${LANE_TRASH_DIR:-$work_dir/.trash}
+state_dir=${LANE_TRASH_STATE_DIR:-$HOME/.local/state/lane-trash}
+grove=${LANE_TRASH_GROVE:-grove}
+grove_repo=${LANE_TRASH_GROVE_REPO:-desktop}
+lock_wait=${LANE_TRASH_LOCK_WAIT:-900}
+
+work_dir=$(realpath -e -- "$work_dir") || die "work_dir missing"
+main_repo=$(realpath -e -- "$main_repo") || die "main repo missing"
+
+mkdir -p -- "$state_dir"
+if [ ! -e "$trash_dir" ]; then
+  mkdir -- "$trash_dir"
+fi
+[ -d "$trash_dir" ] && [ ! -L "$trash_dir" ] || die "$trash_dir is not a plain folder"
+trash_dir=$(realpath -e -- "$trash_dir")
+
+# One lane-trash at a time on this machine.
+exec 9>>"$state_dir/lock"
+if ! flock -w "$lock_wait" 9; then
+  die "another lane-trash still holds $state_dir/lock after ${lock_wait}s"
+fi
+if [ -n "${LANE_TRASH_HOLD_SECS:-}" ]; then
+  sleep "$LANE_TRASH_HOLD_SECS"
+fi
+
+# Run grove from outside any lane, so cwd detection never picks a lane.
+cd "$work_dir"
+
+# The lane must be registered in grove.
+if ! lane=$("$grove" --repo "$grove_repo" path "$tag" 2>&1); then
+  die "grove does not know lane '$tag': $lane"
+fi
+[ -n "$lane" ] || die "grove printed no path for '$tag'"
+[ -d "$lane" ] && [ ! -L "$lane" ] || die "lane folder $lane is missing or is a symlink"
+lane=$(realpath -e -- "$lane")
+
+# Only a lane folder directly under work_dir or work_dir/.scratch.
+case "$lane" in
+  "$work_dir/.scratch/$tag"|"$work_dir/$tag") ;;
+  *) die "lane path $lane is not $work_dir/.scratch/$tag or $work_dir/$tag; refusing" ;;
+esac
+[ "$lane" != "$main_repo" ] || die "refusing to trash the main checkout"
+case "$main_repo/" in "$lane"/*) die "refusing: the main checkout is inside $lane" ;; esac
+case "$trash_dir/" in "$lane"/*) die "refusing: the trash folder is inside $lane" ;; esac
+
+# git must list it as a worktree, or grove done cannot drop its metadata.
+# (Read the whole list first: grep -q exiting early would SIGPIPE git and,
+# with pipefail, make the pipeline fail.)
+is_worktree() {
+  local list
+  list=$(git -C "$main_repo" worktree list --porcelain) || return 2
+  grep -qxF "worktree $1" <<<"$list"
+}
+if ! is_worktree "$lane"; then
+  die "$lane is not a git worktree of $main_repo; use 'grove gc --dry-run' to see what it is"
+fi
+
+# rename(2) works only inside one filesystem (and one btrfs subvolume).
+# Compare the lane's parent folder with the trash folder.
+lane_parent=$(dirname -- "$lane")
+src_dev=$(stat -c %d -- "$lane_parent")
+dst_dev=$(stat -c %d -- "$trash_dir")
+if [ "$src_dev" != "$dst_dev" ]; then
+  die "$lane_parent (device $src_dev) and $trash_dir (device $dst_dev) are on different filesystems; a move would copy, refusing"
+fi
+
+dest="$trash_dir/$tag-$(date +%s)"
+[ ! -e "$dest" ] || dest="$dest-$$"
+# Staged under a dot name until grove done succeeds. lane-trash-purge skips
+# dot names, so it never deletes a lane that may still be moved back.
+staged="$trash_dir/.incoming-$(basename -- "$dest")"
+[ ! -e "$staged" ] || die "$staged already exists"
+
+echo "Reminder: lane-trash does not check that '$tag' is saved. Commit and push its work first."
+dirty=$(timeout 30 git -C "$lane" status --porcelain 2>/dev/null | wc -l) || dirty="?"
+if [ "$dirty" != "0" ]; then
+  echo "Note: $lane has $dirty uncommitted or untracked paths. They go to the trash with the lane."
+fi
+case "$caller_pwd/" in
+  "$lane"/*) echo "Note: your current folder is inside the lane; it moves to the trash." ;;
+esac
+
+if [ "$dry_run" = 1 ]; then
+  echo "Dry run: would move $lane to $dest, then run: $grove --repo $grove_repo done --force ${keep[*]} $tag"
+  exit 0
+fi
+
+# Hold grove's machine lock for the rename, so no grove copy or delete runs
+# on the lane while it moves. Released before grove done, which takes it too.
+grove_lock=${LANE_TRASH_GROVE_LOCK:-$HOME/.local/state/grove/copy.lock}
+mkdir -p -- "$(dirname -- "$grove_lock")"
+exec 8>>"$grove_lock"
+flock -w "$lock_wait" 8 || die "grove's machine lock $grove_lock is still held after ${lock_wait}s"
+mv --no-copy -T -- "$lane" "$staged" || die "move failed; nothing changed"
+exec 8>&-
+echo "Moved $lane to $staged"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$state_dir/trash.log"; }
+
+if "$grove" --repo "$grove_repo" done --force "${keep[@]}" "$tag"; then
+  mv --no-copy -T -- "$staged" "$dest" || die "grove done worked, but renaming $staged to $dest failed; rename it by hand so the purge picks it up"
+  log "trashed $tag $lane -> $dest"
+  echo "Done. lane-trash-purge deletes $dest slowly."
+  exit 0
+fi
+
+# grove done failed. If git still lists the worktree, nothing was dropped yet,
+# so put the folder back where it was.
+if is_worktree "$lane" && [ ! -e "$lane" ]; then
+  if mv --no-copy -T -- "$staged" "$lane"; then
+    log "failed $tag: grove done failed, moved back"
+    die "grove done failed; moved the lane back to $lane"
+  fi
+fi
+log "failed $tag: grove done failed after the move, folder left in $staged"
+die "grove done failed after the move. The files are in $staged (the purge skips it). Check 'git -C $main_repo worktree list' and 'grove --repo $grove_repo path $tag', then rerun 'grove --repo $grove_repo done --force $tag' and rename the folder to $dest"
