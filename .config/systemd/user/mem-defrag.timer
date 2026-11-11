@@ -1,0 +1,10 @@
+[Unit]
+Description=Run mem-defrag every 20 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=20min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

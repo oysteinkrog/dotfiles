@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# mem-defrag: compact memory when Oystein is away, to keep zone Normal free of
+# fragmentation. The NVIDIA driver allocates large contiguous blocks under a global
+# lock; with no free order 3+ blocks it compacts inside the lock and freezes the desktop.
+# Runtime only. Timer: mem-defrag.timer (every 20 min). Log: frag/defrag.log.
+set -u
+DIR=/var/tmp/claude/job-system/frag
+LOG=$DIR/defrag.log
+LAST=$DIR/defrag.last
+PRES=$HOME/.local/state/presence/state
+mkdir -p "$DIR"
+
+now=$(date +%s)
+stamp=$(date '+%F %T')
+
+# Free blocks per order 3..10 for zone Normal.
+orders() { awk '/zone +Normal/ {for(i=8;i<=15;i++) printf "%s%s",$i,(i<15?",":"")}' /proc/buddyinfo; }
+
+state=$(jq -r '.state // "unknown"' "$PRES" 2>/dev/null || echo unknown)
+rdp=$(jq -r '.rdp_last_seen // 0' "$PRES" 2>/dev/null || echo 0)
+rdp_age=$(awk -v n="$now" -v r="$rdp" 'BEGIN{printf "%d", n-r}')
+
+# Act only when Oystein is not at the desk: "away", or "locked" with no recent RDP.
+case "$state" in
+  away) ;;
+  locked) [ "$rdp_age" -gt 300 ] || { echo "$stamp skip presence=$state rdp_age=${rdp_age}s" >>"$LOG"; exit 0; } ;;
+  *) echo "$stamp skip presence=$state" >>"$LOG"; exit 0 ;;
+esac
+
+# Skip under memory pressure: "full" avg10 of 10% or more.
+full10=$(awk '/^full/ {sub("avg10=","",$2); print $2}' /proc/pressure/memory)
+if awk -v p="$full10" 'BEGIN{exit !(p+0>=10)}'; then
+  echo "$stamp skip presence=$state psi_full_avg10=$full10" >>"$LOG"; exit 0
+fi
+
+# KWINWAIT lines of 200 ms or more in the 10 minutes after the previous run.
+kw="n/a"
+if [ -f "$LAST" ]; then
+  prev=$(cat "$LAST")
+  pday=$(date -d "@$prev" +%F)
+  hl=/var/tmp/claude/rmlock/holders-live-$pday.log
+  if [ -f "$hl" ]; then
+    t0=$(date -d "@$prev" +%H:%M:%S); t1=$(date -d "@$((prev+600))" +%H:%M:%S)
+    kw=$(awk -v a="$t0" -v b="$t1" '/^KWINWAIT/ {
+        for(i=1;i<=NF;i++){ if($i ~ /^start=/){s=substr($i,7,8)} if($i ~ /^wait=/){w=$i; sub("wait=","",w); sub("ms","",w)} }
+        if (s>=a && s<=b && w+0>=200) c++ } END{print c+0}' "$hl")
+  fi
+fi
+
+before=$(orders)
+t_start=$(date +%s.%N)
+echo 1 | sudo -n tee /proc/sys/vm/compact_memory >/dev/null
+t_end=$(date +%s.%N)
+after=$(orders)
+dur=$(awk -v a="$t_start" -v b="$t_end" 'BEGIN{printf "%.2f", b-a}')
+
+echo "$now" >"$LAST"
+echo "$stamp presence=$state duration=${dur}s psi_full_avg10=$full10 orders3-10_before=$before orders3-10_after=$after kwinwait200ms_after_prev_run=$kw" >>"$LOG"

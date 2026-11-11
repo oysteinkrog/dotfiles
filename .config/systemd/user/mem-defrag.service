@@ -1,0 +1,7 @@
+[Unit]
+Description=Compact memory while Oystein is away (mem-defrag)
+
+[Service]
+Type=oneshot
+# Runtime only. Writes 1 to /proc/sys/vm/compact_memory via sudo -n. Short kernel call.
+ExecStart=/usr/bin/nice -n 10 %h/bin/mem-defrag
