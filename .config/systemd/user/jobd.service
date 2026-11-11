@@ -17,6 +17,9 @@ RestartSec=5
 MemoryMax=512M
 # Keep jobd and its database pages out of swap (see jobd.slice.d/50-protect.conf).
 MemoryLow=256M
+# 2026-11-11: MemoryLow did not keep jobd's file pages under swap-in storms (passes of 7 to 14 s).
+# Runtime test 15:37 to 16:41 with MemoryMin=300M: 0 slow passes in 64 min. Oystein approved.
+MemoryMin=300M
 MemorySwapMax=0
 
 [Install]
