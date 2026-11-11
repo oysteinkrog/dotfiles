@@ -359,6 +359,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/wine-prefix-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "",
         "hooks": [
           {
