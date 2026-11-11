@@ -150,7 +150,58 @@ psi_some() { awk '/^some/ {for (i=1;i<=NF;i++) {if ($i ~ /^avg60=/) a=substr($i,
 mm_df_avail_gib() { df -B1G --output=avail / | tail -1 | tr -dc 0-9; }
 mm_btrfs_meta() { btrfs filesystem df -b / 2>/dev/null | awk -F'[=, ]+' '/^Metadata/ {for (i=1;i<=NF;i++) {if ($i=="total") t=$(i+1); if ($i=="used") u=$(i+1)}} END {print t+0, u+0}'; }
 mm_btrfs_unalloc() { btrfs filesystem usage -b / 2>/dev/null | awk '/Device unallocated:/ {print $3; exit}'; }
-mm_journal() { journalctl -q --no-pager -o short-unix "$@" 2>/dev/null; }
+# The journal is followed once by long-lived journalctl children (see
+# start_followers), each appending to a small file under $MM_STATE/j. The checks
+# keep calling mm_journal with the old journalctl arguments; it maps them to
+# the matching file and prints only the lines added since its last call (the
+# byte offset lives in a state file, because callers run it in a subshell).
+# --since is ignored: the followers only ever hold lines from after they started.
+mm_journal() {
+  local name= a prev= unit= crit=0 k=0
+  for a in "$@"; do
+    [[ $a == -k ]] && k=1
+    [[ $prev == -u ]] && unit=$a
+    [[ $prev == -p && $a == crit ]] && crit=1
+    prev=$a
+  done
+  if (( k )); then name=kern
+  elif [[ $unit == systemd-oomd.service ]]; then name=oomd
+  elif [[ $unit == slab-guard.service ]]; then (( crit )) && name=slabcrit || name=slab
+  else return 0; fi
+  local f=$MM_STATE/j/$name.log size off
+  size=$(stat -c %s -- "$f" 2>/dev/null) || return 0
+  off=$(state_get "joff_$name" 0)
+  (( off <= size )) || off=0
+  if (( size > off )); then
+    tail -c +$((off + 1)) -- "$f" | head -c $((size - off))
+  fi
+  if (( size > 1048576 )); then : > "$f"; size=0; fi
+  state_set "joff_$name" "$size"
+}
+
+# Followers: name, then journalctl arguments. A dead one is restarted by
+# ensure_followers on the next tick, with -n 0 so old lines are not replayed.
+declare -A MM_FPID=()
+start_follower() {
+  local name=$1; shift
+  journalctl -q --no-pager -f -n 0 -o short-unix "$@" >> "$MM_STATE/j/$name.log" 2>/dev/null &
+  MM_FPID[$name]=$!
+}
+ensure_followers() {
+  local n
+  mkdir -p -- "$MM_STATE/j"
+  for n in kern oomd slab slabcrit; do
+    [[ -n ${MM_FPID[$n]:-} ]] && kill -0 "${MM_FPID[$n]}" 2>/dev/null && continue
+    [[ -n ${MM_FPID[$n]:-} ]] && emit warn JOURNAL "journal follower $n died, restarting"
+    case $n in
+      kern) start_follower kern -k ;;
+      oomd) start_follower oomd -u systemd-oomd.service ;;
+      slab) start_follower slab -u slab-guard.service ;;
+      slabcrit) start_follower slabcrit -u slab-guard.service -p crit ;;
+    esac
+  done
+}
+stop_followers() { local p; for p in "${MM_FPID[@]:-}"; do [[ -n $p ]] && kill "$p" 2>/dev/null; done; }
 mm_user_show() { systemctl --user show "$@" 2>/dev/null; }
 mm_user_active() { systemctl --user is-active "$1" 2>/dev/null; }
 mm_system_active() { systemctl is-active "$1" 2>/dev/null; }
@@ -581,10 +632,16 @@ heartbeat() {
 }
 
 main() {
-  local n=0 t
+  local n=0 t f
+  mkdir -p -- "$MM_STATE/j"
+  for f in kern oomd slab slabcrit; do : > "$MM_STATE/j/$f.log"; state_set "joff_$f" 0; done
+  trap stop_followers EXIT
+  trap 'exit 0' TERM INT
+  ensure_followers
   emit info START "machine-monitor started, pid $$"
   while true; do
     t=$(now)
+    ensure_followers
     if (( n % 2 == 0 )); then
       check_swap; check_sunreclaim
       check_psi cpu PSI_CPU "$MM_PSI_CPU_BANDS" "$MM_PSI_CPU_HOLD" "$MM_PSI_CPU_AVG300" "$MM_PSI_CPU_HYST"
