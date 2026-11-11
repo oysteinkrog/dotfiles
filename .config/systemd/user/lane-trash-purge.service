@@ -1,0 +1,21 @@
+[Unit]
+Description=Delete retired grove lanes in ~/work/desktop/.trash slowly (lane-trash-purge)
+# lane-trash moves lanes into the trash; this deletes them 200 files at a time.
+# Added 2026-11-11 (approved by Oystein) after four parallel `grove done --force`
+# deletes froze the office desktop from 18:00 to 18:23.
+
+[Service]
+Type=simple
+ExecStart=%h/bin/lane-trash-purge
+Slice=builds.slice
+CPUWeight=10
+IOWeight=10
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=512M
+MemoryMax=1G
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target
