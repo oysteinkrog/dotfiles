@@ -122,6 +122,17 @@ calm time to go down from pause, so slow to normal can be quicker than pause
 to slow. A pause dropped to slow with 10 to 20 GiB free comes back only under
 10 GiB, so pause keeps the longer wait.
 
+Seventh change, 2026-11-11 (ignore_claude_stall, 0 is off; approved by
+Oystein as a 48 h trial): a Claude session's stall triggers neither slow nor
+pause. claude.slice scopes are left out of the per-scope signals (slow on one
+scope's some avg10, pause on two scopes at full avg10, and the away rule), and
+memory full avg10 counts for neither level while the scope with the highest
+some avg10 is in claude.slice and app.slice memory full avg10 is under
+claude_ignore_app_full (4%). app.slice, session.slice, swap-in, swap room,
+slice swap and MemAvailable triggers are unchanged. In a replay of 2026-11-10
+14:30 to 24:00, 26 of 34 pause minutes had a claude.slice scope on top with
+swap-in under 8000 pages/s and app.slice under 4%.
+
 Sixth change, 2026-10-27 (own_stall_avail_gib, 0 is off): one session's own
 stall does not pause the build queue. Memory full avg10 is dropped as a pause
 trigger, in the enter test and in the leave test, while all of these hold:
@@ -198,6 +209,11 @@ DEFAULTS: dict[str, float] = {
     "own_stall_avail_gib": 12,
     "own_stall_desktop_some": 1,
     "own_stall_share": 0.5,
+    # Claude-session stall (seventh change, 2026-11-11, 0 is off): a stall
+    # carried by a claude.slice scope triggers neither slow nor pause while
+    # app.slice memory full avg10 is under claude_ignore_app_full.
+    "ignore_claude_stall": 0,
+    "claude_ignore_app_full": 4,
 }
 LEVELS = ("normal", "slow", "pause")
 SLICES = ("claude.slice", "app.slice", "session.slice")
@@ -396,6 +412,8 @@ class Coordinator:
                 if sl == "claude.slice" and some > claude_some:
                     claude_some = some
                     claude_top = f"{kid.name}:{some:.1f}%"
+                if sl == "claude.slice" and self.cfg["ignore_claude_stall"] > 0:
+                    continue  # seventh change: a session's stall is no scope signal
                 th = self.cfg["pause_scope_full"]
                 if th > 0 and full >= th:
                     nfull += 1
@@ -460,10 +478,13 @@ class Coordinator:
         )
         sl_name, sl_pct = self.slice_swap()
         desk_some, _ = psi(self.usvc / "session.slice" / "memory.pressure")
+        _, app_full = psi(self.usvc / "app.slice" / "memory.pressure")
         (r_some, r_slice, r_name), r_second = self.some_rank
         return {
             # -1 when session.slice's pressure file is unreadable.
             "desktop_some": desk_some,
+            # -1 when app.slice's pressure file is unreadable.
+            "app_full": app_full,
             "rank_some": r_some,
             "rank_slice": r_slice,
             "rank_name": r_name or "-",
@@ -531,6 +552,19 @@ class Coordinator:
             return ""
         return str(s["rank_name"])
 
+    def claude_stall(self, s: dict[str, float | str]) -> str:
+        """The claude.slice scope that carries the stall, when the seventh
+        change holds for sample s, else "": ignore_claude_stall is on, the
+        scope with the highest some avg10 is in claude.slice, and app.slice
+        memory full avg10 is readable and under claude_ignore_app_full."""
+        c = self.cfg
+        if c["ignore_claude_stall"] <= 0 or s.get("rank_slice") != "claude.slice":
+            return ""
+        app = float(s.get("app_full", -1))
+        if app < 0 or app >= c["claude_ignore_app_full"]:
+            return ""
+        return str(s["rank_name"])
+
     def triggers(
         self, s: dict[str, float | str], lvl: int, scale: float = 1.0
     ) -> list[str]:
@@ -558,8 +592,10 @@ class Coordinator:
         if lvl == 2:
             # One non-desktop session's own stall with plenty free: memory
             # full counts only for slow (sixth change).
-            if not capped and not self.own_stall(s):
+            if not capped and not self.own_stall(s) and not self.claude_stall(s):
                 ge("mem_full", "pause_mem_full", "memory full avg10", "%")
+        elif self.claude_stall(s):
+            pass  # seventh change: memory full from a Claude session gives no slow
         else:
             mf = float(s["mem_full"])
             pth = c["pause_mem_full"]
@@ -576,7 +612,9 @@ class Coordinator:
                 )
             else:
                 ge("mem_full", "slow_mem_full", "memory full avg10", "%")
-        if lvl == 1 and float(s.get("away", 0)):
+        if lvl == 1 and float(s.get("away", 0)) and c["ignore_claude_stall"] > 0:
+            pass  # away counts only claude.slice scopes, and those are ignored
+        elif lvl == 1 and float(s.get("away", 0)):
             # Away: desktop-app scopes do not count for slow.
             ge(
                 "claude_some",
@@ -741,7 +779,9 @@ class Coordinator:
             f"slice_swap={s['slice_swap']}:{float(s['slice_swap_pct']):.0f}% "
             f"away={int(float(s.get('away', 0)))} "
             f"desktop_some10={float(s.get('desktop_some', -1)):.2f} "
-            f"own_stall={self.own_stall(s) or '-'}"
+            f"own_stall={self.own_stall(s) or '-'} "
+            f"app_full10={float(s.get('app_full', -1)):.2f} "
+            f"claude_stall={self.claude_stall(s) or '-'}"
         )
 
     def log(self, now: float, text: str) -> None:
@@ -1515,6 +1555,38 @@ def self_test() -> int:
             errs == [] and cfg["own_stall_avail_gib"] == 14,
             str(errs),
         )
+
+        # 22. Claude-session stall (2026-11-11): with ignore_claude_stall a
+        # stall carried by claude-1.scope gives neither slow nor pause while
+        # app.slice is calm; app.slice at 5%, an unreadable app.slice file,
+        # low MemAvailable and swap-in still count.
+        app = usvc / "app.slice/memory.pressure"
+        setp(app, 0, 0)
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        t = run_for(co, 20000.0, 30, mem_full=7, avail_gib=8, sess_some=12, sess_full=12)
+        check("claude stall: mem full 7%, session 12%, app calm: normal", lvl(co) == "normal", co.reason)
+        setp(app, 5, 5)
+        t = run_for(co, t, 30, mem_full=7, avail_gib=8, sess_some=12, sess_full=12)
+        check("claude stall: app.slice full 5%: pause", lvl(co) == "pause", co.reason)
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        app.unlink()
+        t = run_for(co, 20200.0, 30, mem_full=7, avail_gib=8, sess_some=12)
+        check("claude stall: app.slice unreadable: pause", lvl(co) == "pause", co.reason)
+        setp(app, 0, 0)
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        t = run_for(co, 20400.0, 30, mem_full=7, avail_gib=1.5, sess_some=12)
+        check("claude stall: 1.5 GiB free still pauses", lvl(co) == "pause", co.reason)
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        t = run_for(co, 20600.0, 30, mem_full=1, avail_gib=20, swapin_add=500000)
+        check("claude stall: disk swap-in still pauses", lvl(co) == "pause", co.reason)
+        co = fresh()
+        t = run_for(co, 20800.0, 30, mem_full=7, avail_gib=8, sess_some=12)
+        check("claude stall off (default): pause", lvl(co) == "pause", co.reason)
+        app.unlink()
 
         # 12. Never signals anything: no kill calls in this file.
         src = Path(__file__).read_text()
