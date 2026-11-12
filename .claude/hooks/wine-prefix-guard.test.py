@@ -27,7 +27,7 @@ GOOD_REG = """WINE REGISTRY Version 2
 """
 
 
-def make_prefix(path: Path, good: bool) -> None:
+def make_prefix(path: Path, good: bool, dotnet: str | None = None) -> None:
     path.mkdir(parents=True)
     (path / "system.reg").write_text("WINE REGISTRY Version 2\n")
     (path / "user.reg").write_text(GOOD_REG if good else "WINE REGISTRY Version 2\n")
@@ -40,7 +40,7 @@ def make_prefix(path: Path, good: bool) -> None:
     s32.mkdir(parents=True)
     for dll in ("d3d9", "d3d11", "dxgi"):
         (s32 / f"{dll}.dll").write_bytes(b"MZ dxvk")
-    version = (
+    version = dotnet or (
         (REPO / "tools/wine/prefix-check.sh")
         .read_text()
         .split("MC_DOTNET_VERSION=")[1]
@@ -82,6 +82,7 @@ def main() -> int:
         base = home / ".local/share/wineprefixes"
         make_prefix(base / "motioncatalyst", good=True)
         make_prefix(base / "motioncatalyst-ui-bare", good=False)
+        make_prefix(base / "motioncatalyst-ui-oldnet", good=True, dotnet="10.0.12")
         cases = [
             # (command, denied)
             ("ls -la", False),
@@ -111,6 +112,7 @@ def main() -> int:
             ("wine BUILD/x64_Debug/MotionCatalyst.exe", True),
             ("WINEPREFIX=/var/tmp/other wine notepad", False),
             ("wine notepad", False),
+            (f"WINEPREFIX={base}/motioncatalyst-ui-oldnet wine MotionCatalyst.exe", False),
             (
                 f"WINEPREFIX={base}/motioncatalyst-ui-bare wine x # noqa: wine-prefix",
                 False,

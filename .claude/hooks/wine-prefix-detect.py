@@ -153,8 +153,14 @@ def main() -> int:
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            missing = "; ".join(line for line in result.stdout.splitlines() if line)
+        lines = [line for line in result.stdout.splitlines() if line]
+        # A prefix that lacks only the current .NET runtime was set up for an older master.
+        # wine-env.sh copies the runtime in the next time a tools/wine script sources it, and MC
+        # without it stops at once with a clear error, so it does not hide a fault like wined3d.
+        if result.returncode != 0 and not (
+            len(lines) == 1 and lines[0].startswith(".NET Windows Desktop runtime ")
+        ):
+            missing = "; ".join(lines)
             print(f"{path} is not a prefix setup-prefix.sh made (it lacks: {missing})")
             return 0
     return 0
