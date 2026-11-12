@@ -6,7 +6,9 @@ description: >-
   (2026-11-01). Use when starting or restructuring a Rust workspace, adding or
   splitting a crate, when Rust builds or tests are slow, when adding test hooks or
   feature flags for tests, when editing Cargo profiles or .cargo/config.toml, when
-  target/ grows too big, and when reviewing a Rust PR for build cost.
+  target/ grows too big, when adding or changing cargo aliases or --target flags,
+  when several teams share one Cargo workspace, and when reviewing a Rust PR for
+  build cost.
 ---
 
 # Rust workspaces built for fast iteration
@@ -150,9 +152,37 @@ selection. In tasklens, about 25 dependencies resolved to different feature sets
 crates only because the `-p` set or feature set changed. Fixes:
 
 - Few crates (up to about 8): use the aliases above with a fixed feature list.
-- Many crates: add a `cargo-hakari` workspace-hack crate, which pins one feature set
-  for every dependency regardless of `-p`. (Not installed yet: `cargo install
-  cargo-hakari`.)
+- Many crates: measure before you add a `cargo-hakari` workspace-hack crate
+  (`cargo-hakari` 0.9.39 is in `~/.cargo/bin`). It pins one feature set for every
+  dependency regardless of `-p`, but it also makes every crate depend on the union
+  of the workspace's third-party crates. In a 30-crate company workspace
+  (2026-11-12) the hack made a small no_std-leaning protocol crate and a shipped
+  DLL depend on tokio, rustls and clap, and the 11-step edit-loop run went from
+  111 s to 102 s, within the noise. It was dropped. A `-p` feature split costs a
+  rebuild of third-party crates once per package set per worktree, and after that
+  an edit rebuilds only workspace crates. Hakari pays off when lanes switch package
+  sets often in a workspace whose crates already share most heavy dependencies.
+
+**Every change of flags is a different build.** Cargo keys its cached work on the
+target, the profile, the feature set and the package set. In the same 30-crate
+workspace:
+
+- **An explicit `--target` equal to the host moves the output** to
+  `target/<triple>/debug` instead of `target/debug`, and builds build scripts and
+  proc macros separately. One alias passed `--target x86_64-unknown-linux-gnu`
+  while every other command did not. A lane that ran both paid a second full build
+  (302 crates, 43 to 49 s) and kept a second 9.9 GB folder beside the 7.3 GB
+  `target/debug`. Without the flag, switching between the two aliases took 0.2 to
+  0.4 s. Pass `--target` only for real cross targets. If CI wants the host target
+  named, CI appends it at its own call site.
+- **`check -p X` and `check -p X --all-targets` resolve features differently**,
+  because only the second includes dev-dependencies. Running one after the other
+  re-checked about 120 dependencies. Pick one form for the project and put it in the
+  alias.
+- **A test file behind a feature that the test command does not pass is absent,
+  not skipped.** It compiles to nothing, and the run reports zero tests for it with
+  no warning. If a test-only feature must exist, every test alias passes it, and a
+  new feature gate on a test file goes into the alias the same day.
 
 ## 4. Generics and monomorphization
 
@@ -200,7 +230,13 @@ Notes:
   30%). Use it only in projects already on nightly (frankenterm uses
   `-Z threads=4`). Do not move a stable project to nightly for this alone.
 - Tested and not worth it here: sccache, nextest (as a build speedup), the wild linker,
-  the Cranelift backend.
+  the Cranelift backend, and Relax (the makepad hot-reload JIT, evaluated
+  2026-11-12: bit-exact after two local fixes, but 2 to 3 times slower per edit,
+  and its live mode did not pick up edits in a Cargo workspace).
+- Put mold under `[target.x86_64-unknown-linux-gnu]` in `.cargo/config.toml`, not
+  under `[build]`. Then a Windows DLL, a cross build for a board and a wasm build
+  keep their own linkers. Every CI job that builds that target needs mold
+  installed.
 
 ## 6. The edit loop for agents and lanes
 
@@ -219,8 +255,19 @@ Put these rules in each project's `AGENTS.md`.
 6. **Read the error before re-running.** 107 same-command re-runs after a failure
    in the window. heavy-build's rerun guard (exit 76) stops the third try.
 7. **Use the project's aliases** so the feature set and package set match every other
-   lane (section 3).
+   lane (section 3). tasklens gives its lane clippy and lane test aliases
+   (`lclippy`, `ltest`) one shared `-p` list, so a lane builds one variant of each
+   heavy dependency. The leader's gate (`gclippy`) runs clippy on the app crate
+   without dev-dependencies.
 8. Every command goes through `heavy-build`; long ones through `job submit --detach`.
+9. **No wall-clock asserts under 2 s in tests.** Under build load a 200 ms timeout
+   fails at random. tasklens bans them with `xtask check-timing`, and a lot of
+   flaky tests went away with it.
+10. **Once the compile loop is under a few seconds, look at test run time.** In a
+    15-crate workspace with small crates, a warm loop was 0.3 to 0.75 s per edit,
+    and two tests (25 s and 49 s in a debug build) were the slowest part of the
+    loop. Find them with `cargo test -p <crate> -- --report-time -Z
+    unstable-options` on nightly, or by timing each test binary.
 
 ## 7. Disk: target/ size
 
@@ -292,8 +339,39 @@ Measure before and after a change, through heavy-build, on the same commit.
 - [ ] Profiles: incremental on, `line-tables-only`, deps at 2, no fat LTO outside
       release, mold.
 - [ ] Is there an upward-edge check, and does it run?
-- [ ] target/ size and whether a timer caps it.
+- [ ] target/ size and whether a timer caps it. More than one `target/<triple>/`
+      folder for the host triple means some command passes `--target` for the host.
+- [ ] Do all dev aliases and CI commands use the same target, feature list and
+      `--all-targets` choice? Run each alias twice in a row, then switch: a switch
+      that rebuilds workspace or third-party crates is a split (section 3).
+
+**Measure before you restructure.** A workspace of small crates can already be
+fast. The 30-crate company workspace above, with no crate over 20k lines, rebuilt
+a base-crate edit and relinked the top binary's tests in 1.5 s. Its only real cost
+was the alias with an explicit host target. When the edit-loop table shows a few
+seconds per edit, fix the splits and leave the layout alone.
 
 Write findings as beads, one change each, in this order: profiles, test-hook gating,
 module cycles, crate splits, test binary split. Profile and gating fixes are small
 and pay off at once; splits take many beads.
+
+## 10. One workspace, several owners
+
+A company monorepo can hold one Cargo workspace that several teams and lanes work
+in at once. Then the workspace-level files are shared: the root `Cargo.toml`
+(members, `[profile.*]`, `[workspace.dependencies]`), `.cargo/config.toml` (aliases,
+linker, target flags) and `xtask`.
+
+- **Ask the other owners before you edit a shared file.** Find them with
+  `ListAgents` and `git log` on the file, and check unmerged branches too: a long
+  local branch may already change the same lines. On 2026-11-12 a branch 537
+  commits ahead of master already carried the profile, mold and `check-deps` work,
+  so a second copy on master would only have produced conflicts.
+- **Agree who lands what.** A fix that helps master lanes and CI now goes to master
+  as its own small PR, and the owner of the long branch resolves the conflict when
+  it merges. A fix that only matters inside the branch stays there.
+- **Give each area its own aliases with an explicit `-p` list**, and make every
+  `--workspace` alias exclude the other areas (`--exclude '<area>-*'` matches package
+  names by glob). Then a run in one area never rebuilds another area's crates.
+- **One project guide for the workspace** (`AGENTS.md` beside the root
+  `Cargo.toml`) carries the section 6 rules and names each area's aliases.
