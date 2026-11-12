@@ -191,3 +191,103 @@ function resetsNear(m, t, radius) {
         return {ms: e.ms, name: m.accounts[p.acct].name, label: p.label};
     });
 }
+
+// The Room chart: aiolos's own forecast of usable capacity (pool.capacity, in Nx, one value
+// per 5-hour slot from now) and the recorded past from the fetch's history file
+// (history: [[time_ms, now_avail, weekly_room], ...], the last 48 hours).
+var ROOM_PAST = 48 * HOUR;
+// A gap longer than this between two samples means the fetch was not running: the line
+// breaks there instead of drawing a straight line across.
+var ROOM_GAP = 10 * 60000;
+
+// A round step so that `parts` steps reach at least `max`: 1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8
+// times a power of 10.
+function niceStep(max, parts) {
+    var raw = Math.max(max, 1e-9) / parts;
+    var p = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var steps = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+    for (var i = 0; i < steps.length; i++)
+        if (steps[i] * p >= raw)
+            return steps[i] * p;
+    return 10 * p;
+}
+
+function roomModel(pool, history) {
+    var cap = pool && pool.capacity;
+    if (!cap || !cap.slots || !cap.slots.length)
+        return null;
+    var now = pool.nowMs, slotMs = cap.slotMs || 5 * HOUR;
+    // Forecast: each slot's value holds until the next slot. That is the lower bound, since
+    // capacity only rises inside a slot as accounts reset.
+    var forecast = cap.slots.map(function (v, s) {
+        return {t: now + s * slotMs, v: v};
+    }).filter(function (p) {
+        return p.t <= now + SPAN;
+    });
+    var past = (history || []).filter(function (h) {
+        return h[0] >= now - ROOM_PAST && h[0] <= now;
+    }).map(function (h) {
+        return {t: h[0], v: h[1], room: h[2]};
+    });
+    var vMax = cap.ceiling || 0, rMax = 0;
+    forecast.forEach(function (p) {
+        vMax = Math.max(vMax, p.v);
+    });
+    past.forEach(function (p) {
+        vMax = Math.max(vMax, p.v);
+        rMax = Math.max(rMax, p.room);
+    });
+    rMax = Math.max(rMax, pool.weeklyRoom || 0, 100);
+    vMax = Math.max(vMax, 1);
+    var parts = 4, vStep = niceStep(vMax * 1.04, parts), rStep = niceStep(rMax * 1.04, parts);
+    return {
+        now: now,
+        start: now - ROOM_PAST,
+        end: now + SPAN,
+        slotMs: slotMs,
+        nowAvail: cap.nowAvail,
+        ceiling: cap.ceiling,
+        forecast: forecast,
+        past: past,
+        parts: parts,
+        vStep: vStep,
+        vTop: vStep * parts,
+        rStep: rStep,
+        rTop: rStep * parts
+    };
+}
+
+// The forecast value at t (a slot holds until the next one), or null before now.
+function roomForecastAt(rm, t) {
+    if (t < rm.now)
+        return null;
+    var s = Math.min(rm.forecast.length - 1, Math.floor((t - rm.now) / rm.slotMs));
+    return rm.forecast[s].v;
+}
+
+// The recorded sample nearest to t, or null if none lies within ROOM_GAP of it.
+function roomPastAt(rm, t) {
+    var best = null;
+    rm.past.forEach(function (p) {
+        if (Math.abs(p.t - t) <= ROOM_GAP && (best === null || Math.abs(p.t - t) < Math.abs(best.t - t)))
+            best = p;
+    });
+    return best;
+}
+
+// The next reset of a window with this label that has some use on it (pct > 0), over the
+// accounts that are not paused: {ms, name}, or null.
+function nextReset(pool, label) {
+    var best = null;
+    (pool.accounts || []).forEach(function (a) {
+        if (a.paused)
+            return;
+        (a.windows || []).forEach(function (w) {
+            if (w.label !== label || !w.resets || w.resets <= pool.nowMs || !(w.pct > 0))
+                return;
+            if (best === null || w.resets < best.ms)
+                best = {ms: w.resets, name: a.name};
+        });
+    });
+    return best;
+}

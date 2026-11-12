@@ -7,8 +7,13 @@
 
 aiolostimeline-window starts it with --serve under with-secrets, and the widget reads the file.
 It reads the pool data that the aiolos Accounts page draws its Timeline from
-(GET /dashboard/api/accounts/pool-data), keeps only the fields the Timeline uses, and adds the
-os-theme choice so the widget matches the Agenda and the Build Queue.
+(GET /dashboard/api/accounts/pool-data), keeps only the fields the Timeline and the Room chart
+use, and adds the os-theme choice so the widget matches the Agenda and the Build Queue.
+
+Each good read also adds one line to ~/.local/state/aiolostimeline/room-history.jsonl: the
+time, the usable capacity now (capacity.now_avail) and the weekly room. The file keeps 7 days,
+and the last 48 hours go to the widget as "history", so the Room chart can draw the past
+beside the forecast.
 
 The server address and key come from the environment, never from this repo:
 ANTHROPIC_BASE_URL (the aiolos base URL) and AIOLOS_API_KEY. Stdlib only, no LLM.
@@ -27,7 +32,12 @@ POOL = "anthropic"
 TIMEOUT_S = 20
 # The desktop theme picked with os-theme, shared with the Agenda and the Build Queue.
 PANEL_THEMES = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "os-theme" / "themes.json"
-PANEL_CHOICE = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state")) / "os-theme" / "current"
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state"))
+PANEL_CHOICE = STATE / "os-theme" / "current"
+# One sample per good read, for the Room chart.
+HISTORY = STATE / "aiolostimeline" / "room-history.jsonl"
+HISTORY_KEEP_MS = 7 * 24 * 3600 * 1000
+HISTORY_SHOW_MS = 48 * 3600 * 1000
 
 
 def write_atomic(path, text):
@@ -76,8 +86,67 @@ def pool_data():
         raise RuntimeError(f"aiolos is not reachable: {exc.reason}") from None
 
 
+def num(x, default=0.0):
+    return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else default
+
+
+def weekly_room(d):
+    """Weekly room in account percent points: per account that is not paused,
+    100 - used_pct, less the weekly hard reserve when the reserve is hard, never below 0,
+    added up over the accounts."""
+    accounts = {a.get("id"): a for a in d.get("accounts") or []}
+    room = 0.0
+    for w in d.get("weekly") or []:
+        a = accounts.get(w.get("id")) or {}
+        if a.get("paused"):
+            continue
+        reserve = num(w.get("hard_reserve")) if a.get("reserve_hard") else 0.0
+        room += max(0.0, 100.0 - num(w.get("used_pct")) - reserve)
+    return round(room, 2)
+
+
+def capacity(d):
+    """aiolos's own forecast of usable capacity: one value per 5-hour slot from now, in Nx
+    (each account's plan multiplier times its free share, above any hard reserve)."""
+    c = d.get("capacity") or {}
+    slots = [round(num(v), 3) for v in c.get("slots") or []]
+    return {
+        "slotMs": int(num(c.get("slot_ms"), 5 * 3600 * 1000)),
+        "ceiling": round(num(c.get("ceiling")), 3),
+        "nowAvail": round(num(c.get("now_avail"), slots[0] if slots else 0.0), 3),
+        "slots": slots,
+    }
+
+
+def record(sample):
+    """Add one sample to the history file, drop lines older than 7 days, and return the
+    samples of the last 48 hours as [[time_ms, now_avail, weekly_room], ...]."""
+    keep_from = sample["t"] - HISTORY_KEEP_MS
+    rows = []
+    try:
+        for line in HISTORY.read_text().splitlines():
+            try:
+                r = json.loads(line)
+                if num(r.get("t")) >= keep_from and num(r.get("t")) != sample["t"]:
+                    rows.append(r)
+            except (ValueError, AttributeError):
+                continue
+    except OSError:
+        pass
+    rows.append(sample)
+    rows.sort(key=lambda r: num(r.get("t")))
+    try:
+        HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(HISTORY, "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
+    except OSError:
+        pass
+    show_from = sample["t"] - HISTORY_SHOW_MS
+    return [[int(r["t"]), num(r.get("avail")), num(r.get("weekly_room"))] for r in rows if num(r.get("t")) >= show_from]
+
+
 def slim(d):
-    """Only what the Timeline uses: per account its multiplier, windows and request rates."""
+    """Only what the widget uses: per account its multiplier, windows and request rates, the
+    capacity forecast and the weekly room."""
     accounts = []
     for a in d.get("accounts") or []:
         accounts.append({
@@ -91,15 +160,26 @@ def slim(d):
             ],
             "rates": a.get("req_rates") or {"h1": 0, "h24": 0, "d7": 0},
         })
-    return {"nowMs": d.get("now_ms") or int(time.time() * 1000), "accounts": accounts}
+    return {
+        "nowMs": d.get("now_ms") or int(time.time() * 1000),
+        "accounts": accounts,
+        "capacity": capacity(d),
+        "weeklyRoom": weekly_room(d),
+    }
 
 
 def snapshot(cache):
     """A fresh pool read, or only the error. The widget keeps its last data on an error."""
     try:
-        return {"updated": int(time.time() * 1000), "pool": slim(pool_data())}
+        pool = slim(pool_data())
     except Exception as exc:
         return {"updated": int(time.time() * 1000), "error": f"{exc}"}
+    snap = {"updated": int(time.time() * 1000), "pool": pool}
+    # No forecast in the answer means no capacity figure, so record nothing rather than a 0.
+    if pool["capacity"]["slots"]:
+        sample = {"t": pool["nowMs"], "avail": pool["capacity"]["nowAvail"], "weekly_room": pool["weeklyRoom"]}
+        snap["history"] = record(sample)
+    return snap
 
 
 def render(snap, cache):

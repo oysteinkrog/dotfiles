@@ -2,6 +2,8 @@
 // much of the Claude pool is free now and how that is projected to move over the next 7 days,
 // stepping up at each account's window reset. The maths is in timeline.js, a port of the
 // dashboard's renderTimeline.
+// A second view, Room, draws aiolos's own forecast of usable capacity (capacity.slots, in Nx)
+// for the next 7 days, joined on the left to what the fetch recorded over the last 48 hours.
 // Data comes from $XDG_RUNTIME_DIR/aiolostimeline/timeline.json, which
 // ~/bin/aiolostimeline-fetch rewrites every minute. Colours follow the os-theme choice, as in
 // the Agenda and the Build Queue (docs/desktop-panels-style.md). Nothing here writes.
@@ -42,11 +44,14 @@ PlasmoidItem {
     property var shownProjs: ["optimistic", "7d"]
     property string mode: "all"
     property string accts: "all"
+    // The chart shown: "timeline" (the dashboard's projection) or "room" (usable capacity).
+    property string chart: "timeline"
     Settings {
         category: "AiolosTimeline"
         property alias shownProjs: root.shownProjs
         property alias mode: root.mode
         property alias accts: root.accts
+        property alias chart: root.chart
     }
 
     // The projection model and one stepped line per projection, built again on new data or
@@ -72,6 +77,18 @@ PlasmoidItem {
                     t: TL.crossing(m, p, 20)
                 });
         return out;
+    }
+
+    // The Room view: the capacity forecast and the recorded past, the accounts routable now,
+    // and the next 5-hour and weekly resets of a window that has some use on it.
+    readonly property var rm: hasData ? TL.roomModel(d.pool, d.history) : null
+    readonly property int routableNow: hasData ? d.pool.accounts.filter(a => a.routable).length : 0
+    readonly property var next5h: hasData ? TL.nextReset(d.pool, "5-hour") : null
+    readonly property var nextWeekly: hasData ? TL.nextReset(d.pool, "Weekly") : null
+
+    // 4.85 as "4.9x".
+    function nx(v) {
+        return i18n("%1x", Number(v).toFixed(1));
     }
 
     readonly property var projMeta: ({
@@ -252,14 +269,54 @@ PlasmoidItem {
                     font.weight: Font.Bold
                 }
                 Small {
-                    text: i18n("Claude pool, next 7 days")
+                    text: root.chart === "room" ? i18n("Claude pool, last 48 h and next 7 days") : i18n("Claude pool, next 7 days")
                     Layout.alignment: Qt.AlignBaseline
+                }
+                // Switch between the two views.
+                Repeater {
+                    model: [
+                        {
+                            key: "timeline",
+                            label: i18n("Timeline"),
+                            desc: i18n("Share of the pool that is free, projected at each window reset.")
+                        },
+                        {
+                            key: "room",
+                            label: i18n("Room"),
+                            desc: i18n("Usable capacity in Nx: the aiolos forecast, and what was recorded over the last 48 hours.")
+                        }
+                    ]
+                    PlasmaComponents.ToolButton {
+                        required property var modelData
+                        text: modelData.label
+                        font.pointSize: root.fsSmall
+                        checkable: true
+                        checked: root.chart === modelData.key
+                        opacity: checked ? 1 : 0.55
+                        onClicked: root.chart = modelData.key
+                        PlasmaComponents.ToolTip.visible: hovered
+                        PlasmaComponents.ToolTip.text: modelData.desc
+                        PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    }
                 }
                 Item {
                     Layout.preferredWidth: Kirigami.Units.largeSpacing
                 }
                 PlasmaComponents.Label {
-                    visible: !isNaN(root.freeNow)
+                    visible: root.chart === "room" && root.rm !== null
+                    text: root.rm ? i18n("%1 usable now", root.nx(root.rm.nowAvail)) : ""
+                    font.pointSize: root.fs
+                    font.weight: Font.DemiBold
+                    color: root.rm && root.rm.nowAvail < 0.2 * root.rm.ceiling ? view.alertColor : Kirigami.Theme.textColor
+                    HoverHandler {
+                        id: availHover
+                    }
+                    PlasmaComponents.ToolTip.visible: availHover.hovered
+                    PlasmaComponents.ToolTip.text: root.rm ? i18n("Usable capacity right now, in Nx: each routable account's plan multiplier times its free share, above any hard reserve. The ceiling, with every window empty, is %1.", root.nx(root.rm.ceiling)) : ""
+                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
+                PlasmaComponents.Label {
+                    visible: root.chart === "timeline" && !isNaN(root.freeNow)
                     text: i18n("%1% free now", Math.round(root.freeNow))
                     font.pointSize: root.fs
                     font.weight: Font.DemiBold
@@ -308,6 +365,7 @@ PlasmoidItem {
                     anchors.fill: parent
                     anchors.margins: Kirigami.Units.smallSpacing * 2.5
                     spacing: Kirigami.Units.smallSpacing
+                    visible: root.chart === "timeline"
 
                     // Line toggles and what is counted.
                     RowLayout {
@@ -621,6 +679,360 @@ PlasmoidItem {
                             opacity: 0.62
                             wrapMode: Text.WordWrap
                             width: Math.min(implicitWidth, parent.width - Kirigami.Units.gridUnit * 2)
+                        }
+                    }
+                }
+
+                // The Room view: usable capacity, recorded on the left of now and forecast on
+                // the right, with the weekly room on its own axis on the right.
+                ColumnLayout {
+                    id: roomView
+                    anchors.fill: parent
+                    anchors.margins: Kirigami.Units.smallSpacing * 2.5
+                    spacing: Kirigami.Units.smallSpacing
+                    visible: root.chart === "room"
+
+                    readonly property color capColor: root.muted(Kirigami.Theme.positiveTextColor)
+                    readonly property color roomColor: root.muted(Kirigami.Theme.neutralTextColor)
+
+                    // Legend.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+                        spacing: Kirigami.Units.largeSpacing
+                        Repeater {
+                            model: [
+                                {
+                                    color: roomView.capColor,
+                                    label: i18n("Usable capacity (left axis, Nx)"),
+                                    desc: i18n("Left of now: what aiolos reported at each fetch. Right of now: the aiolos forecast in 5-hour slots, assuming no more use. Each slot shows the lowest value until the next one.")
+                                },
+                                {
+                                    color: roomView.roomColor,
+                                    label: i18n("Weekly room (right axis, points)"),
+                                    desc: i18n("Recorded only. Per account, 100% less the weekly use and less the weekly hard reserve, added up over the accounts that are not paused.")
+                                }
+                            ]
+                            RowLayout {
+                                required property var modelData
+                                spacing: Kirigami.Units.smallSpacing
+                                Rectangle {
+                                    implicitWidth: Kirigami.Units.gridUnit * 0.8
+                                    implicitHeight: 2
+                                    color: modelData.color
+                                }
+                                PlasmaComponents.Label {
+                                    text: modelData.label
+                                    font.pointSize: root.fsSmall
+                                    HoverHandler {
+                                        id: legendHover
+                                    }
+                                    PlasmaComponents.ToolTip.visible: legendHover.hovered
+                                    PlasmaComponents.ToolTip.text: modelData.desc
+                                    PlasmaComponents.ToolTip.delay: Kirigami.Units.toolTipDelay
+                                }
+                            }
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                        }
+                        PlasmaComponents.Label {
+                            visible: root.hasData
+                            text: root.hasData ? i18n("Weekly room now: %1 points", Math.round(root.d.pool.weeklyRoom || 0)) : ""
+                            font.pointSize: root.fsSmall
+                        }
+                    }
+
+                    Item {
+                        id: roomArea
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+
+                        readonly property real pL: Kirigami.Units.gridUnit * 2.2
+                        readonly property real pR: Kirigami.Units.gridUnit * 2.2
+                        readonly property real pT: Kirigami.Units.smallSpacing * 2
+                        readonly property real pB: Kirigami.Units.gridUnit * 1.2
+                        readonly property real pW: Math.max(1, width - pL - pR)
+                        readonly property real pH: Math.max(1, height - pT - pB)
+
+                        function tx(t) {
+                            return pL + (t - root.rm.start) / (root.rm.end - root.rm.start) * pW;
+                        }
+                        function ty(v) {
+                            return pT + pH - v / root.rm.vTop * pH;
+                        }
+                        function tyRoom(v) {
+                            return pT + pH - v / root.rm.rTop * pH;
+                        }
+                        function tAt(x) {
+                            return root.rm.start + Math.max(0, Math.min(1, (x - pL) / pW)) * (root.rm.end - root.rm.start);
+                        }
+
+                        Canvas {
+                            anchors.fill: parent
+                            renderStrategy: Canvas.Cooperative
+
+                            property var deps: [root.rm, roomView.capColor, roomView.roomColor, root.inkColor, root.chart, width, height]
+                            onDepsChanged: requestPaint()
+
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                const rm = root.rm;
+                                if (!rm || root.chart !== "room")
+                                    return;
+                                const a = roomArea, ink = root.inkColor.toString();
+                                const fontPx = Math.round(Kirigami.Theme.smallFont.pixelSize || 11);
+                                ctx.font = fontPx + "px sans-serif";
+                                ctx.lineWidth = 1;
+                                const xn = Math.round(a.tx(rm.now)) + 0.5;
+
+                                // The recorded part, a little darker than the forecast part.
+                                ctx.globalAlpha = 0.05;
+                                ctx.fillStyle = ink;
+                                ctx.fillRect(a.pL, a.pT, xn - a.pL, a.pH);
+                                ctx.globalAlpha = 0.55;
+                                ctx.fillStyle = ink;
+                                ctx.textBaseline = "top";
+                                ctx.textAlign = "right";
+                                ctx.fillText(i18n("Recorded"), xn - 5, a.pT + 3);
+                                ctx.textAlign = "left";
+                                ctx.fillText(i18n("Forecast"), xn + 5, a.pT + 3);
+
+                                // Grid, left labels in Nx and right labels in points.
+                                ctx.textBaseline = "middle";
+                                for (let i = 0; i <= rm.parts; i++) {
+                                    const y = Math.round(a.ty(i * rm.vStep)) + 0.5;
+                                    ctx.globalAlpha = 0.13;
+                                    ctx.strokeStyle = ink;
+                                    ctx.beginPath();
+                                    ctx.moveTo(a.pL, y);
+                                    ctx.lineTo(a.pL + a.pW, y);
+                                    ctx.stroke();
+                                    ctx.globalAlpha = 0.55;
+                                    ctx.fillStyle = ink;
+                                    ctx.textAlign = "right";
+                                    ctx.fillText(root.nx(i * rm.vStep).replace(".0x", "x"), a.pL - 4, y);
+                                    ctx.fillStyle = roomView.roomColor.toString();
+                                    ctx.textAlign = "left";
+                                    ctx.fillText(Math.round(i * rm.rStep), a.pL + a.pW + 4, y);
+                                }
+
+                                // Local midnights, with the weekday in the middle of each day.
+                                ctx.textAlign = "center";
+                                ctx.textBaseline = "top";
+                                const day = new Date(rm.start);
+                                day.setHours(24, 0, 0, 0);
+                                let prev = rm.start;
+                                for (let t = day.getTime(); ; t += TL.DAY) {
+                                    const edge = Math.min(t, rm.end);
+                                    const mid = (prev + edge) / 2;
+                                    if (edge - prev > 6 * TL.HOUR) {
+                                        ctx.globalAlpha = 0.55;
+                                        ctx.fillStyle = ink;
+                                        ctx.fillText(Qt.formatDateTime(new Date(mid), "ddd d"), a.tx(mid), a.pT + a.pH + 4);
+                                    }
+                                    if (t >= rm.end)
+                                        break;
+                                    const x = Math.round(a.tx(t)) + 0.5;
+                                    ctx.globalAlpha = 0.13;
+                                    ctx.strokeStyle = ink;
+                                    ctx.setLineDash([2, 3]);
+                                    ctx.beginPath();
+                                    ctx.moveTo(x, a.pT);
+                                    ctx.lineTo(x, a.pT + a.pH);
+                                    ctx.stroke();
+                                    ctx.setLineDash([]);
+                                    prev = t;
+                                }
+
+                                // The ceiling: usable capacity with every window empty.
+                                if (rm.ceiling > 0) {
+                                    const yc = Math.round(a.ty(rm.ceiling)) + 0.5;
+                                    ctx.globalAlpha = 0.45;
+                                    ctx.strokeStyle = ink;
+                                    ctx.setLineDash([4, 4]);
+                                    ctx.beginPath();
+                                    ctx.moveTo(a.pL, yc);
+                                    ctx.lineTo(a.pL + a.pW, yc);
+                                    ctx.stroke();
+                                    ctx.setLineDash([]);
+                                    ctx.textAlign = "right";
+                                    ctx.textBaseline = "bottom";
+                                    ctx.fillStyle = ink;
+                                    ctx.fillText(i18n("ceiling %1", root.nx(rm.ceiling)), a.pL + a.pW - 2, yc - 2);
+                                }
+
+                                const cap = roomView.capColor.toString();
+                                // Forecast: a filled step line from now to the end.
+                                const f = rm.forecast;
+                                function forecastPath() {
+                                    ctx.moveTo(a.tx(f[0].t), a.ty(f[0].v));
+                                    for (let i = 1; i < f.length; i++) {
+                                        ctx.lineTo(a.tx(f[i].t), a.ty(f[i - 1].v));
+                                        ctx.lineTo(a.tx(f[i].t), a.ty(f[i].v));
+                                    }
+                                    ctx.lineTo(a.tx(rm.end), a.ty(f[f.length - 1].v));
+                                }
+                                ctx.globalAlpha = 0.14;
+                                ctx.fillStyle = cap;
+                                ctx.beginPath();
+                                forecastPath();
+                                ctx.lineTo(a.tx(rm.end), a.ty(0));
+                                ctx.lineTo(a.tx(rm.now), a.ty(0));
+                                ctx.closePath();
+                                ctx.fill();
+                                ctx.globalAlpha = 1;
+                                ctx.lineWidth = 2;
+                                ctx.lineJoin = "round";
+                                ctx.strokeStyle = cap;
+                                ctx.beginPath();
+                                forecastPath();
+                                ctx.stroke();
+
+                                // Recorded lines, broken where the fetch was not running. The last
+                                // sample is the one at now, so the line meets the forecast there.
+                                function pastPath(key, ty) {
+                                    const p = rm.past;
+                                    ctx.beginPath();
+                                    for (let i = 0; i < p.length; i++) {
+                                        const x = a.tx(p[i].t), y = ty(p[i][key]);
+                                        if (i === 0 || p[i].t - p[i - 1].t > TL.ROOM_GAP)
+                                            ctx.moveTo(x, y);
+                                        else
+                                            ctx.lineTo(x, y);
+                                    }
+                                    ctx.stroke();
+                                }
+                                ctx.lineWidth = 1.5;
+                                ctx.strokeStyle = roomView.roomColor.toString();
+                                pastPath("room", a.tyRoom);
+                                ctx.lineWidth = 2;
+                                ctx.strokeStyle = cap;
+                                pastPath("v", a.ty);
+
+                                // Now, with the value now.
+                                ctx.lineWidth = 1.5;
+                                ctx.strokeStyle = view.nowColor.toString();
+                                ctx.beginPath();
+                                ctx.moveTo(xn, a.pT);
+                                ctx.lineTo(xn, a.pT + a.pH);
+                                ctx.stroke();
+                                const yn = a.ty(rm.nowAvail);
+                                ctx.fillStyle = view.nowColor.toString();
+                                ctx.beginPath();
+                                ctx.arc(xn, yn, 3.5, 0, 2 * Math.PI);
+                                ctx.fill();
+                                ctx.font = "bold " + fontPx + "px sans-serif";
+                                ctx.textAlign = "left";
+                                ctx.textBaseline = yn > a.pT + fontPx * 2 ? "bottom" : "top";
+                                ctx.fillText(i18n("%1 now", root.nx(rm.nowAvail)), xn + 6, yn + (yn > a.pT + fontPx * 2 ? -4 : 4));
+                            }
+                        }
+
+                        // Hover: a hairline and the values at that time.
+                        HoverHandler {
+                            id: roomHover
+                        }
+                        readonly property bool hovering: roomHover.hovered && root.rm !== null && roomHover.point.position.x >= pL && roomHover.point.position.x <= pL + pW
+                        readonly property real hoverT: hovering ? tAt(roomHover.point.position.x) : 0
+                        readonly property var hoverPast: hovering && hoverT < root.rm.now ? TL.roomPastAt(root.rm, hoverT) : null
+
+                        Rectangle {
+                            visible: roomArea.hovering
+                            x: roomArea.hovering ? Math.round(roomArea.tx(roomArea.hoverT)) : 0
+                            y: roomArea.pT
+                            width: 1
+                            height: roomArea.pH
+                            color: root.inkColor
+                            opacity: 0.45
+                        }
+
+                        Rectangle {
+                            visible: roomArea.hovering
+                            readonly property real hx: roomArea.hovering ? roomArea.tx(roomArea.hoverT) : 0
+                            x: hx + width + Kirigami.Units.largeSpacing * 2 < roomArea.width ? hx + Kirigami.Units.largeSpacing : hx - width - Kirigami.Units.largeSpacing
+                            y: roomArea.pT + Kirigami.Units.smallSpacing
+                            width: roomTipCol.implicitWidth + Kirigami.Units.smallSpacing * 4
+                            height: roomTipCol.implicitHeight + Kirigami.Units.smallSpacing * 3
+                            radius: 4
+                            color: root.cardColor
+                            border.color: root.tint(0.2)
+
+                            ColumnLayout {
+                                id: roomTipCol
+                                anchors.centerIn: parent
+                                spacing: Kirigami.Units.smallSpacing / 2
+                                PlasmaComponents.Label {
+                                    text: !roomArea.hovering ? ""
+                                        : roomArea.hoverT >= root.rm.now ? Qt.formatDateTime(new Date(roomArea.hoverT), "ddd d MMM HH:mm") + "  ·  " + root.until(roomArea.hoverT)
+                                        : Qt.formatDateTime(new Date(roomArea.hoverT), "ddd d MMM HH:mm") + "  ·  " + i18n("%1 ago", root.dur((root.rm.now - roomArea.hoverT) / 1000))
+                                    font.pointSize: root.fsSmall
+                                    font.weight: Font.DemiBold
+                                }
+                                RowLayout {
+                                    visible: roomArea.hovering && roomArea.hoverT >= root.rm.now
+                                    spacing: Kirigami.Units.smallSpacing
+                                    Dot {
+                                        color: roomView.capColor
+                                    }
+                                    PlasmaComponents.Label {
+                                        text: roomArea.hovering && roomArea.hoverT >= root.rm.now ? i18n("Forecast: %1 usable", root.nx(TL.roomForecastAt(root.rm, roomArea.hoverT))) : ""
+                                        font.pointSize: root.fsSmall
+                                    }
+                                }
+                                RowLayout {
+                                    visible: roomArea.hoverPast !== null
+                                    spacing: Kirigami.Units.smallSpacing
+                                    Dot {
+                                        color: roomView.capColor
+                                    }
+                                    PlasmaComponents.Label {
+                                        text: roomArea.hoverPast ? i18n("Recorded: %1 usable", root.nx(roomArea.hoverPast.v)) : ""
+                                        font.pointSize: root.fsSmall
+                                    }
+                                }
+                                RowLayout {
+                                    visible: roomArea.hoverPast !== null
+                                    spacing: Kirigami.Units.smallSpacing
+                                    Dot {
+                                        color: roomView.roomColor
+                                    }
+                                    PlasmaComponents.Label {
+                                        text: roomArea.hoverPast ? i18n("Weekly room: %1 points", Math.round(roomArea.hoverPast.room)) : ""
+                                        font.pointSize: root.fsSmall
+                                    }
+                                }
+                                Small {
+                                    visible: roomArea.hovering && roomArea.hoverT < root.rm.now && roomArea.hoverPast === null
+                                    text: i18n("Nothing recorded at this time")
+                                }
+                            }
+                        }
+
+                        PlasmaComponents.Label {
+                            anchors.centerIn: parent
+                            visible: root.rm === null
+                            text: root.hasData ? i18n("No capacity forecast in the aiolos data") : (root.problem || i18n("Waiting for data from aiolos"))
+                            opacity: 0.62
+                            wrapMode: Text.WordWrap
+                            width: Math.min(implicitWidth, parent.width - Kirigami.Units.gridUnit * 2)
+                        }
+                    }
+
+                    // Accounts routable now and the next resets.
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        visible: root.hasData
+                        font.pointSize: root.fsSmall
+                        elide: Text.ElideRight
+                        text: {
+                            if (!root.hasData)
+                                return "";
+                            const parts = [i18n("Routable now: %1 of %2 accounts", root.routableNow, root.d.pool.accounts.length)];
+                            for (const r of [[root.next5h, i18n("5-hour")], [root.nextWeekly, i18n("weekly")]])
+                                parts.push(r[0] ? i18n("Next %1 reset: %2 %3 (%4)", r[1], r[0].name.replace(/@.*/, ""), root.until(r[0].ms), root.when(r[0].ms)) : i18n("No %1 reset in the data", r[1]));
+                            return parts.join("  ·  ");
                         }
                     }
                 }
