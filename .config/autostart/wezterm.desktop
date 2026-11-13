@@ -4,3 +4,4 @@ Name=WezTerm (attach to sessions)
 Exec=/home/oystein/.local/bin/wezterm connect unix
 Icon=org.wezfurlong.wezterm
 X-KDE-autostart-phase=2
+Hidden=true
