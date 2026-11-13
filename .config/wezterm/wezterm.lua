@@ -143,51 +143,11 @@ else
     })
   end
 
-  -- When the mux server starts (at boot), reopen the Claude Code sessions that
-  -- were still open at shutdown. claude-persist.sh plan prints one line per
-  -- session: <cwd> TAB <tab title> TAB <shell command>.
+  -- FrankenTerm reopens the Claude Code sessions at boot. wezterm must not do
+  -- it too: on 2026-11-13 both did, and 23 sessions ran twice. A started mux
+  -- server only opens one plain shell.
   wezterm.on('mux-startup', function()
-    local window
-    local login_path
-    local p = io.popen("fish -lc 'string join : $PATH' 2>/dev/null")
-    if p then
-      login_path = p:read('*l')
-      p:close()
-      if login_path == '' then login_path = nil end
-    end
-    local plan = io.popen('bash ' .. wezterm.home_dir .. '/.claude/hooks/claude-persist.sh plan')
-    if plan then
-      for line in plan:lines() do
-        local cwd, title, cmd = line:match('^([^\t]*)\t([^\t]*)\t(.*)$')
-        if cwd then
-          -- run claude, then keep a shell open in the tab when it exits
-          local spec = {
-            cwd = cwd,
-            args = { 'bash', '-c', cmd .. '; exec fish -l' },
-            -- the server runs under systemd with a minimal PATH; give the
-            -- resumed session the PATH a login shell would have
-            set_environment_variables = login_path and { PATH = login_path } or nil,
-          }
-          -- One failed spawn (e.g. out of file descriptors) must not abort the
-          -- loop: an error here used to leave plan blocked on a full pipe.
-          local ok, err = pcall(function()
-            local tab
-            if window then
-              tab = window:spawn_tab(spec)
-            else
-              tab, _, window = mux.spawn_window(spec)
-            end
-            tab:set_title(title)
-          end)
-          if not ok then
-            wezterm.log_error('claude-persist: could not reopen ' .. cwd .. ': ' .. tostring(err))
-          end
-        end
-      end
-      plan:close()
-    end
-    -- always leave at least one window with a plain shell
-    if not window then mux.spawn_window({}) end
+    mux.spawn_window({})
   end)
 
   -- 'connect' skips gui-startup, so size the window when it attaches instead
