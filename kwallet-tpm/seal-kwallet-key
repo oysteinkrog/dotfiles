@@ -1,0 +1,113 @@
+#!/usr/bin/python3 -I
+"""Seal the KWallet PAM key hash with the TPM, for ksecretd-tpm.
+
+Asks for the wallet password at a hidden prompt, derives the same key that
+pam_kwallet5 derives (PBKDF2-HMAC-SHA512, 50000 rounds, 56 bytes, salt from
+<data>/kwalletd/<wallet>.salt), and seals it with
+systemd-creds encrypt --user --with-key=host+tpm2.
+
+The password and the key are never written to disk or printed. Only the sealed
+file is written, with mode 0600.
+
+Usage: seal-kwallet-key [--wallet NAME] [--out FILE] [--name CREDNAME]
+With no terminal on stdin, the password is read from the first line of stdin
+(used by the tests).
+"""
+
+import argparse
+import configparser
+import getpass
+import hashlib
+import os
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+DATA = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
+CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
+
+# Values from kwallet-pam pam_kwallet.c and kwallet kwalletbackend.h.
+KEYSIZE = 56
+SALTSIZE = 56
+ITERATIONS = 50000
+
+
+def default_wallet():
+    # ksecretd's pamOpen opens Backend::localWallet(): "Default Wallet" when
+    # "Use One Wallet" is on (the default), else "Local Wallet". Both default
+    # to "kdewallet".
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read(os.path.join(CONFIG, "kwalletrc"))
+        if cp.get("Wallet", "Use One Wallet", fallback="true").lower() != "false":
+            return cp.get("Wallet", "Default Wallet", fallback="kdewallet")
+        return cp.get("Wallet", "Local Wallet", fallback="kdewallet")
+    except configparser.Error:
+        return "kdewallet"
+
+
+def read_password():
+    if sys.stdin.isatty():
+        pw = getpass.getpass("KWallet password: ")
+        if getpass.getpass("Again: ") != pw:
+            sys.exit("seal-kwallet-key: the two passwords differ, nothing written")
+        return pw
+    return sys.stdin.readline().rstrip("\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Seal the KWallet PAM key with the TPM.")
+    ap.add_argument("--wallet", default=None, help="wallet name (default: the local wallet, usually kdewallet)")
+    ap.add_argument("--out", default=os.path.join(CONFIG, "kwallet-tpm", "kdewallet.cred"))
+    ap.add_argument("--name", default="kwallet-pam-hash", help="credential name, must match ksecretd-tpm")
+    a = ap.parse_args()
+
+    wallet = a.wallet or default_wallet()
+    salt_path = os.path.join(DATA, "kwalletd", f"{wallet}.salt")
+    kwl_path = os.path.join(DATA, "kwalletd", f"{wallet}.kwl")
+    try:
+        with open(salt_path, "rb") as f:
+            salt = f.read()
+    except OSError as e:
+        sys.exit(f"seal-kwallet-key: cannot read {salt_path}: {e.strerror}")
+    if len(salt) != SALTSIZE:
+        sys.exit(f"seal-kwallet-key: {salt_path} has {len(salt)} bytes, expected {SALTSIZE}")
+    try:
+        with open(kwl_path, "rb") as f:
+            head = f.read(16)
+        # Bytes 12..15: major, minor, cipher, hash. A key from PAM opens only a
+        # wallet with minor 1 and hash 2 (PBKDF2-SHA512), and not a GPG wallet.
+        if len(head) == 16 and (head[13] != 1 or head[15] != 2 or head[14] == 2):
+            sys.exit(f"seal-kwallet-key: {kwl_path} does not use the PBKDF2 key (header {list(head[12:16])}), "
+                     "a sealed key cannot open it")
+    except FileNotFoundError:
+        pass  # ksecretd creates the wallet with this key on first open
+
+    pw = read_password()
+    if not pw:
+        sys.exit("seal-kwallet-key: empty password, nothing written")
+    key = hashlib.pbkdf2_hmac("sha512", pw.encode("utf-8"), salt, ITERATIONS, KEYSIZE)
+    del pw
+
+    out_dir = os.path.dirname(os.path.abspath(a.out))
+    os.makedirs(out_dir, mode=0o700, exist_ok=True)
+    os.umask(0o077)
+    tmp = a.out + ".new"
+    r = subprocess.run(
+        ["systemd-creds", "encrypt", "--user", "--with-key=host+tpm2", f"--name={a.name}", "-", tmp],
+        input=key, stdout=subprocess.DEVNULL,
+    )
+    del key
+    if r.returncode != 0:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        sys.exit(f"seal-kwallet-key: systemd-creds encrypt failed (exit {r.returncode}), nothing written")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, a.out)
+    print(f"Sealed the key for wallet '{wallet}' into {a.out}")
+
+
+if __name__ == "__main__":
+    main()
