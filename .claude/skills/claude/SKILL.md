@@ -22,10 +22,24 @@ different model or thinking level.
 - **Cost guard:** for exploratory asks, add `--max-budget-usd <amount>` when
   the user gives a budget or the task is likely to sprawl.
 
+- **Always pass `--strict-mcp-config`.** Without it, `claude -p` loads every
+  claude.ai connector tool schema (about 366 tools, 420k to 440k tokens), even
+  with `--tools ""`. Measured on 2026-11-13: a Fable review with a 45 KB prompt
+  cost $5.60 for one call. With the flag the same call costs well under $1.
+
 Example:
 
 ```sh
-claude -p --model opus --effort high "<prompt>"
+claude -p --model opus --effort high --strict-mcp-config "<prompt>"
+```
+
+For a consult with no tools (a pasted brief), use the slim form from an empty
+folder under `/var/tmp/claude`:
+
+```sh
+claude -p --model claude-fable-5-2 --tools "" --strict-mcp-config \
+  --disable-slash-commands --exclude-dynamic-system-prompt-sections \
+  --system-prompt "<one line>" --no-session-persistence < prompt.md > out.md
 ```
 
 ## Prompting Claude
@@ -62,7 +76,7 @@ the user explicitly asks it to edit.
 1. Ask for evidence, not vibes: require file paths, observed behavior, command
    output, or labelled inferences.
 2. Prefer a read-only tool surface for reviews:
-   `--tools "Read,Grep,Glob,Bash" --permission-mode dontAsk`.
+   `--tools "Read,Grep,Glob,Bash" --strict-mcp-config --permission-mode dontAsk`.
 3. Triage every finding against the code before acting. Report what Claude
    flagged, what you accepted, and what you dismissed.
 
@@ -79,7 +93,7 @@ without a fresh ask.
    separable from yours. Tell Claude to keep scratch files (probes, dumps,
    notes) out of the tree — its diff must contain only the deliverable.
 3. Choose permissions by what the task must do:
-   - Read/review: `--tools "Read,Grep,Glob,Bash" --permission-mode dontAsk`.
+   - Read/review: `--tools "Read,Grep,Glob,Bash" --strict-mcp-config --permission-mode dontAsk`.
    - Narrow edits: add edit tools and keep the prompt's allowed paths explicit.
    - Broad autonomous work: use `--dangerously-skip-permissions` only in a
      dedicated worktree, with a self-authored prompt and a mandatory diff
@@ -106,7 +120,7 @@ classify the failure before retrying.
 
 ## Rules
 
-- Use `claude -p --model opus --effort high` as the default invocation.
+- Use `claude -p --model opus --effort high --strict-mcp-config` as the default invocation.
 - Let the user override model and effort in plain language; translate that to
   `--model` and `--effort`.
 - Keep Claude's writes out of the working tree unless delegation was explicit.
