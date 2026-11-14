@@ -14,8 +14,17 @@ Rules:
     machine lock (a lane copy or delete is running).
   * Goes faster while presence is "away".
   * Never follows a symlink and never leaves the trash folder: every
-    directory is opened relative to its parent with O_NOFOLLOW, and a
-    directory on another device (a mount or btrfs subvolume) is skipped.
+    directory is opened relative to its parent with O_NOFOLLOW.
+  * A lane whose top folder is a btrfs subvolume (grove makes lanes this
+    way) is deleted too. Its top folder has its own device number and
+    inode 256, so that device becomes the device for the lane. The files go
+    in the same throttled batches, and at the end a plain rmdir removes the
+    empty subvolume. This never calls "btrfs subvolume delete" on a full
+    subvolume: that hands all the work to btrfs-cleaner, which cannot be
+    throttled, and froze the desktop for about 40 minutes on 2026-11-13.
+  * Leaves alone, and retries later, a lane top that is on another device
+    but is not a subvolume root, and any folder below a lane top that is on
+    a different device from the lane top (a nested subvolume or a mount).
   * Skips names starting with "." (lane-trash is still retiring that lane),
     and refuses to run while any mount point lies inside the trash.
   * Logs one line per finished folder to ~/.local/state/lane-trash/purge.log.
@@ -72,6 +81,8 @@ IDLE = float(env("LANE_TRASH_IDLE", "60"))
 MAX_PAUSE = float(env("LANE_TRASH_MAX_PAUSE", "0"))
 # A folder that failed is retried after this long, not in a tight loop.
 RETRY_AFTER = 3600.0
+# Inode number of the root folder of every btrfs subvolume.
+BTRFS_SUBVOL_ROOT_INO = 256
 
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -182,20 +193,50 @@ def removal_ops(root_fd, root_dev, name, counters):
     Every directory is opened with O_NOFOLLOW relative to an already open
     parent, so a symlink is never followed and nothing outside the trash is
     reached even if the tree changes while we walk it.
+
+    The lane top may be a btrfs subvolume root (another device, inode 256).
+    Then its device is the lane device. Every folder below the top must be
+    on the lane device, or the lane is left alone (Stuck).
     """
 
-    # Stack entries: (parent_fd, name, fd, iterator over its entries)
+    def make_writable(fd, st):
+        if not st.st_mode & stat.S_IWUSR or not st.st_mode & stat.S_IXUSR:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+
+    # The lane top decides the device for the whole lane.
+    top = os.open(name, DIR_FLAGS, dir_fd=root_fd)
+    try:
+        st = os.fstat(top)
+        subvol = False
+        if st.st_dev != root_dev:
+            if st.st_ino != BTRFS_SUBVOL_ROOT_INO:
+                raise Stuck(
+                    "lane top is on another device and is not a btrfs "
+                    "subvolume root (inode %d); left alone" % st.st_ino
+                )
+            if os.path.join(os.path.realpath(TRASH), name) in mounts_under_trash():
+                raise Stuck("lane top is a mount point; left alone")
+            subvol = True
+        lane_dev = st.st_dev
+        counters["subvol"] = subvol
+        make_writable(top, st)
+    except BaseException:
+        os.close(top)
+        raise
+
     def open_dir(parent_fd, n):
         fd = os.open(n, DIR_FLAGS, dir_fd=parent_fd)
         st = os.fstat(fd)
-        if st.st_dev != root_dev:
+        if st.st_dev != lane_dev:
             os.close(fd)
-            raise Stuck("%s is on another device (mount or subvolume); left alone" % n)
-        if not st.st_mode & stat.S_IWUSR or not st.st_mode & stat.S_IXUSR:
-            os.fchmod(fd, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+            raise Stuck(
+                "%s is on a different device from the lane top (nested "
+                "subvolume or mount); left alone" % n
+            )
+        make_writable(fd, st)
         return fd
 
-    top = open_dir(root_fd, name)
+    # Stack entries: (parent_fd, name, fd, iterator over its entries)
     stack = [(root_fd, name, top, os.scandir(top))]
     try:
         while stack:
@@ -205,7 +246,19 @@ def removal_ops(root_fd, root_dev, name, counters):
                 it.close()
                 stack.pop()
                 os.close(fd)
-                os.rmdir(dname, dir_fd=parent_fd)
+                if stack:
+                    os.rmdir(dname, dir_fd=parent_fd)
+                else:
+                    # The lane top. For a subvolume this rmdir removes the
+                    # now empty subvolume.
+                    try:
+                        os.rmdir(dname, dir_fd=parent_fd)
+                    except OSError as e:
+                        raise Stuck(
+                            "contents deleted, but rmdir of the empty %s "
+                            "failed: %s"
+                            % ("subvolume" if subvol else "lane top", e)
+                        )
                 counters["dirs"] += 1
                 yield
                 continue
@@ -288,9 +341,10 @@ def purge_entry(root_fd, root_dev, name, grove_lock):
         if not done:
             time.sleep(pace)
     log(
-        "purged %s files=%d dirs=%d bytes=%d secs=%.1f"
+        "purged %s%s files=%d dirs=%d bytes=%d secs=%.1f"
         % (
             name,
+            " (subvolume)" if counters.get("subvol") else "",
             counters["files"],
             counters["dirs"],
             counters["bytes"],

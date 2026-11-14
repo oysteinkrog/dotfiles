@@ -199,16 +199,40 @@ out=$(LANE_TRASH_DIR="$P/trash-link" "$PURGE" --once 2>&1); rc=$?
 check "symlinked trash folder refused" [ "$rc" -ne 0 ]
 check "symlinked trash target kept" [ -f "$P/real/x" ]
 
-# ---- purge: a subvolume inside the trash is left alone -----------------------
+# ---- purge: subvolume lanes ---------------------------------------------------
+# Grove lanes are btrfs subvolumes. A subvolume lane top is deleted file by
+# file and then removed with rmdir. A nested subvolume below a lane top is
+# left alone. These are small real subvolumes under /var/tmp, never /home.
 if btrfs subvolume create "$P/trash/p3" >/dev/null 2>&1; then
-  mkdir "$P/trash/p3/x"; echo y >"$P/trash/p3/x/z"
+  mkdir -p "$P/trash/p3/x/y"; echo y >"$P/trash/p3/x/z"
+  for i in $(seq 1 80); do echo "$i" >"$P/trash/p3/x/y/f$i"; done
+  check "p3 top is a subvolume root" [ "$(stat -c %i "$P/trash/p3")" -eq 256 ]
   out=$("$PURGE" --once 2>&1); rc=$?
-  # The subvolume root itself is not followed into because its device differs.
-  check "subvolume in trash reported stuck" grep -q "stuck p3" <<<"$out"
-  check "subvolume contents kept" [ -f "$P/trash/p3/x/z" ]
-  rm -rf "$P/trash/p3/x"; btrfs subvolume delete "$P/trash/p3" >/dev/null 2>&1 || rmdir "$P/trash/p3"
+  check "subvolume lane purge exits 0" [ "$rc" -eq 0 ]
+  check "subvolume lane is gone" [ ! -e "$P/trash/p3" ]
+  check "subvolume lane logged" grep -q "purged p3 (subvolume) files=81 dirs=3 " <<<"$out"
+
+  # A plain lane with a nested subvolume, and a subvolume lane with one.
+  mkdir -p "$P/trash/p4"; echo a >"$P/trash/p4/a"
+  btrfs subvolume create "$P/trash/p4/inner" >/dev/null
+  echo keep >"$P/trash/p4/inner/k"
+  btrfs subvolume create "$P/trash/p5" >/dev/null
+  echo b >"$P/trash/p5/b"
+  btrfs subvolume create "$P/trash/p5/inner" >/dev/null
+  echo keep >"$P/trash/p5/inner/k"
+  out=$("$PURGE" --once 2>&1); rc=$?
+  check "nested subvolume makes purge exit 1" [ "$rc" -eq 1 ]
+  check "nested subvolume in plain lane reported stuck" \
+    grep -q "stuck p4: inner is on a different device from the lane top" <<<"$out"
+  check "nested subvolume in subvolume lane reported stuck" \
+    grep -q "stuck p5: inner is on a different device from the lane top" <<<"$out"
+  check "nested subvolume kept (plain lane)" [ -f "$P/trash/p4/inner/k" ]
+  check "nested subvolume kept (subvolume lane)" [ -f "$P/trash/p5/inner/k" ]
+  check "subvolume lane top with nested subvolume kept" [ -d "$P/trash/p5" ]
+  # rmdir removes an empty subvolume, so plain rm -r cleans up.
+  rm -r "$P/trash/p4" "$P/trash/p5"
 else
-  echo "skip subvolume test (cannot create a btrfs subvolume here)"
+  echo "skip subvolume tests (cannot create a btrfs subvolume here)"
 fi
 
 echo "passed $pass, failed $fail"
