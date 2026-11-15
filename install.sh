@@ -245,6 +245,10 @@ if [ -n "$native_linux" ]; then
     link_one "$dir/$item" "$HOME/$item"
   done
 
+  # Short tool-neutral global rules for Codex and opencode (Claude Code reads ~/.claude/CLAUDE.md).
+  link_one "$dir/.codex/AGENTS.md" "$HOME/.codex/AGENTS.md"
+  link_one "$dir/.codex/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"
+
   # Per-machine files from the machine profile in the private Life repo (see setup/lib.sh).
   host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
   host_dir="${DOTFILES_HOSTS:-$HOME/projects/life/setup/machines}/$host"
