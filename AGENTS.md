@@ -1,7 +1,8 @@
 # Machine notes for work under ~
 
-Machine-level notes for work under `~`. The global rules are in `~/.claude/CLAUDE.md`,
-including multi-agent orchestration, secrets and the writing contract.
+Machine-level notes for work under `~`. Claude Code reads its global rules from
+`~/.claude/CLAUDE.md`, including multi-agent orchestration, secrets and the writing contract.
+Codex and opencode read a shorter, tool-neutral copy from `~/.dotfiles/.codex/AGENTS.md`.
 
 ## Grove worktree manager
 
@@ -17,7 +18,10 @@ names the live config and registry paths.
   17+ minutes on WSL1. Use `git -C <repo>/master worktree list --porcelain` instead.
 - Shortcuts: `gr <tag>` is `grove cd <tag>`; bare `gr` is `grove list --short`.
 
-## Consulting oracles
+## Consulting oracles (Claude Code)
+
+This section is for Claude Code. If you are Codex, you are Astra: give your own answer and
+do not call `codex exec`. If you need a second opinion, ask Claude with `claude -p`.
 
 **GPT-6 Astra is the primary oracle**, reached through the Codex CLI. Consult it first for
 second opinions, design validation, hard debugging and architecture review. One Astra call is

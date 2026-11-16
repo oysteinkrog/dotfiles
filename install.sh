@@ -157,10 +157,10 @@ done
 
 echo ""
 echo "=== Linking Codex config ==="
-# Codex reads ~/.codex/AGENTS.md as global instructions and ~/.codex/hooks.json for hooks.
+# Codex reads ~/.codex/hooks.json for hooks (~/.codex/AGENTS.md is linked further down).
 # Skills shared with Claude go into ~/.agents/skills, which Codex scans.
 mkdir -p "$HOME/.codex" "$HOME/.agents/skills"
-for item in AGENTS.md hooks.json; do
+for item in hooks.json; do
   if [ -e "$HOME/.codex/$item" ] && [ ! -L "$HOME/.codex/$item" ]; then
     mv "$HOME/.codex/$item" "$olddir/codex-$item"
     echo "  backed up .codex/$item"
@@ -262,6 +262,10 @@ if [ -n "$native_linux" ]; then
   for item in "${linux_items[@]}"; do
     link_one "$dir/$item" "$HOME/$item"
   done
+
+  # Short tool-neutral global rules for Codex and opencode (Claude Code reads ~/.claude/CLAUDE.md).
+  link_one "$dir/.codex/AGENTS.md" "$HOME/.codex/AGENTS.md"
+  link_one "$dir/.codex/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"
 
   # Per-machine files from the machine profile in the private Life repo (see setup/lib.sh).
   host="${DOTFILES_HOST:-$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)}"
