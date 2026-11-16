@@ -5,6 +5,7 @@
 # Audioengine D1: the ALSA stream says RUNNING, but its hw_ptr stands still, so
 # every app gets silence. Suspending and resuming the PipeWire node fixes it.
 # This loop watches hw_ptr once a second and does that restart by itself.
+# It also holds the StreamCam mic gain and the default mic in place.
 #
 # Each line: ALSA card id, PCM folder, pactl list type, pactl suspend command.
 DEVICES="
@@ -16,7 +17,32 @@ STALL_SECONDS=3      # unchanged hw_ptr for this long counts as a stall
 COOLDOWN_SECONDS=15  # wait after a restart before judging the device again
 mkdir -p "$STATE_DIR"
 
+# Mic settings this loop holds in place. Checked every SETTINGS_SECONDS.
+# On 2026-11-16 the camera gain had dropped to 51% and the default mic had gone
+# back to the raw camera. People in a Meet call then heard a garbled voice.
+MIC_RAW_MATCH="alsa_input.*StreamCam"
+MIC_FILTER="effect_output.mic_streamcam"
+MIC_VOLUME=100
+SETTINGS_SECONDS=5
+
 declare -A last_ptr still_count cooldown_until
+
+hold_mic_settings() {
+  local raw vol def
+  raw=$(pactl list short sources | awk -v m="$MIC_RAW_MATCH" '$2 ~ m {print $2; exit}')
+  [ -n "$raw" ] || return
+  vol=$(pactl get-source-volume "$raw" | awk -F/ 'NR==1{gsub(/[ %]/,"",$2); print $2}')
+  if [ -n "$vol" ] && [ "$vol" != "$MIC_VOLUME" ]; then
+    pactl set-source-volume "$raw" "$MIC_VOLUME%"
+    echo "mic gain was $vol%, set back to $MIC_VOLUME%"
+  fi
+  # Only replace the raw camera as default. Another device is a choice made on purpose.
+  def=$(pactl get-default-source)
+  if [ "$def" = "$raw" ] && pactl list short sources | grep -q "$MIC_FILTER"; then
+    pactl set-default-source "$MIC_FILTER"
+    echo "default mic was the raw camera, set back to $MIC_FILTER"
+  fi
+}
 
 restart_node() {
   local card=$1 kind=$2 cmd=$3 node
@@ -33,6 +59,7 @@ restart_node() {
 
 while sleep 1; do
   now=$(date +%s)
+  if [ $(( now % SETTINGS_SECONDS )) -eq 0 ]; then hold_mic_settings; fi
   while read -r card pcm kind cmd; do
     [ -n "$card" ] || continue
     status="/proc/asound/$card/$pcm/sub0/status"
