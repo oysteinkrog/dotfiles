@@ -1,0 +1,15 @@
+[Unit]
+Description=Start the herdr-core (hc) server with the user manager's clean environment (trial since 2026-11-16)
+# hc launches its core as a transient unit (hc-serve-*.service) and copies the
+# caller's environment into it. Started from a Claude session, the core would
+# hand every agent that session's markers (CLAUDE_CODE_CHILD_SESSION turns
+# transcript saving off). This unit starts it from systemd's environment instead.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/herdr-core server start
+ExecStop=%h/.local/bin/herdr-core server stop
+
+[Install]
+WantedBy=default.target
