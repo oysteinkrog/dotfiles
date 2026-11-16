@@ -5,7 +5,7 @@
 # Audioengine D1: the ALSA stream says RUNNING, but its hw_ptr stands still, so
 # every app gets silence. Suspending and resuming the PipeWire node fixes it.
 # This loop watches hw_ptr once a second and does that restart by itself.
-# It also holds the StreamCam mic gain in place.
+# It also holds the StreamCam's own mic gain in place.
 #
 # Each line: ALSA card id, PCM folder, pactl list type, pactl suspend command.
 DEVICES="
@@ -17,27 +17,31 @@ STALL_SECONDS=3      # unchanged hw_ptr for this long counts as a stall
 COOLDOWN_SECONDS=15  # wait after a restart before judging the device again
 mkdir -p "$STATE_DIR"
 
-# Mic settings this loop holds in place. Checked every SETTINGS_SECONDS.
-# On 2026-11-16 the camera sent every sample 16 times too large and clipped at
-# full gain. 70% (camera gain 44.5 dB) sounded fine to Oystein.
-MIC_RAW_MATCH="alsa_input.*StreamCam"
-MIC_FILTER="effect_output.mic_streamcam"
-MIC_VOLUME=70   # below 100% lowers the camera's own gain; at 100% the camera clipped in its 16x state (2026-11-16)
+# Camera mic gain this loop holds in place. Checked every SETTINGS_SECONDS.
+# The StreamCam's "Mic" control is a digital multiplier: 30 dB is the raw signal and
+# each 6 dB more doubles every sample. At 54 dB it clipped inside the camera, and
+# Chrome's automatic mic gain kept moving it during calls (2026-11-16). PipeWire now
+# uses software volume for the camera (wireplumber 51-streamcam-soft-mixer.conf), so
+# only this loop writes the camera gain. 53 (44.5 dB) sounded fine to Oystein.
+MIC_CARD=StreamCam
+MIC_GAIN=53          # ALSA "Mic" value, range 0 to 72 (18 to 54 dB)
 SETTINGS_SECONDS=5
 
-declare -A last_ptr still_count cooldown_until
+declare -A last_ptr still_count cooldown_until last_state
 
-hold_mic_settings() {
-  local raw vol
-  raw=$(pactl list short sources | awk -v m="$MIC_RAW_MATCH" '$2 ~ m {print $2; exit}')
-  [ -n "$raw" ] || return
-  vol=$(pactl get-source-volume "$raw" | awk -F/ 'NR==1{gsub(/[ %]/,"",$2); print $2}')
-  if [ -n "$vol" ] && [ "$vol" != "$MIC_VOLUME" ]; then
-    pactl set-source-volume "$raw" "$MIC_VOLUME%"
-    echo "mic gain was $vol%, set back to $MIC_VOLUME%"
+# Write the gain. With "force", write another value first: ALSA skips a write that
+# equals its cached value, and the camera may have lost the gain in a stream restart.
+hold_mic_gain() {
+  local cur
+  cur=$(amixer -c "$MIC_CARD" sget Mic 2>/dev/null | awk -F'[][ ]+' '/Capture [0-9]+ \[/{for(i=1;i<=NF;i++) if($i=="Capture"){print $(i+1); exit}}')
+  [ -n "$cur" ] || return
+  if [ "$1" = force ]; then
+    amixer -q -c "$MIC_CARD" sset Mic $(( MIC_GAIN - 1 ))
+    amixer -q -c "$MIC_CARD" sset Mic "$MIC_GAIN"
+  elif [ "$cur" != "$MIC_GAIN" ]; then
+    amixer -q -c "$MIC_CARD" sset Mic "$MIC_GAIN"
+    echo "camera mic gain was $cur, set back to $MIC_GAIN"
   fi
-  # The default mic is left alone. The noise filter cut pieces out of speech
-  # (measured 2026-11-16), so the raw camera is the working default for now.
 }
 
 restart_node() {
@@ -55,7 +59,7 @@ restart_node() {
 
 while sleep 1; do
   now=$(date +%s)
-  if [ $(( now % SETTINGS_SECONDS )) -eq 0 ]; then hold_mic_settings; fi
+  if [ $(( now % SETTINGS_SECONDS )) -eq 0 ]; then hold_mic_gain; fi
   while read -r card pcm kind cmd; do
     [ -n "$card" ] || continue
     status="/proc/asound/$card/$pcm/sub0/status"
@@ -64,6 +68,10 @@ while sleep 1; do
       state=$(awk '/^state:/{print $2}' "$status")
       ptr=$(awk '/^hw_ptr/{print $3}' "$status")
     fi
+    if [ "$card" = "$MIC_CARD" ] && [ "$state" = "RUNNING" ] && [ "${last_state[$card]}" != "RUNNING" ]; then
+      hold_mic_gain force
+    fi
+    last_state[$card]=$state
     if [ "$state" != "RUNNING" ] || [ "$now" -lt "${cooldown_until[$card]:-0}" ]; then
       last_ptr[$card]=""; still_count[$card]=0
       continue
@@ -85,6 +93,7 @@ while sleep 1; do
         journalctl --user --since -60s --no-pager _COMM=pipewire _COMM=wireplumber 2>/dev/null | tail -40
       } >"$STATE_DIR/$t-$card.txt" 2>&1
       restart_node "$card" "$kind" "$cmd"
+      last_state[$card]=""
       last_ptr[$card]=""; still_count[$card]=0
       cooldown_until[$card]=$(( $(date +%s) + COOLDOWN_SECONDS ))
     fi
