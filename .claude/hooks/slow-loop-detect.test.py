@@ -53,12 +53,24 @@ class SlowLoopDetect(unittest.TestCase):
     def run_decide(self, replies, now=1_000_000.0, sid="s1"):
         """Feed the replies one stop at a time; return the first reason that fired."""
         out = None
-        for r in replies:
+        for i, r in enumerate(replies):
             transcript(self.t, [r])
             texts = self.m.assistant_texts(self.t)
-            reason = self.m.decide(texts[-1] if texts else None, sid, now)
+            reason = self.m.decide(texts[-1] if texts else None, sid, now + 120 * i)
             out = out or reason
         return out
+
+    def run_main(self, event):
+        import io
+
+        sys.stdin = io.StringIO(json.dumps(event))
+        buf = io.StringIO()
+        old, sys.stdout = sys.stdout, buf
+        try:
+            self.assertEqual(self.m.main(), 0)
+        finally:
+            sys.stdout, sys.stdin = old, sys.__stdin__
+        return buf.getvalue()
 
     def test_fires_on_idle_streak(self):
         self.assertIsNotNone(self.run_decide(["Waiting for plan 31 at 20:28."] * 6))
@@ -98,6 +110,47 @@ class SlowLoopDetect(unittest.TestCase):
         idle = ["Still waiting for the lab."] * 6
         self.assertIsNotNone(self.run_decide(idle, sid="a"))
         self.assertIsNotNone(self.run_decide(idle, sid="b"))
+
+    def test_same_stop_seen_twice_counts_once(self):
+        # A user hook and a repository hook both run on one stop.
+        for i in range(4):
+            for _ in range(2):
+                self.assertIsNone(
+                    self.m.decide(
+                        "Still waiting for the lab.", "dup", 1_000_000.0 + 120 * i
+                    )
+                )
+        self.assertIsNotNone(
+            self.m.decide("Still waiting for the lab.", "dup", 1_000_000.0 + 600)
+        )
+
+    def test_codex_event_uses_last_assistant_message(self):
+        from unittest import mock
+
+        out = ""
+        for i in range(5):
+            with mock.patch.object(
+                self.m.time, "time", return_value=2_000_000.0 + 120 * i
+            ):
+                out = self.run_main(
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "codex-1",
+                        "last_assistant_message": "Waiting for CI on #123.",
+                        "stop_hook_active": False,
+                    }
+                )
+        self.assertIn('"decision": "block"', out)
+
+    def test_stop_hook_active_is_left_alone(self):
+        out = self.run_main(
+            {
+                "session_id": "x",
+                "last_assistant_message": "Waiting.",
+                "stop_hook_active": True,
+            }
+        )
+        self.assertEqual(out, "")
 
     def test_main_never_fails_on_bad_input(self):
         import io

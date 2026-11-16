@@ -3,8 +3,8 @@ name: loop-speed-intervention
 description: >-
   Find out why an improve-and-measure loop is slow and restructure it, so each idea gets a
   verdict in seconds or minutes instead of a night. Use when a session or a goal loop keeps
-  waiting on a scarce resource (a lab machine, a night slot, CI, a human), when the stop hook
-  or a cron check repeats "still waiting" with nothing to act on, when most experiments end in
+  waiting on a scarce resource (a lab machine, a night slot, CI, a human), when a stop hook,
+  a goal loop or a cron check repeats "still waiting" with nothing to act on, when most experiments end in
   "no gain" or "noise", when one verdict takes more than a few hours, when a manager or
   oversight session reviews other sessions' progress, or when the user says the work feels
   slow, says "speed up our loop", "why is this so slow" or "intervention".
@@ -16,7 +16,7 @@ A loop is the cycle: pick a target, change code, measure, decide. This skill mak
 faster. It does not make the product faster; it makes finding product speed-ups faster.
 
 The case that made this a skill (load-speed round, Mon 2026-11-16): a session spent about 60
-stop-hook turns answering "Waiting for plan 31 at 20:28". The lab PC was free all day, but a
+idle check-in turns answering "Waiting for plan 31 at 20:28". The lab PC was free all day, but a
 rule kept it to nights. Every idea waited a night for a verdict, and most came back "no gain".
 Oystein stepped in and asked for a faster loop. Within an hour:
 - a deterministic test on plain Linux .NET reproduced, in 4 s, the take-switch delay that had
@@ -24,7 +24,9 @@ Oystein stepped in and asked for a faster loop. Within an hour:
 - one question to Oystein freed the daytime lab, so three verdicts came the same day instead
   of the next morning.
 
-Run this skill before the human has to step in.
+Run this skill before the human has to step in. It works the same in any agent harness
+(Claude Code, Codex or another): the steps use logs, tests and questions, not one tool set.
+Where a step names a tool, use your harness's equivalent.
 
 ## When to run it
 
@@ -42,7 +44,7 @@ Run it when you see any of these. Each one is cheap to check.
 | A rule holds the resource | A scarce resource sits idle because a permission rule keeps it for later |
 
 Manager and oversight sessions: look for these signals in the sessions you oversee (their
-logs, their last messages, `ListAgents`), not only in your own.
+logs, their last messages, the session list your harness offers), not only in your own.
 
 ## Step 1: measure the loop (10 minutes)
 
@@ -81,7 +83,8 @@ Rules:
 ## Step 3: remove friction around the scarce resource
 
 - **Ask for the resource:** If a permission rule keeps a free machine idle, ask the owner one
-  question (AskUserQuestion) with the numbers. Record the answer with its exact words and its
+  question, with the numbers, through your harness's question tool (AskUserQuestion in Claude
+  Code; in Codex, a direct question in the reply). Record the answer with its exact words and its
   scope.
 - **One generic runner:** Experiments are data (build A, build B, scenario, repeats), not new
   scripts. Each new script is a new place for a setup failure.
@@ -100,6 +103,14 @@ Rules:
   first proof that the new loop works.
 - Record the change where the next session finds it (the project log, a memory entry, the
   progress page).
+
+## Automatic trigger
+
+The `slow-loop-detect` Stop hook watches for idle streaks. After 5 short "waiting" replies in a
+row it refuses the stop once and tells the session to run this skill, at most once per 6 hours
+per session. It reads `last_assistant_message`, which Claude Code and Codex both send to Stop
+hooks, so one script serves both. The hook only catches the waiting pattern; the other signals
+in the table above need a person or a manager session to notice them.
 
 ## Limits
 

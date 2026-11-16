@@ -3,18 +3,25 @@
 
 A session in a goal loop can spend hours answering "still waiting for X" while a faster way
 to get its answer exists (load-speed round, 2026-11-16: about 60 such turns before Oystein
-stepped in). This hook reads the transcript tail. When IDLE_NEED assistant replies in a
-row are short waiting replies (a streak kept in a per-session state file), it blocks the stop once, with a reason
-that tells Claude to run the loop-speed-intervention skill. It fires at most once per
-COOLDOWN_S per session, so it cannot trap a session that really has nothing to do.
+stepped in). When IDLE_NEED replies in a row are short waiting replies (a streak kept in a per-session
+state file), it blocks the stop once, with a reason that tells the agent to run the
+loop-speed-intervention skill. It fires at most once per COOLDOWN_S per session, so it cannot
+trap a session that really has nothing to do.
 
-Input: the Stop hook JSON on stdin (transcript_path, session_id).
+Works for Claude Code and Codex: both send a Stop event with `last_assistant_message` and
+accept {"decision": "block", "reason": ...}. When that field is missing, the hook reads the
+last reply from the Claude transcript tail. If two hook entries see the same stop (a user
+hook and a repository hook), the second sees the same reply within DUP_WINDOW_S and does not
+count it again.
+
+Input: the Stop hook JSON on stdin (last_assistant_message or transcript_path, session_id).
 Output: nothing (allow the stop) or {"decision": "block", "reason": ...}.
 Never fails the stop: any error means allow.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -25,6 +32,7 @@ from pathlib import Path
 IDLE_NEED = 5
 MAX_IDLE_CHARS = 400
 COOLDOWN_S = 6 * 3600
+DUP_WINDOW_S = 60
 TAIL_BYTES = 400_000
 STATE_DIR = Path(
     os.environ.get("SLOW_LOOP_STATE_DIR", Path.home() / ".local/state/slow-loop")
@@ -92,24 +100,44 @@ def decide(last_text: str | None, session_id: str, now: float) -> str | None:
         state = json.loads(path.read_text())
     except (OSError, ValueError):
         state = {}
+    digest = hashlib.sha256(last_text.encode()).hexdigest()[:16]
+    if (
+        state.get("last_hash") == digest
+        and now - float(state.get("last_seen", 0)) < DUP_WINDOW_S
+    ):
+        return None
     streak = int(state.get("streak", 0)) + 1 if is_idle(last_text) else 0
     last_fire = float(state.get("last_fire", 0))
     fire = streak >= IDLE_NEED and now - last_fire >= COOLDOWN_S
     if fire:
         last_fire, streak = now, 0
-    path.write_text(json.dumps({"streak": streak, "last_fire": last_fire}))
+    path.write_text(
+        json.dumps(
+            {
+                "streak": streak,
+                "last_fire": last_fire,
+                "last_hash": digest,
+                "last_seen": now,
+            }
+        )
+    )
     return REASON.format(idle=IDLE_NEED) if fire else None
 
 
 def main() -> int:
     try:
         data = json.load(sys.stdin)
-        transcript = Path(data.get("transcript_path") or "")
-        if not transcript.is_file():
+        if data.get("stop_hook_active"):
             return 0
-        texts = assistant_texts(transcript)
+        last = (data.get("last_assistant_message") or "").strip() or None
+        if last is None:
+            transcript = Path(data.get("transcript_path") or "")
+            if not transcript.is_file():
+                return 0
+            texts = assistant_texts(transcript)
+            last = texts[-1] if texts else None
         reason = decide(
-            texts[-1] if texts else None,
+            last,
             str(data.get("session_id") or "unknown"),
             time.time(),
         )

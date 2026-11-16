@@ -155,6 +155,24 @@ for item in "${claude_items[@]}"; do
   echo "  .claude/$item -> $dir/.claude/$item"
 done
 
+echo ""
+echo "=== Linking Codex config ==="
+# Codex reads ~/.codex/AGENTS.md as global instructions and ~/.codex/hooks.json for hooks.
+# Skills shared with Claude go into ~/.agents/skills, which Codex scans.
+mkdir -p "$HOME/.codex" "$HOME/.agents/skills"
+for item in AGENTS.md hooks.json; do
+  if [ -e "$HOME/.codex/$item" ] && [ ! -L "$HOME/.codex/$item" ]; then
+    mv "$HOME/.codex/$item" "$olddir/codex-$item"
+    echo "  backed up .codex/$item"
+  fi
+  ln -sfn "$dir/.codex/$item" "$HOME/.codex/$item"
+  echo "  .codex/$item -> $dir/.codex/$item"
+done
+for skill in loop-speed-intervention; do
+  ln -sfn "$dir/.claude/skills/$skill" "$HOME/.agents/skills/$skill"
+  echo "  .agents/skills/$skill -> $dir/.claude/skills/$skill"
+done
+
 if [ -n "$native_linux" ]; then
   echo ""
   echo "=== Linking systemd user units (native Linux) ==="
