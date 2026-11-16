@@ -43,7 +43,13 @@ def transcript(path: Path, replies: list[str]) -> None:
 class SlowLoopDetect(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        os.environ["SLOW_LOOP_STATE_DIR"] = self.tmp.name + "/state"
+        from unittest import mock
+
+        env = mock.patch.dict(
+            os.environ, {"SLOW_LOOP_STATE_DIR": self.tmp.name + "/state"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
         self.m = load()
         self.t = Path(self.tmp.name) / "t.jsonl"
 
@@ -175,15 +181,47 @@ class SlowLoopDetect(unittest.TestCase):
                 )
         self.assertIn('"decision": "block"', out)
 
-    def test_stop_hook_active_is_left_alone(self):
-        out = self.run_main(
-            {
-                "session_id": "x",
-                "last_assistant_message": "Waiting.",
-                "stop_hook_active": True,
-            }
+    def test_goal_loop_stops_still_count(self):
+        # A goal loop continues the session from a Stop hook, so every stop after the
+        # first carries stop_hook_active. Those stops are the case the hook exists for.
+        from unittest import mock
+
+        out = ""
+        for i in range(5):
+            with mock.patch.object(
+                self.m.time, "time", return_value=5_000_000.0 + 120 * i
+            ):
+                out = self.run_main(
+                    {
+                        "session_id": "goal",
+                        "last_assistant_message": f"Waiting for plan 31, check {i}.",
+                        "stop_hook_active": True,
+                    }
+                )
+        self.assertIn('"decision": "block"', out)
+
+    def test_same_transcript_stop_counts_once_even_when_slow(self):
+        # Two hook entries see one stop more than DUP_WINDOW_S apart (the Codex bridge
+        # runs the prose check first). The transcript identity still matches.
+        from unittest import mock
+
+        for i in range(4):
+            transcript(self.t, ["Still waiting for CI."] * (i + 1))
+            event = {"session_id": "slow", "transcript_path": str(self.t)}
+            for delay in (0, 30):
+                with mock.patch.object(
+                    self.m.time, "time", return_value=6_000_000.0 + 120 * i + delay
+                ):
+                    self.assertEqual(self.run_main(event), "")
+        transcript(self.t, ["Still waiting for CI."] * 5)
+        self.assertIn(
+            '"decision": "block"',
+            self.run_main({"session_id": "slow", "transcript_path": str(self.t)}),
         )
-        self.assertEqual(out, "")
+
+    def test_missing_session_id_is_left_alone(self):
+        for _ in range(6):
+            self.assertEqual(self.run_main({"last_assistant_message": "Waiting."}), "")
 
     def test_main_never_fails_on_bad_input(self):
         import io

@@ -63,7 +63,7 @@ The main lever. Put each question on the cheapest tier that can answer it.
 
 | Tier | What | Time | Repeats needed |
 |---|---|---|---|
-| 0 | A test that counts the work: objects built, events raised, queries run, bytes allocated, items late in virtual time | seconds | 1, because a count does not vary |
+| 0 | A test that counts the work: objects built, events raised, queries run, bytes allocated, items late in virtual time | seconds | 1, once a second run with the same fixture gives the same count |
 | 1 | A headless run of the real pipeline, timed, no UI | minutes | about 5 |
 | 2 | The full app on the target machine | an hour or more | 10 to 20 |
 
@@ -75,8 +75,9 @@ Rules:
   target does not have.
 - The target machine is for the final check of what needs it: real GPU, real screen, real
   devices. It is not where you look for targets.
-- Pick targets from repeated measurements, never from one trace. A single sampled trace cannot
-  rank costs below about 50 ms.
+- Pick targets from repeated measurements, never from one trace. A sampling profiler sees a
+  short cost in only a few samples, so one trace can rank small costs in the wrong order.
+  Repeat until the ranking stops changing.
 - A tier-0 test that reproduces a problem becomes a gate on the fix: it fails before and passes
   after. Ship it with the fix.
 
@@ -108,8 +109,9 @@ Rules:
 
 The `slow-loop-detect` Stop hook watches for idle streaks. After 5 short "waiting" replies in a
 row it refuses the stop once and tells the session to run this skill, at most once per 6 hours
-per session. It reads `last_assistant_message`, which Claude Code and Codex both send to Stop
-hooks, so one script serves both. The hook only catches the waiting pattern; the other signals
+per session. It also counts stops that a goal loop continued. It reads
+`last_assistant_message`, which Claude Code and Codex both send to Stop hooks, so one script
+serves both. The hook only catches the waiting pattern; the other signals
 in the table above need a person or a manager session to notice them.
 
 ## Limits
