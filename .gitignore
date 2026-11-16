@@ -334,6 +334,7 @@ bin/logs/
 !.claude/skills/latex-handouts/
 !.claude/skills/local-builds/
 !.claude/skills/local-tools/
+!.claude/skills/loop-speed-intervention/
 !.claude/skills/mac-remote/
 !.claude/skills/mdv/
 !.claude/skills/mermaid/

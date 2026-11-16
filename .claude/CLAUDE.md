@@ -85,6 +85,12 @@ same gate on anything about to reach a person and hands back findings on failure
   task's normal cost, anything irreversible or outward-facing that the rules above do not
   already allow), or when he asked to decide it himself. While a question to him is open,
   keep every other line of work moving; never stop all progress to wait for his answer.
+- **A slow loop is a problem to fix, not to wait out.** Oystein, 2026-11-16: when a session
+  keeps waiting on a scarce resource, or most of its experiments end in "no gain", load
+  `loop-speed-intervention` and restructure the loop without being asked: count the work in a
+  seconds-long test, run headless, ask the owner for an idle resource, move booked runs
+  earlier. Manager and oversight sessions run it on the sessions they watch too. The
+  `slow-loop-detect` Stop hook starts it after 5 idle "waiting" replies in a row.
 - **Translate new strings without asking.** Oystein, 2026-11-07: a PR that adds user-facing
   strings runs the paid translation for its own new keys and commits them, so the blocking
   localization check passes. This needs no approval. One limit stays: while a feature wave

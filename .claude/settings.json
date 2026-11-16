@@ -189,6 +189,16 @@
             "command": "bash ~/.claude/hooks/plain-language-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/slow-loop-detect.py",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "StopFailure": [
