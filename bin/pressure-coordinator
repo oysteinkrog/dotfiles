@@ -128,7 +128,8 @@ pause. claude.slice scopes are left out of the per-scope signals (slow on one
 scope's some avg10, pause on two scopes at full avg10, and the away rule), and
 memory full avg10 counts for neither level while the scope with the highest
 some avg10 is in claude.slice and app.slice memory full avg10 is under
-claude_ignore_app_full (4%). app.slice, session.slice, swap-in, swap room,
+claude_ignore_app_full (4%) and that scope's some avg10 is at least
+claude_stall_share (0.5, added 2026-11-16) of memory full avg10. app.slice, session.slice, swap-in, swap room,
 slice swap and MemAvailable triggers are unchanged. In a replay of 2026-11-10
 14:30 to 24:00, 26 of 34 pause minutes had a claude.slice scope on top with
 swap-in under 8000 pages/s and app.slice under 4%.
@@ -214,6 +215,9 @@ DEFAULTS: dict[str, float] = {
     # app.slice memory full avg10 is under claude_ignore_app_full.
     "ignore_claude_stall": 0,
     "claude_ignore_app_full": 4,
+    # The claude.slice scope counts as carrying the stall only when its some
+    # avg10 is at least this share of memory full avg10 (2026-11-16).
+    "claude_stall_share": 0.5,
 }
 LEVELS = ("normal", "slow", "pause")
 SLICES = ("claude.slice", "app.slice", "session.slice")
@@ -555,10 +559,17 @@ class Coordinator:
     def claude_stall(self, s: dict[str, float | str]) -> str:
         """The claude.slice scope that carries the stall, when the seventh
         change holds for sample s, else "": ignore_claude_stall is on, the
-        scope with the highest some avg10 is in claude.slice, and app.slice
-        memory full avg10 is readable and under claude_ignore_app_full."""
+        scope with the highest some avg10 is in claude.slice, its some avg10
+        is at least claude_stall_share of memory full avg10, and app.slice
+        memory full avg10 is readable and under claude_ignore_app_full.
+        Without the share test, an idle Claude scope at 0.01% topped the
+        ranking while a builds.slice job (not ranked) drove memory full to 56%,
+        and the level stayed normal (2026-11-16 02:14)."""
         c = self.cfg
         if c["ignore_claude_stall"] <= 0 or s.get("rank_slice") != "claude.slice":
+            return ""
+        top = float(s.get("rank_some", 0))
+        if top <= 0 or top < c["claude_stall_share"] * float(s.get("mem_full", 0)):
             return ""
         app = float(s.get("app_full", -1))
         if app < 0 or app >= c["claude_ignore_app_full"]:
@@ -781,7 +792,8 @@ class Coordinator:
             f"desktop_some10={float(s.get('desktop_some', -1)):.2f} "
             f"own_stall={self.own_stall(s) or '-'} "
             f"app_full10={float(s.get('app_full', -1)):.2f} "
-            f"claude_stall={self.claude_stall(s) or '-'}"
+            f"claude_stall={self.claude_stall(s) or '-'} "
+            f"rank_some10={float(s.get('rank_some', 0)):.2f}"
         )
 
     def log(self, now: float, text: str) -> None:
@@ -1586,6 +1598,16 @@ def self_test() -> int:
         co = fresh()
         t = run_for(co, 20800.0, 30, mem_full=7, avail_gib=8, sess_some=12)
         check("claude stall off (default): pause", lvl(co) == "pause", co.reason)
+        # 2026-11-16 02:14: memory full 56% came from builds.slice (not
+        # ranked); the Claude scope on top was idle. That is no Claude stall.
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        t = run_for(co, 21000.0, 30, mem_full=56, avail_gib=5.9, sess_some=0.01)
+        check("claude stall: idle Claude scope under 56% memory full: pause", lvl(co) == "pause", co.reason)
+        co = fresh()
+        co.cfg["ignore_claude_stall"] = 1
+        t = run_for(co, 21200.0, 30, mem_full=10, avail_gib=8, sess_some=4)
+        check("claude stall: scope some 4% under 10% memory full: pause", lvl(co) == "pause", co.reason)
         app.unlink()
 
         # 12. Never signals anything: no kill calls in this file.
