@@ -8,26 +8,37 @@ A systemd user timer runs this every 5 minutes (session-rest.timer). It
 never kills, stops, signals or limits a process. For each Claude scope in
 claude.slice it may write a byte count to the scope's cgroup v2
 memory.reclaim, which makes the kernel move that much of the scope's memory
-to swap (zram here). The process keeps running and pulls pages back in when
+to swap (disk swap here, see swap_target). The process keeps running and pulls pages back in when
 it touches them.
 
 A scope is reclaimed only when all of these hold:
 
-- every Claude session in it is interactive, has status idle, and is not
-  critical in ~/.config/machine/sessions.toml, not a manager-* session and not
-  an ancestor of this process (rules shared with claude-version-restart);
+- every Claude session in it is interactive (or a bg session beside an
+  interactive one), is not critical in ~/.config/machine/sessions.toml, does
+  not match never_names (default ^manager-(office|machine)$) and is not an
+  ancestor of this process (rules shared with claude-version-restart);
+- every session has status idle, or a status in quiet_statuses (default
+  "busy,waiting"). Those statuses often stay set long after a session stops
+  working, so they count as idle only through the CPU and process checks
+  below, which every scope must pass anyway;
 - no input in its terminal (tty access time, ignoring the GUI's bulk bursts,
   as claude-version-restart does), no status change and no transcript write
-  for at least idle_minutes (default 30);
-- the scope used at most max_cpu_pct (default 3) percent of one core on
-  average over the last idle_minutes, from cpu.stat samples kept in the state
-  file (an idle Claude TUI uses about 1%; a scope is skipped until it has
-  that much history);
+  for at least idle_minutes (default 15);
+- the scope used at most max_cpu_pct (default 8) percent of one core on
+  average over at least the last idle_minutes, from cpu.stat samples kept in
+  the state file (an idle Claude TUI used about 1% up to 2.1.322 and uses 6 to
+  8% from 2.1.323, measured 2026-11-16; a scope is skipped until it has that
+  much history);
 - neither its name nor its cwd basename matches the exclude_names regex;
 - every process in the scope is a Claude process, its launcher or an MCP
   server, so nothing like a build or a test runs there;
 - its anon memory is above floor_mb (default 160), and it has grown by at
   least regrow_mb (default 200) since the last reclaim of that scope.
+
+A manager-* session (name matches ^manager) gets the same checks with a
+gentler amount: at most manager_cap_mb (default 128) per pass and never below
+manager_floor_mb (default 400). While a capped reclaim has not yet reached
+that floor, the next pass may take another step without waiting for regrow_mb.
 
 With swap_target = disk (the default) the pages must go to disk swap, not
 zram: a pass does nothing while a zram area with room has a higher priority
@@ -41,8 +52,11 @@ swap_target = any to reclaim into whatever swap the kernel picks.
 Reclaim goes in chunk_mb (default 64) steps. It stops when claude.slice
 memory pressure (some avg10, or the stall time of the last step) reaches
 max_slice_psi (default 2, under heavy-build's 5% interactive gate), when the
-scope uses CPU during a step, when a step frees nothing, or after
-run_budget_s (default 90) seconds.
+scope uses CPU during a step, when a step frees nothing, when a session in
+the scope shows new activity or a non-Claude process (checked again before
+every step), or when the whole pass has run run_budget_s (default 90)
+seconds. The bytes asked for never exceed the scope's target or go below its
+floor, even when pages fault back in.
 
 Nothing is reclaimed when swap use is above max_swap_pct (default 70) of all
 swap, when /proc/pressure/memory "some avg60" is above max_psi (default 20),
@@ -85,8 +99,8 @@ SLICE = (
 LOG_MAX = 5 << 20
 
 DEFAULTS = {
-    "idle_minutes": 30,
-    "max_cpu_pct": 3.0,
+    "idle_minutes": 15,
+    "max_cpu_pct": 8.0,
     "floor_mb": 160,
     "regrow_mb": 200,
     "chunk_mb": 64,
@@ -98,6 +112,10 @@ DEFAULTS = {
     "exclude_names": "",
     "swap_target": "disk",
     "disk_margin_mb": 4096,
+    "quiet_statuses": "busy,waiting",
+    "never_names": r"^manager-(office|machine)$",
+    "manager_cap_mb": 128,
+    "manager_floor_mb": 400,
 }
 
 
@@ -300,33 +318,54 @@ def is_agent_hub_channel(argv: list[str]) -> bool:
     return any(os.path.basename(w) == "agent-hub-channel" for w in argv[:2])
 
 
-def chunked_reclaim(cg: Path, target: int, cfg: dict) -> dict:
+def chunked_reclaim(
+    cg: Path,
+    target: int,
+    cfg: dict,
+    floor: int,
+    deadline: float,
+    still_idle,
+) -> dict:
     """Reclaim up to target bytes from cg in chunk_mb steps. Before each step
     stop when claude.slice memory pressure (some avg10) is at max_slice_psi or
     more, when the last step stalled claude.slice tasks for more than
     max_slice_psi percent of its wall time (from the "total" counter, which
     is not smoothed like avg10), when the scope used more than 10% of a core
     during the step (someone is using the session), when a step freed
-    nothing, or when run_budget_s is spent. One write can still block for a
-    while: the budget is checked between writes, not during one."""
+    nothing, when the run-wide deadline (run_budget_s for the whole pass)
+    is reached, or when still_idle() names new activity in the scope. The
+    bytes asked for never add up to more than target, and no single request
+    asks for more than the scope's anon above floor, so a cap holds even
+    when pages fault back in. One write can still block for a while: the
+    deadline is checked between writes, not during one."""
     chunk = max(16, cfg["chunk_mb"]) * MB
     pressure = SLICE / "memory.pressure"
     t0 = time.monotonic()
-    done, steps, worst, stop = 0, 0, 0.0, "target reached"
-    while done < target:
+    done, asked, steps, worst, stop = 0, 0, 0, 0.0, "target reached"
+    while done < target and asked < target:
         avg10 = psi_some(pressure, "avg10")
         worst = max(worst, avg10)
         if avg10 >= cfg["max_slice_psi"]:
             stop = f"claude.slice pressure avg10={avg10}"
             break
-        if time.monotonic() - t0 > cfg["run_budget_s"]:
+        if time.monotonic() > deadline:
             stop = "time budget"
             break
+        if steps:
+            woke = still_idle()
+            if woke:
+                stop = woke
+                break
         total0 = slice_stall_usec()
         cpu0 = cpu_usec(cg) or 0
         anon0 = stat_value(cg, "anon")
+        ask = min(chunk, target - done, target - asked, anon0 - floor)
+        if ask < MB:
+            stop = "at the floor"
+            break
         s0 = time.monotonic()
-        ok, why = reclaim(cg, min(chunk, target - done))
+        ok, why = reclaim(cg, ask)
+        asked += ask
         wall = max(time.monotonic() - s0, 1e-3)
         steps += 1
         freed = anon0 - stat_value(cg, "anon")
@@ -459,14 +498,16 @@ class Pass:
         return out
 
     def last_activity(self, pid: int, d: dict, atimes: list[float]) -> float:
-        """Newest of: status change, transcript write, real terminal input."""
+        """Newest of: status change, transcript write (the session's own or
+        one of its subagents'), real terminal input."""
         t = (d.get("statusUpdatedAt") or 0) / 1000
         cwd, sid = str(d.get("cwd") or ""), str(d.get("sessionId") or "")
-        tr = HOME / ".claude/projects" / cvr.project_slug(cwd) / f"{sid}.jsonl"
-        try:
-            t = max(t, tr.stat().st_mtime)
-        except OSError:
-            pass
+        proj = HOME / ".claude/projects" / cvr.project_slug(cwd)
+        for tr in [proj / f"{sid}.jsonl", *(proj / sid / "subagents").glob("*.jsonl")]:
+            try:
+                t = max(t, tr.stat().st_mtime)
+            except OSError:
+                pass
         tty = self.sys.tty(pid)
         at = self.sys.tty_atime(tty) if tty else None
         if at is not None and not cvr.Monitor.bulk_input(at, atimes):
@@ -507,8 +548,10 @@ class Pass:
     def check_session(self, pid, d, classes, ancestors) -> str | None:
         """Return a skip reason, or None when the session may be reclaimed.
         A background (kind=bg) session shares the scope of the interactive one
-        that started it. It needs status idle and the name rules; its class
-        comes from the interactive session, which the scope must also hold."""
+        that started it. It needs an idle or quiet status and the name rules;
+        its class comes from the interactive session, which the scope must
+        also hold. A manager session passes here; run() gives it the smaller
+        manager cap and floor."""
         kind = d.get("kind")
         if kind not in ("interactive", "bg"):
             return f"kind={kind}"
@@ -521,11 +564,33 @@ class Pass:
             return "session class unknown"
         if cls == "critical":
             return "critical session"
-        if cvr.EXCLUDE_NAMES.search(str(d.get("name") or "")):
-            return "manager session"
-        if d.get("status") != "idle":
-            return f"status={d.get('status')}"
+        never = self.cfg["never_names"]
+        if never and re.search(never, str(d.get("name") or "")):
+            return "excluded by never_names"
+        status = d.get("status")
+        quiet = {s.strip() for s in self.cfg["quiet_statuses"].split(",") if s.strip()}
+        if status != "idle" and status not in quiet:
+            return f"status={status}"
         return None
+
+    def recheck(self, cg: Path, sessions: list, last: float, atimes) -> str | None:
+        """Between reclaim steps: re-read each session file and name any new
+        status, status change, transcript or tty activity, or non-Claude
+        process. None while the scope still looks idle."""
+        allowed = {"idle"} | {
+            x.strip() for x in self.cfg["quiet_statuses"].split(",") if x.strip()
+        }
+        for pid, old in sessions:
+            try:
+                d = json.loads((HOME / f".claude/sessions/{pid}.json").read_text())
+            except (OSError, ValueError):
+                d = old
+            if d.get("status") not in allowed:
+                return f"session {pid} became status={d.get('status')}"
+            if self.last_activity(pid, d, atimes) > last:
+                return f"session {pid} became active"
+        busy = self.busy_process(cg, sessions)
+        return f"busy: {busy}" if busy else None
 
     def busy_process(self, cg: Path, sessions: list) -> str | None:
         """Name a process in the scope that is not Claude, its launcher or an
@@ -550,6 +615,7 @@ class Pass:
 
     def run(self) -> int:
         cfg = self.cfg
+        deadline = time.monotonic() + cfg["run_budget_s"]
         swap_pct = swap_used_pct()
         psi = psi_some_avg60()
         if swap_pct > cfg["max_swap_pct"]:
@@ -634,14 +700,24 @@ class Pass:
                 continue
 
             ent = self.state.get(cg.name, {})
-            if ent.get("zswap_off") and (
-                last > ent.get("at", 0) or (cpu_pct or 0) > cfg["max_cpu_pct"]
-            ):
-                set_zswap_max(cg, "max")
-                ent.pop("zswap_off", None)
-                self.log(
-                    pid, who, idle_min, anon, None, None, "woke", "zswap back on", cwd
-                )
+            if last > ent.get("at", 0) or (cpu_pct or 0) > cfg["max_cpu_pct"]:
+                # Used since the last reclaim: a manager's capped sequence
+                # starts over and waits for regrow_mb again.
+                ent.pop("capped", None)
+                if ent.get("zswap_off"):
+                    set_zswap_max(cg, "max")
+                    ent.pop("zswap_off", None)
+                    self.log(
+                        pid,
+                        who,
+                        idle_min,
+                        anon,
+                        None,
+                        None,
+                        "woke",
+                        "zswap back on",
+                        cwd,
+                    )
 
             reason = None
             if not any(d.get("kind") == "interactive" for _, d in sessions):
@@ -672,14 +748,26 @@ class Pass:
             if busy:
                 skip(f"busy: {busy}")
                 continue
-            target = anon - floor
+            manager = any(
+                cvr.EXCLUDE_NAMES.search(str(d.get("name") or "")) for _, d in sessions
+            )
+            quiet = sorted(
+                {str(d.get("status")) for _, d in sessions if d.get("status") != "idle"}
+            )
+            target = anon - (cfg["manager_floor_mb"] * MB if manager else floor)
             if target < 16 * MB:
-                skip(f"anon {anon // MB}M is at the floor")
+                skip(
+                    f"anon {anon // MB}M is at the {'manager ' if manager else ''}floor"
+                )
                 continue
+            capped = manager and target > cfg["manager_cap_mb"] * MB
+            if capped:
+                target = cfg["manager_cap_mb"] * MB
             prev = self.state.get(cg.name)
             if (
                 prev
                 and "anon_after" in prev
+                and not (manager and prev.get("capped"))
                 and anon < prev["anon_after"] + cfg["regrow_mb"] * MB
             ):
                 skip(
@@ -697,8 +785,16 @@ class Pass:
                     continue
                 target = min(target, disk_budget)
                 disk_budget -= target
+            if self.mode == "live" and time.monotonic() > deadline:
+                skip(f"run time budget ({cfg['run_budget_s']}s) spent")
+                continue
             picked += 1
-            total += anon
+            total += target
+            note = ""
+            if manager:
+                note += f", manager cap {cfg['manager_cap_mb']}M floor {cfg['manager_floor_mb']}M"
+            if quiet:
+                note += f", status {'/'.join(quiet)} counted as idle"
             if self.mode != "live":
                 self.log(
                     pid,
@@ -708,7 +804,7 @@ class Pass:
                     None,
                     None,
                     "would-reclaim",
-                    f"{target // MB}M, scope CPU {cpu_pct:.1f}% {cpu_note}",
+                    f"{target // MB}M, scope CPU {cpu_pct:.1f}% {cpu_note}{note}",
                     cwd,
                 )
                 if budget is not None:
@@ -718,7 +814,14 @@ class Pass:
             avail0 = mem_available()
             zoff = cfg["swap_target"] == "disk" and set_zswap_max(cg, "0")
             zsw0 = read_int(cg / "memory.zswap.current") or 0
-            res = chunked_reclaim(cg, target, cfg)
+            res = chunked_reclaim(
+                cg,
+                target,
+                cfg,
+                cfg["manager_floor_mb"] * MB if manager else floor,
+                deadline,
+                lambda: self.recheck(cg, sessions, last, atimes),
+            )
             after = stat_value(cg, "anon")
             swap1 = read_int(cg / "memory.swap.current") or 0
             avail1 = mem_available()
@@ -735,13 +838,21 @@ class Pass:
                 f"asked {target // MB}M in {res['steps']} steps, {res['secs']:.1f}s,"
                 f" MemAvailable {(avail1 - avail0) // MB:+d}M,"
                 f" slice psi max {res['psi_max']:.1f}%, stop: {res['stop']},"
-                f" zswap {zsw0 // MB}M->{(read_int(cg / 'memory.zswap.current') or 0) // MB}M",
+                f" zswap {zsw0 // MB}M->{(read_int(cg / 'memory.zswap.current') or 0) // MB}M"
+                f"{note}",
                 cwd,
             )
             if res["ok"]:
                 ent = self.state.setdefault(cg.name, {})
                 ent["anon_after"] = after
                 ent["at"] = int(self.now)
+                # A capped manager step that stopped short of its floor may
+                # continue next pass without waiting for regrow_mb.
+                ent["capped"] = bool(
+                    capped
+                    and res["stop"] == "target reached"
+                    and after > cfg["manager_floor_mb"] * MB + 16 * MB
+                )
                 if zoff:
                     ent["zswap_off"] = True
             elif zoff:
@@ -753,7 +864,7 @@ class Pass:
         self.save_state()  # CPU history is kept in dry-run too
         print(
             f"{self.mode}: {len(seen_scopes)} scopes, {picked} picked,"
-            f" {total // MB} MB anon in picked scopes"
+            f" {total // MB} MB to reclaim in picked scopes"
         )
         return 0
 
