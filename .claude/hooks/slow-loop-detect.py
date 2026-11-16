@@ -12,7 +12,8 @@ Works for Claude Code and Codex: both send a Stop event with `last_assistant_mes
 accept {"decision": "block", "reason": ...}. When that field is missing, the hook reads the
 last reply from the Claude transcript tail. If two hook entries see the same stop (a user
 hook and a repository hook), the second sees the same reply within DUP_WINDOW_S and does not
-count it again.
+count it again. A real turn takes longer than that, so repeated identical waiting replies on
+separate stops still count.
 
 Input: the Stop hook JSON on stdin (last_assistant_message or transcript_path, session_id).
 Output: nothing (allow the stop) or {"decision": "block", "reason": ...}.
@@ -21,6 +22,7 @@ Never fails the stop: any error means allow.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -32,7 +34,7 @@ from pathlib import Path
 IDLE_NEED = 5
 MAX_IDLE_CHARS = 400
 COOLDOWN_S = 6 * 3600
-DUP_WINDOW_S = 60
+DUP_WINDOW_S = 3
 TAIL_BYTES = 400_000
 STATE_DIR = Path(
     os.environ.get("SLOW_LOOP_STATE_DIR", Path.home() / ".local/state/slow-loop")
@@ -82,8 +84,20 @@ def assistant_texts(transcript: Path) -> list[str]:
     return texts
 
 
+# A reply that reports finished work is progress, even if it also says it waits for CI.
+WORK_RE = re.compile(
+    r"\b(fixed|pushed|committed|merged|added|wrote|built|opened|landed|"
+    r"rebased|ran|re-ran|implemented|removed|updated)\b",
+    re.IGNORECASE,
+)
+
+
 def is_idle(text: str) -> bool:
-    return len(text) <= MAX_IDLE_CHARS and bool(IDLE_RE.search(text))
+    return (
+        len(text) <= MAX_IDLE_CHARS
+        and bool(IDLE_RE.search(text))
+        and not WORK_RE.search(text)
+    )
 
 
 def decide(last_text: str | None, session_id: str, now: float) -> str | None:
@@ -96,6 +110,14 @@ def decide(last_text: str | None, session_id: str, now: float) -> str | None:
         return None
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     path = STATE_DIR / f"{re.sub(r'[^A-Za-z0-9_-]', '_', session_id)}.json"
+    # A user hook and a repository hook can run this at the same moment: hold a lock
+    # across read and write, and replace the file atomically.
+    with open(path.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _decide_locked(last_text, path, now)
+
+
+def _decide_locked(last_text: str, path: Path, now: float) -> str | None:
     try:
         state = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -111,7 +133,8 @@ def decide(last_text: str | None, session_id: str, now: float) -> str | None:
     fire = streak >= IDLE_NEED and now - last_fire >= COOLDOWN_S
     if fire:
         last_fire, streak = now, 0
-    path.write_text(
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps(
             {
                 "streak": streak,
@@ -121,6 +144,7 @@ def decide(last_text: str | None, session_id: str, now: float) -> str | None:
             }
         )
     )
+    tmp.replace(path)
     return REASON.format(idle=IDLE_NEED) if fire else None
 
 

@@ -124,6 +124,39 @@ class SlowLoopDetect(unittest.TestCase):
             self.m.decide("Still waiting for the lab.", "dup", 1_000_000.0 + 600)
         )
 
+    def test_identical_waits_on_separate_stops_count(self):
+        idle = ["Still waiting."] * 5
+        reasons = [
+            self.m.decide(r, "fast", 3_000_000.0 + 10 * i) for i, r in enumerate(idle)
+        ]
+        self.assertIsNotNone(reasons[-1])
+
+    def test_work_plus_waiting_is_not_idle(self):
+        reply = "Fixed the build and added a regression test. Still waiting for CI."
+        self.assertIsNone(self.run_decide([reply] * 6))
+
+    def test_parallel_hooks_count_one_stop(self):
+        import threading
+
+        for i in range(4):
+            out = []
+            threads = [
+                threading.Thread(
+                    target=lambda: out.append(
+                        self.m.decide(
+                            "Waiting for the lab.", "par", 4_000_000.0 + 120 * i
+                        )
+                    )
+                )
+                for _ in range(2)
+            ]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            self.assertEqual(out, [None, None])
+        self.assertIsNotNone(self.m.decide("Waiting for the lab.", "par", 4_000_600.0))
+
     def test_codex_event_uses_last_assistant_message(self):
         from unittest import mock
 
