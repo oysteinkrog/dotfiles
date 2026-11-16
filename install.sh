@@ -203,6 +203,7 @@ if [ -n "$native_linux" ]; then
     .config/micro/settings.json
     .config/micro/colorschemes
     .config/dcg/config.toml
+    .config/herdr/config.toml
     .config/voxtype/config.toml
     .config/voxtype/auto-enter-apps
     .config/systemd/user/dotoold.service.d

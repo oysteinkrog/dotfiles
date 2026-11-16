@@ -1,0 +1,7 @@
+# herdr settings. Defaults: `herdr --default-config`.
+
+[session]
+# claude-persist resumes Claude sessions into herdr (restore-herdr, run by
+# claude-persist-herdr.service), with the wake-up prompt and claude-tab-run.
+# If herdr resumed them too, each session would start twice.
+resume_agents_on_restore = false
