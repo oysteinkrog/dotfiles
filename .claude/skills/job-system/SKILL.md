@@ -81,7 +81,10 @@ one. A client stopped with SIGTERM or Ctrl-C cancels its job (exit 130).
 
 Cancel only your own requests. Exit codes are heavy-build's: 75 not run (gave
 up waiting, or jobd went away while it waited), 76 rerun guard, 77
-`--wait-timeout`, 124 `HEAVY_BUILD_TIMEOUT`, 130 cancelled. jobd adds 78
+`--wait-timeout`, 124 the run-time limit (`HEAVY_BUILD_TIMEOUT`; a wine-run-tests
+job stops at the machine's `HEAVY_BUILD_WINE_TIMEOUT`, 3600 s here, and a higher
+`HEAVY_BUILD_TIMEOUT` is ignored and logged as `event=env-ignored`; there is no
+`--timeout` flag, so split a long Wine source build into its own job), 130 cancelled. jobd adds 78
 replaced: your session submitted the same argv with the same lock key while
 this job still waited, so the newer request runs it. Do not retry on 78.
 
