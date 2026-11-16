@@ -325,5 +325,39 @@ check "both entries leave the list" '[ -z "$(ls "$S/sessions/")" ]'
 name=$( (source "$T/hooks/claude-persist.sh"; herdr_name "Manager: CTO review 2026") )
 check "titles become valid herdr names" '[ "$name" = manager-cto-review-2026 ]'
 
+# --- sessions that ran in a herdr-core (hc) terminal
+setup hc-skip
+tab_order "$OLD" 1
+entry hc1 "$H/projects/life" null "$OLD"
+f=$(ls "$S/sessions/"hc1@*.json)
+jq '.hc = {terminal:"t3", name:"cto"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+printf 'mux %s\nhc1\n' "$OLD" > "$S/live"
+out=$(run_plan)
+check "plan leaves an hc session out" '! printf "%s\n" "$out" | grep -q hc1'
+
+setup hc-restore
+mkdir -p "$T/bin"
+cat > "$T/bin/hc" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/hc.log"
+case "\$1 \$2" in
+  "server status") echo '{"pid":1}' ;;
+esac
+EOF
+chmod +x "$T/bin/hc"
+entry hc2 "$H/projects/life" null "$OLD"
+entry hc3 "$H/projects/xpeng" null "$OLD"
+f=$(ls "$S/sessions/"hc2@*.json); jq '.hc = {terminal:"t3", name:"cto"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+f=$(ls "$S/sessions/"hc3@*.json); jq '.hc = {terminal:"t4", name:null}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+printf 'mux %s\nhc2\n' "$OLD" > "$S/live"
+HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
+  CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
+  CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
+check "the live hc session comes back under its old name" \
+  'grep -q "^run --bg --name cto --cwd $H/projects/life -- bash .*/hc-run/hc2.sh" "$T/hc.log"'
+check "its script resumes it and drops the child-session marker" \
+  'grep -q -- "--resume hc2" "$S/hc-run/hc2.sh" && grep -q CLAUDE_CODE_CHILD_SESSION "$S/hc-run/hc2.sh"'
+check "a session not running at the last snapshot is dropped" '! grep -q hc3 "$T/hc.log"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

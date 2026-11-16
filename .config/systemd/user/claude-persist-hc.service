@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume the Claude sessions that ran in herdr-core (claude-persist restore-hc)
+After=hc-core.service
+Requisite=hc-core.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash %h/.claude/hooks/claude-persist.sh restore-hc
+TimeoutStartSec=600
+
+[Install]
+# Runs each time hc-core.service starts, which is at login.
+WantedBy=hc-core.service
