@@ -200,6 +200,7 @@ if [ -n "$native_linux" ]; then
   # app's other files (caches, state) stay out of the repo.
   linux_items=(
     .config/alacritty
+    .config/wireplumber/wireplumber.conf.d
     .config/micro/settings.json
     .config/micro/colorschemes
     .config/dcg/config.toml
