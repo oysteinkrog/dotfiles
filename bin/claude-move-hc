@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# claude-move-hc: move one Claude Code session from FrankenTerm into herdr-core.
+#
+#   claude-move-hc SESSION_ID [NAME]
+#
+# Builds the resume command now (from the claude-persist entry), then starts a
+# detached systemd unit that waits for the session's Claude to exit and resumes
+# it with `hc run --bg --name NAME`. End the session in its FrankenTerm tab with
+# /exit after running this. The tab drops to a shell, which you can close.
+# The session never runs twice: the resume waits for the old pid to be gone.
+#
+# NAME defaults to the session's title as a herdr name. Log: the unit's journal
+# (journalctl --user -u claude-move-<first 8 of the id>).
+set -euo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-persist"
+PERSIST="$HOME/.claude/hooks/claude-persist.sh"
+HC_BIN="${CLAUDE_PERSIST_HC_BIN:-$HOME/.local/bin/herdr-core}"
+
+if [ "${1:-}" = --wait ]; then
+  # Internal: runs inside the systemd unit.
+  pid=$2 name=$3 cwd=$4 script=$5
+  for _ in $(seq 3600); do
+    [ -d "/proc/$pid" ] || break
+    sleep 1
+  done
+  if [ -d "/proc/$pid" ]; then echo "Claude pid $pid still runs after 60 min; not moving"; exit 1; fi
+  sleep 2
+  "$HC_BIN" server status >/dev/null 2>&1 || { echo "herdr-core is not running"; exit 1; }
+  "$HC_BIN" run --bg --name "$name" --cwd "$cwd" -- bash "$script"
+  echo "resumed in herdr-core terminal $name"
+  exit 0
+fi
+
+sid=${1:?usage: claude-move-hc SESSION_ID [NAME]}
+shopt -s nullglob
+files=("$STATE_DIR/sessions/$sid"*@*.json)
+[ ${#files[@]} -eq 1 ] || { echo "need exactly one entry for $sid, found ${#files[@]}" >&2; exit 1; }
+f=${files[0]}
+full=$(jq -r '.session_id' "$f"); cwd=$(jq -r '.cwd' "$f"); pid=$(jq -r '.pid // empty' "$f")
+[ -n "$pid" ] || { echo "entry $f has no pid" >&2; exit 1; }
+if [ $# -ge 2 ]; then
+  name=$2
+else
+  name=$(jq -r '.title // empty' "$f" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_-]\{1,\}/-/g; s/^[^a-z]*//; s/-*$//' | cut -c1-32)
+  name=${name:-${full:0:8}}
+fi
+[[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "bad herdr name: $name" >&2; exit 1; }
+
+mkdir -p "$STATE_DIR/hc-run"
+script="$STATE_DIR/hc-run/$full.sh"
+lp=$(fish -lc 'string join : $PATH' 2>/dev/null || true)
+{
+  echo '#!/bin/bash'
+  [ -n "$lp" ] && echo "export PATH=$(printf '%q' "$lp")"
+  echo 'unset LD_PRELOAD AIOLOS_RC_PORT AIOLOS_RC_SCOPED CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_BASE_URL CLAUDE_CODE_CHILD_SESSION'
+  bash "$PERSIST" resume-cmd "$f"
+  echo 'exec fish -l'
+} > "$script"
+grep -q -- "--resume" "$script" || { echo "no resume command in $script" >&2; exit 1; }
+
+unit="claude-move-${full:0:8}"
+systemd-run --user --unit="$unit" --collect --quiet \
+  "$HOME/bin/claude-move-hc" --wait "$pid" "$name" "$cwd" "$script"
+echo "waiting for Claude pid $pid to exit; then it resumes in herdr-core as '$name' (unit $unit)"
