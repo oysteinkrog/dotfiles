@@ -1,0 +1,17 @@
+[Unit]
+Description=Ovis web and phone UI for herdr-core (pinned devswha.ovis 7ab2551f, tailnet only, token)
+# Ovis ran as a herdr TUI plugin and was not started again after the 2026-11-17 reboot.
+After=hc-core.service network-online.target
+Wants=hc-core.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/.config/herdr/plugins/github-installations/devswha.ovis-aa47ee43150f/3403539-0/checkout
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HERDR_PLUGIN_CONFIG_DIR=%h/.config/herdr/plugins/config/devswha.ovis
+ExecStart=/bin/sh scripts/with-bun.sh scripts/plugin.ts start
+ExecStop=/bin/sh scripts/with-bun.sh scripts/plugin.ts stop
+
+[Install]
+WantedBy=default.target
