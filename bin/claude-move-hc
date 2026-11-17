@@ -73,6 +73,7 @@ else
   name=$(jq -r '.title // empty' "$f" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_-]\{1,\}/-/g; s/^[^a-z]*//; s/-*$//' | cut -c1-32)
   name=${name:-${full:0:8}}
 fi
+name=$(printf %s "$name" | tr "A-Z" "a-z")
 [[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "bad herdr name: $name" >&2; exit 1; }
 
 mkdir -p "$STATE_DIR/hc-run"

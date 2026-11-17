@@ -5,9 +5,9 @@ manager-office	Managers
 manager-buildqueue	Managers
 manager-tokens	Managers
 manager-rigs	Managers
-manager-PRs	Managers
-manager-CI	Managers
-manager-CTO	Managers
+manager-prs	Managers
+manager-ci	Managers
+manager-cto	Managers
 manager-security	Managers
 manager-resources	Managers
 manager-atlas	Managers
@@ -42,5 +42,4 @@ fixing-mic	Machine and tools
 slack-integration	Machine and tools
 agentic-oystein	Machine and tools
 agent-hub	Machine and tools
-oystein-b6	Machine and tools
 oystein-fe	Machine and tools
