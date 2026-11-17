@@ -40,7 +40,14 @@ if [ "${1:-}" = --wait ]; then
     space=$(jq -r '.space // empty' <<<"$made"); shell_tab=$(jq -r '.tab // empty' <<<"$made")
   fi
   lbl=()
-  [ -n "$space" ] && lbl=(--label "herdr.space=$space")
+  if [ -n "$space" ]; then
+    lbl=(--label "herdr.space=$space")
+  else
+    # No herdr app window running (for example on a desktop where it was never
+    # opened). Label with a stable id of our own: the app turns an id it does not
+    # know into a new space when it next opens, so the agent still shows up.
+    lbl=(--label "herdr.space=sp$(printf %s "$name" | sha256sum | cut -c1-32)")
+  fi
   "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script"
   addr=$("$HC_BIN" get "$name" --json 2>/dev/null | jq -r '.address // empty')
   if [ -n "$space" ] && [ -n "$addr" ]; then

@@ -16,7 +16,9 @@ import time
 from pathlib import Path
 
 HOME = Path.home()
-LIST = HOME / ".config/styring/arrange.tsv"
+# A per-machine list wins (arrange.<hostname>.tsv), so home and office keep their own folders.
+_HOST_LIST = HOME / f".config/styring/arrange.{os.uname().nodename}.tsv"
+LIST = _HOST_LIST if _HOST_LIST.exists() else HOME / ".config/styring/arrange.tsv"
 FOLDERS = HOME / ".config/herdr-space-folders.json"
 APP = str(HOME / ".local/bin/herdr-app")
 
@@ -25,7 +27,10 @@ def app(*args: str) -> dict:
     out = subprocess.run(
         [APP, *args], capture_output=True, text=True, timeout=30
     ).stdout
-    return json.loads(out or "{}")
+    try:
+        return json.loads(out or "{}")
+    except ValueError:
+        return {}
 
 
 def main() -> None:
@@ -35,7 +40,11 @@ def main() -> None:
             name, folder = line.split("\t")[:2]
             wanted.append((name.strip(), folder.strip()))
 
-    spaces = [s for s in app("ls").get("spaces", []) if not s.get("machine")]
+    listing = app("ls")
+    if "spaces" not in listing:
+        print("no herdr app window running; nothing arranged")
+        return
+    spaces = [s for s in listing["spaces"] if not s.get("machine")]
     by_name = {s["name"]: s["id"] for s in spaces}
 
     try:
