@@ -70,6 +70,16 @@ fi
 sid=${1:?usage: claude-move-hc SESSION_ID [NAME]}
 shopt -s nullglob
 files=("$STATE_DIR/sessions/$sid"*@*.json)
+if [ ${#files[@]} -gt 1 ]; then
+  # A session that changed folder has one entry per folder. Keep the one whose
+  # cwd is where the running Claude works now.
+  keep=()
+  for c in "${files[@]}"; do
+    p=$(jq -r '.pid // empty' "$c"); w=$(jq -r '.cwd' "$c")
+    [ -n "$p" ] && [ "$(readlink "/proc/$p/cwd" 2>/dev/null)" = "$w" ] && keep+=("$c")
+  done
+  files=("${keep[@]}")
+fi
 [ ${#files[@]} -eq 1 ] || { echo "need exactly one entry for $sid, found ${#files[@]}" >&2; exit 1; }
 f=${files[0]}
 full=$(jq -r '.session_id' "$f"); cwd=$(jq -r '.cwd' "$f"); pid=$(jq -r '.pid // empty' "$f")
