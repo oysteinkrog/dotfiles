@@ -1,6 +1,9 @@
 [Unit]
 Description=Save the Frankenterm mux tab order for Claude session restore
 After=frankenterm-mux.service
+# The first snapshot after boot overwrites "live", the list restore reads,
+# so wait for the restores to finish (2026-11-17 reboot).
+After=claude-persist-ft.service claude-persist-herdr.service claude-persist-hc.service
 
 [Service]
 Type=oneshot

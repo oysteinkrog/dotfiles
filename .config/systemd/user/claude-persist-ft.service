@@ -1,0 +1,15 @@
+[Unit]
+Description=Resume the Claude sessions that ran in FrankenTerm (claude-persist restore)
+# wezterm.lua's mux-startup no longer reopens sessions (4fce79a7, 2026-11-13),
+# and FrankenTerm reads the same file, so this unit does it after the mux starts.
+# The 2026-11-17 reboot came back with no tabs because nothing did.
+After=frankenterm-mux.service
+Requisite=frankenterm-mux.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash %h/.claude/hooks/claude-persist.sh restore
+TimeoutStartSec=900
+
+[Install]
+WantedBy=frankenterm-mux.service

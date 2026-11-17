@@ -143,9 +143,10 @@ else
     })
   end
 
-  -- FrankenTerm reopens the Claude Code sessions at boot. wezterm must not do
-  -- it too: on 2026-11-13 both did, and 23 sessions ran twice. A started mux
-  -- server only opens one plain shell.
+  -- claude-persist-ft.service reopens the Claude Code sessions after
+  -- frankenterm-mux.service starts. This hook must not: on 2026-11-13 the wezterm
+  -- mux and this hook both did, and 23 sessions ran twice. FrankenTerm reads this
+  -- file too, so a started mux server only opens one plain shell.
   wezterm.on('mux-startup', function()
     mux.spawn_window({})
   end)
