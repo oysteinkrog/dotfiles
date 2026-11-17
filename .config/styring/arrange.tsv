@@ -19,8 +19,8 @@ ifboard-exits-updates	Company
 if-strategy-revision	Company
 strategy-growth-scenario	Company
 netsuite-access-and-fixes	Company
-stable-26.1-fixing	Swing Catalyst
-stable-26.2-fixing	Swing Catalyst
+stable-26-1-fixing	Swing Catalyst
+stable-26-2-fixing	Swing Catalyst
 qa-lab	Swing Catalyst
 syncbox	Swing Catalyst
 linux-wine	Swing Catalyst
