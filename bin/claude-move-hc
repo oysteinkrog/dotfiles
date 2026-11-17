@@ -27,17 +27,35 @@ if [ "${1:-}" = --wait ]; then
   if [ -d "/proc/$pid" ]; then echo "Claude pid $pid still runs after 60 min; not moving"; exit 1; fi
   sleep 2
   "$HC_BIN" server status >/dev/null 2>&1 || { echo "herdr-core is not running"; exit 1; }
-  # The herdr app shows only terminals with a herdr.space label. Put moved
-  # sessions in the space named by CLAUDE_MOVE_SPACE (default "agents").
-  want=${CLAUDE_MOVE_SPACE:-agents}
-  space=$("$HOME/.local/bin/herdr-app" ls 2>/dev/null | jq -r --arg n "$want" '[.spaces[] | select(.name == $n and .machine == null) | .id][0] // empty')
+  # The herdr app shows only terminals with a herdr.space label. Each moved
+  # agent gets its own space, named after the agent (CLAUDE_MOVE_SPACE picks
+  # another name), and its tab is named after the agent too.
+  app="$HOME/.local/bin/herdr-app"
+  want=${CLAUDE_MOVE_SPACE:-$name}
+  space=$("$app" ls 2>/dev/null | jq -r --arg n "$want" '[.spaces[] | select(.name == $n and .machine == null) | .id][0] // empty')
+  shell_tab=""
   if [ -z "$space" ]; then
-    space=$("$HOME/.local/bin/herdr-app" do space.new --name "$want" --focus false 2>/dev/null | jq -r '.space // empty')
+    # space.new always opens a shell tab; close it once the agent's tab exists.
+    made=$("$app" do space.new --name "$want" --folder "$cwd" --focus false 2>/dev/null)
+    space=$(jq -r '.space // empty' <<<"$made"); shell_tab=$(jq -r '.tab // empty' <<<"$made")
   fi
   lbl=()
   [ -n "$space" ] && lbl=(--label "herdr.space=$space")
   "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script"
-  echo "resumed in herdr-core terminal $name"
+  addr=$("$HC_BIN" get "$name" --json 2>/dev/null | jq -r '.address // empty')
+  if [ -n "$space" ] && [ -n "$addr" ]; then
+    for _ in $(seq 20); do
+      tab=$("$app" ls 2>/dev/null | jq -r --arg s "$space" --arg t "$addr" \
+        '[.spaces[] | select(.id == $s) | .tabs[] | select(any(.terminals[]; .terminal == $t)) | .id][0] // empty')
+      [ -n "$tab" ] && break
+      sleep 1
+    done
+    if [ -n "$tab" ]; then
+      "$app" do tab.rename --id "$tab" --name "$name" >/dev/null 2>&1 || true
+      [ -n "$shell_tab" ] && "$app" do tab.close --id "$shell_tab" --confirmed true >/dev/null 2>&1 || true
+    fi
+  fi
+  echo "resumed in herdr-core terminal $name, space $want"
   exit 0
 fi
 
