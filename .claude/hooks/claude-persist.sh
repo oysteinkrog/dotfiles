@@ -93,8 +93,14 @@ hc_info() {
   env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null) || return 0
   term=$(sed -n 's/^HC_TERMINAL_ID=//p' <<<"$env" | head -1)
   [ -n "$term" ] || return 0
-  name=$("$HC_BIN" get "$term" --json 2>/dev/null | jq -r '.name // empty' 2>/dev/null)
-  jq -cn --arg t "$term" --arg n "$name" '{terminal:$t, name:(if $n == "" then null else $n end)}'
+  # The herdr app shows a terminal only when it has a herdr.space label, so keep
+  # that too: restore-hc puts the session back in the same space.
+  local got space
+  got=$("$HC_BIN" get "$term" --json 2>/dev/null)
+  name=$(jq -r '.name // empty' <<<"$got" 2>/dev/null)
+  space=$(jq -r '.labels["herdr.space"] // empty' <<<"$got" 2>/dev/null)
+  jq -cn --arg t "$term" --arg n "$name" --arg s "$space" \
+    '{terminal:$t, name:(if $n == "" then null else $n end), space:(if $s == "" then null else $s end)}'
 }
 
 # Did entry $1 run outside the Frankenterm mux (herdr or herdr-core)? Those
@@ -1302,7 +1308,7 @@ restore_hc() {
     sleep 1
   done
   local -A live=()
-  local a f sid cwd transcript script name lp
+  local a f sid cwd transcript script name lp space
   [ -f "$LIVE" ] && while IFS= read -r a; do [ -n "$a" ] && live[$a]=1; done < <(tail -n +2 "$LIVE")
   lp=$(fish -lc 'string join : $PATH' 2>/dev/null)
   lock_state
@@ -1333,8 +1339,11 @@ restore_hc() {
     name=$(jq -r '.hc.name // empty' "$f")
     [ -n "$name" ] || name=$(herdr_name "$(tab_title "$transcript" "$cwd")")
     mv "$f" "$STATE_DIR/restored/"
-    if "$HC_BIN" run --bg --name "$name" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1 \
-       || "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
+    local -a lbl=()
+    space=$(jq -r '.hc.space // empty' "$f")
+    [ -n "$space" ] && lbl=(--label "herdr.space=$space")
+    if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1 \
+       || "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
       echo "resume $sid ($cwd) in hc terminal $name"
     else
       echo "could not start $sid in hc"
