@@ -2,7 +2,8 @@
 """styring-arrange: put agent spaces in the herdr app into folders, in a fixed order.
 
 Reads ~/.config/styring/arrange.tsv (agent name, folder; order = wanted order).
-For every space on this computer whose name is in the list:
+For every space whose name is in the list (a name "home/x" means space x on the
+connected machine "home"):
   - assigns it to its folder in ~/.config/herdr-space-folders.json (the
     space-folders mod's file), creating the folder if missing;
   - moves the spaces so they follow the list order (herdr-app do space.move).
@@ -44,8 +45,12 @@ def main() -> None:
     if "spaces" not in listing:
         print("no herdr app window running; nothing arranged")
         return
-    spaces = [s for s in listing["spaces"] if not s.get("machine")]
-    by_name = {s["name"]: s["id"] for s in spaces}
+    spaces = listing["spaces"]
+
+    def key(s: dict) -> str:
+        return f"{s['machine']}/{s['name']}" if s.get("machine") else s["name"]
+
+    by_name = {key(s): s["id"] for s in spaces}
 
     try:
         data = json.loads(FOLDERS.read_text())

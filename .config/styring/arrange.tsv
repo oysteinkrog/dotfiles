@@ -43,3 +43,23 @@ slack-integration	Machine and tools
 agentic-oystein	Machine and tools
 agent-hub	Machine and tools
 oystein-fe	Machine and tools
+home/manager-home	Home machine
+home/voice-transcriber	Home machine
+home/setup-backblaze	Home machine
+home/secure-vps	Home machine
+home/codex-hook-failures	Home machine
+home/dolphin-thumbnails	Home machine
+home/rdp-crash	Home machine
+home/tv-youtube-app-off	Home life
+home/tv-block-youtube	Home life
+home/opencode-tv-session	Home life
+home/retatrutide-doses	Home life
+home/music-library	Home life
+home/photos-scraping	Home life
+home/ali-sale	Home life
+home/banking-insurance	Home life
+home/moss-image-gpu	Home projects
+home/opencode-goal-plugin	Home projects
+home/xpeng-api	Home projects
+home/xpeng-sve-check	Home projects
+home/opencode-test	Home projects
