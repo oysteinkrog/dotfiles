@@ -89,6 +89,14 @@ else
   printf '  skip  %-46s %s\n' "hook cases" "guard not found at $GUARD"
 fi
 
+echo "wrapper skip"
+if out=$(bash "$HERE/hooks/plain-language-wrapper-skip.test.sh" 2>&1); then
+  pass "user wrapper skips when the project has its own hook"
+else
+  fail "wrapper skip"
+  printf '%s\n' "$out" | grep FAIL | head -5
+fi
+
 echo "health check"
 health=$(bash "$HERE/hooks/plain-language-health.sh" 2>&1)
 if [ -z "$health" ]; then
