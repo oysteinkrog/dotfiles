@@ -349,6 +349,10 @@
             "command": "bash ~/.claude/hooks/fs-walk-guard.sh"
           },
           {
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/transcript-search-guard.sh"
+          },
             "type": "command",
             "command": "bash ~/.claude/hooks/grove-worktree-guard.sh"
           },
