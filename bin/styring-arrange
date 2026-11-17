@@ -34,6 +34,41 @@ def app(*args: str) -> dict:
         return {}
 
 
+def read_folders(machine: str) -> dict:
+    if not machine:
+        try:
+            return json.loads(FOLDERS.read_text())
+        except (OSError, ValueError):
+            return {}
+    out = subprocess.run(
+        ["hc", "file", "read", "--on", machine, ".config/herdr-space-folders.json"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout
+    try:
+        d = json.loads(out)
+        return d if "list" in d else {}
+    except ValueError:
+        return {}
+
+
+def write_folders(machine: str, data: dict) -> None:
+    text = json.dumps(data, indent=2) + "\n"
+    if not machine:
+        tmp = FOLDERS.with_suffix(".json.tmp")
+        tmp.write_text(text)
+        os.replace(tmp, FOLDERS)
+        return
+    subprocess.run(
+        ["hc", "file", "write", "--on", machine, ".config/herdr-space-folders.json"],
+        input=text,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+
+
 def main() -> None:
     wanted: list[tuple[str, str]] = []
     for line in LIST.read_text().splitlines():
@@ -52,31 +87,38 @@ def main() -> None:
 
     by_name = {key(s): s["id"] for s in spaces}
 
-    try:
-        data = json.loads(FOLDERS.read_text())
-    except (OSError, ValueError):
-        data = {}
-    folder_list = data.get("list", [])
-    of = data.get("of", {})
+    # The space-folders mod keeps each machine's folders in a file in that
+    # machine's own home, keyed by the space ids that machine uses. So group
+    # the wanted entries per machine and write each machine's file there.
+    machine_of = {key(s): s.get("machine") or "" for s in spaces}
+    local_id = {
+        key(s): (s["id"][len(s["machine"]) + 1 :] if s.get("machine") else s["id"])
+        for s in spaces
+    }
+    machines = sorted(
+        {machine_of.get(n, n.split("/")[0] if "/" in n else "") for n, _ in wanted}
+    )
+    for m in machines:
+        mine = [(n, f) for n, f in wanted if (n.split("/")[0] if "/" in n else "") == m]
+        data = read_folders(m)
+        folder_list = data.get("list", [])
+        of = data.get("of", {})
 
-    def folder_id(name: str) -> str:
-        for f in folder_list:
-            if f.get("name") == name:
-                return f["id"]
-        fid = "styring-" + name.lower().replace(" ", "-")
-        folder_list.append({"id": fid, "name": name, "folded": False})
-        return fid
+        def folder_id(name: str, folder_list: list = folder_list) -> str:
+            for f in folder_list:
+                if f.get("name") == name:
+                    return f["id"]
+            fid = "styring-" + name.lower().replace(" ", "-")
+            folder_list.append({"id": fid, "name": name, "folded": False})
+            return fid
 
-    for _, folder in wanted:  # folders in first-seen order
-        folder_id(folder)
-    for name, folder in wanted:
-        if name in by_name:
-            of[by_name[name]] = folder_id(folder)
-
-    data.update(list=folder_list, of=of, at=int(time.time() * 1000))
-    tmp = FOLDERS.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, FOLDERS)
+        for _, folder in mine:  # folders in first-seen order
+            folder_id(folder)
+        for name, folder in mine:
+            if name in by_name:
+                of[local_id[name]] = folder_id(folder)
+        data.update(list=folder_list, of=of, at=int(time.time() * 1000))
+        write_folders(m, data)
 
     # Order: listed spaces in list order, after any spaces not in the list.
     present = [by_name[n] for n, _ in wanted if n in by_name]
