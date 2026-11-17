@@ -1,0 +1,46 @@
+# Agent spaces in the herdr app: agent name, then folder. The order is the FrankenTerm
+# tab order on 2026-11-17. styring-arrange puts each agent's space in its folder, in
+# this order. Folders appear in the order they first appear here.
+manager-office	Managers
+manager-buildqueue	Managers
+manager-tokens	Managers
+manager-rigs	Managers
+manager-PRs	Managers
+manager-CI	Managers
+manager-CTO	Managers
+manager-security	Managers
+manager-resources	Managers
+manager-atlas	Managers
+new-org-chart	Company
+ipn-project-lead	Company
+ipn-budget	Company
+ifkb-ontology	Company
+ifboard-exits-updates	Company
+if-strategy-revision	Company
+strategy-growth-scenario	Company
+netsuite-access-and-fixes	Company
+stable-26.1-fixing	Swing Catalyst
+stable-26.2-fixing	Swing Catalyst
+qa-lab	Swing Catalyst
+syncbox	Swing Catalyst
+linux-wine	Swing Catalyst
+kpp	Swing Catalyst
+theme	Swing Catalyst
+rust-analysis	Swing Catalyst
+fix-localization-system	Swing Catalyst
+rx-to-r3	Swing Catalyst
+genicam	Swing Catalyst
+load-opts	Swing Catalyst
+monorepo-ontology	Swing Catalyst
+fullswing-kit-sdk	Swing Catalyst
+net11	Swing Catalyst
+x-bookmarks-review	Machine and tools
+job-system	Machine and tools
+tasklens	Machine and tools
+ft-content-size	Machine and tools
+fixing-mic	Machine and tools
+slack-integration	Machine and tools
+agentic-oystein	Machine and tools
+agent-hub	Machine and tools
+oystein-b6	Machine and tools
+oystein-fe	Machine and tools

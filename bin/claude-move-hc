@@ -55,6 +55,7 @@ if [ "${1:-}" = --wait ]; then
       [ -n "$shell_tab" ] && "$app" do tab.close --id "$shell_tab" --confirmed true >/dev/null 2>&1 || true
     fi
   fi
+  "$HOME/bin/styring-arrange" >/dev/null 2>&1 || true
   echo "resumed in herdr-core terminal $name, space $want"
   exit 0
 fi

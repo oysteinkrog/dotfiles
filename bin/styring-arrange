@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""styring-arrange: put agent spaces in the herdr app into folders, in a fixed order.
+
+Reads ~/.config/styring/arrange.tsv (agent name, folder; order = wanted order).
+For every space on this computer whose name is in the list:
+  - assigns it to its folder in ~/.config/herdr-space-folders.json (the
+    space-folders mod's file), creating the folder if missing;
+  - moves the spaces so they follow the list order (herdr-app do space.move).
+Folders and spaces not in the list are left as they are. Safe to run again.
+"""
+
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+HOME = Path.home()
+LIST = HOME / ".config/styring/arrange.tsv"
+FOLDERS = HOME / ".config/herdr-space-folders.json"
+APP = str(HOME / ".local/bin/herdr-app")
+
+
+def app(*args: str) -> dict:
+    out = subprocess.run(
+        [APP, *args], capture_output=True, text=True, timeout=30
+    ).stdout
+    return json.loads(out or "{}")
+
+
+def main() -> None:
+    wanted: list[tuple[str, str]] = []
+    for line in LIST.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            name, folder = line.split("\t")[:2]
+            wanted.append((name.strip(), folder.strip()))
+
+    spaces = [s for s in app("ls").get("spaces", []) if not s.get("machine")]
+    by_name = {s["name"]: s["id"] for s in spaces}
+
+    try:
+        data = json.loads(FOLDERS.read_text())
+    except (OSError, ValueError):
+        data = {}
+    folder_list = data.get("list", [])
+    of = data.get("of", {})
+
+    def folder_id(name: str) -> str:
+        for f in folder_list:
+            if f.get("name") == name:
+                return f["id"]
+        fid = "styring-" + name.lower().replace(" ", "-")
+        folder_list.append({"id": fid, "name": name, "folded": False})
+        return fid
+
+    for _, folder in wanted:  # folders in first-seen order
+        folder_id(folder)
+    for name, folder in wanted:
+        if name in by_name:
+            of[by_name[name]] = folder_id(folder)
+
+    data.update(list=folder_list, of=of, at=int(time.time() * 1000))
+    tmp = FOLDERS.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, FOLDERS)
+
+    # Order: listed spaces in list order, after any spaces not in the list.
+    present = [by_name[n] for n, _ in wanted if n in by_name]
+    others = [s["id"] for s in spaces if s["id"] not in present]
+    for pos, sid in enumerate(others + present, start=1):
+        app("do", "space.move", "--id", sid, "--index", str(pos))
+    print(
+        f"arranged {len(present)} agent spaces in {len({f for _, f in wanted})} folders"
+    )
+
+
+if __name__ == "__main__":
+    main()
