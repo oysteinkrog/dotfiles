@@ -30,9 +30,9 @@ if [ "${1:-}" = --wait ]; then
   # The herdr app shows only terminals with a herdr.space label. Put moved
   # sessions in the space named by CLAUDE_MOVE_SPACE (default "agents").
   want=${CLAUDE_MOVE_SPACE:-agents}
-  space=$(herdr-app ls 2>/dev/null | jq -r --arg n "$want" '[.spaces[] | select(.name == $n and .machine == null) | .id][0] // empty')
+  space=$("$HOME/.local/bin/herdr-app" ls 2>/dev/null | jq -r --arg n "$want" '[.spaces[] | select(.name == $n and .machine == null) | .id][0] // empty')
   if [ -z "$space" ]; then
-    space=$(herdr-app do space.new --name "$want" --focus false 2>/dev/null | jq -r '.space // empty')
+    space=$("$HOME/.local/bin/herdr-app" do space.new --name "$want" --focus false 2>/dev/null | jq -r '.space // empty')
   fi
   lbl=()
   [ -n "$space" ] && lbl=(--label "herdr.space=$space")
