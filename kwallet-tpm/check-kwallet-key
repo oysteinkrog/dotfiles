@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Check that the TPM-sealed key opens the wallet, without touching the running
+# wallet and without a window on the screen.
+#
+# It copies ~/.local/share/kwalletd to a temporary folder, starts ksecretd-tpm
+# on a private D-Bus session (dbus-run-session) with Qt set to offscreen, and
+# reads ksecretd's output. The key is never printed.
+#
+# Exit 0: the sealed key opens the wallet.
+# Exit 1: ksecretd refused the key (for example "error code is -9": the key was
+#         sealed from a different password). Run seal-kwallet-key again.
+# Exit 2: the check could not run.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+data=${XDG_DATA_HOME:-$HOME/.local/share}
+cred=${KWALLET_TPM_CRED:-${XDG_CONFIG_HOME:-$HOME/.config}/kwallet-tpm/kdewallet.cred}
+base=/var/tmp/claude
+[ -d "$base" ] || base=${TMPDIR:-/var/tmp}
+tmp=$(mktemp -d -p "$base" kwallet-check.XXXXXX) || exit 2
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/data" "$tmp/runtime"
+chmod 700 "$tmp/runtime"
+cp -a "$data/kwalletd" "$tmp/data/" || { echo "check-kwallet-key: cannot copy $data/kwalletd"; exit 2; }
+[ -f "$cred" ] || { echo "check-kwallet-key: no sealed key at $cred"; exit 2; }
+
+# The wrapper execs ksecretd, which keeps running; stop it after 8 s.
+# Qt logs to the journal when JOURNAL_STREAM is set; force stderr so the
+# result shows here.
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u JOURNAL_STREAM \
+  QT_FORCE_STDERR_LOGGING=1 \
+  XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/runtime" QT_QPA_PLATFORM=offscreen \
+  KWALLET_TPM_CRED="$cred" \
+  dbus-run-session -- timeout 8 "$here/ksecretd-tpm" 2>&1)
+if printf '%s\n' "$out" | grep -q 'without the sealed key'; then
+  printf '%s\n' "$out" | grep 'without the sealed key'
+  echo "check-kwallet-key: the wrapper could not unseal the key"
+  exit 1
+fi
+if printf '%s\n' "$out" | grep -q 'failed to get opened by PAM'; then
+  printf '%s\n' "$out" | grep -o 'failed to get opened by PAM.*' | head -1
+  echo "check-kwallet-key: the sealed key does not open the wallet. Run seal-kwallet-key again with the wallet password."
+  exit 1
+fi
+echo "check-kwallet-key: the sealed key opens the wallet"
+exit 0

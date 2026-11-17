@@ -35,12 +35,24 @@ A wrong key (for example after a password change) does not show up there: ksecre
 `--pam-login` mode, fails to open the wallet, and the wallet stays locked until you type the
 password. Seal the key again to fix it.
 
+To find out whether the sealed key opens the wallet, without a reboot and without touching the
+running wallet, run:
+
+```sh
+~/.dotfiles/kwallet-tpm/check-kwallet-key
+```
+
+It starts the wrapper on a private D-Bus session against a copy of the wallet, with no window.
+Exit 0 means the key opens the wallet. Exit 1 with "error code is -9" means the key came from a
+different password; run `seal-kwallet-key` again.
+
 ## Files
 
 | File | What it does |
 |---|---|
 | `ksecretd-tpm` | The wrapper D-Bus starts. Python, run with `-I`. |
 | `seal-kwallet-key` | Asks for the wallet password, derives the key, seals it into `~/.config/kwallet-tpm/kdewallet.cred` (mode 0600). |
+| `check-kwallet-key` | Checks that the sealed key opens a copy of the wallet. Run it after sealing. |
 | `install.sh` | Writes two D-Bus service files into `~/.local/share/dbus-1/services`. `--undo` removes them. |
 
 The two service files override `org.kde.secretservicecompat` and
