@@ -1,9 +1,19 @@
 #!/bin/sh
-# Work Chrome profile: "Default" (oystein@initialforce.com) in the default data
-# folder, with its own Wayland app_id (chrome-work) so it gets a taskbar icon
-# separate from chrome-personal. "Profile 1" is the innkjop@ account.
+# Work Chrome in the default data folder, with its own Wayland app_id
+# (chrome-work) so it gets a taskbar icon separate from chrome-personal.
+# Opens the profile named "oystein@". Its folder differs per machine
+# (office: Default, home: Profile 1), so look it up in Local State.
+DATA="$HOME/.config/google-chrome"
+PROFILE=$(python3 -I -c '
+import json, sys
+try:
+    cache = json.load(open(sys.argv[1]))["profile"]["info_cache"]
+    print(next(k for k, v in cache.items() if v.get("name") == "oystein@"))
+except Exception:
+    print("Default")
+' "$DATA/Local State")
 exec /usr/bin/google-chrome-stable \
-  --user-data-dir="$HOME/.config/google-chrome" \
-  --profile-directory="Default" \
+  --user-data-dir="$DATA" \
+  --profile-directory="$PROFILE" \
   --class=chrome-work \
   "$@"
