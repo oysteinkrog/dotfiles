@@ -1,0 +1,12 @@
+[Unit]
+Description=Freeze the jobd job using most VRAM when free VRAM is low (vram-guard)
+
+[Service]
+ExecStart=%h/bin/vram-guard
+Restart=on-failure
+RestartSec=5
+Nice=5
+MemoryMax=64M
+
+[Install]
+WantedBy=default.target

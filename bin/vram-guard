@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""vram-guard: freeze the jobd job that uses the most VRAM when the card runs low.
+
+Every 2 s read free VRAM. Below LOW_MIB (600), find GPU compute processes that
+live in a jobd job unit (builds.slice/job-*.service) and freeze the unit of the
+one with the most VRAM. Thaw it when free VRAM stays above HIGH_MIB (1200) for
+10 s. Never kills anything and never touches processes outside job units.
+
+Flags: --dry-run (log only, no systemctl), --max-ticks N (stop after N ticks).
+Test inputs (env): VRAM_GUARD_FAKE_FREE=comma list of free MiB, one per tick,
+last value repeats; VRAM_GUARD_FAKE_APPS=comma list of pid:used_mib:cgroup_path;
+VRAM_GUARD_STATE_DIR, VRAM_GUARD_INTERVAL, VRAM_GUARD_HOLD (seconds).
+"""
+import os, re, signal, subprocess, sys, time
+
+LOW_MIB = 600
+HIGH_MIB = 1200
+HOLD_S = float(os.environ.get("VRAM_GUARD_HOLD", "10"))
+INTERVAL = float(os.environ.get("VRAM_GUARD_INTERVAL", "2"))
+STATE = os.environ.get("VRAM_GUARD_STATE_DIR") or os.path.expanduser("~/.local/state/vram-guard")
+DRY = "--dry-run" in sys.argv
+MAXT = None
+if "--max-ticks" in sys.argv:
+    MAXT = int(sys.argv[sys.argv.index("--max-ticks") + 1])
+FAKE_FREE = [int(x) for x in os.environ.get("VRAM_GUARD_FAKE_FREE", "").split(",") if x]
+FAKE_APPS = os.environ.get("VRAM_GUARD_FAKE_APPS")
+UNIT_RE = re.compile(r"(job-(\d+)-(\d+)-([0-9a-f]+)-[^/]*\.service)(/|$)")
+
+os.makedirs(STATE, exist_ok=True)
+LOG = os.path.join(STATE, "log")
+EVENTS = os.path.join(STATE, "events")
+
+
+def ts():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log(msg):
+    line = f"{ts()} {'[dry-run] ' if DRY else ''}{msg}"
+    with open(LOG, "a") as f:
+        f.write(line + "\n")
+    print(line, flush=True)
+
+
+def event(msg):
+    with open(EVENTS, "a") as f:
+        f.write(f"{ts()} {'[dry-run] ' if DRY else ''}{msg}\n")
+
+
+def smi(args):
+    return subprocess.run(["nvidia-smi"] + args, capture_output=True, text=True, timeout=15).stdout
+
+
+def free_mib(tick):
+    if FAKE_FREE:
+        return FAKE_FREE[min(tick, len(FAKE_FREE) - 1)]
+    return int(smi(["--query-gpu=memory.free", "--format=csv,noheader,nounits"]).split()[0])
+
+
+def cgroup_of(pid):
+    try:
+        return open(f"/proc/{pid}/cgroup").read().strip().split("::", 1)[-1]
+    except OSError:
+        return None
+
+
+def job_apps():
+    """Return {unit: (used_mib_total, request_id, pids)} for jobd job units only."""
+    rows = []
+    if FAKE_APPS is not None:
+        for item in FAKE_APPS.split(","):
+            if item:
+                pid, used, cg = item.split(":", 2)
+                rows.append((int(pid), int(used), cg))
+    else:
+        for ln in smi(["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]).splitlines():
+            try:
+                pid, used = [x.strip() for x in ln.split(",")]
+                cg = cgroup_of(pid)
+                if cg:
+                    rows.append((int(pid), int(used), cg))
+            except ValueError:
+                pass
+    units = {}
+    for pid, used, cg in rows:
+        if "builds.slice" not in cg:
+            continue
+        m = UNIT_RE.search(cg)
+        if not m:
+            continue
+        u = units.setdefault(m.group(1), [0, m.group(4), []])
+        u[0] += used
+        u[2].append(pid)
+    return units
+
+
+def sysctl(verb, unit):
+    if DRY:
+        return True
+    r = subprocess.run(["systemctl", "--user", verb, unit], capture_output=True, text=True)
+    if r.returncode != 0:
+        log(f"systemctl {verb} {unit} failed: {r.stderr.strip()}")
+    return r.returncode == 0
+
+
+def unit_alive(unit):
+    if DRY or FAKE_FREE:
+        return True
+    return subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit]).returncode == 0
+
+
+frozen = None  # (unit, req_id)
+high_since = None
+last_low_log = 0.0
+
+
+def thaw(reason):
+    global frozen, high_since
+    if not frozen:
+        return
+    unit, req = frozen
+    if sysctl("thaw", unit):
+        log(f"THAW {unit} (request {req}): {reason}")
+        event(f"vram-guard: resumed jobd job {req} (unit {unit})")
+        frozen = None
+        high_since = None
+
+
+def on_term(*_):
+    thaw("vram-guard stopping")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, on_term)
+signal.signal(signal.SIGINT, on_term)
+log(f"start low<{LOW_MIB} MiB resume>{HIGH_MIB} MiB for {HOLD_S:g}s interval {INTERVAL:g}s")
+tick = 0
+while MAXT is None or tick < MAXT:
+    try:
+        free = free_mib(tick)
+        now = time.monotonic()
+        if frozen and not unit_alive(frozen[0]):
+            log(f"frozen unit {frozen[0]} is gone; clearing state")
+            frozen = None
+            high_since = None
+        if free < LOW_MIB:
+            high_since = None
+            if frozen:
+                if now - last_low_log >= 60:
+                    last_low_log = now
+                    log(f"free {free} MiB still low, {frozen[0]} stays frozen")
+            else:
+                units = job_apps()
+                if not units:
+                    if now - last_low_log >= 60:
+                        last_low_log = now
+                        log(f"free {free} MiB low, no jobd job on the GPU; no action")
+                else:
+                    unit, (used, req, pids) = max(units.items(), key=lambda kv: kv[1][0])
+                    if sysctl("freeze", unit):
+                        frozen = (unit, req)
+                        last_low_log = now
+                        log(f"FREEZE {unit} (request {req}, {used} MiB, pids {pids}) free {free} MiB")
+                        event(f"vram-guard: froze jobd job {req} (unit {unit}, {used} MiB VRAM) because free VRAM was {free} MiB. Thaws when free > {HIGH_MIB} MiB for {HOLD_S:g}s, or run: systemctl --user thaw {unit}")
+        elif frozen and free > HIGH_MIB:
+            high_since = high_since or now
+            if now - high_since >= HOLD_S:
+                thaw(f"free {free} MiB above {HIGH_MIB} for {HOLD_S:g}s")
+        else:
+            high_since = None
+    except Exception as e:  # keep running
+        log(f"error: {e!r}")
+    tick += 1
+    if MAXT is None or tick < MAXT:
+        time.sleep(INTERVAL)
+if frozen and MAXT is not None:
+    log("exit with job still frozen (test end)")
