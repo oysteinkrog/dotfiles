@@ -1338,9 +1338,22 @@ restore_hc() {
     } > "$script" || { echo "could not write $script"; continue; }
     name=$(jq -r '.hc.name // empty' "$f")
     [ -n "$name" ] || name=$(herdr_name "$(tab_title "$transcript" "$cwd")")
-    mv "$f" "$STATE_DIR/restored/"
-    local -a lbl=()
     space=$(jq -r '.hc.space // empty' "$f")
+    mv "$f" "$STATE_DIR/restored/"
+    # hc keeps each old terminal across the reboot as a plain shell under the
+    # old name and in the old herdr space (2026-11-18: all 38 sessions came back
+    # under name-xxxx outside any space). Take the space from that stand-in,
+    # and remove it when it is an idle shell, so the session gets its own name.
+    local old fg fgpid
+    if old=$("$HC_BIN" get "$name" --json 2>/dev/null) && [ "$(jq -r '.state' <<<"$old")" = live ]; then
+      [ -n "$space" ] || space=$(jq -r '.labels["herdr.space"] // empty' <<<"$old")
+      fg=$(jq -r '.foreground.name // empty' <<<"$old"); fgpid=$(jq -r '.foreground.pid // empty' <<<"$old")
+      if [[ "$fg" =~ ^(fish|bash|zsh|sh)$ ]] && [ -n "$fgpid" ] && [ -z "$(pgrep -P "$fgpid")" ]; then
+        "$HC_BIN" kill "$name" >/dev/null 2>&1 && "$HC_BIN" rm "$name" >/dev/null 2>&1 \
+          && echo "removed stand-in shell $name"
+      fi
+    fi
+    local -a lbl=()
     [ -n "$space" ] && lbl=(--label "herdr.space=$space")
     if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1 \
        || "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
