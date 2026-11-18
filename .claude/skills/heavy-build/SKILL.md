@@ -119,9 +119,12 @@ On Linux, a monorepo build of a `net10.0-windows` project fails with NETSDK1100 
 `EnableWindowsTargeting` is set. The repo does not set it globally, and
 `build.sh build -r win-x64` does not add it either (checked on master, stable/26.2 and
 stable/26.1 on 2026-11-18: only `build --target wine` on 26.2 and the publish command on
-master set it). Pass `-p:EnableWindowsTargeting=true` to `dotnet build` or `dotnet test`,
-for example `dotnet build src/motioncatalyst/MotionCatalyst.sln -c Debug
--p:EnableWindowsTargeting=true`. Three lanes lost runs to this on 2026-11-01 and 11-02, and
+master set it). Pass `-p:EnableWindowsTargeting=true` to `dotnet build` or `dotnet test`.
+A whole-solution build also needs `-r win-x64`, or every WPF app project fails with
+NETSDK1082 (no WindowsDesktop runtime pack for linux-x64): for example
+`dotnet build src/motioncatalyst/MotionCatalyst.sln -c Debug -r win-x64
+-p:EnableWindowsTargeting=true`. Prove a new build command with a `dotnet restore` using the
+same `-r` and `-p` arguments (seconds) before it goes in the queue. Three lanes lost runs to this on 2026-11-01 and 11-02, and
 three more on 2026-11-18 after waiting up to 58 min in the queue.
 
 ## 6. Parallel builds of one tree
