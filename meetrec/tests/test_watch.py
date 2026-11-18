@@ -127,6 +127,28 @@ def run_ticks(w, monkeypatch, graph, clock, n=4):
         clock[0] += 1.0
 
 
+def end_ticks(w) -> int:
+    """Ticks of silence after which a call is over, rejoin window included."""
+    return int(max(watch.STOP_AFTER_S, w.cfg.get("rejoin_window_s", 180))) + 3
+
+
+def test_rejoin_within_window_continues_the_call(watcher, monkeypatch):
+    # 2026-11-05: Oystein left and rejoined one huddle several times; each was a new call.
+    clock = [time.time()]
+    monkeypatch.setattr(watch.time, "time", lambda: clock[0])
+    watcher.on_event({"t": clock[0] * 1000, "source": "teams"})
+    run_ticks(watcher, monkeypatch, chrome_mic_graph(), clock)
+    s = watcher.sessions["chrome"]
+    run_ticks(
+        watcher, monkeypatch, watch.Graph(), clock, n=int(watch.STOP_AFTER_S) + 30
+    )
+    assert watcher.sessions.get("chrome") is s
+    assert not s.recorders  # nothing is recorded while away
+    watcher.on_event({"t": clock[0] * 1000, "source": "teams"})
+    run_ticks(watcher, monkeypatch, chrome_mic_graph(), clock)
+    assert watcher.sessions.get("chrome") is s and s.recorders
+
+
 def test_teams_heartbeat_starts_a_teams_session(watcher, monkeypatch):
     clock = [time.time()]
     monkeypatch.setattr(watch.time, "time", lambda: clock[0])
@@ -203,7 +225,7 @@ def test_call_end_queues_teams_recording(watcher, monkeypatch):
     run_ticks(watcher, monkeypatch, chrome_mic_graph(), clock)
     s = watcher.sessions["chrome"]
     (s.dir / "me-7-000000000.pcm").write_bytes(b"\0\0")
-    run_ticks(watcher, monkeypatch, watch.Graph(), clock, n=int(watch.STOP_AFTER_S) + 3)
+    run_ticks(watcher, monkeypatch, watch.Graph(), clock, n=end_ticks(watcher))
     assert "chrome" not in watcher.sessions
     queued = list((watch.config.root() / ".queue").iterdir())
     assert [q.name.endswith("-teams") for q in queued] == [True]
