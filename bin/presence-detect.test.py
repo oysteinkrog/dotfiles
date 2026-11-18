@@ -314,5 +314,62 @@ class FooyinRule(unittest.TestCase):
         self.assertEqual(self.quits, [])
 
 
+class VoiceRule(unittest.TestCase):
+    def setUp(self):
+        self.active = {"voxtype.service", "ytring.service"}
+        self.calls = []
+        pd.VOICE_FILE = Path(_tmp) / "voice-unloaded"
+        pd.VOICE_FILE.unlink(missing_ok=True)
+
+        def active(u):
+            return u in self.active
+
+        def ctl(action, u):
+            self.calls.append((action, u))
+            (self.active.discard if action == "stop" else self.active.add)(u)
+            return True
+
+        pd.unit_active, pd.unit_ctl = active, ctl
+
+    def test_remote_stops_both_and_here_restores_both(self):
+        v = pd.Voice()
+        v.tick({"state": "here"}, True)
+        self.assertEqual(self.calls, [])
+        v.tick({"state": "remote"}, True)
+        self.assertEqual(self.active, set())
+        v.tick({"state": "remote"}, True)
+        self.assertEqual(len(self.calls), 2)  # nothing more to stop
+        v.tick({"state": "here"}, True)
+        self.assertEqual(self.active, {"voxtype.service", "ytring.service"})
+        self.assertFalse(pd.VOICE_FILE.exists())
+
+    def test_here_starts_only_those_that_were_running(self):
+        self.active = {"ytring.service"}
+        v = pd.Voice()
+        v.tick({"state": "away"}, True)
+        self.assertEqual(self.calls, [("stop", "ytring.service")])
+        self.calls.clear()
+        v.tick({"state": "here"}, True)
+        self.assertEqual(self.calls, [("start", "ytring.service")])
+        self.assertEqual(self.active, {"ytring.service"})
+
+    def test_unit_stopped_by_hand_before_leaving_comes_back(self):
+        pd.VOICE_FILE.write_text('["voxtype.service"]\n')
+        self.active = set()
+        pd.Voice().tick({"state": "here"}, True)
+        self.assertEqual(self.calls, [("start", "voxtype.service")])
+
+    def test_switch_off_does_nothing(self):
+        v = pd.Voice()
+        v.tick({"state": "remote"}, False)
+        v.tick({"state": "away"}, False)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(pd.VOICE_FILE.exists())
+        self.assertEqual(len(self.active), 2)
+
+    def test_conf_default_on(self):
+        self.assertTrue(pd.on(pd.read_conf(), "voice_unload"))
+
+
 if __name__ == "__main__":
     unittest.main()
