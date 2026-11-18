@@ -116,9 +116,13 @@ risks stale DLLs. For parallel .NET builds in one checkout, use `AgentOutputSuff
 (monorepo `docs/dev/recovery.md`).
 
 On Linux, a monorepo build of a `net10.0-windows` project fails with NETSDK1100 unless
-`EnableWindowsTargeting` is set. The repo does not set it globally. Use
-`build.sh build -r win-x64`, which adds it, or pass `-p:EnableWindowsTargeting=true` to a
-bare `dotnet build` or `dotnet test`. Three lanes lost runs to this on 2026-11-01 and 11-02.
+`EnableWindowsTargeting` is set. The repo does not set it globally, and
+`build.sh build -r win-x64` does not add it either (checked on master, stable/26.2 and
+stable/26.1 on 2026-11-18: only `build --target wine` on 26.2 and the publish command on
+master set it). Pass `-p:EnableWindowsTargeting=true` to `dotnet build` or `dotnet test`,
+for example `dotnet build src/motioncatalyst/MotionCatalyst.sln -c Debug
+-p:EnableWindowsTargeting=true`. Three lanes lost runs to this on 2026-11-01 and 11-02, and
+three more on 2026-11-18 after waiting up to 58 min in the queue.
 
 ## 6. Parallel builds of one tree
 
