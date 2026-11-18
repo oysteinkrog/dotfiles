@@ -87,8 +87,18 @@ while sleep 1; do
       echo "stall on $card: hw_ptr stuck at $ptr for ${STALL_SECONDS}s, saving $STATE_DIR/$t-$card.txt"
       {
         cat "$status"
+        echo "--- stream ran for $(( ptr / 48000 )) s before the stall (at 48 kHz)"
+        echo "--- USB stream info"
+        cat "/proc/asound/$card/stream0" 2>/dev/null | head -12
+        echo "--- apps recording or playing"
+        pactl list short source-outputs 2>/dev/null
+        pactl list short sink-inputs 2>/dev/null
+        echo "--- PipeWire links to the device"
+        pw-link -l 2>/dev/null | grep -i -A3 "$card" | head -30
+        echo "--- PipeWire graph"
+        timeout 4 pw-top -b -n 2 2>/dev/null | tail -40
         echo "--- kernel log, last 60 s"
-        journalctl -k --since -60s --no-pager 2>/dev/null | tail -40
+        journalctl -k --since -60s --no-pager 2>/dev/null | grep -v 'UFW BLOCK' | tail -40
         echo "--- pipewire and wireplumber log, last 60 s"
         journalctl --user --since -60s --no-pager _COMM=pipewire _COMM=wireplumber 2>/dev/null | tail -40
       } >"$STATE_DIR/$t-$card.txt" 2>&1
