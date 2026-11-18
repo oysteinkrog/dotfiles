@@ -356,6 +356,7 @@ bin/logs/
 !.claude/skills/screenshot-critique/
 !.claude/skills/secret-lookup/
 !.claude/skills/security-audit/
+!.claude/skills/security-pushback-review/
 !.claude/skills/show-me-your-work/
 !.claude/skills/slide-management/
 !.claude/skills/slide-quality/
