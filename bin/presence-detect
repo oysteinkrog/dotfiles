@@ -43,6 +43,10 @@ Actions (each can be turned off in ~/.config/presence.conf, key=value):
                   remote: CPUWeight back to 20 and the file removed at once. Running
                   builds are never stopped or frozen.
   chrome_away_min=60  read by chrome-idle-close, not here.
+  voice_unload=1  while remote or away (anything but here), stop voxtype.service and
+                  ytring.service if active, within one check. The units that were active
+                  are listed in the voice-unloaded file and started again on here. RDP
+                  does not count as at the computer. (Approved 2026-11-18.)
 
 Signals:
   /run/local-input/last  mtime = last key press or click on local USB input,
@@ -77,6 +81,8 @@ STATE_DIR = Path(
 )
 CONF = Path(os.environ.get("PRESENCE_CONF", HOME / ".config/presence.conf"))
 STATE = STATE_DIR / "state"
+VOICE_FILE = STATE_DIR / "voice-unloaded"
+VOICE_UNITS = ("voxtype.service", "ytring.service")
 LOG = STATE_DIR / "log"
 OVERRIDE = STATE_DIR / "heavy-build.override"
 RDP_PORT = os.environ.get("KRDP_PORT", "3389")
@@ -133,7 +139,7 @@ def log(line: str) -> None:
 
 
 def read_conf() -> dict[str, str]:
-    conf = {"fooyin_quit": "1", "build_boost": "1"}
+    conf = {"fooyin_quit": "1", "build_boost": "1", "voice_unload": "1"}
     try:
         for line in CONF.read_text().splitlines():
             line = line.split("#", 1)[0].strip()
@@ -570,6 +576,72 @@ class Fooyin:
                 )
 
 
+# ---------------------------------------------------------------- voice apps
+
+
+def unit_active(unit: str) -> bool:
+    return run("systemctl", "--user", "is-active", unit) == "active"
+
+
+def unit_ctl(action: str, unit: str) -> bool:
+    return run("systemctl", "--user", action, unit, timeout=60) is not None
+
+
+class Voice:
+    """Stops voxtype and ytring when not here, starts back only those it stopped.
+
+    The list of units it stopped lives in VOICE_FILE, so a restart of the detector
+    (or a reboot while away) still brings them back on here. Starting happens on
+    here whatever the switch says, so turning the switch off never strands a unit.
+    """
+
+    def stopped(self) -> list[str]:
+        try:
+            return [u for u in json.loads(VOICE_FILE.read_text()) if u in VOICE_UNITS]
+        except (OSError, ValueError):
+            return []
+
+    def save(self, units: list[str]) -> None:
+        if not units:
+            try:
+                VOICE_FILE.unlink()
+            except FileNotFoundError:
+                pass
+            return
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = VOICE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(units) + "\n")
+        tmp.replace(VOICE_FILE)
+
+    def tick(self, rec: dict, enabled: bool) -> None:
+        state = rec.get("state")
+        if state is None:
+            return
+        saved = self.stopped()
+        if state == "here":
+            keep = []
+            for u in saved:
+                if unit_active(u) or unit_ctl("start", u):
+                    log(f'action=voice-start unit={u} reason="state here"')
+                else:
+                    keep.append(u)  # retry on the next check
+            if keep != saved:
+                self.save(keep)
+            return
+        if not enabled:
+            return
+        for u in VOICE_UNITS:
+            if not unit_active(u):
+                continue
+            if u not in saved:
+                saved.append(u)
+                self.save(saved)  # record first, so a crash never loses the unit
+            if unit_ctl("stop", u):
+                log(f'action=voice-stop unit={u} reason="state {state}"')
+            else:
+                log(f"action=voice-stop-failed unit={u} retrying")
+
+
 # ---------------------------------------------------------------- main loop
 
 
@@ -608,6 +680,7 @@ def main() -> int:
     rec = load_state()
     boost = Boost(rec)
     fy = Fooyin()
+    voice = Voice()
 
     def stop(*_):
         boost.apply(False, time.time(), "presence-detect stopping")
@@ -628,7 +701,7 @@ def main() -> int:
         li = last_local_input()
         if now - last_check >= CHECK_S or li != last_input:
             last_check, last_input = now, li
-            rec = check(now, rec, boost, fy)
+            rec = check(now, rec, boost, fy, voice)
             held["rec"] = rec
         time.sleep(1)
 
@@ -638,7 +711,9 @@ def want_boost(rec: dict, conf: dict[str, str]) -> bool:
     return rec.get("state") == "away" and on(conf, "build_boost")
 
 
-def check(now: float, rec: dict, boost: Boost, fy: Fooyin) -> dict:
+def check(
+    now: float, rec: dict, boost: Boost, fy: Fooyin, voice: Voice | None = None
+) -> dict:
     """One check: read the signals, step the state, apply the actions. A failed check
     leaves the state unknown, so the boost goes off until a check works again."""
     try:
@@ -654,6 +729,8 @@ def check(now: float, rec: dict, boost: Boost, fy: Fooyin) -> dict:
         rec["boost"] = boost.active
         save_state(rec)
         fy.tick(now, rec, on(conf, "fooyin_quit"))
+        if voice is not None:
+            voice.tick(rec, on(conf, "voice_unload"))
     except Exception as e:  # keep watching; the next check retries
         log(f'event=error error="{e}"')
         try:
