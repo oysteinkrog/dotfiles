@@ -122,9 +122,13 @@ stable/26.1 on 2026-11-18: only `build --target wine` on 26.2 and the publish co
 master set it). Pass `-p:EnableWindowsTargeting=true` to `dotnet build` or `dotnet test`.
 A plain whole-solution `dotnet build` on Linux does not work on every branch: without
 `-r win-x64` the WPF app projects fail with NETSDK1082, and with `-r` on the `.sln` the
-.NET 11 SDK (master, stable/26.2) refuses it with NETSDK1134. For a whole-solution compile
-check use the Wine build path: `./build.sh build --target wine` where the branch has it
-(master, stable/26.2), or `tools/wine/run-tests.sh --build-only <projects>`. Only the .NET 10
+.NET 11 SDK (master, stable/26.2) refuses it with NETSDK1134. `./build.sh build --target
+wine` is not a whole-solution build either: it builds only MotionCatalyst.csproj and
+UiMcpHost plus their references (79 of 109 projects on master, no test projects, no
+MotionCatalyst-cli). On SDK 11, map the changed files to their projects and compile the ones
+your test runs did not already build with `tools/wine/run-tests.sh --build-only <projects>`,
+or build a single project with `-r win-x64 -p:EnableWindowsTargeting=true` (a RID on a
+project is fine). Only the .NET 10
 SDK (stable/26.1) accepts `dotnet build src/motioncatalyst/MotionCatalyst.sln -c Debug -r
 win-x64 -p:EnableWindowsTargeting=true`. A restore does not catch NETSDK1134, so check the
 branch's `global.json` SDK version before you queue a plain solution build. Three lanes lost runs to this on 2026-11-01 and 11-02, and
