@@ -125,13 +125,13 @@ A plain whole-solution `dotnet build` on Linux does not work on every branch: wi
 .NET 11 SDK (master, stable/26.2) refuses it with NETSDK1134. `./build.sh build --target
 wine` is not a whole-solution build either: it builds only MotionCatalyst.csproj and
 UiMcpHost plus their references (79 of 109 projects on master, no test projects, no
-MotionCatalyst-cli). On SDK 11, map the changed files to their projects and compile the ones
-your test runs did not already build with `tools/wine/run-tests.sh --build-only <projects>`,
-or build a single project with `-r win-x64 -p:EnableWindowsTargeting=true` (a RID on a
-project is fine). Only the .NET 10
-SDK (stable/26.1) accepts `dotnet build src/motioncatalyst/MotionCatalyst.sln -c Debug -r
-win-x64 -p:EnableWindowsTargeting=true`. A restore does not catch NETSDK1134, so check the
-branch's `global.json` SDK version before you queue a plain solution build. Three lanes lost runs to this on 2026-11-01 and 11-02, and
+MotionCatalyst-cli). The .NET 10 SDK on stable/26.1 refuses `-r` on a `.sln` too
+(NETSDK1134, seen 2026-11-18), and a restore does not catch it. So never pass `-r` to a
+solution build. Map the changed files to their projects and compile the ones your test runs
+did not already build, one project at a time:
+`dotnet build <project>.csproj -c Debug -r win-x64 -p:EnableWindowsTargeting=true` (a RID on
+a project is fine). `tools/wine/run-tests.sh --build-only` exists on master only; stable/26.2
+rejects the option. Three lanes lost runs to this on 2026-11-01 and 11-02, and
 three more on 2026-11-18 after waiting up to 58 min in the queue.
 
 ## 6. Parallel builds of one tree
