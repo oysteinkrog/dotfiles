@@ -23,7 +23,7 @@ names the live config and registry paths.
 This section is for Claude Code. If you are Codex, you are Astra: give your own answer and
 do not call `codex exec`. If you need a second opinion, ask Claude with `claude -p`.
 
-**GPT-6 Astra is the primary oracle**, reached through the Codex CLI. Consult it first for
+**GPT-6.2 Astra is the primary oracle**, reached through the Codex CLI. Consult it first for
 second opinions, design validation, hard debugging and architecture review. One Astra call is
 a complete consultation.
 

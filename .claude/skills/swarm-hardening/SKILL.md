@@ -8,7 +8,7 @@ argument-hint: "<target: beads, plan file, or code path> [--max-rounds N] [--ski
 
 Orchestrate the full review-fix-validate-verify loop that takes artifacts from "draft" to "implementation-ready." Combines `/swarm-review` and `/swarm-oracle` into an iterative pipeline with convergence tracking.
 
-**Models (2026-10-28):** every review round and every verifier is a bounded GPT-6 Astra run at effort `medium` (one prompt of about 60k tokens with the excerpts pasted in, run from an empty directory with the shell tools off, at most 4 at once; see `/consult-oracles`, Bounded Astra run). If Codex fails, use Fable, then Opus, and say so. Fable also cross-checks a security lens on a high-stakes change. Agents that apply fixes stay on Claude (Sonnet, Opus for hard fixes).
+**Models (2026-10-28):** every review round and every verifier is a bounded GPT-6.2 Astra run at effort `medium` (one prompt of about 60k tokens with the excerpts pasted in, run from an empty directory with the shell tools off, at most 4 at once; see `/consult-oracles`, Bounded Astra run). If Codex fails, use Fable, then Opus, and say so. Fable also cross-checks a security lens on a high-stakes change. Agents that apply fixes stay on Claude (Sonnet, Opus for hard fixes).
 
 ## When to Use
 

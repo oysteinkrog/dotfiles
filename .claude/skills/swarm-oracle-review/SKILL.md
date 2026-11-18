@@ -20,7 +20,7 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 
 # Oracle Review Skill
 
-> **Oracle and review policy (2026-10-28):** GPT-6 Astra runs every oracle session
+> **Oracle and review policy (2026-10-28):** GPT-6.2 Astra runs every oracle session
 > and every review lane. Each is one bounded Astra run at effort `medium`: one prompt
 > of about 60k tokens with the diff and needed excerpts pasted in, run from an empty
 > directory with the shell tools off (see `/consult-oracles`, Bounded Astra run). At
@@ -58,7 +58,7 @@ then (2) iterative hardening loop until findings converge to near-zero.
 ### Setup
 
 Run 2 concurrent oracle sessions:
-- **Default tier:** two bounded Astra runs (`codex exec -m gpt-6-astra`, effort `medium`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, made in a single message. See `/swarm-oracle` Step 2 for the exact command and prompts
+- **Default tier:** two bounded Astra runs (`codex exec -m gpt-6.2-astra`, effort `medium`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, made in a single message. See `/swarm-oracle` Step 2 for the exact command and prompts
 - **Cross-provider check / Codex fallback:** two fresh Fable subagents (`Agent`, `model: "fable"`), one FOR, one AGAINST, spawned in a single message. Use them for security reviews or contested calls, and as the whole debate when Codex fails. Opus subagents only when Astra and Fable both fail
 - **Alternate route:** PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST) when the structured consensus flow is wanted
 - **Cost rules:** give the oracles the change delta, not the whole artifact history, and validate each change once

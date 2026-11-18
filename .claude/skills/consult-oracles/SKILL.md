@@ -1,13 +1,13 @@
 ---
 name: consult-oracles
-description: Consult GPT-6 Astra (primary oracle and default reviewer, Codex CLI at effort medium, one bounded prompt) for expert second opinions. Add Fable only for security reviews or contested questions, or when Astra is unavailable. Use Opus when both fail. Gemini 4 Argon (via PAL) is the optional third oracle but is currently unavailable. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult GPT-6.2 Astra (primary oracle and default reviewer, Codex CLI at effort medium, one bounded prompt) for expert second opinions. Add Fable only for security reviews or contested questions, or when Astra is unavailable. Use Opus when both fail. Gemini 4 Argon (via PAL) is the optional third oracle but is currently unavailable. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 argument-hint: "[--effort low|medium|high|xhigh|max|ultra] <question>"
 context: fork
 ---
 
 # Consult Oracles Skill
 
-Get expert analysis by consulting AI models. **GPT-6 Astra (`gpt-6-astra`, reached
+Get expert analysis by consulting AI models. **GPT-6.2 Astra (`gpt-6.2-astra`, reached
 through the Codex CLI at effort `medium`) is the primary oracle and the default
 choice, used on its own.** Fable 5.2 (`claude-fable-5-2`, a fresh subagent spawned
 with the `Agent` tool and `model: "fable"`, which resolves to 5.2) is the secondary oracle: add it for security reviews and contested
@@ -44,11 +44,11 @@ for one high-stakes question, and say why.
 
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
-| **GPT-6 Astra** (`gpt-6-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
+| **GPT-6.2 Astra** (`gpt-6.2-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
 | **Fable 5.2** (`claude-fable-5-2`) | Fresh subagent via `Agent` tool with `model: "fable"` (the alias resolves to 5.2; checked 2026-11-09) | Secondary oracle. Add it for security reviews and contested calls (Astra looks wrong, or two oracles disagree), or use it when Codex fails |
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable and Astra both fail. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted and a GPT view is needed |
-| `gpt-5.6-sol` / `gpt-5.6-terra` | Codex CLI | Rarely; prior-generation GPT probe |
+| `gpt-6.2-sol` / `gpt-6.1-terra` | Codex CLI | Rarely; a faster GPT probe (Sol for code, Terra for images and computer use) |
 | **Gemini 4 Argon** (`gemini-4-argon`) | `mcp__pal__chat` with `model: "gemini-4-argon"` | Optional third oracle from Google. **Currently unavailable:** the AI Studio prepay credit ran out on 2026-10-21 and Oystein chose to leave it off. Do not rely on it |
 | `gemini-3.1-pro-preview` | `mcp__pal__chat` | Only when the Argon call fails. Flag the substitution. Same credit, so also unavailable for now |
 
@@ -88,7 +88,7 @@ for one high-stakes question, and say why.
 
 ## How to Consult
 
-### Primary Consultation (GPT-6 Astra): the bounded run
+### Primary Consultation (GPT-6.2 Astra): the bounded run
 
 Build one prompt file of about 60k tokens at most: the brief (see Question
 Formulation), the diff, and the file excerpts Astra needs, pasted in with their paths
@@ -97,7 +97,7 @@ Astra answers from the prompt and cannot browse the tree:
 
 ```bash
 mkdir -p /var/tmp/claude/<task>/astra-empty && cd /var/tmp/claude/<task>/astra-empty
-codex exec -m gpt-6-astra -c model_reasoning_effort=<effort> \
+codex exec -m gpt-6.2-astra -c model_reasoning_effort=<effort> \
   --disable shell_tool --disable unified_exec --disable code_mode_host \
   --skip-git-repo-check \
   -o <scratchpad>/oracle-astra.md - < <scratchpad>/astra-prompt.md 2>/dev/null
@@ -126,7 +126,8 @@ An answer that cites no excerpt was given too little. Add the missing excerpt an
 rerun; do not turn file reading back on. Follow the `/codex` skill for prompting
 discipline and exec liveness pitfalls.
 
-Effort guide (all six values verified against `gpt-6-astra` on 2026-09-04):
+Effort guide (`gpt-6.2-astra` accepted `low`, `medium`, `xhigh` and `max` on 2026-11-18 and
+rejected `none` and `minimal`):
 
 - `low`: a cheap sanity read only.
 - `medium`: the default for every Astra run.
@@ -164,7 +165,7 @@ Run them in parallel: a single message with two tool calls.
 ```
 Bash with:                             Agent with:
 cd /var/tmp/claude/<task>/astra-empty  - subagent_type: "general-purpose"
-codex exec -m gpt-6-astra \            - model: "fable"
+codex exec -m gpt-6.2-astra \            - model: "fable"
   -c model_reasoning_effort=medium \   - prompt: "<same question>"
   --disable shell_tool \
   --disable unified_exec \
@@ -268,7 +269,7 @@ When they disagree, do NOT silently pick one:
 ```
 ## Oracle Consultation Results
 
-### GPT-6 Astra Analysis (Primary: name the effort, e.g. at medium)
+### GPT-6.2 Astra Analysis (Primary: name the effort, e.g. at medium)
 <summary of Astra response>
 
 ### Fable Analysis (Secondary)
@@ -302,7 +303,7 @@ User: /consult-oracles Is this token check in <file:lines> bypassable?
 Single message, two parallel tool calls:
 1. Bash   the bounded Astra run at medium, excerpts pasted in
 2. Agent  (model: "fable") "<same question, with the files named>"
-Then synthesize with the template above, naming "GPT-6 Astra at medium".
+Then synthesize with the template above, naming "GPT-6.2 Astra at medium".
 ```
 
 ### Astra Answer Looks Wrong (add Fable)

@@ -71,13 +71,14 @@ cat /tmp/codex-look-out.txt
 
 ### Pin a specific model
 
-Add `-m <model>` if the user asked for a specific Codex model. Use explicit
-GPT-5.6 tier IDs (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) — the bare
-`gpt-5.6` alias hangs codex exec:
+Add `-m <model>` if the user asked for a specific Codex model. Use full model
+IDs from `codex debug models`, never a bare version alias. On 2026-11-18 the
+current ones are `gpt-6.2-astra`, `gpt-6.2-sol` and `gpt-6.1-terra` (Terra is
+the one OpenAI tunes for visual understanding):
 
 ```bash
 codex exec --skip-git-repo-check --sandbox read-only \
-  -m gpt-5.6-sol \
+  -m gpt-6.1-terra \
   -o /tmp/codex-look-out.txt \
   "..." \
   -i /path/to/image.png \

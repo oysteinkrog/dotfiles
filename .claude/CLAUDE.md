@@ -142,7 +142,7 @@ Rules, all hard:
 - **Reference by env-var name** in scripts and configs, never by value, and wrap the
   consuming command in `with-secrets KEY -- ...`.
 - **Anthropic, OpenAI and Google are approved providers.** Claude subagents (Opus, Sonnet,
-  Fable), OpenAI through Codex (GPT-6 Astra and the other OpenAI models) and Google Gemini
+  Fable), OpenAI through Codex (GPT-6.2 Astra and the other OpenAI models) and Google Gemini
   through PAL (Gemini 4 Argon and the other Gemini models) can receive proprietary content
   without asking first. Any other provider reached through PAL still needs approval before
   proprietary content goes to it.
@@ -197,14 +197,14 @@ These rules hold whether or not a skill is loaded:
   | Lookup, classify, list files, check one fact, format output | `haiku` |
   | Search, read and summarise, explore, mechanical edits, builds, tests, UI checks, log scraping | `sonnet` |
   | Writing real code, normal debugging, coordinating lanes, the session's own main thread | `opus` |
-  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult Astra (`codex exec -m gpt-6-astra`, effort `medium`) by default with a short, self-contained brief and a bounded reading list. Add `fable` for high-stakes or contested decisions, or when Astra is unavailable. Gemini 4 Argon (PAL) is currently unavailable. The answer comes back as text; the lane carries on on its own model |
+  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult Astra (`codex exec -m gpt-6.2-astra`, effort `medium`) by default with a short, self-contained brief and a bounded reading list. Add `fable` for high-stakes or contested decisions, or when Astra is unavailable. Gemini 4 Argon (PAL) is currently unavailable. The answer comes back as text; the lane carries on on its own model |
   | Review agents: PR review, security review, plan or bead polish review and verify | Codex/Astra at effort `medium`, with the diff and the named files pasted into one prompt of about 60k tokens. Use the bounded command below. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails |
   | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
   **Every Astra call uses the bounded command**, run from an empty folder with the tools off:
 
   ```sh
-  cd "$(mktemp -d -p /var/tmp/claude)" && timeout 900 codex exec -m gpt-6-astra \
+  cd "$(mktemp -d -p /var/tmp/claude)" && timeout 900 codex exec -m gpt-6.2-astra \
     -c model_reasoning_effort=medium --disable shell_tool --disable unified_exec \
     --disable code_mode_host --skip-git-repo-check -o out.md - < prompt.md
   ```
