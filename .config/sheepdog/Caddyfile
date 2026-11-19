@@ -1,0 +1,22 @@
+# Caddy in front of sheepdog: a real HTTPS name on the tailnet address only, so a
+# phone browser opens the voice page without a certificate warning.
+# Values come from ~/.config/tailnet-https/sheepdog.env (machine-specific, not in this repo):
+#   DOMAIN      the private HTTPS name, a DNS-only A record to the tailnet IP
+#   HTTPS_PORT  port on the tailnet address
+#   UPSTREAM    sheepdog's loopback listener (sheepdog itself keeps its own TLS
+#               port on the tailnet address for pairing and the iPhone app)
+# BIND (the tailnet IPv4) is set by sheepdog-caddy.service at start.
+# The certificate is fetched and renewed by tailnet-cert@sheepdog.timer.
+# sheepdog still requires a paired device: loopback requests carrying
+# X-Forwarded-* headers (Caddy adds them) get no automatic local access.
+{
+	admin off
+	auto_https disable_redirects
+	persist_config off
+}
+
+https://{$DOMAIN}:{$HTTPS_PORT} {
+	bind {$BIND}
+	tls {$HOME}/.local/share/tailnet-tls/sheepdog/certificates/{$DOMAIN}.crt {$HOME}/.local/share/tailnet-tls/sheepdog/certificates/{$DOMAIN}.key
+	reverse_proxy {$UPSTREAM}
+}

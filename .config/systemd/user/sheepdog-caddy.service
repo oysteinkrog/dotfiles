@@ -1,0 +1,15 @@
+[Unit]
+Description=Caddy HTTPS front for sheepdog on the tailnet address (see ~/.config/sheepdog/Caddyfile)
+After=sheepdog.service network-online.target
+Wants=sheepdog.service
+
+[Service]
+EnvironmentFile=%h/.config/tailnet-https/sheepdog.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'BIND=$(tailscale ip -4) exec caddy run --adapter caddyfile --config %h/.config/sheepdog/Caddyfile'
+Restart=on-failure
+RestartSec=10
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target

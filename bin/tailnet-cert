@@ -1,0 +1,34 @@
+#!/bin/sh
+# tailnet-cert NAME: get or renew the HTTPS certificate of a tailnet-only service
+# with lego (Cloudflare DNS-01), and restart that service's Caddy only when the
+# certificate file changed.
+#
+# NAME picks ~/.config/tailnet-https/NAME.env, which sets (machine-specific, not in
+# this repo):
+#   DOMAIN       the private HTTPS name, a DNS-only A record to the tailnet IP
+#   CADDY_UNIT   the user unit to restart on a new certificate
+# The certificate goes to ~/.local/share/tailnet-tls/NAME/certificates/DOMAIN.crt.
+# Run by tailnet-cert@NAME.service (daily timer). Needs CLOUDFLARE_KROG_TOKEN in the
+# secrets store. lego v5 `run` gets the certificate, or renews it once 30 days or
+# less are left; otherwise it does nothing. wherdr still has its own copy of this
+# script (wherdr-cert).
+set -eu
+name=${1:?usage: tailnet-cert NAME}
+env="$HOME/.config/tailnet-https/$name.env"
+[ -r "$env" ] || { echo "tailnet-cert: missing $env" >&2; exit 1; }
+. "$env"
+: "${DOMAIN:?set DOMAIN in $env}"
+: "${CADDY_UNIT:?set CADDY_UNIT in $env}"
+dir="$HOME/.local/share/tailnet-tls/$name"
+crt="$dir/certificates/$DOMAIN.crt"
+mkdir -p "$dir" && chmod 700 "$dir"
+before=$(stat -c %Y "$crt" 2>/dev/null || echo none)
+# --dns.resolvers: the local resolver (Headscale MagicDNS) cannot see the challenge record.
+with-secrets CLOUDFLARE_KROG_TOKEN -- sh -c '
+  CF_DNS_API_TOKEN="$CLOUDFLARE_KROG_TOKEN" exec lego run --accept-tos --dns cloudflare \
+    --dns.resolvers 1.1.1.1:53 --renew-days 30 --domains "$1" --path "$2"' sh "$DOMAIN" "$dir"
+after=$(stat -c %Y "$crt" 2>/dev/null || echo none)
+if [ "$before" != "$after" ]; then
+    echo "tailnet-cert: new certificate for $DOMAIN, restarting $CADDY_UNIT"
+    systemctl --user try-restart "$CADDY_UNIT"
+fi

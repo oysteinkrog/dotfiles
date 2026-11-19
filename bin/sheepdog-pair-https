@@ -1,0 +1,21 @@
+#!/bin/sh
+# sheepdog-pair-https: print a one-time sheepdog pairing code whose browser link opens
+# the real HTTPS name (Caddy in front, see ~/.config/sheepdog/Caddyfile) instead of
+# the tailnet IP with sheepdog's self-signed certificate.
+# Same code as `sheepdog pair` (works once, expires after 10 minutes, replaces any
+# earlier code); only the host:port in the link changes. The browser pairs and keeps
+# its key for the origin it opens, so pair with this link to use the name.
+# Machine values come from ~/.config/tailnet-https/sheepdog.env (DOMAIN, HTTPS_PORT,
+# UPSTREAM). Needs qrencode.
+set -eu
+. "$HOME/.config/tailnet-https/sheepdog.env"
+link=$(curl -fsS "http://$UPSTREAM/api/pair?new=1" | jq -r .link)
+case "$link" in
+    https://*/voice\#pair=*) ;;
+    *) echo "sheepdog-pair-https: unexpected pairing link from sheepdog" >&2; exit 1 ;;
+esac
+link="https://$DOMAIN:$HTTPS_PORT/voice#${link#*#}"
+qrencode -t ansiutf8 -m 2 "$link"
+echo "Scan with the phone camera. Opens https://$DOMAIN:$HTTPS_PORT/voice and pairs this browser."
+echo "Works once and expires in 10 minutes. Showing a new code replaces it."
+if [ "${1:-}" = "--link" ]; then echo "$link"; fi
