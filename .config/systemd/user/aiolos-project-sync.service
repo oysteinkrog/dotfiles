@@ -1,0 +1,20 @@
+[Unit]
+Description=Post agent session to herdr space mappings to aiolos (per-project cost)
+# See ~/.config/aiolos-rc/project-sync. Reads claude-persist snapshots,
+# herdr-app ls, hc events and transcript titles; adds nothing to requests.
+After=network-online.target
+
+[Service]
+ExecStart=%h/bin/with-secrets AIOLOS_API_KEY -- %h/.config/aiolos-rc/project-sync
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin
+# AIOLOS_URL=... (not tracked: it names the server)
+EnvironmentFile=%h/.config/aiolos/project-sync.env
+Restart=always
+RestartSec=30
+Nice=10
+IOSchedulingClass=idle
+# The first pass reads transcripts once to find session titles.
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target

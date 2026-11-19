@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""Tell aiolos which herdr space each agent session on this machine sits in.
+
+aiolos reports cost per herdr space. It sees each request's session id but
+not where the session runs, so this job posts, once a minute and right after
+an `hc events` change:
+
+- sightings: session id -> (space id, tab id, terminal) on this machine, for
+  Claude Code sessions (claude-persist snapshots) and running Codex
+  processes (their HC_TERMINAL_ID and open rollout file);
+- names: the current names of spaces, tabs and terminals (herdr-app ls) and
+  of sessions (the newest /rename title in the transcript, else the
+  snapshot's name).
+
+aiolos keeps one sighting per session and 5-minute bucket, and resolves
+names when a report runs, so renames and moves show correctly. A session
+that is open but idle, and a name that has not changed, are posted again
+only every 30 minutes. Nothing is added to any model request.
+
+Run by aiolos-project-sync.service through with-secrets, which provides
+AIOLOS_API_KEY. The key is sent as x-api-key and never printed, and it is
+removed from the environment before any other program starts. AIOLOS_URL
+names the aiolos server; the unit reads it from the untracked file
+~/.config/aiolos/project-sync.env (AIOLOS_URL=...).
+
+    project-sync            run until stopped
+    project-sync --once     post once (also the 35-day backfill: every
+                            snapshot still on disk is posted)
+    project-sync --dry-run  print what would be posted, send nothing
+"""
+
+import argparse
+import datetime
+import glob
+import ipaddress
+import json
+import os
+import queue
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HOME = os.path.expanduser("~")
+SNAPSHOTS = os.path.join(HOME, ".local/state/claude-persist/sessions")
+MAX_AGE_S = 35 * 86400  # the server refuses older sightings
+INTERVAL_S = 60
+HEARTBEAT_S = 30 * 60  # repost an unchanged sighting or name this often
+ACTIVE_S = 10 * 60  # a transcript written this recently means a busy session
+BATCH = 2000
+ROLLOUT_ID = re.compile(
+    r"rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"
+)
+TITLE = re.compile(rb'"type":"custom-title","customTitle":"((?:[^"\\]|\\.)*)"')
+
+
+def log(msg):
+    print(f"project-sync: {msg}", flush=True)
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def machine_name():
+    return (
+        re.sub(r"[^A-Za-z0-9_.-]", "-", socket.gethostname().split(".")[0]) or "unknown"
+    )
+
+
+# ---- where to post ------------------------------------------------------------
+
+
+def check_url(url):
+    """https anywhere; plain http only to loopback or tailnet hosts, whose
+    traffic never crosses a network in clear text."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https":
+        return
+    host = parts.hostname or ""
+    if parts.scheme == "http":
+        if host == "localhost":
+            return
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10"):
+                return
+        except ValueError:
+            pass
+    sys.exit(
+        "project-sync: AIOLOS_URL must be https, or http to a loopback or tailnet host"
+    )
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it could carry the key to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, "refusing redirect", headers, fp
+        )
+
+
+# No proxy from the environment: the key goes straight to aiolos.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+
+def post(url, key, payload):
+    req = urllib.request.Request(
+        url + "/api/projects/sync",
+        data=json.dumps(payload).encode(),
+        headers={"content-type": "application/json", "x-api-key": key},
+        method="POST",
+    )
+    with OPENER.open(req, timeout=30) as resp:
+        return json.load(resp)
+
+
+# ---- what to post -------------------------------------------------------------
+
+
+def run_json(argv):
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+        return json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def herdr_layout():
+    """terminal -> (space id, tab id), and names by kind, from herdr-app ls.
+    None when herdr does not answer: an empty layout would look like every
+    session had left herdr."""
+    where, names = {}, []
+    data = run_json(["herdr-app", "ls"])
+    if not isinstance(data, dict) or not isinstance(data.get("spaces"), list):
+        return None
+    for sp in data.get("spaces", []):
+        if sp.get("name"):
+            names.append(("space", sp["id"], sp["name"]))
+        for tb in sp.get("tabs", []):
+            if tb.get("name"):
+                names.append(("tab", tb["id"], tb["name"]))
+            for t in tb.get("terminals", []):
+                where[t["terminal"]] = (sp["id"], tb["id"])
+                if t.get("name"):
+                    names.append(("terminal", t["terminal"], t["name"]))
+    return where, names
+
+
+class TitleCache:
+    """Newest /rename title per transcript, reading only new bytes each time."""
+
+    def __init__(self):
+        self.state = {}  # path -> (offset, title)
+
+    def title(self, path):
+        offset, title = self.state.get(path, (0, None))
+        try:
+            if os.path.getsize(path) < offset:
+                offset, title = 0, None
+            with open(path, "rb") as f:
+                f.seek(offset)
+                carry = b""
+                while True:
+                    block = f.read(8 << 20)
+                    if not block:
+                        break
+                    data = carry + block
+                    # Only whole lines; keep a partial last line for later.
+                    end = data.rfind(b"\n") + 1
+                    for m in TITLE.finditer(data[:end]):
+                        try:
+                            title = json.loads(b'"' + m.group(1) + b'"')
+                        except ValueError:
+                            pass
+                    offset += end
+                    carry = data[end:]
+        except OSError:
+            pass
+        self.state[path] = (offset, title)
+        return title
+
+
+BOOT_TIME = None
+
+
+def process_start(pid):
+    """Start time of `pid` in epoch seconds, from /proc."""
+    global BOOT_TIME
+    if BOOT_TIME is None:
+        with open("/proc/stat") as f:
+            BOOT_TIME = next(int(ln.split()[1]) for ln in f if ln.startswith("btime"))
+    with open(f"/proc/{pid}/stat") as f:
+        ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+    return BOOT_TIME + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def session_is_live(snap):
+    """True when the snapshot's pid is still the Claude Code process that
+    wrote it: its program lives under a `claude` directory, and it started
+    before the session did (a reused pid starts later)."""
+    pid = snap.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        if "/claude/" not in os.readlink(f"/proc/{pid}/exe"):
+            return False
+        started = datetime.datetime.fromisoformat(snap["started"]).timestamp()
+        return process_start(pid) <= started + 60
+    except (OSError, KeyError, TypeError, ValueError, StopIteration):
+        return False
+
+
+def recently_written(path):
+    """True when `path` was written in the last ACTIVE_S seconds."""
+    try:
+        return bool(path) and time.time() - os.path.getmtime(path) < ACTIVE_S
+    except OSError:
+        return False
+
+
+def claude_sessions(where, titles, cutoff_s):
+    """Sightings and session names from claude-persist snapshots.
+
+    A live session is placed by the current layout (`where`), and skipped
+    when the layout is unknown. A finished one is placed where its snapshot
+    says it was, at the snapshot's time: today's layout may have reused its
+    terminal for something else."""
+    sightings, names = [], []
+    for path in glob.glob(os.path.join(SNAPSHOTS, "*.json")):
+        try:
+            mtime = os.path.getmtime(path)
+            with open(path) as f:
+                snap = json.load(f)
+        except (OSError, ValueError):
+            continue
+        live = session_is_live(snap)
+        # claude-persist rewrites a snapshot only when it changes, so a live
+        # session can have an old file.
+        if mtime < cutoff_s and not live:
+            continue
+        sid = snap.get("session_id") or os.path.basename(path).split("@")[0]
+        hc = snap.get("hc") if isinstance(snap.get("hc"), dict) else {}
+        terminal = hc.get("terminal") or ""
+        saved = (hc.get("space") or "", hc.get("tab") or "")
+        if live:
+            # Skip this pass when herdr did not answer, or when the terminal
+            # is missing from an otherwise good layout.
+            if where is None or (terminal and terminal not in where):
+                continue
+            space, tab = where.get(terminal, ("", ""))
+        else:
+            space, tab = saved
+        seen = now_ms() if live else int(mtime * 1000)
+        active = live and recently_written(snap.get("transcript"))
+        sightings.append(
+            {
+                "session_id": sid,
+                "client": "claude-code",
+                "space_id": space,
+                "tab_id": tab,
+                "terminal": terminal,
+                "seen_at": seen,
+                "_live": live,
+                "_active": active,
+            }
+        )
+        title = titles.title(snap["transcript"]) if snap.get("transcript") else None
+        name = title or snap.get("name")
+        if name:
+            names.append(("session", sid, name, seen))
+        if terminal and hc.get("name"):
+            names.append(("terminal", terminal, hc["name"], seen))
+    return sightings, names
+
+
+def codex_sessions(where):
+    """Sightings for running Codex processes: their terminal and rollout file."""
+    sightings = []
+    if where is None:
+        return sightings
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if not f.read().strip().startswith("codex"):
+                    continue
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                env = dict(
+                    kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv
+                )
+            sid, rollout = None, None
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                target = os.readlink(f"/proc/{pid}/fd/{fd}")
+                m = ROLLOUT_ID.search(target)
+                if m:
+                    sid, rollout = m.group(1), target
+                    break
+        except OSError:
+            continue
+        if not sid:
+            continue
+        terminal = env.get(b"HC_TERMINAL_ID", b"").decode(errors="replace")
+        if terminal and terminal not in where:
+            continue  # its terminal is missing from this layout; try next pass
+        space, tab = where.get(terminal, ("", ""))
+        sightings.append(
+            {
+                "session_id": sid,
+                "client": "codex",
+                "space_id": space,
+                "tab_id": tab,
+                "terminal": terminal,
+                "seen_at": now_ms(),
+                "_live": True,
+                "_active": recently_written(rollout),
+            }
+        )
+    return sightings
+
+
+def collect(titles, cutoff_s):
+    layout = herdr_layout()
+    where, layout_names = layout if layout else (None, [])
+    sightings, session_names = claude_sessions(where, titles, cutoff_s)
+    # The server keeps the newest sighting per session and 5-minute bucket,
+    # so every distinct sighting goes up, oldest first.
+    sightings = sorted(sightings + codex_sessions(where), key=lambda s: s["seen_at"])
+    t = now_ms()
+    # One name per id. The herdr layout is current, so it wins over the name
+    # a snapshot recorded for the same terminal.
+    chosen = {}
+    for k, i, n, s in session_names:
+        old = chosen.get((k, i))
+        if old is None or s > old["updated_at"]:
+            chosen[(k, i)] = {"kind": k, "id": i, "name": n, "updated_at": min(s, t)}
+    for k, i, n in layout_names:
+        chosen[(k, i)] = {"kind": k, "id": i, "name": n, "updated_at": t}
+    return sightings, list(chosen.values())
+
+
+class Memo:
+    """What was last posted, so unchanged things go up only every
+    HEARTBEAT_S. Updated only after a pass fully succeeds."""
+
+    def __init__(self):
+        self.posted = {}  # key -> (value, time posted)
+
+    def due(self, key, value, always=False):
+        last = self.posted.get(key)
+        if always or last is None or last[0] != value:
+            return True
+        return time.time() - last[1] >= HEARTBEAT_S
+
+    def filter(self, sightings, names):
+        def place(s):
+            return (s["space_id"], s["tab_id"], s["terminal"])
+
+        # A finished session's sighting never changes: post it once per run.
+        # A live one goes up when it moves, while it is busy, or on the
+        # heartbeat.
+        keep = []
+        for s in sightings:
+            if not s["_live"]:
+                if ("d", s["session_id"], s["seen_at"]) not in self.posted:
+                    keep.append(s)
+                continue
+            last = self.posted.get(("s", s["session_id"]))
+            if not s["terminal"] and last and last[0][2]:
+                continue  # lost its terminal id for a moment; keep the known place
+            if self.due(("s", s["session_id"]), place(s), always=s["_active"]):
+                keep.append(s)
+        names = [n for n in names if self.due(("n", n["kind"], n["id"]), n["name"])]
+        return keep, names
+
+    def record(self, sightings, names):
+        t = time.time()
+        for s in sightings:
+            key = (
+                ("s", s["session_id"])
+                if s["_live"]
+                else ("d", s["session_id"], s["seen_at"])
+            )
+            self.posted[key] = ((s["space_id"], s["tab_id"], s["terminal"]), t)
+        for n in names:
+            self.posted[("n", n["kind"], n["id"])] = (n["name"], t)
+
+
+def public(sightings):
+    """Sightings without this job's own bookkeeping fields."""
+    return [{k: v for k, v in s.items() if not k.startswith("_")} for s in sightings]
+
+
+def sync(url, key, titles, cutoff_s, memo, dry_run=False):
+    """Post one pass. Raises on any failed post, so the caller knows the
+    pass is incomplete; then nothing is marked as posted."""
+    sightings, names = memo.filter(*collect(titles, cutoff_s))
+    if dry_run:
+        print(
+            json.dumps(
+                {
+                    "machine": machine_name(),
+                    "sessions": public(sightings),
+                    "names": names,
+                },
+                indent=1,
+            )
+        )
+        return
+    total = {}
+    body = public(sightings)
+    for i in range(0, max(len(body), len(names), 1), BATCH):
+        got = post(
+            url,
+            key,
+            {
+                "machine": machine_name(),
+                "sessions": body[i : i + BATCH],
+                "names": names[i : i + BATCH],
+            },
+        )
+        for k, v in got.items():
+            if isinstance(v, int):
+                total[k] = total.get(k, 0) + v
+    memo.record(sightings, names)
+    if (
+        total.get("mappings_added")
+        or total.get("mappings_changed")
+        or total.get("names_updated")
+        or total.get("rejected")
+    ):
+        log(f"{len(sightings)} sessions, {len(names)} names: {total}")
+
+
+def watch_events(trigger):
+    """Set `trigger` whenever hc reports a terminal or label change."""
+    while True:
+        try:
+            proc = subprocess.Popen(
+                ["hc", "events"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            for line in proc.stdout:
+                if (
+                    '"type":"labels"' in line
+                    or '"type":"created"' in line
+                    or '"type":"removed"' in line
+                ):
+                    trigger.put(None)
+            proc.wait()
+        except OSError:
+            pass
+        time.sleep(10)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--once", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    # Taken out of the environment first, so herdr-app, hc and anything
+    # else this job starts never sees it.
+    key = os.environ.pop("AIOLOS_API_KEY", "")
+    titles = TitleCache()
+    memo = Memo()
+    if args.dry_run:
+        sync("", "", titles, time.time() - MAX_AGE_S, memo, dry_run=True)
+        return
+    url = os.environ.get("AIOLOS_URL", "").rstrip("/")
+    if not url:
+        sys.exit(
+            "project-sync: AIOLOS_URL is not set (see ~/.config/aiolos/project-sync.env)"
+        )
+    check_url(url)
+    if not key:
+        sys.exit("project-sync: AIOLOS_API_KEY is not set (run through with-secrets)")
+
+    # Until one pass has fully succeeded, every pass posts every snapshot on
+    # disk (the backfill). After that, a pass skips snapshots untouched for
+    # a day unless their session is still live.
+    cutoff = time.time() - MAX_AGE_S
+    if args.once:
+        sync(url, key, titles, cutoff, memo)
+        return
+    trigger = queue.Queue()
+    threading.Thread(target=watch_events, args=(trigger,), daemon=True).start()
+    while True:
+        try:
+            sync(url, key, titles, cutoff, memo)
+            cutoff = time.time() - 86400
+        except Exception as e:  # keep running; the next pass retries
+            log(f"pass failed: {type(e).__name__}: {getattr(e, 'reason', e)}")
+        try:
+            trigger.get(timeout=INTERVAL_S)
+            time.sleep(10)  # let a burst of events settle; at most 6 passes a minute
+            while not trigger.empty():
+                trigger.get_nowait()
+        except queue.Empty:
+            pass
+
+
+if __name__ == "__main__":
+    main()
