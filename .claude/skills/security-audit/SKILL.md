@@ -28,7 +28,7 @@ This skill is agent-neutral:
 
 Use equivalent platform capabilities while preserving role, write-isolation, prompt, and independence boundaries.
 
-**Model routing (2026-10-28).** Run verifiers, coverage critics, and any hunter whose unit fits in one prompt as bounded GPT-6 Astra runs at effort `medium` (see `/consult-oracles`): the source excerpts pasted in, under about 60k tokens, at most 4 at once. A hunter or verifier that must explore the tree or run a sandboxed local check stays a Claude agent. Add a Fable verifier as a cross-check for a high-stakes (critical or high) finding. If Codex fails, use Fable, then Opus, and record the substitution.
+**Model routing (2026-10-28).** Run verifiers, coverage critics, and any hunter whose unit fits in one prompt as bounded GPT-6.2 Astra runs at effort `medium` (see `/consult-oracles`): the source excerpts pasted in, under about 60k tokens, at most 4 at once. A hunter or verifier that must explore the tree or run a sandboxed local check stays a Claude agent. Add a Fable verifier as a cross-check for a high-stakes (critical or high) finding. If Codex fails, use Fable, then Opus, and record the substitution.
 
 ## Universal execution safety
 

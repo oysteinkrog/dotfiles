@@ -113,7 +113,7 @@ Read the repository's key files to understand current state:
 
 ### Step 2: Oracle Scoring
 
-Load `/swarm-oracle` and run its FOR/AGAINST debate on the scorecard. By default that is two GPT-6 Astra sessions through the Codex CLI:
+Load `/swarm-oracle` and run its FOR/AGAINST debate on the scorecard. By default that is two GPT-6.2 Astra sessions through the Codex CLI:
 
 - **FOR:** score generously and name the strengths.
 - **AGAINST:** score critically and name the gaps.

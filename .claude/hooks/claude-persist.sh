@@ -88,6 +88,7 @@ herdr_info() {
 # The herdr-core (hc) terminal of Claude process $1, as JSON {terminal, name},
 # when it runs in one. Prints nothing otherwise.
 HC_BIN="${CLAUDE_PERSIST_HC_BIN:-$HOME/.local/bin/herdr-core}"
+HERDR_APP_BIN="${CLAUDE_PERSIST_HERDR_APP_BIN:-herdr-app}"
 hc_info() {
   local env term name
   env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null) || return 0
@@ -95,12 +96,21 @@ hc_info() {
   [ -n "$term" ] || return 0
   # The herdr app shows a terminal only when it has a herdr.space label, so keep
   # that too: restore-hc puts the session back in the same space.
-  local got space
+  # The tab too, so the session goes back into its named tab: most terminals
+  # carry no herdr.tab label, so ask the open herdr window (once per run).
+  local got space tab
   got=$("$HC_BIN" get "$term" --json 2>/dev/null)
   name=$(jq -r '.name // empty' <<<"$got" 2>/dev/null)
   space=$(jq -r '.labels["herdr.space"] // empty' <<<"$got" 2>/dev/null)
-  jq -cn --arg t "$term" --arg n "$name" --arg s "$space" \
-    '{terminal:$t, name:(if $n == "" then null else $n end), space:(if $s == "" then null else $s end)}'
+  tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$got" 2>/dev/null)
+  if [ -z "$tab" ] && [ -n "$space" ]; then
+    [ -n "${HC_APP_LS+x}" ] || HC_APP_LS=$(timeout 5 "$HERDR_APP_BIN" ls 2>/dev/null || true)
+    tab=$(jq -r --arg t "$term" '[.spaces[]?.tabs[]? | select(any(.terminals[]?; .terminal == $t)) | .id][0] // empty' \
+      <<<"$HC_APP_LS" 2>/dev/null)
+  fi
+  jq -cn --arg t "$term" --arg n "$name" --arg s "$space" --arg b "$tab" \
+    '{terminal:$t, name:(if $n == "" then null else $n end), space:(if $s == "" then null else $s end),
+      tab:(if $b == "" then null else $b end)}'
 }
 
 # Did entry $1 run outside the Frankenterm mux (herdr or herdr-core)? Those
@@ -1338,16 +1348,50 @@ restore_hc() {
     } > "$script" || { echo "could not write $script"; continue; }
     name=$(jq -r '.hc.name // empty' "$f")
     [ -n "$name" ] || name=$(herdr_name "$(tab_title "$transcript" "$cwd")")
-    mv "$f" "$STATE_DIR/restored/"
-    local -a lbl=()
+    # An earlier restore may have had to add the session's id to the name.
+    local was_name="$name"
+    name="${name%-"${sid:0:4}"}"
     space=$(jq -r '.hc.space // empty' "$f")
+    local saved_tab
+    saved_tab=$(jq -r '.hc.tab // empty' "$f")
+    mv "$f" "$STATE_DIR/restored/"
+    # hc keeps each old terminal across the reboot as a plain shell under the
+    # old name and in the old herdr space (2026-11-18: all 38 sessions came back
+    # under name-xxxx outside any space, in tabs named "1"). Start the session
+    # in its old space and tab (herdr.tab, full id: the app adds it to that
+    # tab, which keeps its name), and remove the stand-in when it is an idle
+    # shell.
+    local old="" fg="" fgpid="" tab="" standin=""
+    # The stand-in has the name the terminal had at the reboot.
+    if old=$("$HC_BIN" get "$was_name" --json 2>/dev/null) && [ "$(jq -r '.state' <<<"$old")" = live ]; then
+      [ -n "$space" ] || space=$(jq -r '.labels["herdr.space"] // empty' <<<"$old")
+      [ "$(jq -r '.labels["herdr.space"] // empty' <<<"$old")" = "$space" ] && tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$old")
+      fg=$(jq -r '.foreground.name // empty' <<<"$old"); fgpid=$(jq -r '.foreground.pid // empty' <<<"$old")
+      [[ "$fg" =~ ^(fish|bash|zsh|sh)$ ]] && [ -n "$fgpid" ] && [ -z "$(pgrep -P "$fgpid")" ] \
+        && standin=$(jq -r '.address' <<<"$old")
+    fi
+    [ -n "$tab" ] || tab="$saved_tab"
+    local -a lbl=()
     [ -n "$space" ] && lbl=(--label "herdr.space=$space")
-    if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1 \
-       || "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
-      echo "resume $sid ($cwd) in hc terminal $name"
+    [ -n "$tab" ] && lbl+=(--label "herdr.tab=$tab")
+    # The stand-in holds the name, and hc cannot rename. A short placeholder
+    # keeps the tab open while the stand-in goes, so the session gets both
+    # its old name and its old tab.
+    local hold=""
+    if [ -n "$standin" ]; then
+      hold=$(herdr_name "$name-hold-${sid:0:4}")
+      [ -n "$tab" ] && "$HC_BIN" run --bg --name "$hold" "${lbl[@]}" --cwd "$cwd" -- sleep 120 >/dev/null 2>&1 || hold=""
+      "$HC_BIN" kill "$standin" >/dev/null 2>&1 && "$HC_BIN" rm "$standin" >/dev/null 2>&1 \
+        && echo "removed stand-in shell $standin ($was_name)"
+    fi
+    if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
+      echo "resume $sid ($cwd) in hc terminal $name${tab:+ (tab $tab)}"
+    elif "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
+      echo "resume $sid ($cwd) in hc terminal $name-${sid:0:4}${tab:+ (tab $tab)}"
     else
       echo "could not start $sid in hc"
     fi
+    [ -n "$hold" ] && { "$HC_BIN" kill "$hold" >/dev/null 2>&1; "$HC_BIN" rm "$hold" >/dev/null 2>&1; }
   done
   exec 9>&-
 }

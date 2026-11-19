@@ -21,9 +21,6 @@ items=(
   .dotfiles/.claude/history.jsonl
   AppData/Roaming/coding-agent-search/coding-agent-search/data   # cass index
   .codex
-  "$U/.mcp_agent_mail_git_mailbox_repo"                    # the live agent-mail store
-  .mcp_agent_mail_git_mailbox_repo
-  .local/share/mcp-agent-mail
   .gemini
   .local/share/opencode
   .cass-memory

@@ -1,6 +1,6 @@
 ---
 name: swarm-review
-description: Run 6 parallel review lanes by default (bounded GPT-6 Astra runs), each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
+description: Run 6 parallel review lanes by default (bounded GPT-6.2 Astra runs), each with a different quality lens (correctness, safety, perf, a11y, etc.), against plans, beads, code, or architecture decisions. Use when a thorough multi-perspective review is needed before shipping.
 argument-hint: "<target: plan file, bead list, or code path> [--lenses L1,L2,...] [--team-size N]"
 ---
 
@@ -20,7 +20,7 @@ Run N parallel review lanes (default 6), each assigned a distinct review lens, t
 
 Full set of 10 lenses. The default team of 6 runs lenses 1, 2, 3, 6, 9 and 10 (correctness, safety, performance, testability, security, feasibility). Override with `--lenses` to select a subset or customize.
 
-**Model per lane (2026-10-28):** every lane is one bounded GPT-6 Astra run at effort `medium` (see `/consult-oracles`, Bounded Astra run). At most 4 run at once, so a team of 6 goes in two waves. If Codex fails, run that lane as a Fable subagent, then Opus, and say so. Add a Fable run beside Astra for the security lens (9) only when the change is high-stakes.
+**Model per lane (2026-10-28):** every lane is one bounded GPT-6.2 Astra run at effort `medium` (see `/consult-oracles`, Bounded Astra run). At most 4 run at once, so a team of 6 goes in two waves. If Codex fails, run that lane as a Fable subagent, then Opus, and say so. Add a Fable run beside Astra for the security lens (9) only when the change is high-stakes.
 
 | # | Lens | Focus | Key Questions |
 |---|------|-------|---------------|

@@ -116,9 +116,23 @@ risks stale DLLs. For parallel .NET builds in one checkout, use `AgentOutputSuff
 (monorepo `docs/dev/recovery.md`).
 
 On Linux, a monorepo build of a `net10.0-windows` project fails with NETSDK1100 unless
-`EnableWindowsTargeting` is set. The repo does not set it globally. Use
-`build.sh build -r win-x64`, which adds it, or pass `-p:EnableWindowsTargeting=true` to a
-bare `dotnet build` or `dotnet test`. Three lanes lost runs to this on 2026-11-01 and 11-02.
+`EnableWindowsTargeting` is set. The repo does not set it globally, and
+`build.sh build -r win-x64` does not add it either (checked on master, stable/26.2 and
+stable/26.1 on 2026-11-18: only `build --target wine` on 26.2 and the publish command on
+master set it). Pass `-p:EnableWindowsTargeting=true` to `dotnet build` or `dotnet test`.
+A plain whole-solution `dotnet build` on Linux does not work on every branch: without
+`-r win-x64` the WPF app projects fail with NETSDK1082, and with `-r` on the `.sln` the
+.NET 11 SDK (master, stable/26.2) refuses it with NETSDK1134. `./build.sh build --target
+wine` is not a whole-solution build either: it builds only MotionCatalyst.csproj and
+UiMcpHost plus their references (79 of 109 projects on master, no test projects, no
+MotionCatalyst-cli). The .NET 10 SDK on stable/26.1 refuses `-r` on a `.sln` too
+(NETSDK1134, seen 2026-11-18), and a restore does not catch it. So never pass `-r` to a
+solution build. Map the changed files to their projects and compile the ones your test runs
+did not already build, one project at a time:
+`dotnet build <project>.csproj -c Debug -r win-x64 -p:EnableWindowsTargeting=true` (a RID on
+a project is fine). `tools/wine/run-tests.sh --build-only` exists on master only; stable/26.2
+rejects the option. Three lanes lost runs to this on 2026-11-01 and 11-02, and
+three more on 2026-11-18 after waiting up to 58 min in the queue.
 
 ## 6. Parallel builds of one tree
 

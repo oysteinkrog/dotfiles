@@ -146,7 +146,7 @@ Each agent prompt MUST include:
 
 ## Pattern 3: Oracle Integration
 
-Use Astra oracles (`codex exec` on `gpt-6-astra` via `/swarm-oracle`, effort `medium`,
+Use Astra oracles (`codex exec` on `gpt-6.2-astra` via `/swarm-oracle`, effort `medium`,
 one bounded prompt per run) for adversarial review at decision points. Every review
 and verify stage also runs as bounded Astra runs (see `/consult-oracles`, Bounded Astra
 run; at most 4 at once). Add a Fable pair (fresh `Agent` subagents) for a security
@@ -318,7 +318,7 @@ wizard flow, data model, integration, terminology, a11y, VM architecture.
 **Output:** Synthesize designs into plan → `foundation/product/features/`.
 
 ## Phase 4: Oracle Validation
-**Use:** `/swarm-oracle` | **Team:** 2 GPT-6 Astra (FOR + AGAINST); add 2 Fable if security or contested
+**Use:** `/swarm-oracle` | **Team:** 2 GPT-6.2 Astra (FOR + AGAINST); add 2 Fable if security or contested
 
 Two rounds: (1) UX + interaction design, (2) architecture + data model.
 Apply corrections before proceeding.

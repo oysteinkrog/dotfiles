@@ -47,30 +47,33 @@ raising `--effort`.
   back"), "think harder" in place of a contract, mixing jobs in one run, and
   demanding certainty the evidence can't support.
 
-## Models (GPT-5.6 era — verified 2026-07-10)
+## Models (GPT-6.2 era, verified 2026-11-18)
 
-The default model lives in `~/.codex/config.toml` (currently `gpt-5.6-sol`,
-`model_reasoning_effort = "medium"`). Codex is the only local route to GPT-5.6 —
-PAL MCP still tops out at `gpt-5.5-pro`.
+The default model lives in `~/.codex/config.toml` (currently `gpt-6.2-astra`,
+`model_reasoning_effort = "medium"`). Run `codex debug models` to see the live
+catalog. Codex is the only local route to GPT-6.x; PAL MCP still tops out at
+`gpt-5.5-pro`.
 
 | Model | `-m` value | Use for |
 |-------|-----------|---------|
-| GPT-5.6 Sol | `gpt-5.6-sol` | Flagship. Ambiguous, difficult, or high-value work: complex code changes, deep review, research. Default when unsure. |
-| GPT-5.6 Terra | `gpt-5.6-terra` | Everyday workhorse — GPT-5.5-level quality, cheaper/faster. Natural replacement for tasks previously sent to gpt-5.5. |
-| GPT-5.6 Luna | `gpt-5.6-luna` | Fast, well-defined, repeatable work: extraction, classification, transformation, mechanical edits. |
-| GPT-5.5 | `gpt-5.5` | Prior-generation frontier; still available as a fallback. |
-| GPT-5.3 Codex Spark | `gpt-5.3-codex-spark` | Near-instant iteration preview (ChatGPT Pro only). |
+| GPT-6.2 Astra | `gpt-6.2-astra` | Most capable. Oracle questions, reviews, complex code changes, research. Always through the bounded command in `/consult-oracles`. |
+| GPT-6.2 Sol | `gpt-6.2-sol` | Fast everyday coding model. Default when the task does not need Astra. |
+| GPT-6.1 Terra | `gpt-6.1-terra` | Efficient; strongest at visual understanding and computer use. Good fit for image reads. |
+| GPT-6 Luna | `gpt-6-luna` | Fast and cheap: extraction, classification, mechanical edits. |
 
-- **Always pass explicit tier IDs.** The bare `gpt-5.6` alias hangs `codex exec`
-  indefinitely on this setup (process alive at 0% CPU, no output), and the
-  interactive `/model` picker doesn't list the 5.6 models even though `-m`
-  works (known upstream issue). `gpt-5.6-sol|terra|luna` all work.
+Older IDs (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-*`) are still in
+the catalog, marked previous generation or legacy. Do not pin them.
+
+- **Always pass full model IDs.** A bare version alias (for example `gpt-5.6`)
+  hung `codex exec` on this setup in 2026-07 (process alive at 0% CPU, no
+  output).
 - **Reasoning effort:** `-c model_reasoning_effort=<value>`. The API enum is
   `none|minimal|low|medium|high|xhigh`; on top of that the CLI accepts `max`
   (deepest single-task reasoning) and `ultra` (Sol Ultra — fans out subagents
   for work that splits into parallel chunks). All of these are accepted by
   `codex exec` too, not just interactive sessions (verified 2026-07-10).
-  There is no exact effort mapping from 5.5 to 5.6 — start lower than you
+  `gpt-6.2-astra` rejects `none` and `minimal` (2026-11-18).
+  Effort does not map one to one between model versions. Start lower than you
   think and raise only if the result is shallow. Most tasks don't need
   `max`/`ultra`; reserve `ultra` for genuinely decomposable work and expect
   it to burn plan quota fast.
@@ -179,5 +182,4 @@ changes. "Process running" is NOT "working."
   model_reasoning_effort=high`, `-m <model>` (the old `--effort` flag is gone
   in current Codex). Leave both at their defaults unless the user asks or the
   task clearly fits a cheaper tier (see Models above) — tighten the prompt
-  first. When overriding, use explicit tier IDs, never the bare `gpt-5.6`
-  alias.
+  first. When overriding, use full model IDs, never a bare version alias.

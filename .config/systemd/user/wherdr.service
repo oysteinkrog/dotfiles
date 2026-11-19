@@ -1,0 +1,24 @@
+[Unit]
+Description=wherdr v3 phone and web UI for herdr-core (loopback behind Caddy, or tailnet address)
+After=hc-core.service network-online.target
+Wants=hc-core.service
+
+[Service]
+WorkingDirectory=%h/.local/share/wherdr
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HC_SOCKET=%t/herdr-core/default.sock
+Environment=DATA_DIR=%h/.local/share/wherdr-data
+Environment=PORT=7683
+Environment=TZ=Europe/Oslo
+# Machine-specific: WHERDR_DOMAIN and APP_URL (https). Optional.
+EnvironmentFile=-%h/.config/wherdr/wherdr.env
+# With an HTTPS name, wherdr listens on loopback and wherdr-caddy.service serves the
+# tailnet address. Without one, wherdr listens on the tailnet address itself (plain
+# HTTP). Never 0.0.0.0.
+ExecStart=/bin/sh -c 'if [ -n "$WHERDR_DOMAIN" ]; then HOST=127.0.0.1; else HOST=$(tailscale ip -4); fi; export HOST; exec node scripts/start.mjs'
+Restart=on-failure
+RestartSec=10
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

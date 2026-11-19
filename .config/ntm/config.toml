@@ -4,10 +4,10 @@ projects_base = "/home/oystein/work"
 claude = "env -u CLAUDECODE -u CLAUDE_CODE_SESSION -u CLAUDE_CODE_ENTRY_POINT NODE_OPTIONS=\"--max-old-space-size=32768\" claude --dangerously-skip-permissions --strict-mcp-config{{if .Model}} --model {{shellQuote .Model}}{{end}}{{if .SystemPromptFile}} --system-prompt-file {{shellQuote .SystemPromptFile}}{{end}}"
 
 [models]
-default_claude = "claude-opus-4-6"
+default_claude = "claude-opus-5-5"
 
 [models.claude]
-opus = "claude-opus-4-6"
-sonnet = "claude-sonnet-4-6"
-fast = "claude-sonnet-4-6"
-haiku = "claude-haiku-4-5-20251001"
+opus = "claude-opus-5-5"
+sonnet = "claude-sonnet-5-5"
+fast = "claude-sonnet-5-5"
+haiku = "claude-haiku-5-5"

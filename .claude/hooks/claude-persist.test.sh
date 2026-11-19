@@ -359,5 +359,34 @@ check "its script resumes it and drops the child-session marker" \
   'grep -q -- "--resume hc2" "$S/hc-run/hc2.sh" && grep -q CLAUDE_CODE_CHILD_SESSION "$S/hc-run/hc2.sh"'
 check "a session not running at the last snapshot is dropped" '! grep -q hc3 "$T/hc.log"'
 
+# hc kept the old terminal across the reboot as an idle shell under the old
+# name: the session goes back into its old space and tab under that name.
+setup hc-standin
+mkdir -p "$T/bin"
+sleep 60 & idle=$!
+cat > "$T/bin/hc" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/hc.log"
+case "\$1 \$2" in
+  "server status") echo '{"pid":1}' ;;
+  "get cto-hc4") [ -f "$T/gone" ] && exit 1
+    echo '{"address":"t9","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":$idle}}' ;;
+  "rm t9") touch "$T/gone" ;;
+esac
+EOF
+chmod +x "$T/bin/hc"
+entry hc4 "$H/projects/life" null "$OLD"
+f=$(ls "$S/sessions/"hc4@*.json); jq '.hc = {terminal:"t9", name:"cto-hc4", space:"spA", tab:"tbB"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+printf 'mux %s\nhc4\n' "$OLD" > "$S/live"
+HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
+  CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
+  CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
+kill $idle 2>/dev/null
+steps=$(grep -oE '^(run --bg --name cto-hold|kill t9|rm t9|run --bg --name cto |kill cto-hold)' "$T/hc.log" | tr '\n' '|')
+check "a placeholder holds the tab while the stand-in shell goes" \
+  '[ "$steps" = "run --bg --name cto-hold|kill t9|rm t9|run --bg --name cto |kill cto-hold|" ]'
+check "the session gets its old name, space and tab" \
+  'grep -q "^run --bg --name cto --label herdr.space=spA --label herdr.tab=tbB --cwd" "$T/hc.log"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

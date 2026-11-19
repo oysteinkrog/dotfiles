@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for Bash: keep GPT-6 Astra calls bounded.
+"""PreToolUse hook for Bash: keep GPT-6.2 Astra calls bounded.
 
-Blocks `codex exec -m gpt-6-astra` when the shell tool is left on, or when
+Blocks `codex exec -m gpt-6.2-astra` when the shell tool is left on, or when
 the reasoning effort is xhigh or above. With the shell tool on, Astra opens
 files by itself, and a prompt that names a reading list does not stop it:
 on 2026-11-01 reviews run that way read 264k to 342k tokens each instead of
@@ -18,8 +18,11 @@ import re
 import shlex
 import sys
 
+# Any Astra version (gpt-6-astra, gpt-6.2-astra, ...), so a model bump keeps the guard.
+ASTRA_RE = re.compile(r"gpt-[0-9][0-9.]*-astra")
+
 BOUNDED = (
-    'cd "$(mktemp -d -p /var/tmp/claude)" && timeout 900 codex exec -m gpt-6-astra \\\n'
+    'cd "$(mktemp -d -p /var/tmp/claude)" && timeout 900 codex exec -m gpt-6.2-astra \\\n'
     "  -c model_reasoning_effort=medium --disable shell_tool --disable unified_exec \\\n"
     "  --disable code_mode_host --skip-git-repo-check -o out.md - < prompt.md"
 )
@@ -85,7 +88,7 @@ def codex_segments(command):
 
 def problems(args):
     joined = " ".join(args)
-    if "gpt-6-astra" not in joined or "--help" in args or "-h" in args:
+    if not ASTRA_RE.search(joined) or "--help" in args or "-h" in args:
         return []
     out = []
     shell_off = re.search(r"--disable[ =]shell_tool", joined) or re.search(
@@ -107,7 +110,7 @@ def main():
         command = payload.get("tool_input", {}).get("command", "") or ""
     except Exception:
         return 0
-    if "codex" not in command or "gpt-6-astra" not in command:
+    if "codex" not in command or not ASTRA_RE.search(command):
         return 0
     if "noqa: astra-guard" in command:
         return 0

@@ -19,8 +19,8 @@ ifboard-exits-updates	Company
 if-strategy-revision	Company
 strategy-growth-scenario	Company
 netsuite-access-and-fixes	Company
-stable-26.1-fixing	Swing Catalyst
-stable-26.2-fixing	Swing Catalyst
+stable-26-1-fixing	Swing Catalyst
+stable-26-2-fixing	Swing Catalyst
 qa-lab	Swing Catalyst
 syncbox	Swing Catalyst
 linux-wine	Swing Catalyst
@@ -43,3 +43,23 @@ slack-integration	Machine and tools
 agentic-oystein	Machine and tools
 agent-hub	Machine and tools
 oystein-fe	Machine and tools
+home/manager-home	Machine
+home/voice-transcriber	Machine
+home/setup-backblaze	Machine
+home/secure-vps	Machine
+home/codex-hook-failures	Machine
+home/dolphin-thumbnails	Machine
+home/rdp-crash	Machine
+home/tv-youtube-app-off	Life
+home/tv-block-youtube	Life
+home/opencode-tv-session	Life
+home/retatrutide-doses	Life
+home/music-library	Life
+home/photos-scraping	Life
+home/ali-sale	Life
+home/banking-insurance	Life
+home/moss-image-gpu	Projects
+home/opencode-goal-plugin	Projects
+home/xpeng-api	Projects
+home/xpeng-sve-check	Projects
+home/opencode-test	Projects

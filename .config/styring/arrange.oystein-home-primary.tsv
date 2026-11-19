@@ -1,21 +1,25 @@
 # Home desktop (personal realm) agent spaces: agent name, then folder.
-# Order from home's FrankenTerm sessions on 2026-11-17. Edit freely.
+# Order from home's FrankenTerm sessions on 2026-11-17. Names follow what each
+# conversation is about (set 2026-11-17; the old ones were Claude's auto names).
 manager-home	Machine
 voice-transcriber	Machine
 setup-backblaze	Machine
 secure-vps	Machine
-life-e5	Life
-life-c2	Life
-life-17	Life
-life-a2	Life
-life-2b	Life
-life-7c	Life
-life-9b	Life
+codex-hook-failures	Machine
+dolphin-thumbnails	Machine
+rdp-crash	Machine
+rdp-not-working	Machine
+tv-youtube-app-off	Life
+tv-block-youtube	Life
+opencode-tv-session	Life
+retatrutide-doses	Life
+music-library	Life
 photos-scraping	Life
 ali-sale	Life
-update-full-banking-and-insurance-details	Life
+banking-insurance	Life
 dactyl-manuform-mini-b6	Projects
-oystein-5e	Other
-oystein-5e-2	Other
-oystein-21	Other
-oystein-dc	Other
+moss-image-gpu	Projects
+opencode-goal-plugin	Projects
+xpeng-api	Projects
+xpeng-sve-check	Projects
+opencode-test	Projects

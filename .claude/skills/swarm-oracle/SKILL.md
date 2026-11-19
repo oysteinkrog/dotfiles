@@ -1,12 +1,12 @@
 ---
 name: swarm-oracle
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6 Astra runs via Codex CLI (one per stance, one bounded prompt each); add two Fable subagents only for security-sensitive or contested validations, and use them as the fallback when Codex fails. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6.2 Astra runs via Codex CLI (one per stance, one bounded prompt each); add two Fable subagents only for security-sensitive or contested validations, and use them as the fallback when Codex fails. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
 
 # Oracle Consensus
 
-> **Oracle policy (2026-10-24, all reviews since 2026-10-28):** GPT-6 Astra is the
+> **Oracle policy (2026-10-24, all reviews since 2026-10-28):** GPT-6.2 Astra is the
 > primary oracle. The default FOR/AGAINST debate runs as two bounded Astra runs at
 > effort `medium`, one per stance: one prompt of about 60k tokens each, with the diff
 > and the needed excerpts pasted in, run from an empty directory with the shell tools
@@ -81,7 +81,7 @@ The evaluation prompt must be self-contained — models do not share context bet
 
 ### Step 2: Configure Stances
 
-**Default tier (GPT-6 Astra):** run two bounded `codex exec` runs in a single message,
+**Default tier (GPT-6.2 Astra):** run two bounded `codex exec` runs in a single message,
 one FOR and one AGAINST. Each prompt file is self-contained: the evaluation prompt,
 the stance, and the excerpts it needs pasted in with paths and line numbers (about
 60k tokens at most). The two runs share no context. Astra is not reachable through
@@ -93,11 +93,11 @@ why. `xhigh`, `max` and `ultra` only when Oystein asks for them:
 
 ```bash
 mkdir -p /var/tmp/claude/<task>/astra-empty && cd /var/tmp/claude/<task>/astra-empty
-codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
+codex exec -m gpt-6.2-astra -c model_reasoning_effort=medium \
   --disable shell_tool --disable unified_exec --disable code_mode_host \
   --skip-git-repo-check \
   -o <scratchpad>/oracle-for.md - < <scratchpad>/prompt-for.md 2>/dev/null
-codex exec -m gpt-6-astra -c model_reasoning_effort=medium \
+codex exec -m gpt-6.2-astra -c model_reasoning_effort=medium \
   --disable shell_tool --disable unified_exec --disable code_mode_host \
   --skip-git-repo-check \
   -o <scratchpad>/oracle-against.md - < <scratchpad>/prompt-against.md 2>/dev/null

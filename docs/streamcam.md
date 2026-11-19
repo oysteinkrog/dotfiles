@@ -89,6 +89,50 @@ correlation fell from 0.56 to 0.00. After the mono block, flatness settled at 0.
 0.02 and Oystein heard good sound. So the script now writes mono. Stereo stays
 available with `--stereo` but is not recommended.
 
+## Mic gain and volume
+
+Measured 2026-11-16. The camera's ALSA control `Mic` (range 0 to 72, shown as 18 to
+54 dB) is a digital multiplier inside the camera. At 24 (30 dB) the samples are the raw
+signal. Each 12 steps (6 dB) more doubles every sample: at 36 all samples are even, at 48
+all are multiples of 4, at 72 (54 dB) all are multiples of 16. At 72 loud speech clips
+inside the camera. The gain reads 0 after a WirePlumber restart, so it is not kept.
+
+PipeWire used this control as the source volume, so the volume slider and Chrome's
+automatic mic gain moved it during calls. Two things now keep it fixed:
+
+- `~/.config/wireplumber/wireplumber.conf.d/51-streamcam-soft-mixer.conf` sets
+  `api.alsa.soft-mixer = true` for the camera. The slider and apps then change only
+  PipeWire's software volume.
+- `audio-stall-watchdog` holds `Mic` at 53 (44.5 dB) and writes it again each time the
+  mic stream starts. Oystein judged 44.5 dB to sound fine.
+
+## Stream faults
+
+Two faults sit below PipeWire. `audio-stall-watchdog` (a user service) handles the first.
+
+**Stall.** ALSA says the stream is RUNNING, but `hw_ptr` in
+`/proc/asound/StreamCam/pcm0c/sub0/status` stands still and every app gets silence.
+Suspending and resuming the PipeWire source fixes it (`mic-kick` does this by hand). The
+watchdog checks `hw_ptr` once a second and restarts the source after 3 s without change.
+It repaired five real stalls from 2026-11-17 to 2026-11-18. Three of them came within
+0.4 s of a stream start, the others after 6 s, 36 s and 82 minutes. Each stall leaves a
+snapshot in `~/.local/state/audio-stall-watchdog/`.
+
+The cause is not known. Tests on 2026-11-19 that did not reproduce it:
+
+| Test | Result |
+|---|---|
+| Start and stop the camera's video stream 5 times while audio records (MJPEG 720p and 1080p, YUYV 480p) | Audio kept running every time. |
+| Start the mic stream through PipeWire 25 times, each from a closed device | No stall. |
+| Open and close the ALSA device back to back 60 times, 0.4 s each | Every open delivered audio. |
+
+**Dropped samples.** On 2026-11-16 the raw stream had 60 to 85 sample discontinuities
+per second, aligned to the 1 ms USB packets. Callers heard a garbled voice. The stream
+had then been open for almost 3 days, because the mic filter held it open. `mic-kick`
+cleared it. The mic filter is passive again, so the stream runs only while an app
+records. `sp.py` in `/var/tmp/claude/mic-repro/` counts the discontinuities; a clean
+stream shows about 1 per second. RMS and silence checks do not find this fault.
+
 ## Camera controls
 
 The camera exposes Logitech's "peripheral" UVC extension unit, GUID
@@ -105,8 +149,8 @@ Only two selectors answer on this unit:
 
 Selector 15 right after a factory reset reads `00000000faff01000a00f7fff7fff0fff0ff`
 (mono), the block the script writes. Byte 2 set to 1 is stereo. In both modes
-every sample's low byte is `0x00` or `0xFF`, so the camera's DSP output has about 8 bits
-of real resolution. That is how the firmware works, not a fault.
+every sample's low byte was `0x00` or `0xFF` when this was measured. That came from a
+high `Mic` gain, which multiplies every sample (see "Mic gain and volume").
 
 Selector 15 cannot be read back reliably. `GET_CUR`, `GET_DEF`, `GET_MIN` and `GET_MAX`
 all return the same buffer, and after some writes that buffer does not match what the

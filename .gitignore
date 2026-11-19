@@ -124,7 +124,6 @@ bin/logs/
 .claude/daemon.lock
 .claude/daemon.log
 .claude/daemon.status.json
-.claude/agent-mail/
 .claude/feedback/
 
 # Paid skills from jeffreys-skills.md (installed with jsm under a personal
@@ -268,7 +267,6 @@ bin/logs/
 .claude/skills/ocr-with-distributed-workers/
 
 # Added 2026-11-09: jsm owns these folders now. The free flywheel copy is no longer tracked.
-.claude/skills/agent-mail/
 .claude/skills/beads-workflow/
 .claude/skills/caam/
 .claude/skills/cass/
@@ -356,6 +354,7 @@ bin/logs/
 !.claude/skills/screenshot-critique/
 !.claude/skills/secret-lookup/
 !.claude/skills/security-audit/
+!.claude/skills/security-pushback-review/
 !.claude/skills/show-me-your-work/
 !.claude/skills/slide-management/
 !.claude/skills/slide-quality/
