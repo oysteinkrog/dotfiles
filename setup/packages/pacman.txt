@@ -68,6 +68,8 @@ krdp                # KDE RDP server
 remmina             # RDP client (use it for the home PC, KRDC fails with Microsoft accounts)
 freerdp
 parsec-bin          # client only, Parsec cannot host on Linux
+caddy               # HTTPS front for wherdr on the tailnet (wherdr-caddy.service)
+lego                # Let's Encrypt via Cloudflare DNS for wherdr (wherdr-cert.timer)
 
 # Apps
 firefox

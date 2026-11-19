@@ -1,0 +1,9 @@
+[Unit]
+Description=Get or renew the wherdr HTTPS certificate (restarts Caddy only on a new one)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/wherdr/wherdr.env
+Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/bin/wherdr-cert

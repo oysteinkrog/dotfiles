@@ -1,0 +1,15 @@
+[Unit]
+Description=Caddy HTTPS front for wherdr on the tailnet address (see ~/.config/wherdr/Caddyfile)
+After=wherdr.service network-online.target
+Wants=wherdr.service
+
+[Service]
+EnvironmentFile=%h/.config/wherdr/wherdr.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'WHERDR_BIND=$(tailscale ip -4) exec caddy run --adapter caddyfile --config %h/.config/wherdr/Caddyfile'
+Restart=on-failure
+RestartSec=10
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target

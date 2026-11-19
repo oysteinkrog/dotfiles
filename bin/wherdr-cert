@@ -1,0 +1,22 @@
+#!/bin/sh
+# wherdr-cert: get or renew the wherdr HTTPS certificate with lego (Cloudflare DNS-01),
+# and restart Caddy only when the certificate file changed.
+# Run by wherdr-cert.service (daily timer). Needs WHERDR_DOMAIN (from
+# ~/.config/wherdr/wherdr.env) and CLOUDFLARE_KROG_TOKEN in the secrets store.
+# lego v5 `run` gets the certificate, or renews it once 30 days or less are left
+# (or when Let's Encrypt's renewal info says so); otherwise it does nothing.
+set -eu
+: "${WHERDR_DOMAIN:?set WHERDR_DOMAIN in ~/.config/wherdr/wherdr.env}"
+dir="$HOME/.local/share/wherdr-tls"
+crt="$dir/certificates/$WHERDR_DOMAIN.crt"
+mkdir -p "$dir" && chmod 700 "$dir"
+before=$(stat -c %Y "$crt" 2>/dev/null || echo none)
+# --dns.resolvers: the local resolver (Headscale MagicDNS) cannot see the challenge record.
+with-secrets CLOUDFLARE_KROG_TOKEN -- sh -c '
+  CF_DNS_API_TOKEN="$CLOUDFLARE_KROG_TOKEN" exec lego run --accept-tos --dns cloudflare \
+    --dns.resolvers 1.1.1.1:53 --renew-days 30 --domains "$1" --path "$2"' sh "$WHERDR_DOMAIN" "$dir"
+after=$(stat -c %Y "$crt" 2>/dev/null || echo none)
+if [ "$before" != "$after" ]; then
+    echo "wherdr-cert: new certificate, restarting wherdr-caddy"
+    systemctl --user try-restart wherdr-caddy.service
+fi

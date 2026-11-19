@@ -1,0 +1,17 @@
+# Caddy in front of wherdr: HTTPS on the tailnet address only.
+# Values come from ~/.config/wherdr/wherdr.env (machine-specific, not in this repo):
+#   WHERDR_DOMAIN  the private HTTPS name, a DNS-only A record to the tailnet IP
+#   WHERDR_PORT    port on the tailnet address (wherdr itself listens on 127.0.0.1:7683)
+# WHERDR_BIND (the tailnet IPv4) is set by wherdr-caddy.service at start.
+# The certificate is fetched and renewed by wherdr-cert.service (lego, Cloudflare DNS-01).
+{
+	admin off
+	auto_https disable_redirects
+	persist_config off
+}
+
+https://{$WHERDR_DOMAIN}:{$WHERDR_PORT} {
+	bind {$WHERDR_BIND}
+	tls {$HOME}/.local/share/wherdr-tls/certificates/{$WHERDR_DOMAIN}.crt {$HOME}/.local/share/wherdr-tls/certificates/{$WHERDR_DOMAIN}.key
+	reverse_proxy 127.0.0.1:7683
+}
