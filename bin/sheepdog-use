@@ -1,0 +1,35 @@
+#!/bin/sh
+# sheepdog-use: choose which sheepdog binary sheepdog.service runs, then restart it.
+#
+#   sheepdog-use upstream   the release installed by sheepdog's own installer
+#                           (~/.local/share/sheepdog/bin/sheepdog, `sheepdog update`)
+#   sheepdog-use local      the fork build installed with `localbuild install sheepdog`
+#                           (~/.local/share/sheepdog-local/current/sheepdog): pinned, stable
+#   sheepdog-use dev        the working build in the fork checkout
+#                           (~/projects/herdr-sheepdog/bin/sheepdog, from `make build`):
+#                           edit, `make build`, `sheepdog-use dev` (or just restart)
+#   sheepdog-use            show which one is active
+#
+# The choice is the link ~/.local/share/sheepdog-active/sheepdog; sheepdog.service puts
+# that folder first on PATH. Config and data (~/.config/sheepdog, ~/.local/share/sheepdog)
+# are the same for all three, so pairing, history and settings carry over.
+set -eu
+link_dir="$HOME/.local/share/sheepdog-active"
+link="$link_dir/sheepdog"
+case "${1:-}" in
+    "")
+        if [ -L "$link" ]; then readlink "$link"; else echo "not set (service uses the upstream release on PATH)"; fi
+        exit 0 ;;
+    upstream) target="$HOME/.local/share/sheepdog/bin/sheepdog" ;;
+    local) target="$HOME/.local/share/sheepdog-local/current/sheepdog" ;;
+    dev) target="$HOME/projects/herdr-sheepdog/bin/sheepdog" ;;
+    *) echo "usage: sheepdog-use [upstream|local|dev]" >&2; exit 2 ;;
+esac
+[ -x "$target" ] || { echo "sheepdog-use: $target is missing or not executable" >&2; exit 1; }
+"$target" --version >/dev/null 2>&1 || { echo "sheepdog-use: $target does not run" >&2; exit 1; }
+mkdir -p "$link_dir"
+ln -sfn "$target" "$link"
+echo "sheepdog.service now uses: $("$target" --version 2>&1 | head -1) ($1)"
+systemctl --user restart sheepdog.service
+sleep 2
+systemctl --user is-active sheepdog.service

@@ -4,7 +4,9 @@ After=hc-core.service network-online.target
 Wants=hc-core.service
 
 [Service]
-Environment=PATH=%h/.local/share/sheepdog/bin:%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# sheepdog-active holds the binary picked with `sheepdog-use` (upstream, local or dev);
+# without it the upstream release in ~/.local/share/sheepdog/bin is used.
+Environment=PATH=%h/.local/share/sheepdog-active:%h/.local/share/sheepdog/bin:%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=SHEEPDOG_HC_SOCKET=%t/herdr-core/default.sock
 # Keys come from the secrets store, only into this process. The Anthropic orchestrator
 # goes through the same proxy as Claude Code (ANTHROPIC_BASE_URL).
