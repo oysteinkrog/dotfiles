@@ -8,7 +8,7 @@ Environment=PATH=%h/.local/share/sheepdog/bin:%h/bin:%h/.local/bin:/usr/local/bi
 Environment=SHEEPDOG_HC_SOCKET=%t/herdr-core/default.sock
 # Keys come from the secrets store, only into this process. The Anthropic orchestrator
 # goes through the same proxy as Claude Code (ANTHROPIC_BASE_URL).
-ExecStart=/bin/sh -c 'export SHEEPDOG_WEB_BIND=$(tailscale ip -4); exec with-secrets GEMINI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_BASE_URL -- sh -c "SHEEPDOG_ANTHROPIC_BASE_URL=\\$ANTHROPIC_BASE_URL exec sheepdog serve"'
+ExecStart=/bin/sh -c 'export SHEEPDOG_WEB_BIND=$(tailscale ip -4); exec with-secrets OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_BASE_URL -- sh -c "SHEEPDOG_ANTHROPIC_BASE_URL=\\$ANTHROPIC_BASE_URL exec sheepdog serve"'
 Restart=on-failure
 RestartSec=10
 MemoryMax=1G
