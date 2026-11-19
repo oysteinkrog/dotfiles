@@ -22,9 +22,6 @@ function claude --description 'Claude Code (native install + WSL1 p_align patch 
     # (resolved under versions/), an absolute path to a binary, or 'latest'/unset
     # for the newest (the ~/.local/bin/claude symlink). Same wrapper behavior either way.
     set -l bin "$HOME/.local/bin/claude"
-    # In a herdr pane: the process is named after its version (2.1.325), so herdr
-    # recognises it as Claude only with this hint.
-    test "$HERDR_ENV" = 1; and set -lx HERDR_AGENT claude
     if set -q CLAUDE_VERSION; and test -n "$CLAUDE_VERSION"; and test "$CLAUDE_VERSION" != latest
         if string match -qr '^/' -- "$CLAUDE_VERSION"
             set bin "$CLAUDE_VERSION"

@@ -21,18 +21,13 @@
 #                                     session of entry FILE (no claude-tab-run)
 #   claude-persist.sh respawn FILE [WINDOW]
 #                                     resume entry FILE in a new tab, print its pane
-#   claude-persist.sh restore-herdr   resume the sessions that ran in herdr into
-#                                     the herdr server (claude-persist-herdr.service
-#                                     runs this after herdr.service starts)
-#   claude-persist.sh restore-hc      the same for herdr-core (hc) terminals
-#                                     (claude-persist-hc.service, after
-#                                     hc-core.service starts)
+#   claude-persist.sh restore-hc      resume the sessions that ran in herdr-core
+#                                     (hc) terminals (claude-persist-hc.service,
+#                                     after hc-core.service starts)
 #
-# Sessions that run inside herdr (HERDR_ENV=1) are recorded with a "herdr"
-# field (pane, workspace, folder). plan and the late resume skip them, so the
-# Frankenterm mux never opens them; restore-herdr puts each one back in its old
-# herdr pane, or a new tab in its workspace when that pane is gone. herdr's own
-# resume_agents_on_restore must be false, or the session would start twice.
+# Sessions that run inside herdr-core are recorded with an "hc" field (terminal,
+# name, space, tab). plan and the late resume skip them, so the Frankenterm mux
+# never opens them; restore-hc puts each one back in its old space and tab.
 #
 # Resumed tabs run under claude-tab-run (~/bin), so claude-version-restart can
 # restart a session in the same pane after a Claude Code update.
@@ -71,20 +66,6 @@ TAB_RUN="${CLAUDE_TAB_RUN_BIN:-$HOME/bin/claude-tab-run}"
 CLAUDE_BIN="${CLAUDE_PERSIST_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 # Prints the Agent Hub channel flag (see that script; AGENT_HUB_CHANNEL=0 turns it off)
 CHANNEL_ARGS="${CLAUDE_CHANNEL_ARGS_BIN:-$HOME/bin/claude-channel-args}"
-HERDR_BIN="${CLAUDE_PERSIST_HERDR_BIN:-$HOME/.local/bin/herdr}"
-
-# The herdr place of Claude process $1, as JSON {pane, workspace}, when it runs
-# in a herdr pane. Prints nothing otherwise.
-herdr_info() {
-  local env pane ws
-  env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null) || return 0
-  grep -qx 'HERDR_ENV=1' <<<"$env" || return 0
-  pane=$(sed -n 's/^HERDR_PANE_ID=//p' <<<"$env" | head -1)
-  ws=$(sed -n 's/^HERDR_WORKSPACE_ID=//p' <<<"$env" | head -1)
-  [ -n "$pane" ] || return 0
-  jq -cn --arg p "$pane" --arg w "$ws" '{pane:$p, workspace:$w}'
-}
-
 # The herdr-core (hc) terminal of Claude process $1, as JSON {terminal, name},
 # when it runs in one. Prints nothing otherwise.
 HC_BIN="${CLAUDE_PERSIST_HC_BIN:-$HOME/.local/bin/herdr-core}"
@@ -113,8 +94,9 @@ hc_info() {
       tab:(if $b == "" then null else $b end)}'
 }
 
-# Did entry $1 run outside the Frankenterm mux (herdr or herdr-core)? Those
-# come back through restore-herdr or restore-hc, never through plan.
+# Did entry $1 run outside the Frankenterm mux? herdr-core sessions come back
+# through restore-hc, never through plan. "herdr" marks the old herdr server
+# (removed 2026-11-19); such entries are not resumed anywhere.
 runs_elsewhere() {
   [ "$(jq -r 'has("herdr") or has("hc")' "$1" 2>/dev/null)" = true ]
 }
@@ -277,18 +259,17 @@ record() {
   fi
   # the mux pane the session runs in, to put its tab back in the same place
   pane=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^WEZTERM_PANE=//p' | head -1)
-  # In herdr, the herdr pane instead: the mux pane is meaningless there.
-  local herdr hc; herdr=$(herdr_info "$pid"); hc=$(hc_info "$pid")
-  [ -n "$herdr$hc" ] && pane=""
+  # In herdr-core, the hc terminal instead: the mux pane is meaningless there.
+  local hc; hc=$(hc_info "$pid")
+  [ -n "$hc" ] && pane=""
   mkdir -p "$SESS_DIR"
   local f; f=$(entry_file "$sid" "$cwd")
   jq -n --arg sid "$sid" --arg cwd "$cwd" --arg transcript "$transcript" --arg name "$name" \
         --argjson pid "$pid" --argjson flags "$flags" --argjson launcher "$launcher" \
-        --arg started "$(date -Is)" --arg pane "$pane" --arg herdr "$herdr" --arg hc "$hc" \
+        --arg started "$(date -Is)" --arg pane "$pane" --arg hc "$hc" \
         '{session_id:$sid, cwd:$cwd, name:$name, transcript:$transcript, pid:$pid,
           pane:(if $pane == "" then null else ($pane | tonumber) end),
           launcher:$launcher, flags:$flags, started:$started}
-         + (if $herdr == "" then {} else {herdr:($herdr | fromjson)} end)
          + (if $hc == "" then {} else {hc:($hc | fromjson)} end)' \
     > "$f.tmp" && mv "$f.tmp" "$f"
 }
@@ -694,17 +675,13 @@ snapshot() {
     jq --argjson pane "$pane" '.pane = $pane' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
   done
 
-  # Mark live sessions that run in herdr (also ones recorded before herdr
-  # support), and keep their herdr pane current. restore-herdr resumes these.
+  # Mark live sessions that run in herdr-core, and keep their hc terminal,
+  # space and tab current. restore-hc resumes these.
   local hinfo
   for f in "$SESS_DIR"/*.json; do
     [ -e "$f" ] || continue
     epid=$(jq -r '.pid // 0' "$f")
     claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
-    hinfo=$(herdr_info "$epid")
-    if [ -n "$hinfo" ] && [ "$(jq -c '.herdr // empty' "$f")" != "$hinfo" ]; then
-      jq --argjson h "$hinfo" '.herdr = $h | .pane = null' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
-    fi
     hinfo=$(hc_info "$epid")
     if [ -n "$hinfo" ] && [ "$(jq -c '.hc // empty' "$f")" != "$hinfo" ]; then
       jq --argjson h "$hinfo" '.hc = $h | .pane = null' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
@@ -1049,9 +1026,9 @@ plan() {
       for p_ in "${!newest[@]}"; do [ "${newest[$p_]}" = "$f" ] && unset "newest[$p_]"; done
       return 0
     fi
-    # herdr and herdr-core sessions go back there (restore-herdr, restore-hc), never into the mux
+    # herdr-core sessions go back there (restore-hc), never into the mux
     if runs_elsewhere "$f"; then
-      echo "skip $key: it ran in herdr or herdr-core, restore-herdr or restore-hc resumes it" >> "$log"; return 0
+      echo "skip $key: it ran in herdr-core (or the old herdr), restore-hc resumes it" >> "$log"; return 0
     fi
     sid=$(jq -r '.session_id // empty' "$f" 2>/dev/null); cwd=$(jq -r '.cwd // empty' "$f" 2>/dev/null)
     if [ -z "$sid" ] || [ -z "$cwd" ]; then
@@ -1208,103 +1185,16 @@ restore() {
   done < <(plan)
 }
 
-hc() { "$HERDR_BIN" "$@"; }
-
-# A herdr agent name from a session title: herdr wants [a-z][a-z0-9_-]{0,31}.
+# A terminal name from a session title: [a-z][a-z0-9_-]{0,31}.
 herdr_name() {
   local n
   n=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_-]\{1,\}/-/g; s/^[^a-z]*//; s/-*$//' | cut -c1-32)
   printf '%s' "${n:-agent}"
 }
 
-# Is herdr pane $1 free to take a session: it exists and runs only a shell?
-herdr_pane_free() {
-  local names
-  names=$(hc pane process-info --pane "$1" 2>/dev/null \
-    | jq -r '.result.process_info.foreground_processes[]?.name' 2>/dev/null) || return 1
-  [ -n "$names" ] || return 1
-  ! grep -qvxE 'fish|bash|zsh|sh' <<<"$names"
-}
-
-# Resume the sessions that ran in herdr into the herdr server. Each goes back
-# into its old pane when herdr restored that pane as a plain shell, else into a
-# new tab of its old workspace, else into a new workspace. The command runs
-# under claude-tab-run with HERDR_AGENT=claude: Claude's process is named after
-# its version (2.1.325), and herdr only recognises it as Claude with that hint.
-# Only sessions whose Claude was running at the last snapshot come back, as in
-# plan; the rest are stale entries and are dropped.
-restore_herdr() {
-  mkdir -p "$SESS_DIR" "$STATE_DIR/restored" "$STATE_DIR/herdr-run"
-  exec >> "$STATE_DIR/restore.log" 2>&1
-  echo "=== restore-herdr $(date -Is)"
-  local n=0
-  until hc status server 2>/dev/null | grep -q '^status: running'; do
-    n=$((n + 1)); [ $n -ge 60 ] && { echo "herdr server not running, giving up"; return 1; }
-    sleep 1
-  done
-  sleep 3   # herdr restores its layout right after it starts
-  local -A live=()
-  local a f sid cwd transcript hp hw target script title name lp
-  [ -f "$LIVE" ] && while IFS= read -r a; do [ -n "$a" ] && live[$a]=1; done < <(tail -n +2 "$LIVE")
-  lp=$(fish -lc 'string join : $PATH' 2>/dev/null)
-  lock_state
-  for f in "$SESS_DIR"/*.json; do
-    [ -e "$f" ] || continue
-    [ "$(jq -r 'has("herdr")' "$f" 2>/dev/null)" = true ] || continue
-    sid=$(jq -r '.session_id // empty' "$f"); cwd=$(jq -r '.cwd // empty' "$f")
-    transcript=$(jq -r '.transcript // empty' "$f")
-    if session_running "$sid"; then echo "skip $sid: still running"; continue; fi
-    if [ -z "${live[$sid]:-}" ]; then
-      echo "drop $sid ($cwd): not running at the last snapshot"; mv "$f" "$STATE_DIR/restored/"; continue
-    fi
-    if [ -n "$transcript" ] && [ ! -s "$transcript" ]; then
-      echo "drop $sid ($cwd): no transcript"; mv "$f" "$STATE_DIR/restored/"; continue
-    fi
-    if [ ! -d "$cwd" ]; then
-      echo "drop $sid: folder $cwd is gone"; mv "$f" "$STATE_DIR/restored/"; continue
-    fi
-    hp=$(jq -r '.herdr.pane // empty' "$f"); hw=$(jq -r '.herdr.workspace // empty' "$f")
-    target=""
-    if [ -n "$hp" ] && herdr_pane_free "$hp"; then
-      target=$hp
-    elif [ -n "$hw" ]; then
-      target=$(hc tab create --workspace "$hw" --cwd "$cwd" --no-focus 2>/dev/null \
-        | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
-    fi
-    if [ -z "$target" ]; then
-      target=$(hc workspace create --cwd "$cwd" --label "$(basename "$cwd")" 2>/dev/null \
-        | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
-    fi
-    [ -n "$target" ] || { echo "could not get a herdr pane for $sid ($cwd)"; continue; }
-    trust_folder "$cwd" "$STATE_DIR/restore.log"
-    script="$STATE_DIR/herdr-run/$sid.sh"
-    {
-      echo '#!/bin/bash'
-      [ -n "$lp" ] && echo "export PATH=$(printf '%q' "$lp")"
-      echo 'export HERDR_AGENT=claude'
-      echo 'unset LD_PRELOAD AIOLOS_RC_PORT AIOLOS_RC_SCOPED CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_BASE_URL'
-      resume_cmd "$f"
-      echo 'exec fish -l'
-    } > "$script" || { echo "could not write $script"; continue; }
-    title=$(tab_title "$transcript" "$cwd")
-    mv "$f" "$STATE_DIR/restored/"
-    hc pane run "$target" "exec bash $(printf '%q' "$script")" >/dev/null 2>&1 \
-      || { echo "could not start $sid in herdr pane $target"; continue; }
-    echo "resume $sid ($cwd) in herdr pane $target"
-    # Name the agent after the session once herdr sees it.
-    name=$(herdr_name "$title")
-    ( for _ in $(seq 60); do hc agent get "$target" >/dev/null 2>&1 && break; sleep 1; done
-      hc agent rename "$target" "$name" >/dev/null 2>&1 \
-        || hc agent rename "$target" "$(herdr_name "$name-${sid:0:4}")" >/dev/null 2>&1 ) &
-    sleep 1
-  done
-  exec 9>&-
-  wait
-}
-
 # Resume the sessions that ran in a herdr-core (hc) terminal into new hc
 # terminals on this machine. hc never reruns a program after a reboot, so this
-# does it, with the same checks as restore-herdr: only sessions whose Claude was
+# does it, with these checks: only sessions whose Claude was
 # running at the last snapshot, with a transcript and an existing folder. Each
 # gets its old terminal name when that name is free, else one from its title.
 # claude-persist-hc.service runs this each time hc-core.service starts.
@@ -1417,7 +1307,6 @@ case "${1:-}" in
   plan)       plan ;;
   panes)      ft list --json 2>/dev/null | { l=$(cat); pane_rows "$l"; } ;;
   restore)    restore ;;
-  restore-herdr) restore_herdr ;;
   restore-hc) restore_hc ;;
   list)       list ;;
   forget)     rm -v "$SESS_DIR/${2:?entry key}.json" ;;

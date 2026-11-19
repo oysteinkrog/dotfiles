@@ -278,7 +278,7 @@ out=$(HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_BIN=/usr/bin/claude \
   CLAUDE_CHANNEL_ARGS_BIN=/nonexistent bash "$T/hooks/claude-persist.sh" resume-cmd "$f")
 check "no helper installed: resume as before" 'printf "%s\n" "$out" | grep -qF "/usr/bin/claude --resume ch1"'
 
-# --- sessions that ran in herdr: plan leaves them out, restore-herdr resumes them
+# --- sessions that ran in the old herdr server: plan leaves them out
 setup herdr-skip
 tab_order "$OLD" 1 2
 entry ft1 "$H/projects/life" 1 "$OLD"
@@ -291,39 +291,8 @@ check "the mux session is resumed" 'printf "%s\n" "$out" | grep -q -- "--resume 
 check "the herdr session is not resumed into the mux" '! printf "%s\n" "$out" | grep -q hd1'
 check "the herdr entry stays on the list" '[ -f "$f" ]'
 
-setup herdr-restore
-mkdir -p "$T/bin"
-cat > "$T/bin/herdr" <<EOF
-#!/bin/bash
-echo "\$*" >> "$T/herdr.log"
-case "\$1 \$2" in
-  "status server") echo "status: running" ;;
-  "pane process-info") echo '{"result":{"process_info":{"foreground_processes":[{"name":"fish"}]}}}' ;;
-  "tab create") echo '{"result":{"root_pane":{"pane_id":"w1:p9"}}}' ;;
-  "agent get") exit 0 ;;
-esac
-EOF
-chmod +x "$T/bin/herdr"
-entry hd2 "$H/projects/life" null "$OLD"
-entry hd3 "$H/projects/xpeng" null "$OLD"
-for s in hd2 hd3; do
-  f=$(ls "$S/sessions/"$s@*.json)
-  jq '.herdr = {pane:"w1:p1", workspace:"w1"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-done
-printf 'mux %s\nhd2\n' "$OLD" > "$S/live"
-HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
-  CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
-  CLAUDE_PERSIST_HERDR_BIN=$T/bin/herdr bash "$T/hooks/claude-persist.sh" restore-herdr
-check "the live herdr session goes back into its old pane" \
-  'grep -q "^pane run w1:p1 exec bash .*/herdr-run/hd2.sh" "$T/herdr.log"'
-check "its script resumes it with the herdr agent hint" \
-  'grep -q "^export HERDR_AGENT=claude" "$S/herdr-run/hd2.sh" && grep -q -- "--resume hd2" "$S/herdr-run/hd2.sh"'
-check "the agent is named after the session" 'grep -q "^agent rename w1:p1 life" "$T/herdr.log"'
-check "a session not running at the last snapshot is dropped" \
-  '! grep -q hd3 "$T/herdr.log" && grep -q "drop hd3" "$S/restore.log"'
-check "both entries leave the list" '[ -z "$(ls "$S/sessions/")" ]'
 name=$( (source "$T/hooks/claude-persist.sh"; herdr_name "Manager: CTO review 2026") )
-check "titles become valid herdr names" '[ "$name" = manager-cto-review-2026 ]'
+check "titles become valid terminal names" '[ "$name" = manager-cto-review-2026 ]'
 
 # --- sessions that ran in a herdr-core (hc) terminal
 setup hc-skip
