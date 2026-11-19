@@ -30,6 +30,7 @@ esac
 mkdir -p "$link_dir"
 ln -sfn "$target" "$link"
 echo "sheepdog.service now uses: $("$target" --version 2>&1 | head -1) ($1)"
+systemctl --user daemon-reload
 systemctl --user restart sheepdog.service
 sleep 2
 systemctl --user is-active sheepdog.service
