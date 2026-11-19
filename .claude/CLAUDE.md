@@ -241,6 +241,26 @@ These rules hold whether or not a skill is loaded:
 - Tell teammates to read CLAUDE.md first, and name the files they will touch so two
   teammates never edit the same file.
 
+## Terminal workspace: herdr-core
+
+Oystein, 2026-11-19: all sessions run in **herdr-core** (CLI `hc`, socket
+`/run/user/1000/herdr-core/default.sock`) with the herdr-app UI. It organizes work into
+spaces, tabs and terminals. The old `herdr` CLI (`herdr workspace list`, `herdr agent list`,
+`herdr --skill`) is retired: do not use it or its docs. agentic-oystein owns herdr-core.
+
+- `hc ls --json` lists every terminal on both desktops: address (`t13`, `home/t…`), name,
+  agent, cwd, status and `where` (`<space> / <tab>`).
+- `herdr-app ls` lists spaces and tabs with their ids and the terminals in each.
+- Each pane has `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET`. `hc get $HC_TERMINAL_ID --json`
+  gives your own terminal's name and labels (`herdr.space`, `herdr.tab`, `where`).
+- A Claude session id maps to its terminal, space and tab through
+  `~/.local/state/claude-persist/sessions/<sid>@<project-dir>.json` (`.hc`), refreshed
+  every 30 s. Each desktop has its own.
+- Space, tab and terminal names change by hand, and terminal addresses change after a
+  reboot. Store space ids and session ids, and look names up when you report.
+- Claude's `/rename` title is not copied into hc. Read it from the transcript
+  (`customTitle`) when you need it.
+
 ## Lab PC
 
 The lab PC is the Windows machine `trd-lab-pc` at `192.168.1.143` on the office LAN (not on

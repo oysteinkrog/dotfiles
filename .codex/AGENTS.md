@@ -69,6 +69,17 @@ booked runs earlier. Manager and oversight sessions run the skill on the session
 too. The `slow-loop-detect` Stop hook in `~/.codex/hooks.json` starts it after 5 idle
 "waiting" replies in a row.
 
+## Terminal workspace: herdr-core
+
+All sessions run in herdr-core (CLI `hc`) with the herdr-app UI, organized into spaces,
+tabs and terminals. The old `herdr` CLI is retired; do not use it.
+
+- `hc ls --json` lists terminals with name, agent, cwd and `where` (`<space> / <tab>`).
+  `herdr-app ls` lists spaces and tabs with their ids.
+- Your pane has `HC_TERMINAL_ID`; `hc get $HC_TERMINAL_ID --json` shows its name and space.
+- Names change by hand and terminal addresses change after a reboot. Store ids, look names
+  up when you report.
+
 ## Tools
 
 - Beads: `br` is the CLI. Never run bare `bv`, it opens a TUI and hangs. Always pass a
