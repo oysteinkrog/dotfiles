@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly cache prune (uv, nuget http-cache, paru, claude-desktop-update, ~/.debug, trash, docker builder)
+
+[Service]
+Type=oneshot
+# Dry run until Oystein says yes. Going live means adding --apply here.
+ExecStart=%h/bin/weekly-prune
+Nice=10
+IOSchedulingClass=idle
+MemoryHigh=2G
+TimeoutStartSec=3h
