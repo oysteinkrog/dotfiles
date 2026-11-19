@@ -21,7 +21,20 @@ while read -r p flag; do
   fi
 done < <(read_list "$SETUP/secret-paths.txt")
 
-if [ -f "$HOME/.config/secrets/.env" ] && [ -x "$DOTFILES/bin/secret" ]; then
+sd="$HOME/.config/secrets"
+if [ -f "$sd/work.env" ] && [ -f "$sd/personal.env" ]; then
+  # .env is generated from the two owned files; rebuild it if it is missing or stale.
+  if "$DOTFILES/bin/secrets-build" --check >/dev/null 2>&1; then
+    ok "secrets: work.env $(grep -c '^[A-Za-z_]' "$sd/work.env") keys, personal.env $(grep -c '^[A-Za-z_]' "$sd/personal.env") keys, .env current"
+  elif "$DOTFILES/bin/secrets-build" >/dev/null; then
+    ok "secrets: rebuilt .env from work.env and personal.env"
+  else
+    warn "secrets-build failed; run it by hand to see why"
+  fi
+elif [ -f "$sd/.env" ]; then
+  warn "~/.config/secrets has only a hand-kept .env; split it into work.env and personal.env (docs/computers/secrets.md in Life)"
+fi
+if [ -f "$sd/.env" ] && [ -x "$DOTFILES/bin/secret" ]; then
   n="$("$DOTFILES/bin/secret" --list 2>/dev/null | wc -l)"
   ok "secret --list: $n keys"
 fi

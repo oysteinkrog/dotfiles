@@ -55,7 +55,11 @@ native_linux=""
 if ! grep -qi microsoft /proc/version 2>/dev/null; then
   native_linux=1
   config_dirs=("${config_dirs[@]/ConEmu}")
-  linux_links=(".gitconfig.local:.gitconfig.linux")
+  linux_links=(
+    ".gitconfig.local:.gitconfig.linux"
+    # The folder also holds the machine's own wherdr.env, so link the file, not the folder.
+    ".config/wherdr/Caddyfile:.config/wherdr/Caddyfile"
+  )
 fi
 
 # Files inside .claude to symlink individually when ~/.claude is a real dir
@@ -102,6 +106,7 @@ for file in "${files[@]}"; do
 done
 
 for pair in "${linux_links[@]}"; do
+  mkdir -p "$(dirname "$HOME/${pair%%:*}")"
   ln -sfn "$dir/${pair#*:}" "$HOME/${pair%%:*}"
   echo "  ${pair%%:*} -> $dir/${pair#*:}"
 done
