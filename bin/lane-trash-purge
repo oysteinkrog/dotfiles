@@ -22,9 +22,12 @@ Rules:
     empty subvolume. This never calls "btrfs subvolume delete" on a full
     subvolume: that hands all the work to btrfs-cleaner, which cannot be
     throttled, and froze the desktop for about 40 minutes on 2026-11-13.
+  * A nested subvolume inside a lane (grove keeps build folders such as
+    rust/target as nested subvolumes) is deleted the same way: its files in
+    the throttled batches, then rmdir of the empty subvolume.
   * Leaves alone, and retries later, a lane top that is on another device
-    but is not a subvolume root, and any folder below a lane top that is on
-    a different device from the lane top (a nested subvolume or a mount).
+    but is not a subvolume root, and any folder below it whose device
+    differs from its parent's without being a subvolume root (a mount).
   * Skips names starting with "." (lane-trash is still retiring that lane),
     and refuses to run while any mount point lies inside the trash.
   * Logs one line per finished folder to ~/.local/state/lane-trash/purge.log.
@@ -195,8 +198,10 @@ def removal_ops(root_fd, root_dev, name, counters):
     reached even if the tree changes while we walk it.
 
     The lane top may be a btrfs subvolume root (another device, inode 256).
-    Then its device is the lane device. Every folder below the top must be
-    on the lane device, or the lane is left alone (Stuck).
+    Then its device is the lane device. A folder below may also be a
+    subvolume root (a nested subvolume, inode 256 on its own device); its
+    device is then the device for what is under it. Any other change of
+    device (a mount) leaves the lane alone (Stuck).
     """
 
     def make_writable(fd, st):
@@ -224,23 +229,25 @@ def removal_ops(root_fd, root_dev, name, counters):
         os.close(top)
         raise
 
-    def open_dir(parent_fd, n):
+    def open_dir(parent_fd, parent_dev, n):
         fd = os.open(n, DIR_FLAGS, dir_fd=parent_fd)
         st = os.fstat(fd)
-        if st.st_dev != lane_dev:
-            os.close(fd)
-            raise Stuck(
-                "%s is on a different device from the lane top (nested "
-                "subvolume or mount); left alone" % n
-            )
+        if st.st_dev != parent_dev:
+            if st.st_ino != BTRFS_SUBVOL_ROOT_INO:
+                os.close(fd)
+                raise Stuck(
+                    "%s is on a different device from its parent and is not "
+                    "a btrfs subvolume root (a mount?); left alone" % n
+                )
+            counters["nested"] = counters.get("nested", 0) + 1
         make_writable(fd, st)
-        return fd
+        return fd, st.st_dev
 
-    # Stack entries: (parent_fd, name, fd, iterator over its entries)
-    stack = [(root_fd, name, top, os.scandir(top))]
+    # Stack entries: (parent_fd, name, fd, device, iterator over its entries)
+    stack = [(root_fd, name, top, lane_dev, os.scandir(top))]
     try:
         while stack:
-            parent_fd, dname, fd, it = stack[-1]
+            parent_fd, dname, fd, dev, it = stack[-1]
             entry = next(it, None)
             if entry is None:
                 it.close()
@@ -263,8 +270,8 @@ def removal_ops(root_fd, root_dev, name, counters):
                 yield
                 continue
             if entry.is_dir(follow_symlinks=False):
-                child = open_dir(fd, entry.name)
-                stack.append((fd, entry.name, child, os.scandir(child)))
+                child, child_dev = open_dir(fd, dev, entry.name)
+                stack.append((fd, entry.name, child, child_dev, os.scandir(child)))
                 continue
             try:
                 size = entry.stat(follow_symlinks=False).st_blocks * 512
@@ -278,7 +285,7 @@ def removal_ops(root_fd, root_dev, name, counters):
             counters["bytes"] += size
             yield
     finally:
-        for _, _, fd, it in reversed(stack):
+        for _, _, fd, _, it in reversed(stack):
             it.close()
             try:
                 os.close(fd)
@@ -341,10 +348,11 @@ def purge_entry(root_fd, root_dev, name, grove_lock):
         if not done:
             time.sleep(pace)
     log(
-        "purged %s%s files=%d dirs=%d bytes=%d secs=%.1f"
+        "purged %s%s%s files=%d dirs=%d bytes=%d secs=%.1f"
         % (
             name,
             " (subvolume)" if counters.get("subvol") else "",
+            " (%d nested)" % counters["nested"] if counters.get("nested") else "",
             counters["files"],
             counters["dirs"],
             counters["bytes"],
