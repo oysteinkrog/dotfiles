@@ -339,10 +339,10 @@
             "command": "bash ~/.claude/hooks/fs-walk-guard.sh"
           },
           {
-          {
             "type": "command",
             "command": "bash ~/.claude/hooks/transcript-search-guard.sh"
           },
+          {
             "type": "command",
             "command": "bash ~/.claude/hooks/grove-worktree-guard.sh"
           },
@@ -467,7 +467,7 @@
     "cowork-plugin-management@inline": false,
     "claude-seo@agricidaniel-claude-seo": true,
     "cc-plugin-you-should-know@builtin": true,
-    "agent-hub@agent-hub-plugins": false
+    "agent-hub@agent-hub-plugins": true
   },
   "extraKnownMarketplaces": {
     "ui-ux-pro-max-skill": {
