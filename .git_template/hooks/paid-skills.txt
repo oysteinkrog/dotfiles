@@ -5,7 +5,6 @@ ab-testing
 admin-page-for-nextjs-sites
 agent-ergonomics-and-intuitiveness-maximization-for-cli-tools
 agent-fungibility-philosophy
-agent-mail
 ai-model-into-rust-mega-fused-hyper-kernel
 asupersync-mega-skill
 automating-your-automations
