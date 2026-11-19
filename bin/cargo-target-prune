@@ -463,6 +463,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="report what would be deleted, delete nothing")
     ap.add_argument("--verbose", action="store_true", help="print every unit")
     ap.add_argument("--targets", nargs="*", help="target dirs to use instead of ~/work/*/target")
+    ap.add_argument("--also", nargs="*", default=[], help="extra target dirs added to the ~/work/*/target default")
     ap.add_argument("--stale-hours", type=float, default=1)
     ap.add_argument("--incr-hours", type=float, default=6)
     ap.add_argument("--cap-min-hours", type=float, default=2)
@@ -475,6 +476,7 @@ def main():
     excl = load_excludes()
     targets = [Path(t).resolve() for t in args.targets] if args.targets is not None \
         else sorted(p for p in (HOME / "work").glob("*/target"))
+    targets += [Path(t).resolve() for t in args.also if Path(t).resolve() not in targets]
     STATE.mkdir(parents=True, exist_ok=True)
     logf = STATE / "deleted.log"
     try:

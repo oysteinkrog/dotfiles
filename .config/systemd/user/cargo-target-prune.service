@@ -4,7 +4,7 @@ Description=Delete superseded cargo build units in ~/work/*/target (cargo-target
 [Service]
 Type=oneshot
 # Live pass: deletes for real. Add --dry-run here to stop deleting.
-ExecStart=%h/bin/cargo-target-prune
+ExecStart=%h/bin/cargo-target-prune --also %h/projects/aiolos/target
 Nice=19
 IOSchedulingClass=idle
 MemoryMax=1G
