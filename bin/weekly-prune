@@ -150,24 +150,37 @@ def item_cdu(rep, apply):
 
 
 def item_debug(rep, apply):
-    root = HOME_CACHE / ".debug/.build-id"
+    # perf build-id cache: .build-id/<xx>/<id> are symlinks to <path>/<id> dirs that hold the data.
+    base = HOME_CACHE / ".debug"
+    root = base / ".build-id"
     if not root.is_dir():
         return rep.item("debug", 0, "no .debug/.build-id")
     cutoff = NOW - 30 * DAY
-    victims = []
+    prefix = str(base.resolve()) + "/"
+    victims = []  # (link, real target dir or None)
     for sub in sorted(root.iterdir()):
-        if sub.is_dir() and not sub.is_symlink():
-            victims += [e for e in sub.iterdir() if mtime(e) < cutoff]
-    size = sum(du(v) for v in victims)
+        if not sub.is_dir() or sub.is_symlink():
+            continue
+        for e in sub.iterdir():
+            real = Path(os.path.realpath(e)) if e.is_symlink() else None
+            if real is not None and not str(real).startswith(prefix):
+                continue  # never follow a link out of ~/.debug
+            if real is not None and not real.exists():
+                real = None  # dangling link: remove the link only
+            if mtime(real if real is not None else e) < cutoff:
+                victims.append((e, real))
+    size = sum(du(t) for _, t in victims if t is not None)
     if apply:
-        for v in victims:
-            remove(v)
+        for link, real in victims:
+            if real is not None:
+                remove(real)
+            remove(link)
         for sub in root.iterdir():  # drop emptied two-hex dirs
             try:
                 sub.rmdir()
             except OSError:
                 pass
-    rep.item("debug", size, "entries older than 30 days" + ("" if apply else " (would delete)"), len(victims))
+    rep.item("debug", size, "build-id entries older than 30 days" + ("" if apply else " (would delete)"), len(victims))
 
 
 def item_trash(rep, apply):
