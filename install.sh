@@ -46,6 +46,7 @@ config_dirs=(
   os-theme
   omf
   rclone
+  styring
   tridactyl
   wezterm
 )
@@ -263,6 +264,7 @@ if [ -n "$native_linux" ]; then
     .local/bin/cass-memcheck
     .config/environment.d/cass.conf
     .config/environment.d/motioncatalyst-wine.conf
+    .config/environment.d/herdr-fonts.conf
     .cargo/config.toml
   )
   for item in "${linux_items[@]}"; do

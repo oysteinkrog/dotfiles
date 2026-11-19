@@ -142,6 +142,16 @@ else
   info "cd ~/projects/tasklens/packaging && heavy-build makepkg -f --nocheck && sudo pacman -U tasklens-*.pkg.tar.zst"
 fi
 
+step "tools: herdr-core and herdr-app"
+# The agent terminal server (hc) and its desktop app with our add-ons. Needs the app opened
+# once between the two commands, so this step only reports. See bin/herdr-setup.
+if [ -x "$HOME/.local/bin/herdr-core" ] && [ -x "$HOME/.local/bin/herdr-app" ]; then
+  ok "$("$HOME/.local/bin/herdr-core" --version 2>/dev/null), $("$HOME/.local/bin/herdr-app" --version 2>/dev/null)"
+  [ -d "$HOME/.config/herdr-app/mods/whitby" ] || info "add-ons missing: run herdr-setup install"
+else
+  warn "herdr not installed: run herdr-setup binaries, open herdr-app once, then herdr-setup install"
+fi
+
 step "tools: prebuilt binaries"
 # name|where it lives|where it comes from
 prebuilt=(

@@ -1,0 +1,149 @@
+{
+  "id": "root",
+  "type": "column",
+  "resizable": false,
+  "titlebar": "none",
+  "traffic_lights": [
+    9,
+    9
+  ],
+  "preview": "layouts/whitby.svg",
+  "theme": {
+    "light": "frankenterm-gruvbox",
+    "dark": "frankenterm-gruvbox"
+  },
+  "font": "DejaVu Sans Mono",
+  "font_size": 15.33,
+  "ui_font": "DejaVu Sans",
+  "terminal_padding": [
+    8,
+    8
+  ],
+  "background": "canvas",
+  "toast": "whitby",
+  "children": [
+    {
+      "id": "titlebar",
+      "type": "block",
+      "size": {
+        "px": 30
+      },
+      "window_drag": true,
+      "content": {
+        "mod": "whitby",
+        "props": {
+          "part": "titlebar"
+        }
+      }
+    },
+    {
+      "id": "body",
+      "type": "row",
+      "divider": {
+        "width": 1,
+        "color": "border"
+      },
+      "children": [
+        {
+          "id": "rail",
+          "type": "block",
+          "size": {
+            "px": 48
+          },
+          "resizable": false,
+          "content": {
+            "mod": "whitby",
+            "props": {
+              "part": "rail"
+            }
+          }
+        },
+        {
+          "id": "sidebar",
+          "type": "block",
+          "size": {
+            "px": 192
+          },
+          "min": 180,
+          "max": 352,
+          "content": {
+            "mod": "whitby",
+            "props": {
+              "part": "sidebar"
+            }
+          }
+        },
+        {
+          "id": "work",
+          "type": "stack",
+          "active": "agent",
+          "min": 320,
+          "children": [
+            {
+              "id": "agent",
+              "type": "column",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "agent-header",
+                  "type": "block",
+                  "size": {
+                    "px": 62
+                  },
+                  "content": {
+                    "mod": "whitby",
+                    "props": {
+                      "part": "header"
+                    }
+                  }
+                },
+                {
+                  "id": "main",
+                  "type": "block",
+                  "background": "border",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "gap": 1,
+                      "radius": 0,
+                      "background": "background",
+                      "focus": {
+                        "width": 1,
+                        "color": "accent"
+                      },
+                      "lone": false
+                    }
+                  }
+                },
+                {
+                  "id": "agent-footer",
+                  "type": "block",
+                  "size": {
+                    "px": 42
+                  },
+                  "content": {
+                    "mod": "whitby",
+                    "props": {
+                      "part": "footer"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "home",
+              "type": "block",
+              "content": {
+                "mod": "whitby",
+                "props": {
+                  "part": "home"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "font_weight": 400
+}

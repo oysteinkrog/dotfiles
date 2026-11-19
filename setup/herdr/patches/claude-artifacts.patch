@@ -1,0 +1,71 @@
+--- a/mods/claude-artifacts/main.js
++++ b/mods/claude-artifacts/main.js
+@@ -12,7 +12,7 @@
+ import { spaces, agents, focused, exec, appHome, theme, nextCommand, shared } from "herdr";
+
+ const REFRESH_MS = 4000;
+-const SCRIPT = () => `${appHome()}/mods/artifacts/artifacts.py`;
++const SCRIPT = () => `${appHome()}/mods/claude-artifacts/artifacts.py`;
+ const SCOPE_KEY = "artifacts.scope"; // "agent" | "space", remembered on this screen
+
+ function ago(ts) {
+@@ -148,7 +148,7 @@
+         this.copied = url; cx.notify();
+         cx.timer.after(1500, (cx) => { if (this.copied === url) this.copied = null; cx.notify(); });
+       })
+-      .child(svg(`mods/artifacts/${copied ? "check" : "copy"}.svg`).size(12));
++      .child(svg(`mods/claude-artifacts/${copied ? "check" : "copy"}.svg`).size(12));
+   }
+
+   hoverRow(url) {
+@@ -167,7 +167,7 @@
+     return h_flex().id(`art-${a.url}`).h(30).pl(8 + indent).pr(6).gap(8).items_center().rounded(7).cursor_pointer().flex_none()
+       .hover((s) => s.bg(t.hover)).on_hover(this.hoverRow(a.url))
+       .on_click((_e, cx) => cx.open_url(a.url))
+-      .child(svg("mods/artifacts/artifact.svg").size(14).flex_none().text_color(published ? t.accent : t.dim))
++      .child(svg("mods/claude-artifacts/artifact.svg").size(14).flex_none().text_color(published ? t.accent : t.dim))
+       .child(div().flex_1().min_w(0).truncate().text_color(published ? t.foreground : t.muted).child(a.title || a.url))
+       .child(div().flex_none().w(46).text_right().text_size(11).text_color(published && a.version ? t.muted : t.dim).child(tag))
+       .child(div().flex_none().w(30).text_right().text_size(11).text_color(t.dim).child(ago(a.last_ts)))
+@@ -178,7 +178,7 @@
+     return h_flex().id(`link-${l.url}`).h(30).pl(8 + indent).pr(6).gap(8).items_center().rounded(7).cursor_pointer()
+       .hover((s) => s.bg(t.hover)).on_hover(this.hoverRow(l.url))
+       .on_click((_e, cx) => cx.open_url(l.url))
+-      .child(svg("mods/artifacts/link.svg").size(13).flex_none().text_color(t.muted))
++      .child(svg("mods/claude-artifacts/link.svg").size(13).flex_none().text_color(t.muted))
+       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(l.title || l.url))
+       .when(Boolean(l.host) && l.title !== l.host && !l.title.startsWith(l.host), (e) => e.child(div().flex_none().max_w(120).truncate().text_size(11).text_color(t.dim).child(l.host)))
+       .child(div().flex_none().w(30).text_right().text_size(11).text_color(t.dim).child(ago(l.last_ts)))
+@@ -242,7 +242,7 @@
+       .when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(on ? t.selected : t.hover))
+       .on_click((_e, cx) => cx.open_url(r.url))
+       .on_hover((hovered, cx) => { if (hovered && this.selected !== i) { this.selected = i; cx.notify(); } })
+-      .child(svg(`mods/artifacts/${artifact ? "artifact" : "link"}.svg`).size(14).flex_none().text_color(artifact ? t.accent : t.muted))
++      .child(svg(`mods/claude-artifacts/${artifact ? "artifact" : "link"}.svg`).size(14).flex_none().text_color(artifact ? t.accent : t.muted))
+       .child(v_flex().flex_1().min_w(0).gap(1)
+         .child(div().truncate().text_color(t.foreground).child(r.title))
+         .child(div().truncate().text_size(11).text_color(t.dim).child(r.detail.join("  ·  "))))
+@@ -298,7 +298,7 @@
+       .when(all.length > 1 || this.scope === "space", (el) => el.child(this.scopeSwitch(t)))
+       .child(div().id("refresh").size(20).flex().items_center().justify_center().rounded(5).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover))
+         .on_click((_e, cx) => this.refresh(cx, true))
+-        .child(this.loading ? svg("mods/workspace-chrome/spinner.svg").size(12).spin(900) : svg("mods/artifacts/refresh.svg").size(12)));
++        .child(this.loading ? svg("mods/workspace-chrome/spinner.svg").size(12).spin(900) : svg("mods/claude-artifacts/refresh.svg").size(12)));
+
+     const agentLine = (agent, scan, folded, first) => h_flex().id(`agent-${agent.address}`).h(30).when(!first, (e) => e.mt(8)).px(8).gap(8).items_center().rounded(7)
+       .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.collapsed[agent.address] = !folded; cx.notify(); })
+@@ -393,7 +393,7 @@
+     const searchBar = h_flex().flex_none().px(8).pt(8).pb(4).gap(6).items_center()
+       .child(h_flex().id("artifacts-search").flex_1().min_w(0).h(30).px(9).gap(7).items_center().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).bg(t.background).cursor_text()
+         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+-        .child(svg("mods/artifacts/search.svg").size(13).flex_none().text_color(t.dim))
++        .child(svg("mods/claude-artifacts/search.svg").size(13).flex_none().text_color(t.dim))
+         .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground))
+         .when(searching, (e) => e.child(div().id("search-clear").size(18).flex_none().flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
+           .on_click((_e, cx) => this.clearSearch(cx)).child("×")))
+--- a/mods/claude-artifacts/mod.json
++++ b/mods/claude-artifacts/mod.json
+@@ -1 +1 @@
+-{ "place": "none", "title": "Artifacts" }
++{"place": "none", "title": "Claude artifacts"}
+\ No newline at end of file

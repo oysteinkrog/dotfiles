@@ -1,0 +1,204 @@
+#!/bin/bash
+# herdr-setup: put the herdr desktop app (herdr-app) add-ons and settings in place on this computer.
+#
+#   herdr-setup binaries            install herdr-core (hc, pinned) and herdr-app (latest) from releases.herdr.dev
+#   herdr-setup install [--root DIR] [--no-shepherdr] [--no-build]
+#                                   Shepherdr, the add-on mods at pinned commits plus our patches, then our files
+#   herdr-setup check               show where the live setup differs from what install would write
+#   herdr-setup capture             copy the live versions of our files (keys, settings, layouts) back into dotfiles
+#
+# The data lives next to this script's repo in setup/herdr/: patches/*.patch (one per add-on, paths relative to
+# ~/.config/herdr-app) and files/ (copied over ~/.config/herdr-app, never linked: the app and the installers
+# rewrite these files with a rename, which would turn a link back into a plain file).
+#
+# Install is idempotent. Upstream clones go in ~/src/<name> (HERDR_SETUP_SRC moves them) and are only fetched;
+# files come out of them with `git archive <commit>`, so the branch a clone is on does not matter. Shepherdr is
+# the exception: its installer runs from its checkout, which must be at the pinned commit.
+# The app must have been opened once first, so ~/.config/herdr-app exists.
+set -euo pipefail
+
+DOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+DATA="$DOT/setup/herdr"
+SRC="${HERDR_SETUP_SRC:-$HOME/src}"
+HC_VERSION="0.1.21" # tested with herdr-app 0.1.16; the app installer always takes the newest app
+
+# name|git url|commit|what to copy (repo path=app-home path, space separated)|patch
+ADDONS=(
+  "herdr-whitby|https://github.com/shellscape/herdr-whitby.git|f512095|mods/whitby=mods/whitby themes/whitby-dark.json=themes/whitby-dark.json themes/whitby-light.json=themes/whitby-light.json layouts/whitby.svg=layouts/whitby.svg layouts/whitby-chat.svg=layouts/whitby-chat.svg|whitby-gruvbox"
+  "herdr-space-folders|https://github.com/jankeesvw/herdr-space-folders.git|63a78b2|mods/space-folders=mods/space-folders|space-folders"
+  "herdr-artifacts|https://github.com/jmoyers/herdr-artifacts.git|7d85899|artifacts=mods/claude-artifacts|claude-artifacts"
+  "herdr-agent-ask|https://github.com/sachin-philip/herdr-agent-ask.git|764155f|mods/asks=mods/asks mods/tabs-asks=mods/tabs-asks mods/spaces-asks=mods/spaces-asks|herdr-agent-ask"
+)
+SHEPHERDR="shepherdr|https://github.com/eliasstravik/shepherdr.git|abd5a0f1"
+SHEPHERDR_PATCH="shepherdr-coordinator"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'herdr-setup: %s\n' "$*" >&2; exit 1; }
+
+# fetch NAME URL COMMIT: make sure ~/src/NAME has COMMIT; prints the clone path.
+fetch() {
+  local name=$1 url=$2 commit=$3 dir="$SRC/$1"
+  if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$SRC"
+    git clone -q "$url" "$dir" >&2
+  fi
+  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$dir" fetch -q origin >&2
+  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || die "$name: commit $commit not found in $url"
+  printf '%s\n' "$dir"
+}
+
+# apply_patch DIR PATCH: apply once; a patch that is already in place is skipped.
+apply_patch() {
+  local dir=$1 p=$2
+  if patch -p1 -d "$dir" -R --dry-run -s -f <"$p" >/dev/null 2>&1; then
+    say "  $(basename "$p"): already applied"
+  else
+    patch -p1 -d "$dir" --forward -s <"$p" || die "$(basename "$p") does not apply in $dir"
+    say "  $(basename "$p"): applied"
+  fi
+}
+
+# stage DIR: write every add-on (upstream at its commit, plus our patch) into DIR, laid out like the app home.
+stage() {
+  local out=$1 row name url commit items patchname dir item from to
+  for row in "${ADDONS[@]}"; do
+    IFS='|' read -r name url commit items patchname <<<"$row"
+    dir=$(fetch "$name" "$url" "$commit")
+    for item in $items; do
+      from=${item%%=*} to=${item#*=}
+      mkdir -p "$out/$(dirname "$to")"
+      if [ "$(git -C "$dir" cat-file -t "$commit:$from")" = tree ]; then
+        mkdir -p "$out/$to"
+        git -C "$dir" archive "$commit" "$from" | tar -x -C "$out/$to" --strip-components="$(awk -F/ '{print NF}' <<<"$from")"
+      else
+        git -C "$dir" show "$commit:$from" >"$out/$to"
+      fi
+    done
+    patch -p1 -d "$out" --forward -s <"$DATA/patches/$patchname.patch" || die "$patchname.patch does not apply to $name $commit"
+  done
+}
+
+# Our files under files/, relative to the app home.
+our_files() { (cd "$DATA/files" && find . -type f | sed 's|^\./||' | sort); }
+
+cmd_binaries() {
+  command -v curl >/dev/null || die "needs curl"
+  say "herdr-core $HC_VERSION:"
+  curl -fsSL https://releases.herdr.dev/core/install.sh | HC_VERSION="$HC_VERSION" sh
+  say "herdr-app (newest):"
+  curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+  say "Now open herdr-app once (it writes ~/.config/herdr-app), close it, then run: herdr-setup install"
+}
+
+cmd_install() {
+  local root=$HOME shep=1 build=1
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --root) root=$(readlink -f "$2"); shift 2 ;;
+      --no-shepherdr) shep=""; shift ;;
+      --no-build) build=""; shift ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+  local app="$root/.config/herdr-app" stamp
+  [ -d "$app" ] || die "no $app: open herdr-app once first"
+  stamp=$(date +%Y%m%d-%H%M%S)
+
+  if [ -n "$shep" ]; then
+    local name url commit dir head
+    IFS='|' read -r name url commit <<<"$SHEPHERDR"
+    say "=== Shepherdr $commit"
+    if [ ! -d "$SRC/$name/.git" ]; then
+      dir=$(fetch "$name" "$url" "$commit")
+      git -C "$dir" -c advice.detachedHead=false checkout -q "$commit"
+    else
+      dir=$(fetch "$name" "$url" "$commit")
+    fi
+    head=$(git -C "$dir" rev-parse HEAD)
+    case $head in "$commit"*) ;; *) die "$dir is at ${head:0:8}, not $commit: check it out there (or pass --no-shepherdr)" ;; esac
+    local args=(install --yes --no-hooks --keys keep)
+    [ "$root" = "$HOME" ] || args+=(--root "$root")
+    [ -n "$build" ] || args+=(--no-build)
+    python3 "$dir/bin/shepherdr" "${args[@]}"
+    apply_patch "$app" "$DATA/patches/$SHEPHERDR_PATCH.patch"
+  fi
+
+  say "=== Add-on mods"
+  local tmp; tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/herdr-setup.XXXXXX")
+  trap 'rm -rf "$tmp"' RETURN
+  stage "$tmp"
+  local m
+  for m in "$tmp"/mods/*/; do
+    m=$(basename "$m")
+    mkdir -p "$app/mods/$m"
+    # The app writes gpui-kit.d.ts and jsconfig.json into each mod itself.
+    rsync -a --delete --exclude gpui-kit.d.ts --exclude jsconfig.json "$tmp/mods/$m/" "$app/mods/$m/"
+    say "  mods/$m"
+  done
+  local f
+  for f in $(cd "$tmp" && find themes layouts -type f 2>/dev/null); do
+    mkdir -p "$app/$(dirname "$f")"
+    cp "$tmp/$f" "$app/$f"
+    say "  $f"
+  done
+
+  say "=== Our files"
+  for f in $(our_files); do
+    mkdir -p "$app/$(dirname "$f")"
+    if [ -f "$app/$f" ] && ! cmp -s "$DATA/files/$f" "$app/$f"; then
+      cp -a "$app/$f" "$app/$f.before-herdr-setup-$stamp"
+      say "  $f (old copy kept as $f.before-herdr-setup-$stamp)"
+    elif [ -f "$app/$f" ]; then
+      say "  $f (same)"
+      continue
+    else
+      say "  $f"
+    fi
+    cp "$DATA/files/$f" "$app/$f"
+  done
+  say "Done. Restart herdr-app to load the mods. Pick the asks-folders layout if it is not shown."
+}
+
+cmd_check() {
+  local app="$HOME/.config/herdr-app" tmp drift=0 m f
+  [ -d "$app" ] || die "no $app"
+  tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/herdr-setup.XXXXXX")
+  trap 'rm -rf "$tmp"' RETURN
+  stage "$tmp" >/dev/null
+  for m in "$tmp"/mods/*/; do
+    m=$(basename "$m")
+    diff -r -q -x gpui-kit.d.ts -x jsconfig.json "$tmp/mods/$m" "$app/mods/$m" || drift=1
+  done
+  for f in $(cd "$tmp" && find themes layouts -type f); do
+    cmp -s "$tmp/$f" "$app/$f" || { say "differs: $f"; drift=1; }
+  done
+  if patch -p1 -d "$app" -R --dry-run -s -f <"$DATA/patches/$SHEPHERDR_PATCH.patch" >/dev/null 2>&1; then :; else
+    say "not applied: $SHEPHERDR_PATCH.patch"; drift=1
+  fi
+  for f in $(our_files); do
+    cmp -s "$DATA/files/$f" "$app/$f" || { say "differs: $f (herdr-setup capture saves the live one)"; drift=1; }
+  done
+  [ $drift = 0 ] && say "The live setup matches dotfiles."
+  return $drift
+}
+
+cmd_capture() {
+  local app="$HOME/.config/herdr-app" f n=0
+  for f in $(our_files); do
+    if ! cmp -s "$app/$f" "$DATA/files/$f"; then
+      cp "$app/$f" "$DATA/files/$f"
+      say "  saved $f"
+      n=$((n + 1))
+    fi
+  done
+  say "$n file(s) saved. Review with: git -C $DOT diff -- setup/herdr/files"
+  say "Changed mod code is not captured: make a patch in setup/herdr/patches (see herdr-setup check)."
+}
+
+case "${1:-}" in
+  binaries) shift; cmd_binaries "$@" ;;
+  install) shift; cmd_install "$@" ;;
+  check) shift; cmd_check "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

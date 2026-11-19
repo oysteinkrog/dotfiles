@@ -1,0 +1,24 @@
+--- a/mods/tabs-tasks/coordinator.js
++++ b/mods/tabs-tasks/coordinator.js
+@@ -58,7 +58,8 @@
+
+ // Whether new spaces get a coordinator tab: on unless shared "coordinator.auto" is false (no UI;
+ // set it by hand to turn it off).
+-export const autoCoordinator = () => shared("coordinator.auto") !== false;
++// Local change 2026-11-18 (Oystein): off unless "coordinator.auto" is true. After a reboot every space looked new and got an Assistant tab.
++export const autoCoordinator = () => shared("coordinator.auto") === true;
+
+ // Whose worker a terminal is: its coordinator's address, or its parent's.
+ export function parentOf(k, all = terminals()) {
+--- a/mods/spaces-chat/coordinator.js
++++ b/mods/spaces-chat/coordinator.js
+@@ -58,7 +58,8 @@
+
+ // Whether new spaces get a coordinator tab: on unless shared "coordinator.auto" is false (no UI;
+ // set it by hand to turn it off).
+-export const autoCoordinator = () => shared("coordinator.auto") !== false;
++// Local change 2026-11-18 (Oystein): off unless "coordinator.auto" is true. After a reboot every space looked new and got an Assistant tab.
++export const autoCoordinator = () => shared("coordinator.auto") === true;
+
+ // Whose worker a terminal is: its coordinator's address, or its parent's.
+ export function parentOf(k, all = terminals()) {

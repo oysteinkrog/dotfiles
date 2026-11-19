@@ -1,0 +1,6 @@
+{
+  "classifier": "claude",
+  "model": "haiku",
+  "trailing_questions": true,
+  "debug": false
+}

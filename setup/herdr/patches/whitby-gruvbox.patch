@@ -1,0 +1,120 @@
+--- a/mods/whitby/bell.js
++++ b/mods/whitby/bell.js
+@@ -27,7 +27,7 @@
+     .w(BELL + PAD * 2)
+     .h(30 - (TOP - PAD) - 1), v, "bell")
+     .child(glyph("attention-bell-fill", t.front))
+-    .child(fadeLayer("whitby-bell-fill", hovered(v, "bell"), glyph("attention-bell-fill", t.dark ? "#4a6aa8" : "#c6d8fc")))
++    .child(fadeLayer("whitby-bell-fill", hovered(v, "bell"), glyph("attention-bell-fill", t.dark ? "#3b4b3c" : "#c6d8fc")))
+     .child(glyph("attention-bell", t.blue))
+     .child(pressLayer("whitby-bell-press", alpha(t.blue, 0.14), 6, () => run("pane.focus", { pane: waiting[0].pane })))
+     .child(div().absolute().top(PAD - 4).left(PAD + BELL - 9).min_w(14).px(3.5).py(1.75).rounded_full().bg(t.solid)
+--- a/mods/whitby/chat.js
++++ b/mods/whitby/chat.js
+@@ -922,7 +922,7 @@
+
+ const firstLine = (s) => (s ?? "").split("\n").find((l) => l.trim())?.trim() ?? "";
+ const tidy = (s) => firstLine(s).split(home() + "/").join("~/");
+-const bubble = (t) => (t.dark ? "#363c46" : "#f8f8f9");
++const bubble = (t) => (t.dark ? "#3c3836" : "#f8f8f9");
+
+ function stamp(t, ms, i) {
+   return h_flex().id(`stamp-${i}`).w_full().justify_center().pt(6).pb(2).text_size(11).text_color(t.muted).child(stampText(ms));
+--- a/mods/whitby/home.js
++++ b/mods/whitby/home.js
+@@ -53,7 +53,7 @@
+ export function home(v) {
+   const t = palette();
+   const count = spaces().length;
+-  const border = t.dark ? "#363c46" : "#e0e1e6";
++  const border = t.dark ? "#3c3836" : "#e0e1e6";
+   const add = h_flex()
+     .id("home-add")
+     .relative()
+@@ -78,7 +78,7 @@
+       .opacity(v.hoverAdd && !v.adding ? 0.5 : 0).transition("opacity", 150)
+       .child(icon("arrow-right", 14, t.muted)));
+   const card = v_flex().id("home-card").w_full().min_w(0).rounded(7).border(1).border_color(border)
+-    .bg(t.dark ? "#2f343e" : "#f9f9fb").overflow_hidden().child(add);
++    .bg(t.dark ? "#32302f" : "#f9f9fb").overflow_hidden().child(add);
+   // The platter sits just below the card, 120% of the column wide, at 5%.
+   const wide = v.column * 1.2;
+   const platter = div().absolute().left(0).top("100%").w_full().flex().justify_center()
+--- a/mods/whitby/kit.js
++++ b/mods/whitby/kit.js
+@@ -20,14 +20,14 @@
+ // border, and text.muted and icon.muted for labels and secondary lines. Light keeps
+ // Whitby's muted-at-N%.
+ const ZED = {
+-  0.15: "#363c46", 0.28: "#c8ccd44c", 0.3: "#4e5a5f", 0.4: "#878a98", 0.45: "#47679e", 0.5: "#878a98",
+-  0.55: "#878a98", 0.6: "#a9afbc", 0.65: "#a9afbc", 0.7: "#a9afbc", 0.75: "#a9afbc", 0.8: "#878a98", 0.85: "#a9afbc",
++  0.15: "#3c3836", 0.28: "#ebdbb24c", 0.3: "#504945", 0.4: "#928374", 0.45: "#689d6a", 0.5: "#928374",
++  0.55: "#928374", 0.6: "#a89984", 0.65: "#a89984", 0.7: "#bdae93", 0.75: "#bdae93", 0.8: "#928374", 0.85: "#c4b796",
+ };
+
+ // Theme tokens plus the few Whitby colors herdr has no name for.
+ export function palette() {
+   const t = theme();
+-  const dark = Boolean(settings()?.dark);
++  const dark = Boolean(settings()?.dark) || (/^#[0-9a-f]{6}$/i.test(t.background ?? "") && parseInt(t.background.slice(1, 3), 16) < 0x80);
+   const tone = (light, night) => (dark ? night : light);
+   // Muted at a faint step, as Whitby's muted-at-N% (in dark, Zed One Dark's, see ZED).
+   const fade = (a) => (dark && ZED[a]) || alpha(t.muted, a);
+@@ -35,39 +35,39 @@
+     ...t,
+     dark,
+     fade,
+-    running: tone("#189a30", "#1c882d"),
++    running: tone("#189a30", "#98971a"),
+     // Status dots: soft enough to sit quietly beside a title.
+     dot: {
+-      working: "#6cbf8a", running: alpha("#6cbf8a", 0.5), done: "#8ab0f7", idle: fade(0.55),
+-      stopped: fade(0.3), blocked: "#e5787a", error: "#e5787a", needs: "#a78bfa",
++      working: "#3498db", running: alpha("#3498db", 0.5), done: "#2ecc71", idle: fade(0.55),
++      stopped: fade(0.3), blocked: "#e74c3c", error: "#e74c3c", needs: "#f39c12",
+     },
+     // The same states as words, where a label needs one.
+-    word: { working: tone("#2e9f4b", "#4cc06a"), running: tone("#2e9f4b", "#4cc06a"), blocked: tone("#b54343", "#ff938a"), error: tone("#b54343", "#ff938a"), needs: tone("#7c5cd6", "#b49cfb") },
++    word: { working: tone("#2e9f4b", "#4cc06a"), running: tone("#2e9f4b", "#4cc06a"), blocked: tone("#b54343", "#ff938a"), error: tone("#b54343", "#ff938a"), needs: tone("#7c5cd6", "#fabd2f") },
+     live: "#2e9f4b",
+     failed: "#b54343",
+-    warn: tone("#b7791f", "#d49338"),
++    warn: tone("#b7791f", "#d79921"),
+     // Whitby's blue for marks, lines and links; dark takes Zed One Dark's accent. Whitby's
+     // solid blue stays the fill under white text (buttons, your messages, the bell's badge).
+-    blue: tone("#246cf4", "#74ade8"),
+-    link: tone("#246cf4", "#74ade8"),
++    blue: tone("#246cf4", "#689d6a"),
++    link: tone("#246cf4", "#83a598"),
+     // Inline code (paths): Zed One Dark's element.hover in dark.
+-    codeBg: tone(alpha(t.muted, 0.14), "#363c46"),
+-    front: tone("#ffffff", "#2f343e"),
+-    body: tone("#f9f9fb", "#282c33"),
+-    rowHover: tone("#f9f9fb", "#2f343e"),
++    codeBg: tone(alpha(t.muted, 0.14), "#3c3836"),
++    front: tone("#ffffff", "#32302f"),
++    body: tone("#f9f9fb", "#282828"),
++    rowHover: tone("#f9f9fb", "#32302f"),
+     // The rail, the sidebar's filter row and the agent header: Whitby's canvas in light;
+     // in dark, Zed One Dark's panel and tab bar background.
+-    bar: tone(t.canvas, "#2f343e"),
++    bar: tone(t.canvas, "#1d2021"),
+     // Text fields: in dark, Zed One Dark's search field (the editor's background, edged
+     // in its border).
+-    field: tone("#f8f8fa", "#282c33"),
++    field: tone("#f8f8fa", "#282828"),
+     // The focused pane's line: Whitby's blue in light; in dark, Zed One Dark's
+     // border.focused.
+-    focus: tone("#246cf4", "#47679e"),
+-    placeholder: tone("#999ba3", "#878a98"),
+-    footer: tone("#f8f8fa", "#3b414d"),
+-    footerBorder: tone("#d9d9e0", "#464b57"),
+-    footerMuted: tone("#60646c", "#a9afbc"),
++    focus: tone("#246cf4", "#689d6a"),
++    placeholder: tone("#999ba3", "#928374"),
++    footer: tone("#f8f8fa", "#1d2021"),
++    footerBorder: tone("#d9d9e0", "#3c3836"),
++    footerMuted: tone("#60646c", "#a89984"),
+   };
+ }
+
