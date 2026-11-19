@@ -1,0 +1,11 @@
+[Unit]
+Description=Clean old scratch files and folders in /var/tmp/claude
+
+[Service]
+Type=oneshot
+Slice=builds.slice
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+TimeoutStartSec=4h
+ExecStart=%h/.dotfiles/bin/tmp-janitor --apply

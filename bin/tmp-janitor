@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Daily cleanup of /var/tmp/claude. Dry run by default; --apply deletes.
+
+Rules:
+ 1. Top-level tmp*, hx*, astra*, rev* items older than 2 days.
+ 2. Claude session scratchpads (claude-1000/<project>/<session>) older than
+    14 days whose session is not alive.
+ 3. Other top-level folders over 5 GiB and older than 7 days: first run only
+    notifies; delete on a later run at least 24 h after the notice, if no
+    .keep appeared.
+Never touched: jobd-xdg, grove-delete.lock, claude-1000 itself, anything with a
+.keep, anything in use by a process, git worktrees, paths in the skip file.
+"""
+import argparse, fnmatch, json, os, re, shutil, subprocess, sys, time
+
+GiB = 1024 ** 3
+DAY = 86400
+PATTERNS = ("tmp*", "hx*", "astra*", "rev*")
+PROTECTED = {"jobd-xdg", "grove-delete.lock", "claude-1000"}
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+DEPTH_CAP = 3          # depth of the newest-mtime check
+ENTRY_CAP = 3000       # entries looked at per item for the newest-mtime check
+
+
+def newest_mtime(path):
+    """Newest mtime in path, up to DEPTH_CAP levels and ENTRY_CAP entries."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return 0.0
+    newest = st.st_mtime
+    if not os.path.isdir(path) or os.path.islink(path):
+        return newest
+    seen = 0
+    stack = [(path, 0)]
+    while stack:
+        d, depth = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                seen += 1
+                if seen > ENTRY_CAP:
+                    return newest
+                try:
+                    m = e.stat(follow_symlinks=False).st_mtime
+                    if m > newest:
+                        newest = m
+                    if depth + 1 < DEPTH_CAP and e.is_dir(follow_symlinks=False):
+                        stack.append((e.path, depth + 1))
+                except OSError:
+                    pass
+    return newest
+
+
+def apparent_size(path):
+    """Sum of apparent file sizes, no symlink following, one filesystem."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return 0
+    if not os.path.isdir(path) or os.path.islink(path):
+        return st.st_size
+    total, dev = 0, st.st_dev
+    stack = [path]
+    while stack:
+        d = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    s = e.stat(follow_symlinks=False)
+                    total += s.st_size
+                    if e.is_dir(follow_symlinks=False) and s.st_dev == dev:
+                        stack.append(e.path)
+                except OSError:
+                    pass
+    return total
+
+
+def has_keep(path):
+    if not os.path.isdir(path) or os.path.islink(path):
+        return False
+    return os.path.lexists(os.path.join(path, ".keep"))
+
+
+def has_worktree_marker(path):
+    """True if path, or a folder up to 2 levels below it, holds a .git FILE (worktree)."""
+    if not os.path.isdir(path) or os.path.islink(path):
+        return False
+    stack = [(path, 0)]
+    while stack:
+        d, depth = stack.pop()
+        g = os.path.join(d, ".git")
+        if os.path.isfile(g) and not os.path.islink(g):
+            return True
+        if depth >= 2:
+            continue
+        try:
+            for e in os.scandir(d):
+                if e.is_dir(follow_symlinks=False) and e.name != ".git":
+                    stack.append((e.path, depth + 1))
+        except OSError:
+            pass
+    return False
+
+
+def load_skip(skip_file):
+    pats = []
+    try:
+        for line in open(skip_file):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                pats.append(os.path.expanduser(line))
+    except OSError:
+        pass
+    return pats
+
+
+def skipped(path, skip_pats):
+    for p in skip_pats:
+        p = p.rstrip("/")
+        if "/" not in p:
+            if fnmatch.fnmatch(os.path.basename(path), p):
+                return True
+            continue
+        if fnmatch.fnmatch(path, p) or path.startswith(p + "/") or p.startswith(path + "/"):
+            return True
+    return False
+
+
+class Procs:
+    """One pass over /proc: live session ids, and the paths processes use."""
+
+    def __init__(self, proc="/proc", sessions_dir=None):
+        self.cmdblob = ""
+        self.paths = set()
+        cmds = []
+        for pid in os.listdir(proc):
+            if not pid.isdigit():
+                continue
+            pd = os.path.join(proc, pid)
+            try:
+                raw = open(os.path.join(pd, "cmdline"), "rb").read()
+                cmds.append(raw.replace(b"\0", b" ").decode("utf8", "replace"))
+            except OSError:
+                pass
+            for name in ("cwd", "root"):
+                try:
+                    self.paths.add(os.readlink(os.path.join(pd, name)))
+                except OSError:
+                    pass
+            try:
+                for fd in os.listdir(os.path.join(pd, "fd")):
+                    try:
+                        self.paths.add(os.readlink(os.path.join(pd, "fd", fd)))
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        self.cmdblob = "\n".join(cmds)
+        self.persist_ids = set()
+        if sessions_dir and os.path.isdir(sessions_dir):
+            for f in os.listdir(sessions_dir):
+                if not f.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(sessions_dir, f)) as fh:
+                        j = json.load(fh)
+                    pid = j.get("pid")
+                    if pid and os.path.isdir(os.path.join(proc, str(pid))):
+                        if j.get("session_id"):
+                            self.persist_ids.add(j["session_id"])
+                except (OSError, ValueError):
+                    pass
+
+    def session_alive(self, sid):
+        return sid in self.cmdblob or sid in self.persist_ids
+
+    def in_use(self, path):
+        if path in self.cmdblob:
+            return True
+        pre = path + "/"
+        for p in self.paths:
+            if p == path or p.startswith(pre):
+                return True
+        return False
+
+
+def io_pressure_full():
+    try:
+        for line in open("/proc/pressure/io"):
+            if line.startswith("full"):
+                return float(re.search(r"avg10=([\d.]+)", line).group(1))
+    except (OSError, AttributeError, ValueError):
+        pass
+    return 0.0
+
+
+def gib(n):
+    return n / GiB
+
+
+def select(base, now, procs, skip_pats, state, big_days=7, big_gib=5.0):
+    """Return dict of rule -> list of (path, size, age_days, note)."""
+    out = {1: [], 2: [], 3: [], "skipped": []}
+    names = sorted(os.listdir(base))
+
+    def blocked(path, name=None):
+        if name in PROTECTED:
+            return "protected"
+        if skipped(path, skip_pats):
+            return "skip-list"
+        if has_keep(path):
+            return ".keep"
+        if has_worktree_marker(path):
+            return "worktree"
+        if procs.in_use(path):
+            return "in use"
+        return None
+
+    # rule 1 and rule 3 on top-level entries
+    for name in names:
+        path = os.path.join(base, name)
+        if name in PROTECTED:
+            continue
+        try:
+            os.lstat(path)
+        except OSError:
+            continue
+        age = (now - newest_mtime(path)) / DAY
+        if any(fnmatch.fnmatchcase(name, p) for p in PATTERNS):
+            if age > 2:
+                why = blocked(path, name)
+                if why:
+                    out["skipped"].append((path, 1, why))
+                else:
+                    out[1].append((path, apparent_size(path), age, ""))
+            continue
+        if os.path.isdir(path) and not os.path.islink(path) and age > big_days:
+            size = apparent_size(path)
+            if size > big_gib * GiB:
+                why = blocked(path, name)
+                if why:
+                    out["skipped"].append((path, 3, why))
+                    continue
+                n = state.get(path)
+                if not n:
+                    out[3].append((path, size, age, "notify"))
+                elif now - n["noticed"] >= DAY:
+                    out[3].append((path, size, age, "delete"))
+                else:
+                    out[3].append((path, size, age, "waiting"))
+
+    # rule 2: scratchpads
+    cdir = os.path.join(base, "claude-1000")
+    if os.path.isdir(cdir):
+        for proj in sorted(os.listdir(cdir)):
+            if not proj.startswith("-"):
+                continue
+            pdir = os.path.join(cdir, proj)
+            if not os.path.isdir(pdir) or os.path.islink(pdir):
+                continue
+            for sid in sorted(os.listdir(pdir)):
+                if not UUID.match(sid):
+                    continue
+                path = os.path.join(pdir, sid)
+                if not os.path.isdir(path) or os.path.islink(path):
+                    continue
+                age = (now - newest_mtime(path)) / DAY
+                if age <= 14:
+                    continue
+                if procs.session_alive(sid):
+                    out["skipped"].append((path, 2, "live session"))
+                    continue
+                why = blocked(path)
+                if why:
+                    out["skipped"].append((path, 2, why))
+                    continue
+                out[2].append((path, apparent_size(path), age, ""))
+    return out
+
+
+def remove(path):
+    r = subprocess.run(["nice", "-n", "10", "ionice", "-c3", "rm", "-rf", "--one-file-system", "--", path],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and not os.path.lexists(path), r.stderr.strip()
+
+
+def notify(state_dir, items):
+    lines = [f"{gib(s):.1f} GiB, {a:.0f} d old: {p}" for p, s, a in items]
+    report = os.path.join(state_dir, "notice-report.txt")
+    with open(report, "w") as f:
+        f.write("tmp-janitor: big old folders in /var/tmp/claude.\n"
+                "They will be deleted by a run at least 24 h after this notice.\n"
+                "To keep one, create a file named .keep inside it.\n\n" + "\n".join(lines) + "\n")
+    try:
+        subprocess.run(["notify-send", "-a", "tmp-janitor", "Big old folders in /var/tmp/claude",
+                        f"{len(items)} folders will be deleted after 24 h unless they hold a .keep file. See {report}"],
+                       timeout=10, capture_output=True)
+    except Exception:
+        pass
+    return report
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply", action="store_true", help="delete (default is a dry run)")
+    ap.add_argument("--dry-run", action="store_true", help="default; report only")
+    ap.add_argument("--base", default="/var/tmp/claude")
+    ap.add_argument("--state-dir", default=os.path.expanduser("~/.local/state/tmp-janitor"))
+    ap.add_argument("--skip-file", default=os.path.expanduser("~/.config/tmp-janitor/skip"))
+    ap.add_argument("--proc", default="/proc")
+    ap.add_argument("--sessions-dir", default=os.path.expanduser("~/.local/state/claude-persist/sessions"))
+    ap.add_argument("--now", type=float, default=None, help="epoch seconds (tests)")
+    ap.add_argument("--top", type=int, default=10, help="candidates to list")
+    ap.add_argument("--max-io-full", type=float, default=5.0)
+    a = ap.parse_args(argv)
+    apply = a.apply and not a.dry_run
+    now = a.now if a.now is not None else time.time()
+    os.makedirs(a.state_dir, exist_ok=True)
+    state_path = os.path.join(a.state_dir, "notices.json")
+    try:
+        state = json.load(open(state_path))
+    except (OSError, ValueError):
+        state = {}
+
+    procs = Procs(a.proc, a.sessions_dir)
+    sel = select(a.base, now, procs, load_skip(a.skip_file), state)
+
+    # drop notices for folders that are no longer candidates (gone, .keep, active again)
+    live3 = {p for p, _, _, _ in sel[3]}
+    state = {p: v for p, v in state.items() if p in live3}
+
+    notices = [(p, s, ag) for p, s, ag, n in sel[3] if n == "notify"]
+    deletes = [(p, s, ag, 1) for p, s, ag, _ in sel[1]] + \
+              [(p, s, ag, 2) for p, s, ag, _ in sel[2]] + \
+              [(p, s, ag, 3) for p, s, ag, n in sel[3] if n == "delete"]
+
+    mode = "APPLY" if apply else "DRY-RUN"
+    print(f"tmp-janitor {mode} base={a.base}")
+    allc = sorted(deletes + [(p, s, ag, "3n") for p, s, ag in notices], key=lambda x: -x[1])
+    print(f"top {min(a.top, len(allc))} candidates by size:")
+    for p, s, ag, r in allc[:a.top]:
+        act = "notify" if r == "3n" else "delete"
+        print(f"  rule {str(r)[0]} {act:6} {gib(s):8.2f} GiB {ag:5.1f} d  {p}")
+
+    done = {1: [0, 0], 2: [0, 0], 3: [0, 0]}
+    failed = 0
+    stopped = None
+    if apply:
+        logp = os.path.join(a.state_dir, "log")
+        with open(logp, "a") as log:
+            for p, s, ag, r in deletes:
+                f = io_pressure_full()
+                if f > a.max_io_full:
+                    stopped = f"io pressure full avg10={f}"
+                    break
+                if not os.path.lexists(p):
+                    continue
+                ok, err = remove(p)
+                ts = time.strftime("%F %T", time.localtime())
+                if ok:
+                    done[r][0] += 1
+                    done[r][1] += s
+                    log.write(f"{ts} deleted rule{r} {s} bytes {ag:.1f}d {p}\n")
+                else:
+                    failed += 1
+                    log.write(f"{ts} FAILED rule{r} {s} bytes {p}: {err[:200]}\n")
+                log.flush()
+        if notices:
+            for p, s, ag in notices:
+                state[p] = {"noticed": now, "size": s}
+            notify(a.state_dir, notices)
+        for p in list(state):
+            if not os.path.lexists(p):
+                del state[p]
+        tmp = state_path + ".tmp"
+        json.dump(state, open(tmp, "w"), indent=1)
+        os.replace(tmp, state_path)
+
+    def tot(rule, pick):
+        n = sum(1 for x in pick if x[3] == rule)
+        sz = sum(x[1] for x in pick if x[3] == rule)
+        return n, sz
+    verb = "deleted" if apply else "would delete"
+    if apply:
+        parts = [f"rule{r}: {done[r][0]} items {gib(done[r][1]):.1f} GiB" for r in (1, 2, 3)]
+    else:
+        parts = [f"rule{r}: {tot(r, deletes)[0]} items {gib(tot(r, deletes)[1]):.1f} GiB" for r in (1, 2, 3)]
+    waiting = [x for x in sel[3] if x[3] == "waiting"]
+    print(f"SUMMARY {verb} " + "; ".join(parts) +
+          f"; rule3 {'notified' if apply else 'would notify'}: {len(notices)} items "
+          f"{gib(sum(s for _, s, _ in notices)):.1f} GiB; rule3 waiting 24h: {len(waiting)}; "
+          f"skipped: {len(sel['skipped'])}; failed: {failed}" + (f"; STOPPED {stopped}" if stopped else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

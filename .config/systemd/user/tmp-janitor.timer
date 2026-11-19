@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily cleanup of /var/tmp/claude
+
+[Timer]
+OnCalendar=*-*-* 22:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

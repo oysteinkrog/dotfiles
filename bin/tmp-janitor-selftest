@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Selection-logic tests for tmp-janitor against a fake tree. Never touches real data."""
+import importlib.machinery, importlib.util, json, os, shutil, subprocess, sys, time, unittest
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+ROOT = sys.argv[1] if len(sys.argv) > 1 else "/var/tmp/claude/tmp-janitor-test"
+loader = importlib.machinery.SourceFileLoader("tj", os.path.join(HERE, "tmp-janitor"))
+spec = importlib.util.spec_from_loader("tj", loader)
+tj = importlib.util.module_from_spec(spec)
+loader.exec_module(tj)
+NOW = time.time()
+SID_DEAD, SID_LIVE, SID_NEW, SID_KEEP = ("%08x-0000-0000-0000-%012x" % (i, i) for i in (1, 2, 3, 4))
+
+
+def mk(path, days, size=10, isdir=False):
+    if isdir:
+        os.makedirs(path, exist_ok=True)
+        f = os.path.join(path, "f")
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        f = path
+    with open(f, "wb") as h:
+        h.write(b"x" * size)
+    t = NOW - days * 86400
+    os.utime(f, (t, t))
+    if isdir:
+        os.utime(path, (t, t))
+    return path
+
+
+def touch_old(path, days):
+    t = NOW - days * 86400
+    os.utime(path, (t, t))
+    os.utime(os.path.dirname(path), (t, t))
+
+
+class T(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.t = os.path.join(ROOT, "fake")
+        shutil.rmtree(cls.t, ignore_errors=True)
+        b = cls.base = os.path.join(cls.t, "claude")
+        cls.proc = os.path.join(cls.t, "proc")
+        cls.sess = os.path.join(cls.t, "sessions")
+        os.makedirs(cls.sess)
+        # rule 1
+        mk(b + "/tmpold", 3, isdir=True)
+        mk(b + "/tmpnew", 1, isdir=True)
+        mk(b + "/tmpdeep", 5, isdir=True)  # old folder, fresh file inside
+        mk(b + "/tmpdeep/a/b/fresh", 0.1)
+        mk(b + "/hxfile", 3)
+        mk(b + "/astra1", 3, isdir=True)
+        mk(b + "/rev-x", 3, isdir=True)
+        mk(b + "/other-small", 30, isdir=True)  # not matching, small
+        mk(b + "/tmpkeep", 9, isdir=True)
+        open(b + "/tmpkeep/.keep", "w").close()
+        touch_old(b + "/tmpkeep/.keep", 9)
+        mk(b + "/tmpwt", 9, isdir=True)
+        open(b + "/tmpwt/.git", "w").write("gitdir: /x")
+        touch_old(b + "/tmpwt/.git", 9)
+        mk(b + "/tmpbusy", 9, isdir=True)
+        mk(b + "/tmpskip", 9, isdir=True)
+        mk(b + "/jobd-xdg", 99, isdir=True)
+        mk(b + "/grove-delete.lock", 99)
+        # rule 2
+        c = b + "/claude-1000/-proj"
+        mk(f"{c}/{SID_DEAD}", 20, isdir=True)
+        mk(f"{c}/{SID_LIVE}", 20, isdir=True)
+        mk(f"{c}/{SID_NEW}", 3, isdir=True)
+        mk(f"{c}/{SID_KEEP}", 20, isdir=True)
+        open(f"{c}/{SID_KEEP}/.keep", "w").close()
+        touch_old(f"{c}/{SID_KEEP}/.keep", 20)
+        mk(f"{c}/notauuid", 20, isdir=True)
+        # rule 3: sparse 6 GiB files
+        for n, d in (("big-old", 10), ("big-new", 2), ("big-keep", 10)):
+            p = mk(f"{b}/{n}", d, isdir=True)
+            with open(p + "/sparse", "wb") as h:
+                h.truncate(6 * tj.GiB)
+            os.utime(p + "/sparse", (NOW - d * 86400,) * 2)
+            os.utime(p, (NOW - d * 86400,) * 2)
+        open(b + "/big-keep/.keep", "w").close()
+        touch_old(b + "/big-keep/.keep", 10)
+        # fake /proc: live session via cmdline, tmpbusy via cwd
+        os.makedirs(cls.proc + "/100")
+        open(cls.proc + "/100/cmdline", "w").write(f"claude\0--resume\0{SID_LIVE}\0")
+        os.makedirs(cls.proc + "/200")
+        os.symlink(b + "/tmpbusy", cls.proc + "/200/cwd")
+        cls.skipf = os.path.join(cls.t, "skip")
+        open(cls.skipf, "w").write("# c\n" + b + "/tmpskip\n")
+
+    def sel(self, state=None):
+        procs = tj.Procs(self.proc, self.sess)
+        return tj.select(self.base, NOW, procs, tj.load_skip(self.skipf), state or {})
+
+    def rel(self, items):
+        return {os.path.relpath(i[0], self.base) for i in items}
+
+    def test_rule1(self):
+        self.assertEqual(self.rel(self.sel()[1]), {"tmpold", "hxfile", "astra1", "rev-x"})
+
+    def test_blocked_reasons(self):
+        why = {os.path.basename(p): w for p, r, w in self.sel()["skipped"]}
+        self.assertEqual(why["tmpkeep"], ".keep")
+        self.assertEqual(why["tmpwt"], "worktree")
+        self.assertEqual(why["tmpbusy"], "in use")
+        self.assertEqual(why["tmpskip"], "skip-list")
+
+    def test_protected(self):
+        s = self.sel()
+        allp = self.rel(s[1] + s[2] + s[3])
+        self.assertNotIn("jobd-xdg", allp)
+        self.assertNotIn("grove-delete.lock", allp)
+
+    def test_rule2(self):
+        s = self.sel()
+        self.assertEqual({os.path.basename(i[0]) for i in s[2]}, {SID_DEAD})
+        why = {os.path.basename(p): w for p, r, w in s["skipped"]}
+        self.assertEqual(why[SID_LIVE], "live session")
+        self.assertEqual(why[SID_KEEP], ".keep")
+
+    def test_rule2_live_via_persist_file(self):
+        os.makedirs(self.proc + "/300", exist_ok=True)
+        json.dump({"session_id": SID_DEAD, "pid": 300}, open(self.sess + "/x.json", "w"))
+        try:
+            self.assertEqual(self.sel()[2], [])
+        finally:
+            os.remove(self.sess + "/x.json")
+
+    def test_rule3_notify_then_wait_then_delete(self):
+        p = self.base + "/big-old"
+        self.assertEqual([(os.path.basename(i[0]), i[3]) for i in self.sel()[3]], [("big-old", "notify")])
+        self.assertEqual(self.sel({p: {"noticed": NOW - 3600}})[3][0][3], "waiting")
+        self.assertEqual(self.sel({p: {"noticed": NOW - 25 * 3600}})[3][0][3], "delete")
+
+    def test_cli_dry_run_deletes_nothing(self):
+        before = sorted(os.listdir(self.base))
+        r = subprocess.run([os.path.join(HERE, "tmp-janitor"), "--base", self.base, "--proc", self.proc,
+                            "--sessions-dir", self.sess, "--skip-file", self.skipf,
+                            "--state-dir", self.t + "/state"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("SUMMARY would delete", r.stdout)
+        self.assertEqual(before, sorted(os.listdir(self.base)))
+        self.assertFalse(os.path.exists(self.t + "/state/notices.json"))
+
+    def test_cli_apply_on_fake_tree_copy(self):
+        cp = self.t + "/applycopy"
+        shutil.rmtree(cp, ignore_errors=True)
+        shutil.copytree(self.base, cp, symlinks=True)
+        args = [os.path.join(HERE, "tmp-janitor"), "--apply", "--base", cp, "--proc", self.proc,
+                "--sessions-dir", self.sess, "--skip-file", self.skipf, "--state-dir", self.t + "/state2"]
+        r = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(cp + "/tmpold"))
+        self.assertFalse(os.path.exists(cp + "/hxfile"))
+        self.assertTrue(os.path.exists(cp + "/tmpkeep"))
+        self.assertTrue(os.path.exists(cp + "/tmpnew"))
+        self.assertTrue(os.path.exists(cp + "/big-old"))  # only notified
+        self.assertTrue(os.path.exists(self.t + "/state2/notices.json"))
+        self.assertTrue(os.path.exists(f"{cp}/claude-1000/-proj/{SID_LIVE}"))
+        self.assertFalse(os.path.exists(f"{cp}/claude-1000/-proj/{SID_DEAD}"))
+        st = json.load(open(self.t + "/state2/notices.json"))
+        for v in st.values():
+            v["noticed"] -= 26 * 3600
+        json.dump(st, open(self.t + "/state2/notices.json", "w"))
+        subprocess.run(args, capture_output=True, text=True)
+        self.assertFalse(os.path.exists(cp + "/big-old"))
+        self.assertTrue(os.path.exists(cp + "/big-keep"))
+        shutil.rmtree(cp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main(argv=[sys.argv[0]], verbosity=2)
