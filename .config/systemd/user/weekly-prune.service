@@ -3,8 +3,8 @@ Description=Weekly cache prune (uv, nuget http-cache, paru, claude-desktop-updat
 
 [Service]
 Type=oneshot
-# Dry run until Oystein says yes. Going live means adding --apply here.
-ExecStart=%h/bin/weekly-prune
+# Live since 2026-11-19 (Oystein via manager-office). Remove --apply to go back to a dry run.
+ExecStart=%h/bin/weekly-prune --apply
 Nice=10
 IOSchedulingClass=idle
 MemoryHigh=2G
