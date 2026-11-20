@@ -32,12 +32,13 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 > verdict. If Fable also fails, use Opus subagents (`model: "opus"`) and say so. Do not
 > silently downgrade.
 >
-> **Gemini 4 Argon** (via PAL) is the optional third oracle but is currently
-> unavailable: the AI Studio prepay credit ran out on 2026-10-21 and Oystein chose to
-> leave it off. Do not plan around it.
+> **Gemini 4 Neon** (via PAL, `gemini-4-neon`) is the optional third oracle and
+> **Gemini 4 Carbon** (`gemini-4-carbon`) the rare fourth, "ultra" oracle for the
+> hardest contested calls. Both wait on Gemini API billing: calls return 402 as of
+> 2026-11-20. Run a one-line test call before planning around either.
 >
 > **Sensitive code:** Anthropic, OpenAI and Google are approved providers. Proprietary
-> material can go to Astra, Fable and Gemini 4 Argon without asking first.
+> material can go to Astra, Fable and the Gemini 4 models without asking first.
 >
 > **Cost rules:** short self-contained briefs, the needed excerpts pasted in, the
 > change delta rather than the whole module, and one validation per change.
@@ -125,9 +126,10 @@ Agent({ subagent_type: "general-purpose", model: "fable",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
 
-**Gemini 4 Argon (currently unavailable):** when it is back, a Gemini FOR/AGAINST pair
-is two `mcp__pal__chat` calls with `model: "gemini-4-argon"`, `thinking_mode: "max"`
-and the same two stance prompts.
+**Gemini 4 Neon (waits on billing):** once a test call works, a Gemini FOR/AGAINST
+pair is two `mcp__pal__chat` calls with `model: "gemini-4-neon"`, `thinking_mode: "max"`
+and the same two stance prompts. Use `gemini-4-carbon` instead only as the fourth
+oracle on the hardest calls.
 
 *Alternate route, PAL 2x GPT-Pro* (when the structured consensus flow is wanted;
 PAL tops out at gpt-5.5-pro):
@@ -143,12 +145,12 @@ PAL tops out at gpt-5.5-pro):
 
 #### Alternate Configurations (PAL route)
 
-**Architecture validation (3 models; needs Gemini 4 Argon, currently unavailable):**
+**Architecture validation (3 models; needs Gemini 4 Neon, which waits on billing):**
 ```json
 [
   {"model": "gpt-5.5-pro", "stance": "for"},
   {"model": "gpt-5.5-pro", "stance": "against"},
-  {"model": "gemini-4-argon", "stance": "neutral", "stance_prompt": "Provide an independent technical assessment. Focus on feasibility, risk, and alternatives the other evaluators may miss."}
+  {"model": "gemini-4-neon", "stance": "neutral", "stance_prompt": "Provide an independent technical assessment. Focus on feasibility, risk, and alternatives the other evaluators may miss."}
 ]
 ```
 

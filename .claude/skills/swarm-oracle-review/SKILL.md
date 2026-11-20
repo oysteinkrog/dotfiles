@@ -28,8 +28,8 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 > secondary oracle: add it for a security review or a contested call (Astra looks
 > wrong, or two oracles disagree), and use it in place of Astra when Codex fails
 > (auth error, rate limit, empty output). Opus is the last fallback, only when Astra
-> and Fable both fail. Gemini 4 Argon is currently unavailable (AI Studio credit ran
-> out 2026-10-21). Why: the OpenAI accounts ended last week at about 26% to 31% with
+> and Fable both fail. Gemini 4 Neon (third) and Gemini 4 Carbon (fourth, "ultra")
+> wait on Gemini API billing (402 as of 2026-11-20). Why: the OpenAI accounts ended last week at about 26% to 31% with
 > reset credits unused, while four Claude accounts hit 100%. Go back to Fable first only
 > when every routable OpenAI account is past 70% of its week (Oystein, 2026-11-09:
 > aiolos fills one account before the next). Use `high` only for
