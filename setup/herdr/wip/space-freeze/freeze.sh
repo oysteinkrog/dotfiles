@@ -145,7 +145,7 @@ freeze() {
   local space=$1 name=${2:-} p busy e out=() failed=()
   [ -f "$STATE/$space.json" ] && die "this space is already frozen"
   p=$(plan "$space") || exit 1
-  busy=$(jq -r '[.terminals[] | select(.kind != "shell" and (.status == "working" or .status == "blocked")) | "\(.name) (\(.status))"] | join(", ")' <<<"$p")
+  busy=$(jq -r '[.terminals[] | select(.kind != "shell" and (.status == "working" or .status == "blocked")) | "\(.name // .address) (\(.status))"] | join(", ")' <<<"$p")
   [ -z "$busy" ] || die "not frozen: still busy: $busy"
   [ "$(jq '[.terminals[] | select(.kind != "shell")] | length' <<<"$p")" -gt 0 ] || die "nothing runs in this space"
   while IFS= read -r e; do

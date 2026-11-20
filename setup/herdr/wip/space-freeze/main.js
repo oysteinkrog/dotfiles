@@ -94,6 +94,16 @@ export default class SpaceFreeze extends View {
         try { this.plan = await freezeSh(this.space, "plan", localId(this.space)); } catch (e) { this.error = String(e.message ?? e); }
         cx.notify();
       });
+      // While an agent is busy, look again every 3 s so Freeze turns on when it is idle.
+      cx.timer.every(3000, (cx) => {
+        if (this.working || this.polling || !this.plan?.terminals?.some((e) => e.kind !== "shell" && (e.status === "working" || e.status === "blocked"))) return;
+        this.polling = true;
+        cx.spawn(async (cx) => {
+          try { this.plan = await freezeSh(this.space, "plan", localId(this.space)); } catch { /* keep the last plan */ }
+          this.polling = false;
+          cx.notify();
+        });
+      });
     }
   }
 
