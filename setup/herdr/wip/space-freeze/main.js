@@ -1,6 +1,8 @@
 // Freeze and Thaw for a whole space (krog layout). Opened by space-folders:
 //   props { menu: spaceId }    the space's right-click menu: Freeze or Thaw, then Herdr's own items
 //   props { confirm: spaceId } the dialog that lists what Freeze stops, and does it
+//   props { thaw: spaceId }    the dialog that thaws it at once and shows the result
+// Every step finishes before the overlay closes: a closed overlay's pending work never lands.
 // The work is done by freeze.sh beside this file, on the machine that owns the space, which
 // keeps the frozen state in ~/.local/state/space-freeze/<space>.json there. This mod mirrors
 // that into shared("space-freeze.frozen") ({ spaceId: { count, at } }) for the spaces list.
@@ -56,20 +58,17 @@ async function checkout(folder, on) {
 
 const what = (e) => (e.kind === "claude" ? "Claude Code" : e.kind === "codex" ? "Codex" : (e.argv ?? []).join(" ") || "program");
 
-async function thaw(space) {
-  try {
-    const r = await freezeSh(space, "thaw", localId(space));
-    notify({ title: `Thawed ${space.name}`, body: r.left ? `${r.thawed} started again, ${r.left} could not start (their terminal is busy).` : `${r.thawed} started again.`, level: r.left ? "warning" : "success" });
-  } catch (e) {
-    notify({ title: `Could not thaw ${space.name}`, body: String(e.message ?? e), level: "error" });
-  }
-  await refresh(machineOf(space)).catch(() => null);
+// Mark one space frozen or not in the mirror at once, before freeze.sh's list is read again.
+function mark(space, frozen) {
+  const mirror = { ...(shared(KEY) ?? {}) };
+  if (frozen) mirror[space.id] = frozen; else delete mirror[space.id];
+  setShared(KEY, mirror);
 }
 
 export default class SpaceFreeze extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.space = spaces().find((s) => s.id === (p.menu ?? p.confirm)) ?? null;
+    this.space = spaces().find((s) => s.id === (p.menu ?? p.confirm ?? p.thaw)) ?? null;
     this.at = 0;
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -83,6 +82,10 @@ export default class SpaceFreeze extends View {
         await refresh(machineOf(this.space)).catch(() => null);
         cx.notify();
       });
+    } else if (p.thaw) {
+      this.result = null;
+      this.error = null;
+      cx.spawn(async (cx) => this.doThaw(cx));
     } else {
       this.plan = null;
       this.error = null;
@@ -98,7 +101,7 @@ export default class SpaceFreeze extends View {
     const s = this.space;
     const frozen = isFrozen(s.id);
     return [
-      frozen ? ["Thaw space", () => thaw(s)] : ["Freeze space…", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 480, props: { confirm: s.id } })],
+      frozen ? ["Thaw space", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 420, props: { thaw: s.id } })] : ["Freeze space…", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 480, props: { confirm: s.id } })],
       ["Rename", () => run("space.rename", { id: s.id })],
       ...(this.git ? [["New worktree", () => this.worktree("new")], ["Open worktree", () => this.worktree("open")]] : []),
       ...(this.git === "linked" ? [["Remove worktree", () => this.worktree("remove")]] : []),
@@ -145,14 +148,52 @@ export default class SpaceFreeze extends View {
     const s = this.space;
     try {
       const r = await freezeSh(s, "freeze", localId(s), s.name);
+      if (r.frozen > 0) mark(s, { count: r.frozen, at: new Date().toISOString() });
+      await refresh(machineOf(s)).catch(() => null);
       notify({ title: `Froze ${s.name}`, body: r.failed.length ? `${r.frozen} stopped. Could not stop: ${r.failed.join(", ")}.` : `${r.frozen} stopped. Right-click the space and pick Thaw to start them again.`, level: r.failed.length ? "warning" : "success" });
       closeOverlay(props().overlay);
+      return;
     } catch (e) {
       this.error = String(e.message ?? e);
       this.working = false;
     }
     await refresh(machineOf(s)).catch(() => null);
     cx.notify();
+  }
+
+  // Thaw at once (picking Thaw in the menu is the go-ahead), then close unless something is left.
+  async doThaw(cx) {
+    const s = this.space;
+    if (!s) return;
+    try {
+      const r = await freezeSh(s, "thaw", localId(s));
+      if (!r.left) mark(s, null);
+      await refresh(machineOf(s)).catch(() => null);
+      notify({ title: `Thawed ${s.name}`, body: r.left ? `${r.thawed} started again, ${r.left} could not start (their terminal is busy).` : `${r.thawed} started again.`, level: r.left ? "warning" : "success" });
+      if (!r.left) { closeOverlay(props().overlay); return; }
+      this.result = r;
+    } catch (e) {
+      this.error = String(e.message ?? e);
+      await refresh(machineOf(s)).catch(() => null);
+    }
+    cx.notify();
+  }
+
+  thawView(t) {
+    const overlay = props().overlay;
+    let body;
+    if (this.error) body = div().text_color(t.ansi1).child(this.error);
+    else if (this.result) body = div().text_color(t.muted).child(`${this.result.thawed} started again. ${this.result.left} could not start because something else runs in their terminal now. The space stays frozen for those: pick Thaw again when the terminal is free.`);
+    else body = div().text_color(t.dim).child("Starting the programs again…");
+    return v_flex().id("space-freeze-thaw").track_focus(this.handle).w_full().p(20).gap(14).bg(t.popover).text_color(t.foreground).text_size(12.5)
+      .on_key_down((e, cx) => { if (e.key === "escape") { closeOverlay(overlay); cx.stop_propagation(); } })
+      .child(h_flex().gap(8).items_center()
+        .child(svg("mods/space-freeze/snowflake.svg").size(16).text_color(t.ansi4 ?? t.foreground))
+        .child(div().text_size(15).font_semibold().child(`Thaw ${this.space.name}`)))
+      .child(body)
+      .when(Boolean(this.error || this.result), (el) => el.child(h_flex().pt(4).justify_end()
+        .child(h_flex().id("sf-close").h(32).px(14).items_center().rounded(8).border_1().border_color(t.input).bg(t.raised)
+          .text_size(12.5).font_medium().cursor_pointer().hover((st) => st.opacity(0.88)).on_click(() => closeOverlay(overlay)).child("Close"))));
   }
 
   confirmView(t) {
@@ -190,6 +231,7 @@ export default class SpaceFreeze extends View {
   render() {
     const t = theme();
     if (!this.space) return div().p(10).bg(t.popover).text_color(t.dim).child("That space is gone.");
-    return (props() ?? {}).menu ? this.menuView(t) : this.confirmView(t);
+    const p = props() ?? {};
+    return p.menu ? this.menuView(t) : p.thaw ? this.thawView(t) : this.confirmView(t);
   }
 }
