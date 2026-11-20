@@ -39,7 +39,12 @@ export async function refresh(machine) {
   const mirror = Object.fromEntries(Object.entries(shared(KEY) ?? {}).filter(([id]) => (id.includes("/") ? id.split("/")[0] : null) !== machine));
   for (const f of list) mirror[prefix + f.space] = { count: f.count, at: f.frozen_at };
   setShared(KEY, mirror);
+  bump();
 }
+
+// Every change made here bumps a revision, so the spaces list's slower background re-read
+// (space-folders loadFrozen) can tell its result is older and drop it instead of writing it back.
+function bump() { setShared(`${KEY}.rev`, (shared(`${KEY}.rev`) ?? 0) + 1); }
 
 export const isFrozen = (id) => Boolean((shared(KEY) ?? {})[id]);
 
@@ -63,6 +68,7 @@ function mark(space, frozen) {
   const mirror = { ...(shared(KEY) ?? {}) };
   if (frozen) mirror[space.id] = frozen; else delete mirror[space.id];
   setShared(KEY, mirror);
+  bump();
 }
 
 export default class SpaceFreeze extends View {
