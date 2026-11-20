@@ -22,12 +22,14 @@ DATA="$DOT/setup/herdr"
 SRC="${HERDR_SETUP_SRC:-$HOME/src}"
 HC_VERSION="0.1.21" # tested with herdr-app 0.1.16; the app installer always takes the newest app
 
-# name|git url|commit|what to copy (repo path=app-home path, space separated)|patch
+# name|git url|commit|what to copy (repo path=app-home path, space separated)|patch (none: empty)
 ADDONS=(
   "herdr-whitby|https://github.com/shellscape/herdr-whitby.git|f512095|mods/whitby=mods/whitby themes/whitby-dark.json=themes/whitby-dark.json themes/whitby-light.json=themes/whitby-light.json layouts/whitby.svg=layouts/whitby.svg layouts/whitby-chat.svg=layouts/whitby-chat.svg|whitby-gruvbox"
   "herdr-space-folders|https://github.com/jankeesvw/herdr-space-folders.git|63a78b2|mods/space-folders=mods/space-folders|space-folders"
   "herdr-artifacts|https://github.com/jmoyers/herdr-artifacts.git|7d85899|artifacts=mods/claude-artifacts|claude-artifacts"
   "herdr-agent-ask|https://github.com/sachin-philip/herdr-agent-ask.git|764155f|mods/asks=mods/asks mods/tabs-asks=mods/tabs-asks mods/spaces-asks=mods/spaces-asks|herdr-agent-ask"
+  # helm: one mod for the whole krog layout, tried as the krog-next layout beside krog. Our own repo, no patch.
+  "herdr-helm|https://github.com/oysteinkrog/herdr-helm.git|ce0430f|helm=mods/helm layouts/krog.json=layouts/krog-next.json|"
 )
 # Shepherdr from Oystein's fork: branch oystein/main is upstream 3.1.39 plus our commits (Ctrl+K switcher
 # keys and fuzzy search, Assistant in new spaces off by default). Our changes are commits there, not patches.
@@ -65,7 +67,7 @@ stage() {
         git -C "$dir" show "$commit:$from" >"$out/$to"
       fi
     done
-    patch -p1 -d "$out" --forward -s <"$DATA/patches/$patchname.patch" || die "$patchname.patch does not apply to $name $commit"
+    [ -z "$patchname" ] || patch -p1 -d "$out" --forward -s <"$DATA/patches/$patchname.patch" || die "$patchname.patch does not apply to $name $commit"
   done
 }
 

@@ -143,5 +143,25 @@
   },
   "layout:whitby-chat": {
     "cmd-`": "whitby.view"
+  },
+  "layout:krog-next": {
+    "alt-down": "helm.space-next",
+    "ctrl-shift-down": "helm.space-next",
+    "ctrl-shift-e": "helm.space-next",
+    "ctrl-shift-pagedown": "helm.space-next",
+    "ctrl-space shift-n": "helm.space-next",
+    "alt-up": "helm.space-prev",
+    "ctrl-shift-up": "helm.space-prev",
+    "ctrl-shift-u": "helm.space-prev",
+    "ctrl-shift-pageup": "helm.space-prev",
+    "ctrl-space shift-p": "helm.space-prev",
+    "ctrl-alt-a": "helm.panel-asks",
+    "ctrl-alt-f": "helm.panel-files",
+    "ctrl-alt-c": "helm.panel-changes",
+    "ctrl-alt-r": "helm.panel-artifacts",
+    "ctrl-shift-a": "helm.panel-artifacts",
+    "ctrl-alt-j": "helm.next-waiting",
+    "ctrl-alt-b": "helm.space-back",
+    "ctrl-alt-h": "helm.hide-frozen"
   }
 }
