@@ -49,6 +49,10 @@ bash $F list                 # JSON: frozen spaces on this desktop
 - Run it on the desktop that owns the space. For a home space from the office:
   `ssh home 'bash ~/.config/herdr-app/mods/space-freeze/freeze.sh plan SPACE'`.
 - Freeze refuses when an agent in the space is `working` or `blocked`.
+- Freeze keeps a reflink copy of each Claude transcript in
+  `~/.local/state/space-freeze/transcripts/<session>/`, and thaw puts a missing transcript back
+  from it. If both are gone, thaw keeps the space frozen and names the session in `errors`.
+  Spaces frozen before 2026-11-20 evening get their copy with `bash $F backup SPACE`.
 - State lives in `~/.local/state/space-freeze/<SPACE>.json`. Frozen terminals carry the label
   `herdr.frozen=<kind>`; that label is what the window shows, on both desktops, within a second.
 - Oystein can also Freeze and Thaw by right-clicking a space, and hide frozen spaces with the
