@@ -112,6 +112,14 @@ desktop. Tell jobd what your job needs:
   `events.log` shows `event=vram-peak declared_gib= peak_gib= over=1` when a
   run used more than it declared.
 
+**When Oystein is waiting for a job right now**, ask manager-office for a desk grant
+(SendMessage to `manager-office`). Say what Oystein is waiting for, the job id, and its
+memory, cores, time and VRAM. Only manager-office gives grants (`job grant`). A grant
+allows 3 desk jobs for a set time, and cancelled desk jobs count against it. Submit each
+one with `job submit --desk --est MEM,CORES,WALL -- CMD`. Desk jobs skip the queue
+order, but jobd still checks memory and the VRAM floor. Do not ask for a desk grant or a
+high rule for work nobody is waiting on. Too many high jobs only reorders the queue.
+
 ## 5. Logs
 
 | File | Contents |
