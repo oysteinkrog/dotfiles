@@ -97,16 +97,6 @@ same gate on anything about to reach a person and hands back findings on failure
   is still changing its English text, batch the translation at the end of the wave, so no
   string is paid for twice.
 
-## No time estimates
-
-Oystein, 2026-11-03: never estimate time or effort, anywhere, ever. Do not write
-durations, hours, agent-days, "about a week" or effort sizes in plans, beads, PRDs,
-reports, artifacts, chat replies or subagent prompts. Leave estimate fields empty when
-creating beads, never ask him to choose between estimates, and do not track or compare
-work against them. Order work by priority and dependencies instead. Measured times are
-facts, not estimates, and stay: a build that took 44 s, a test's run time, a latency
-figure.
-
 ## Secrets and credentials
 
 **Do not search the filesystem or old session logs for secrets.** Everything is in one place.
@@ -260,6 +250,10 @@ spaces, tabs and terminals. The old `herdr` CLI (`herdr workspace list`, `herdr 
   reboot. Store space ids and session ids, and look names up when you report.
 - Claude's `/rename` title is not copied into hc. Read it from the transcript
   (`customTitle`) when you need it.
+- **Load `herdr-sessions`** to find sessions, or to freeze or thaw a space. Freeze stops a
+  space's programs to free memory and Thaw resumes them with `claude --resume`. Since
+  2026-11-20, manager-office and manager-home freeze idle spaces on their own desktop
+  under the rules in that skill. `hc label <terminal> herdr.nofreeze=1` protects a space.
 
 ## Lab PC
 

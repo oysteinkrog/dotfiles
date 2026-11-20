@@ -319,6 +319,7 @@ bin/logs/
 !.claude/skills/harness-eval/
 !.claude/skills/headless-app-ui/
 !.claude/skills/heavy-build/
+!.claude/skills/herdr-sessions/
 !.claude/skills/humanizer/
 !.claude/skills/imagegen-gpt-image/
 !.claude/skills/imagegen-nano-banana/
