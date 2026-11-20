@@ -24,7 +24,7 @@ async function freezeSh(space, ...args) {
   const on = machineOf(space);
   // Here: this app's own folder. Another machine: its herdr-app folder (herdr-setup installs the mod there too).
   const script = on ? '"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/space-freeze/freeze.sh"' : `"${appHome()}/mods/space-freeze/freeze.sh"`;
-  const r = await exec("bash", ["-c", `${script} "$@"`, "freeze.sh", ...args], { on, timeout: 120000 });
+  const r = await exec("bash", ["-c", `bash ${script} "$@"`, "freeze.sh", ...args], { on, timeout: 120000 });
   let out = null;
   try { out = JSON.parse(r.stdout); } catch { /* not JSON */ }
   if (r.code !== 0 || out === null) throw new Error(out?.error ?? (r.stderr.trim() || `freeze.sh ${args[0]} failed`));
