@@ -26,6 +26,14 @@ site.
 | `InitialForce/sites` | Company content: anything that speaks for Initial Force AS, or that another person would treat as authoritative. OKRs, board-facing reports, shared dashboards, official docs. | Private Pages, org members only | `/c/work/sites-repo` |
 | `oysteinkrog/sites` | Personal content: my own tools, dashboards, notes and experiments. | Public Pages | `/c/work/sites-repo-personal` |
 
+**Never publish personal health, medical, genetic or family data to either repo.** Not to
+`InitialForce/sites` (every staff member can read it, and its git history) and not to
+`oysteinkrog/sites` (public). That material stays in the private Life repo. "Private"
+on the company repo means private to the company, not to Oystein. On 2026-11-20 a
+`health/` folder with family genomics reports and GP briefs was found on
+internal.initialforce.com, where it had sat since 2026-04-20; purging it took a history
+rewrite of the company repo.
+
 If it speaks for the company, or anyone other than Oystein will reference it, it goes to
 `InitialForce/sites`. When the content names customers, staff or unreleased plans, ask before
 publishing at all. Writing something yourself does not make it publishable.
