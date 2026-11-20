@@ -11,7 +11,46 @@
      const text = `${r.stderr} ${r.stdout}`;
 --- a/mods/tabs-asks/main.js
 +++ b/mods/tabs-asks/main.js
-@@ -102,7 +102,7 @@
+@@ -3,7 +3,7 @@
+ // always on screen, so asks are found, understood and toasted before the panel is opened.
+ import { View, div, svg, image } from "gpui-kit";
+ import { h_flex } from "gpui-base";
+-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand, focused } from "herdr";
++import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand, focused, notify } from "herdr";
+ import { Engine } from "./engine.js";
+ import { readState, loadConfig } from "./state.js";
+
+@@ -30,12 +30,29 @@
+         const c = await nextCommand();
+         if (c === "toggle") this.togglePanel("asks", c === "open");
+         else if (c === "open") this.togglePanel("asks", true);
++        // Linux keys for each side panel (keys.json, layout:krog).
++        else if (c === "files" || c === "changes") this.togglePanel(c, false);
++        else if (c === "artifacts") this.togglePanel("claude-artifacts", false);
++        else if (c === "next") this.nextWaiting();
+         else if (c === "recheck") this.engine.recheck();
+         cx.notify();
+       }
+     });
+   }
+
++  // Go to the agent that has waited longest for an answer, in any space on any machine. Pressing
++  // again from that agent goes to the next one in the queue (oldest first), then back to the start.
++  nextWaiting() {
++    const queue = readState().asks.filter((a) => a.state === "pending" && !a.notice && a.address)
++      .sort((a, b) => (a.detected_at ?? 0) - (b.detected_at ?? 0));
++    const seen = new Set(), list = queue.filter((a) => !seen.has(a.address) && seen.add(a.address));
++    if (!list.length) { notify({ title: "Nobody is waiting", timeout: 2500 }); return; }
++    const here = focused()?.terminal ?? focused()?.address ?? null;
++    const at = list.findIndex((a) => a.address === here);
++    const next = list[(at + 1) % list.length];
++    run("agent.focus", { terminal: next.address });
++  }
++
+   togglePanel(id, forceOpen) {
+     const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
+     const on = panel && !panel.hidden && body?.active === id;
+@@ -102,7 +119,7 @@
        ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
        : 10;
      const panel = find(root, "panel"), body = find(root, "panel-body");
@@ -20,7 +59,7 @@
      this.syncPanel(space, panel, body, enabled);
      const panelButton = (id, label, icon, badge) => {
        const on = panel && !panel.hidden && body?.active === id;
-@@ -126,7 +126,8 @@
+@@ -126,7 +143,8 @@
        .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
        .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
        .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))

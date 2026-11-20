@@ -116,7 +116,6 @@
     "ctrl-shift-up": "space-folders.prev"
   },
   "layout:krog": {
-    "cmd-shift-a": "tabs-asks.toggle",
     "alt-down": "space-folders.next",
     "alt-up": "space-folders.prev",
     "ctrl-shift-pagedown": "space-folders.next",
@@ -133,7 +132,12 @@
     "ctrl-shift-down": "space-folders.next",
     "ctrl-shift-e": "space-folders.next",
     "ctrl-shift-u": "space-folders.prev",
-    "ctrl-shift-up": "space-folders.prev"
+    "ctrl-shift-up": "space-folders.prev",
+    "ctrl-alt-a": "tabs-asks.toggle",
+    "ctrl-alt-f": "tabs-asks.files",
+    "ctrl-alt-c": "tabs-asks.changes",
+    "ctrl-alt-r": "tabs-asks.artifacts",
+    "ctrl-alt-j": "tabs-asks.next"
   },
   "layout:whitby-chat": {
     "cmd-`": "whitby.view"
