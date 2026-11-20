@@ -20,7 +20,7 @@
  import { Engine } from "./engine.js";
  import { readState, loadConfig } from "./state.js";
 
-@@ -30,12 +30,29 @@
+@@ -30,12 +30,44 @@
          const c = await nextCommand();
          if (c === "toggle") this.togglePanel("asks", c === "open");
          else if (c === "open") this.togglePanel("asks", true);
@@ -28,6 +28,7 @@
 +        else if (c === "files" || c === "changes") this.togglePanel(c, false);
 +        else if (c === "artifacts") this.togglePanel("claude-artifacts", false);
 +        else if (c === "next") this.nextWaiting();
++        else if (c === "back") this.backSpace();
          else if (c === "recheck") this.engine.recheck();
          cx.notify();
        }
@@ -47,10 +48,32 @@
 +    run("agent.focus", { terminal: next.address });
 +  }
 +
++  // Remember the space shown before the current one, so "back" can return to it (like alt-tab
++  // between two spaces). Called from render, which runs whenever the shown space changes.
++  trackSpace(id) {
++    if (!id || id === this.curSpace) return;
++    if (this.curSpace) this.prevSpace = this.curSpace;
++    this.curSpace = id;
++  }
++
++  backSpace() {
++    const prev = this.prevSpace;
++    if (!prev || !spaces().some((s) => s.id === prev)) { notify({ title: "No previous space", timeout: 2500 }); return; }
++    run("space.select", { id: prev });
++  }
++
    togglePanel(id, forceOpen) {
      const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
      const on = panel && !panel.hidden && body?.active === id;
-@@ -102,7 +119,7 @@
+@@ -74,6 +106,7 @@
+     this.engine.tick(cx);
+     const t = theme();
+     const space = spaces().find(p => p.active);
++    this.trackSpace(space?.id);
+     const shown = space?.tabs ?? [];
+     const stop = (_e, cx) => cx.stop_propagation();
+     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+@@ -102,7 +135,7 @@
        ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
        : 10;
      const panel = find(root, "panel"), body = find(root, "panel-body");
@@ -59,7 +82,7 @@
      this.syncPanel(space, panel, body, enabled);
      const panelButton = (id, label, icon, badge) => {
        const on = panel && !panel.hidden && body?.active === id;
-@@ -126,7 +143,8 @@
+@@ -126,7 +159,8 @@
        .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
        .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
        .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))

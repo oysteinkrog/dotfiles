@@ -137,7 +137,8 @@
     "ctrl-alt-f": "tabs-asks.files",
     "ctrl-alt-c": "tabs-asks.changes",
     "ctrl-alt-r": "tabs-asks.artifacts",
-    "ctrl-alt-j": "tabs-asks.next"
+    "ctrl-alt-j": "tabs-asks.next",
+    "ctrl-alt-b": "tabs-asks.back"
   },
   "layout:whitby-chat": {
     "cmd-`": "whitby.view"
