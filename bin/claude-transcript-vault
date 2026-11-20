@@ -1,0 +1,32 @@
+#!/bin/bash
+# claude-transcript-vault: keep a hard link to every Claude transcript (.jsonl) under
+# ~/.claude/projects in ~/.local/share/claude-transcript-vault, at the same relative path.
+# A hard link shares the file's data, so it costs no disk, and Claude's appends show up in both.
+# When anything deletes a transcript from ~/.claude/projects, the vault still has all of it.
+# Why: Oystein, 2026-11-20: transcripts must never be lost. That day a frozen session's
+# transcript was deleted at home by something unknown, and only an hourly snapshot had it.
+# The vault never deletes. A transcript replaced by a new file keeps the old one as .replaced-*.
+# Restore: cp --reflink=auto -p VAULT/<project>/<id>.jsonl ~/.claude/projects/<project>/
+set -u
+SRC="$HOME/.claude/projects"
+VAULT="${CLAUDE_TRANSCRIPT_VAULT:-$HOME/.local/share/claude-transcript-vault}"
+[ -d "$SRC" ] || exit 0
+mkdir -p "$VAULT"
+# Same filesystem only: a hard link cannot cross filesystems.
+[ "$(stat -c %d "$SRC")" = "$(stat -c %d "$VAULT")" ] || { echo "claude-transcript-vault: $VAULT is on another filesystem" >&2; exit 1; }
+n=0
+while IFS= read -r -d '' rel; do
+  f="$SRC/$rel"; v="$VAULT/$rel"
+  if [ -e "$v" ]; then
+    [ "$(stat -c %i "$f")" = "$(stat -c %i "$v")" ] && continue
+    mv -n "$v" "$v.replaced-$(date +%Y%m%d-%H%M%S)"
+  fi
+  mkdir -p "${v%/*}" && ln "$f" "$v" && n=$((n + 1))
+done < <(
+  # Files whose vault copy is missing or is another inode: compare both trees by inode.
+  awk -v RS='\0' -v ORS='\0' 'FILENAME == ARGV[1] { have[$0]=1; next } !($0 in have) { sub(/^[0-9]+ /, ""); print }' \
+    <(cd "$VAULT" && find . -type f -name '*.jsonl' -printf '%i %P\0') \
+    <(cd "$SRC" && find . -type f -name '*.jsonl' -printf '%i %P\0')
+)
+[ "$n" -gt 0 ] && echo "claude-transcript-vault: linked $n"
+exit 0

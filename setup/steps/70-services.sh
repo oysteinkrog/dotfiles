@@ -38,6 +38,7 @@ units=(
   claude-version-restart.timer             # dotfiles: restarts idle sessions on old versions
   claude-desktop-update.timer              # dotfiles: Claude Desktop from Anthropic's apt repo
   session-rest.timer                       # dotfiles: long-idle sessions to swap
+  claude-transcript-vault.timer            # dotfiles: hard links to every transcript, so none is lost
   aiolos-rc-shim.service                   # dotfiles: shared TLS shim for --no-pin sessions
   aiolos-reauth-check.timer                # dotfiles: tells when an aiolos account needs a sign-in
   jsm-auto-update.timer                    # dotfiles: jeffreys-skills update at night

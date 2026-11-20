@@ -1,0 +1,17 @@
+// Log every delete or rename of a .jsonl file by user 1000, with the process and its parent,
+// so the next deleted Claude transcript names its culprit. Why: 2026-11-20 a transcript was
+// deleted at home and nothing showed which process did it. Output: /var/log/transcript-deletes.log
+tracepoint:syscalls:sys_enter_unlinkat, tracepoint:syscalls:sys_enter_unlink
+/uid == 1000 && strcontains(str(args.pathname), ".jsonl")/
+{
+  printf("%s unlink pid=%d comm=%s ppid=%d pcomm=%s gpcomm=%s cg=%s name=%s\n", strftime("%F %T", nsecs),
+    pid, comm, curtask->real_parent->tgid, curtask->real_parent->comm,
+    curtask->real_parent->real_parent->comm, cgroup_path(cgroup), str(args.pathname));
+}
+tracepoint:syscalls:sys_enter_renameat2, tracepoint:syscalls:sys_enter_renameat, tracepoint:syscalls:sys_enter_rename
+/uid == 1000 && strcontains(str(args.oldname), ".jsonl")/
+{
+  printf("%s rename pid=%d comm=%s ppid=%d pcomm=%s gpcomm=%s cg=%s name=%s to=%s\n", strftime("%F %T", nsecs),
+    pid, comm, curtask->real_parent->tgid, curtask->real_parent->comm,
+    curtask->real_parent->real_parent->comm, cgroup_path(cgroup), str(args.oldname), str(args.newname));
+}

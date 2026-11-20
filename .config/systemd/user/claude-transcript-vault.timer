@@ -1,0 +1,10 @@
+[Unit]
+Description=Run claude-transcript-vault every minute
+
+[Timer]
+OnActiveSec=10s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

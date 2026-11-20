@@ -1,0 +1,9 @@
+[Unit]
+Description=Hard-link every Claude transcript into ~/.local/share/claude-transcript-vault
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+Slice=background.slice
+ExecStart=%h/.dotfiles/bin/claude-transcript-vault

@@ -1,0 +1,13 @@
+[Unit]
+Description=Log which process deletes or renames a .jsonl file (Claude transcripts)
+
+[Service]
+ExecStart=/usr/bin/bpftrace /usr/local/share/transcript-delete-trace.bt
+StandardOutput=append:/var/log/transcript-deletes.log
+StandardError=journal
+Restart=on-failure
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
