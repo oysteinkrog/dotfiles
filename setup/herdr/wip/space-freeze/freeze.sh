@@ -54,8 +54,13 @@ describe() {
   status=$(jq -r '.status.state // empty' <<<"$g"); app=$(jq -r '.status.app // empty' <<<"$g")
   cwd=$(jq -r '.foreground.cwd // .cwd // empty' <<<"$g")
   argv=$(jq -c '.foreground.argv // []' <<<"$g")
-  # An idle shell runs nothing: it stays as it is.
-  if [ -z "$fgpid" ] || { [ "$fgpid" = "$tpid" ] && [[ "$SHELLS" == *" ${fgname#-} "* ]]; }; then
+  # herdr-app starts programs as `fish -ic 'command X; exec fish -i'`: then the foreground is that
+  # shell and the program is its child. A shell with no child runs nothing: it stays as it is.
+  if [ -n "$fgpid" ] && [ "$fgpid" = "$tpid" ] && [[ "$SHELLS" == *" ${fgname#-} "* ]]; then
+    fgpid=$(pgrep -P "$tpid" | head -1)
+    [ -n "$fgpid" ] && { argv=$(tr '\0' '\n' < "/proc/$fgpid/cmdline" | jq -R . | jq -sc 'map(select(. != ""))'); cwd=$(readlink "/proc/$fgpid/cwd"); }
+  fi
+  if [ -z "$fgpid" ]; then
     jq -cn --argjson g "$g" '{address:$g.address, name:$g.name, kind:"shell", status:($g.status.state // null),
       tab:($g.labels["herdr.tab"] // null), cwd:($g.cwd // null)}'
     return 0
@@ -85,9 +90,9 @@ describe() {
     while IFS= read -r a; do resume+=" $(printf %q "$a")"; done < <(jq -r '.[]' <<<"$argv")
   fi
   jq -cn --argjson g "$g" --arg kind "$kind" --arg sid "$sid" --arg resume "$resume" --arg cwd "$cwd" \
-    --argjson argv "$argv" --arg cpid "${cpid:-}" '{address:$g.address, name:$g.name, kind:$kind,
+    --argjson argv "$argv" --arg cpid "${cpid:-}" --arg pid "$fgpid" '{address:$g.address, name:$g.name, kind:$kind,
       status:($g.status.state // null), tab:($g.labels["herdr.tab"] // null), cwd:$cwd, argv:$argv,
-      session:(if $sid == "" then null else $sid end), resume:$resume, pid:$g.foreground.pid,
+      session:(if $sid == "" then null else $sid end), resume:$resume, pid:($pid|tonumber),
       claude_pid:(if $cpid == "" then null else ($cpid|tonumber) end)}'
 }
 
@@ -98,11 +103,19 @@ plan() {
   for a in $addrs; do describe "$a"; done | jq -s --arg s "$space" '{space:$s, terminals:.}'
 }
 
-# The foreground is back to the terminal's own shell.
+# The foreground is back to the terminal's own shell, and that shell runs nothing.
 idle_shell() {
-  local g; g=$("$HC" get "$1" --json 2>/dev/null) || return 0
+  local g tpid; g=$("$HC" get "$1" --json 2>/dev/null) || return 0
   [ "$(jq -r .state <<<"$g")" = live ] || return 0
-  [ "$(jq -r '.foreground.pid // 0' <<<"$g")" = "$(jq -r '.pid // 1' <<<"$g")" ]
+  tpid=$(jq -r '.pid // 1' <<<"$g")
+  [ "$(jq -r '.foreground.pid // 0' <<<"$g")" = "$tpid" ] && [ -z "$(pgrep -P "$tpid")" ]
+}
+
+# Signal a process and everything under it, children first (never its process group: in a
+# herdr-app terminal that group holds the terminal's own shell too).
+signal_tree() {
+  local sig=$1 p; shift
+  for p in $(descendants "$1" | tac) "$1"; do kill "-$sig" "$p" 2>/dev/null; done
 }
 
 wait_idle() {
@@ -119,8 +132,8 @@ stop_one() {
   sid=$(jq -r '.session // empty' <<<"$e")
   [ -n "$pid" ] || return 0
   if [ -n "$cpid" ]; then kill -TERM "$cpid" 2>/dev/null; else kill -TERM "$pid" 2>/dev/null; fi
-  wait_idle "$addr" 15 || { kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; wait_idle "$addr" 5; } \
-    || { kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null; wait_idle "$addr" 3; } || return 1
+  wait_idle "$addr" 15 || { signal_tree TERM "$pid"; wait_idle "$addr" 5; } \
+    || { signal_tree KILL "$pid"; wait_idle "$addr" 3; } || return 1
   # claude-persist must not bring a frozen session back after a reboot.
   if [ -n "$sid" ]; then
     for f in "$PERSIST_DIR/$sid"@*.json; do [ -e "$f" ] && rm -f "$f"; done
@@ -157,14 +170,17 @@ thaw_one() {
   local space=$1 e=$2 name tab cwd resume g target=""
   name=$(jq -r .name <<<"$e"); tab=$(jq -r '.tab // empty' <<<"$e"); cwd=$(jq -r '.cwd // empty' <<<"$e")
   resume=$(jq -r .resume <<<"$e")
-  if g=$("$HC" get "$name" --json 2>/dev/null) && [ "$(jq -r .state <<<"$g")" = live ] \
+  # By name (herdr-app terminals have none), else by address: hc keeps both across a core restart.
+  local key=$name; [ "$key" = null ] || [ -z "$key" ] && key=$(jq -r .address <<<"$e")
+  if g=$("$HC" get "$key" --json 2>/dev/null) && [ "$(jq -r .state <<<"$g")" = live ] \
     && [ "$(jq -r '.labels["herdr.space"] // empty' <<<"$g")" = "$space" ]; then
-    idle_shell "$name" || return 1   # someone runs something there now: leave it
+    idle_shell "$key" || return 1   # someone runs something there now: leave it
     target=$(jq -r .address <<<"$g")
   else
     local -a lbl=(--label "herdr.space=$space"); [ -n "$tab" ] && lbl+=(--label "herdr.tab=$tab")
-    target=$("$HC" run --json --bg --keep --no-parent --name "$name" --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
-    [ -n "$target" ] || target=$("$HC" run --json --bg --keep --no-parent --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
+    [ "$name" = null ] && name=""
+    [ -n "$name" ] && target=$("$HC" run --json --bg --keep --no-parent --name "$name" --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
+    [ -n "${target:-}" ] || target=$("$HC" run --json --bg --keep --no-parent --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
     [ -n "$target" ] || return 1
     sleep 1
   fi
@@ -189,7 +205,10 @@ thaw() {
 list() {
   mkdir -p "$STATE"
   local f
-  for f in "$STATE"/*.json; do [ -e "$f" ] && jq -c '{space, name, frozen_at, count:(.terminals | length)}' "$f"; done | jq -s .
+  for f in "$STATE"/*.json; do
+    [ -e "$f" ] || continue
+    jq -c '{space, name, frozen_at, count:(.terminals | length)}' "$f"
+  done | jq -s .
 }
 
 case "${1:-}" in
