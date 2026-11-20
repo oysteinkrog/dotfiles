@@ -29,8 +29,9 @@ ADDONS=(
   "herdr-artifacts|https://github.com/jmoyers/herdr-artifacts.git|7d85899|artifacts=mods/claude-artifacts|claude-artifacts"
   "herdr-agent-ask|https://github.com/sachin-philip/herdr-agent-ask.git|764155f|mods/asks=mods/asks mods/tabs-asks=mods/tabs-asks mods/spaces-asks=mods/spaces-asks|herdr-agent-ask"
 )
-SHEPHERDR="shepherdr|https://github.com/eliasstravik/shepherdr.git|abd5a0f1"
-SHEPHERDR_PATCH="shepherdr-coordinator"
+# Shepherdr from Oystein's fork: branch oystein/main is upstream 3.1.35 plus our commits (Ctrl+K switcher
+# keys and fuzzy search, Assistant in new spaces off by default). Our changes are commits there, not patches.
+SHEPHERDR="shepherdr|https://github.com/oysteinkrog/shepherdr.git|777477a5"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'herdr-setup: %s\n' "$*" >&2; exit 1; }
@@ -42,20 +43,10 @@ fetch() {
     mkdir -p "$SRC"
     git clone -q "$url" "$dir" >&2
   fi
-  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$dir" fetch -q origin >&2
+  # From the pinned URL itself: a clone made from upstream has the fork's commits only there.
+  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$dir" fetch -q "$url" >&2 || git -C "$dir" fetch -q origin >&2
   git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || die "$name: commit $commit not found in $url"
   printf '%s\n' "$dir"
-}
-
-# apply_patch DIR PATCH: apply once; a patch that is already in place is skipped.
-apply_patch() {
-  local dir=$1 p=$2
-  if patch -p1 -d "$dir" -R --dry-run -s -f <"$p" >/dev/null 2>&1; then
-    say "  $(basename "$p"): already applied"
-  else
-    patch -p1 -d "$dir" --forward -s <"$p" || die "$(basename "$p") does not apply in $dir"
-    say "  $(basename "$p"): applied"
-  fi
 }
 
 # stage DIR: write every add-on (upstream at its commit, plus our patch) into DIR, laid out like the app home.
@@ -115,12 +106,21 @@ cmd_install() {
       dir=$(fetch "$name" "$url" "$commit")
     fi
     head=$(git -C "$dir" rev-parse HEAD)
-    case $head in "$commit"*) ;; *) die "$dir is at ${head:0:8}, not $commit: check it out there (or pass --no-shepherdr)" ;; esac
+    case $head in
+      "$commit"*) ;;
+      *)
+        # Move the checkout only when it has no edits of its own.
+        if [ -z "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
+          git -C "$dir" -c advice.detachedHead=false checkout -q "$commit"
+          say "  moved $dir to $commit"
+        else
+          die "$dir is at ${head:0:8} with local edits, not $commit: commit or move them first (or pass --no-shepherdr)"
+        fi ;;
+    esac
     local args=(install --yes --no-hooks --keys keep)
     [ "$root" = "$HOME" ] || args+=(--root "$root")
     [ -n "$build" ] || args+=(--no-build)
     python3 "$dir/bin/shepherdr" "${args[@]}"
-    apply_patch "$app" "$DATA/patches/$SHEPHERDR_PATCH.patch"
   fi
 
   say "=== Add-on mods"
@@ -172,9 +172,6 @@ cmd_check() {
   for f in $(cd "$tmp" && find themes layouts -type f); do
     cmp -s "$tmp/$f" "$app/$f" || { say "differs: $f"; drift=1; }
   done
-  if patch -p1 -d "$app" -R --dry-run -s -f <"$DATA/patches/$SHEPHERDR_PATCH.patch" >/dev/null 2>&1; then :; else
-    say "not applied: $SHEPHERDR_PATCH.patch"; drift=1
-  fi
   for f in $(our_files); do
     cmp -s "$DATA/files/$f" "$app/$f" || { say "differs: $f (herdr-setup capture saves the live one)"; drift=1; }
   done
