@@ -44,7 +44,7 @@ fetch() {
     git clone -q "$url" "$dir" >&2
   fi
   # From the pinned URL itself: a clone made from upstream has the fork's commits only there.
-  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$dir" fetch -q "$url" >&2 || git -C "$dir" fetch -q origin >&2
+  git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$dir" fetch -q "$url" "+refs/heads/*:refs/remotes/herdr-setup/*" >&2 || git -C "$dir" fetch -q origin >&2
   git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null || die "$name: commit $commit not found in $url"
   printf '%s\n' "$dir"
 }
