@@ -1,6 +1,6 @@
 ---
 name: consult-oracles
-description: Consult GPT-6.2 Astra (primary oracle and default reviewer, Codex CLI at effort medium, one bounded prompt) for expert second opinions. Add Fable only for security reviews or contested questions, or when Astra is unavailable. Use Opus when both fail. Gemini 4 Neon (via PAL) is the optional third oracle and Gemini 4 Carbon the rare fourth (ultra) oracle; both wait on Gemini API billing. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult GPT-6.2 Astra (primary oracle and default reviewer, Codex CLI at effort medium, one bounded prompt) for expert second opinions. Add Fable only for security reviews or contested questions, or when Astra is unavailable. Use Opus when both fail. Gemini 4 Neon (via PAL) is the optional third oracle and Gemini 4 Carbon the rare fourth (ultra) oracle; both run through Vertex AI. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 argument-hint: "[--effort low|medium|high|xhigh|max|ultra] <question>"
 context: fork
 ---
@@ -49,8 +49,8 @@ for one high-stakes question, and say why.
 | Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable and Astra both fail. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted and a GPT view is needed |
 | `gpt-6.2-sol` / `gpt-6.1-terra` | Codex CLI | Rarely; a faster GPT probe (Sol for code, Terra for images and computer use) |
-| **Gemini 4 Neon** (`gemini-4-neon`, released 2026-11-18) | `mcp__pal__chat` with `model: "gemini-4-neon"` | Optional third oracle from Google, and the first Gemini choice. $3 in and $15 out per 1M tokens. **Waiting on billing:** as of 2026-11-20 every Gemini API call returns 402 (AI Studio prepay credit used up). Oystein wants postpaid billing; until that works, do not plan around it |
-| **Gemini 4 Carbon** (`gemini-4-carbon`, released 2026-11-10) | `mcp__pal__chat` with `model: "gemini-4-carbon"` | Fourth oracle, the "ultra" option: Google's top Gemini 4 tier. Use it rarely, only for the hardest or most contested calls where the other three have not settled it. $2 in and $10 out per 1M tokens, but long thinking at `max` makes each call large. Same billing block as Neon |
+| **Gemini 4 Neon** (`gemini-4-neon`, released 2026-11-18) | `mcp__pal__chat` with `model: "gemini-4-neon"` | Optional third oracle from Google, and the first Gemini choice. $3 in and $15 out per 1M tokens. Runs through Vertex AI (see below) |
+| **Gemini 4 Carbon** (`gemini-4-carbon`, released 2026-11-10) | `mcp__pal__chat` with `model: "gemini-4-carbon"` | Fourth oracle, the "ultra" option: Google's top Gemini 4 tier. Use it rarely, only for the hardest or most contested calls where the other three have not settled it. $2 in and $10 out per 1M tokens, but long thinking at `max` makes each call large. Runs through Vertex AI |
 | `gemini-4-argon` | `mcp__pal__chat` | Older Gemini 4 model. Only when a Neon or Carbon call fails on the model itself. Flag the substitution |
 
 **Rules:**
@@ -68,9 +68,7 @@ for one high-stakes question, and say why.
 4. **Gemini 4 Neon** is the optional third oracle, a different provider with
    different training. Add it for high-stakes decisions or when Fable and Astra
    disagree. **Gemini 4 Carbon** is the fourth, last-resort oracle: use it only when
-   the first three disagree on a high-stakes call, or when the user asks for it. Both
-   wait on Gemini API billing (see the table); before relying on either, check that a
-   one-line test call does not return 402.
+   the first three disagree on a high-stakes call, or when the user asks for it.
 5. Anthropic (Fable, Opus), OpenAI (Astra through Codex) and Google (Gemini through
    PAL) are all approved providers, so proprietary code can go to any of these
    oracles without asking first. Any other provider reached through PAL still needs
@@ -180,9 +178,8 @@ codex exec -m gpt-6.2-astra \            - model: "fable"
 
 ### Third and Fourth Oracles (Gemini 4 Neon and Carbon)
 
-Gemini API calls return 402 since the AI Studio prepay credit ran out (checked
-2026-11-20). Oystein wants postpaid billing, which is being sorted out. Once a test call
-works, consult Neon for a third provider's view, when Fable and Astra disagree, or for
+PAL sends Gemini calls through Vertex AI (Cloud project `gen-lang-client-0138044607`, billed after use) with Application Default Credentials. If a call fails with an auth or reauthentication error, ask Oystein to run `gcloud auth application-default login` (the old AI Studio key has no prepaid credit and returns 402; set up 2026-11-20).
+Consult Neon for a third provider's view, when Fable and Astra disagree, or for
 bug hunting and deep code analysis. Use Carbon (`model: "gemini-4-carbon"`) the same way,
 but only as the fourth oracle for the hardest calls:
 
@@ -202,7 +199,7 @@ of the dotfiles README.
 ### Consensus (Multiple PAL Models)
 
 When the user explicitly wants a structured multi-model debate, `mcp__pal__consensus`
-works for the PAL-reachable models (GPT-5.5, and Gemini 4 Neon and Carbon once billing works).
+works for the PAL-reachable models (GPT-5.5, Gemini 4 Neon and Carbon).
 Fable and Astra are not PAL-reachable; run them with their own calls and synthesize
 all the answers together:
 

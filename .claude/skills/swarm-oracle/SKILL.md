@@ -34,8 +34,7 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 >
 > **Gemini 4 Neon** (via PAL, `gemini-4-neon`) is the optional third oracle and
 > **Gemini 4 Carbon** (`gemini-4-carbon`) the rare fourth, "ultra" oracle for the
-> hardest contested calls. Both wait on Gemini API billing: calls return 402 as of
-> 2026-11-20. Run a one-line test call before planning around either.
+> hardest contested calls. Both run through Vertex AI via PAL (set up 2026-11-20).
 >
 > **Sensitive code:** Anthropic, OpenAI and Google are approved providers. Proprietary
 > material can go to Astra, Fable and the Gemini 4 models without asking first.
@@ -126,7 +125,7 @@ Agent({ subagent_type: "general-purpose", model: "fable",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
 
-**Gemini 4 Neon (waits on billing):** once a test call works, a Gemini FOR/AGAINST
+**Gemini 4 Neon:** a Gemini FOR/AGAINST
 pair is two `mcp__pal__chat` calls with `model: "gemini-4-neon"`, `thinking_mode: "max"`
 and the same two stance prompts. Use `gemini-4-carbon` instead only as the fourth
 oracle on the hardest calls.
@@ -145,7 +144,7 @@ PAL tops out at gpt-5.5-pro):
 
 #### Alternate Configurations (PAL route)
 
-**Architecture validation (3 models; needs Gemini 4 Neon, which waits on billing):**
+**Architecture validation (3 models; needs Gemini 4 Neon):**
 ```json
 [
   {"model": "gpt-5.5-pro", "stance": "for"},
