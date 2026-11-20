@@ -50,7 +50,7 @@ curl -fsSL https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 claude mcp add -s user fff -- ~/.local/bin/fff-mcp
 ```
 
-#### PAL MCP server (GPT and Gemini models, including Gemini 4 Argon)
+#### PAL MCP server (GPT and Gemini models, including Gemini 4 Neon and Carbon)
 
 [PAL](https://github.com/oysteinkrog/pal-mcp-server) runs as a stdio MCP server from
 its own checkout at `~/projects/pal-mcp-server`. Its API keys live in that checkout's
@@ -61,6 +61,12 @@ gitignored `.env`, so nothing secret is in this repo. The entry in
 claude mcp add-json -s user pal "$(jq -c .mcpServers.pal ~/.claude/mcp-servers.json)"
 claude mcp list | grep pal   # expect: pal ... Connected
 ```
+
+Gemini goes through Vertex AI, billed after use to the Initial Force Cloud account,
+because the AI Studio key now needs prepaid credit. PAL's `.env` sets
+`GEMINI_VERTEX_PROJECT` (and optionally `GEMINI_VERTEX_LOCATION`, default `global`), and
+calls authenticate with Application Default Credentials. On a new machine, run
+`gcloud auth application-default login` with the initialforce.com account.
 
 Do not also add `pal` to a repo `.mcp.json`. Two registrations of one server race for
 the same tool names. After a PAL model change, restart Claude Code sessions to load it.
