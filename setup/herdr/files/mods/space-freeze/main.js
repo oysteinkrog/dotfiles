@@ -144,8 +144,11 @@ export default class SpaceFreeze extends View {
       .children(list.map((it, i) => v_flex()
         .when(i === 1 || it[0] === "Close", (el) => el.child(div().mx(7).my(4).h(1).bg(t.border)))
         .child(h_flex().id(`sf-${i}`).h(31).px(8).gap(9).rounded(7).items_center().text_color(t.foreground)
+          // One highlight, and it follows the pointer. A separate .hover(bg(t.hover)) does not
+          // work here: in the gruvbox theme hover is the popover colour, so the row under the
+          // pointer lost its highlight while the keyboard row (first item) kept it.
           .when(i === this.at, (el) => el.bg(t.selected))
-          .hover((s) => s.bg(t.hover))
+          .on_hover((hovered, cx) => { if (hovered && this.at !== i) { this.at = i; cx.notify(); } })
           .on_click(() => this.choose(i))
           .when(i === 0, (el) => el.child(svg("mods/space-freeze/snowflake.svg").size(14).flex_none().text_color(t.ansi4 ?? t.muted)))
           .when(i !== 0, (el) => el.child(div().size(14).flex_none()))
