@@ -59,11 +59,11 @@ and its pending wakeup, a `/goal`, background shells and Monitors, and an unansw
 Thaw resumes the conversation, not those. So a session that has any of them must not be frozen
 by anyone but Oystein.
 
-## Auto-freeze (manager-office and manager-home)
+## Auto-freeze (manager-resources and manager-home)
 
 Oystein, 2026-11-20: idle Claude sessions use too much memory on both desktops, and he wants
 spaces he is not using frozen automatically instead of closed, so he can find and resume them
-later. manager-office does this for the office desktop and manager-home for home, as part of
+later. manager-resources does this for the office desktop (manager-office is not running) and manager-home for home, as part of
 their loop. Each manager only freezes spaces on its own desktop.
 
 A space may be frozen when **all** of these hold:

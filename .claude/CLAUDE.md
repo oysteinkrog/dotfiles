@@ -262,7 +262,7 @@ spaces, tabs and terminals. The old `herdr` CLI (`herdr workspace list`, `herdr 
   (`customTitle`) when you need it.
 - **Load `herdr-sessions`** to find sessions, or to freeze or thaw a space. Freeze stops a
   space's programs to free memory and Thaw resumes them with `claude --resume`. Since
-  2026-11-20, manager-office and manager-home freeze idle spaces on their own desktop
+  2026-11-20, manager-resources (office) and manager-home freeze idle spaces on their own desktop
   under the rules in that skill. `hc label <terminal> herdr.nofreeze=1` protects a space.
 
 ## Lab PC
