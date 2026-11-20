@@ -153,7 +153,7 @@ freeze() {
       "$HC" label "$(jq -r .address <<<"$e")" "herdr.frozen=$(jq -r .kind <<<"$e")" >/dev/null 2>&1
       out+=("$e")
     else
-      failed+=("$(jq -r .name <<<"$e")")
+      failed+=("$(jq -r '.name // .address' <<<"$e")")
     fi
   done < <(jq -c '.terminals[] | select(.kind != "shell")' <<<"$p")
   if [ ${#out[@]} -gt 0 ]; then
@@ -166,8 +166,11 @@ freeze() {
 
 # Start one saved program again: in its terminal when that is still an idle shell of this space,
 # else in a new shell in the same tab.
+# THAW_ADDR is the terminal it used, so a program that stays frozen is saved with its new address.
 thaw_one() {
-  local space=$1 e=$2 name tab cwd resume g target=""
+  local space=$1 e=$2 name tab cwd resume g target="" kind
+  THAW_ADDR=""
+  kind=$(jq -r '.kind // "program"' <<<"$e")
   name=$(jq -r .name <<<"$e"); tab=$(jq -r '.tab // empty' <<<"$e"); cwd=$(jq -r '.cwd // empty' <<<"$e")
   resume=$(jq -r .resume <<<"$e")
   # By name (herdr-app terminals have none), else by address: hc keeps both across a core restart.
@@ -182,19 +185,34 @@ thaw_one() {
     [ -n "$name" ] && target=$("$HC" run --json --bg --keep --no-parent --name "$name" --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
     [ -n "${target:-}" ] || target=$("$HC" run --json --bg --keep --no-parent --cwd "${cwd:-$HOME}" "${lbl[@]}" 2>/dev/null | jq -r '.address // empty')
     [ -n "$target" ] || return 1
+    # The new shell belongs to the frozen space until the program runs in it.
+    "$HC" label "$target" "herdr.frozen=$kind" >/dev/null 2>&1
+    THAW_ADDR=$target
     sleep 1
   fi
+  # The label goes before this returns, so every window shows the space thawed at once.
   "$HC" label "$target" "herdr.frozen=" >/dev/null 2>&1
-  "$HC" send "$target" "$resume" >/dev/null 2>&1
+  if ! "$HC" send "$target" "$resume" >/dev/null 2>&1; then
+    "$HC" label "$target" "herdr.frozen=$kind" >/dev/null 2>&1
+    THAW_ADDR=$target
+    return 1
+  fi
 }
 
 thaw() {
   local space=$1 f="$STATE/$1.json" e left=() n=0
   [ -f "$f" ] || die "this space is not frozen"
   while IFS= read -r e; do
-    if thaw_one "$space" "$e"; then n=$((n + 1)); else left+=("$e"); fi
+    if thaw_one "$space" "$e"; then n=$((n + 1))
+    elif [ -n "$THAW_ADDR" ]; then left+=("$(jq -c --arg a "$THAW_ADDR" '.address = $a' <<<"$e")")
+    else left+=("$e"); fi
   done < <(jq -c '.terminals[]' "$f")
   if [ ${#left[@]} -eq 0 ]; then
+    # Nothing here is frozen now: no terminal of the space may keep the label.
+    local t
+    for t in $("$HC" ls --json --label "herdr.space=$space" 2>/dev/null | jq -r '.terminals[].address'); do
+      [ -n "$("$HC" get "$t" --json 2>/dev/null | jq -r '.labels["herdr.frozen"] // empty')" ] && "$HC" label "$t" "herdr.frozen=" >/dev/null 2>&1
+    done
     mv "$f" "$STATE/.thawed-$1-$(date +%Y%m%d-%H%M%S).json"
   else
     printf '%s\n' "${left[@]}" | jq -s --slurpfile old "$f" '$old[0] + {terminals:.}' > "$f.tmp" && mv "$f.tmp" "$f"
@@ -207,7 +225,7 @@ list() {
   local f
   for f in "$STATE"/*.json; do
     [ -e "$f" ] || continue
-    jq -c '{space, name, frozen_at, count:(.terminals | length)}' "$f"
+    jq -c '{space, name, frozen_at, count:(.terminals | length), addresses:[.terminals[].address]}' "$f"
   done | jq -s .
 }
 

@@ -1,11 +1,13 @@
 // Freeze and Thaw for a whole space (krog layout). Opened by space-folders:
-//   props { menu: spaceId }    the space's right-click menu: Freeze or Thaw, then Herdr's own items
+//   props { menu: spaceId, frozen }  the space's right-click menu: Freeze or Thaw, then Herdr's own items
 //   props { confirm: spaceId } the dialog that lists what Freeze stops, and does it
 //   props { thaw: spaceId }    the dialog that thaws it at once and shows the result
 // Every step finishes before the overlay closes: a closed overlay's pending work never lands.
 // The work is done by freeze.sh beside this file, on the machine that owns the space, which
-// keeps the frozen state in ~/.local/state/space-freeze/<space>.json there. This mod mirrors
-// that into shared("space-freeze.frozen") ({ spaceId: { count, at } }) for the spaces list.
+// keeps the frozen state in ~/.local/state/space-freeze/<space>.json there and puts the label
+// herdr.frozen on each stopped terminal. The spaces list reads those labels (live on every
+// machine). This mod also mirrors the state files into shared("space-freeze.frozen")
+// ({ spaceId: { count, at, addresses } }), the fallback for a frozen terminal that is gone.
 //
 // Freeze stops the programs (they exit: Claude is resumed later with --resume); shells and tabs
 // stay. Not the cgroup freeze of freeze-job.sh. Nothing freezes or thaws on its own.
@@ -37,7 +39,7 @@ export async function refresh(machine) {
   const list = await freezeSh(any, "list");
   const prefix = machine ? `${machine}/` : "";
   const mirror = Object.fromEntries(Object.entries(shared(KEY) ?? {}).filter(([id]) => (id.includes("/") ? id.split("/")[0] : null) !== machine));
-  for (const f of list) mirror[prefix + f.space] = { count: f.count, at: f.frozen_at };
+  for (const f of list) mirror[prefix + f.space] = { count: f.count, at: f.frozen_at, addresses: f.addresses ?? [] };
   setShared(KEY, mirror);
   bump();
 }
@@ -46,7 +48,6 @@ export async function refresh(machine) {
 // (space-folders loadFrozen) can tell its result is older and drop it instead of writing it back.
 function bump() { setShared(`${KEY}.rev`, (shared(`${KEY}.rev`) ?? 0) + 1); }
 
-export const isFrozen = (id) => Boolean((shared(KEY) ?? {})[id]);
 
 // Where a space is now, for the worktree items (as Herdr's menu does).
 function place(s) {
@@ -115,7 +116,8 @@ export default class SpaceFreeze extends View {
 
   items() {
     const s = this.space;
-    const frozen = isFrozen(s.id);
+    // space-folders decides (its frozenSpaces, the same function its rows use) and passes it in.
+    const frozen = Boolean(props()?.frozen);
     return [
       frozen ? ["Thaw space", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 420, props: { thaw: s.id } })] : ["Freeze space…", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 480, props: { confirm: s.id } })],
       ["Rename", () => run("space.rename", { id: s.id })],

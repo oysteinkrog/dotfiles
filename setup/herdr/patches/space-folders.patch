@@ -5,28 +5,53 @@
  import { View, div, svg } from "gpui-kit";
  import { v_flex, h_flex, InputState, Input } from "gpui-base";
 -import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, pickFolder, home, nextCommand } from "herdr";
-+import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, pickFolder, home, nextCommand, checking, appHome } from "herdr";
++import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, pickFolder, home, nextCommand, checking, appHome, terminals } from "herdr";
 
  // A machine's folders live in a file in its home, so every screen showing its
  // spaces shows the same folders: { list: [{ id, name, folded }], of: { spaceId:
-@@ -126,7 +126,7 @@
+@@ -126,7 +126,32 @@
    const tabs = new Set((s.tabs ?? []).map((c) => c.id));
    return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
  }
 -const rowHeight = ({ tree }) => (tree ? 28 : 30);
++// The frozen spaces (the space-freeze mod), as app space ids ("home/sp…" for another machine).
++// The rows and the Freeze/Thaw menu both use this one function: the menu gets its answer in
++// its props. The source is the herdr.frozen label that freeze.sh sets on every terminal it
++// stops and clears when it starts it again. herdr-core syncs labels between machines and
++// terminals() is live in every window, so every window sees a change at once, with no polling.
++// The fallback is each machine's state files (shared "space-freeze.frozen", read by loadFrozen):
++// it counts only when a frozen terminal listed there is no longer live (closed, or its machine
++// is offline), so an old copy of it can never show a space as frozen while its terminals live.
++function frozenSpaces() {
++  const frozen = new Set(), live = new Set();
++  for (const term of terminals()) {
++    if (term.state !== "live") continue;
++    live.add(term.address);
++    const sp = term.labels?.["herdr.space"];
++    if (!sp || !term.labels?.["herdr.frozen"]) continue;
++    const slash = term.address.indexOf("/");
++    frozen.add(slash > 0 ? `${term.address.slice(0, slash)}/${sp}` : sp);
++  }
++  for (const [id, f] of Object.entries(shared("space-freeze.frozen") ?? {})) {
++    if (frozen.has(id)) continue;
++    const m = id.includes("/") ? id.split("/")[0] : null;
++    if ((f?.addresses ?? []).some((a) => !live.has(m ? `${m}/${a}` : a))) frozen.add(id);
++  }
++  return frozen;
++}
 +const rowHeight = ({ tree }) => (tree ? 20 : 22);
  const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
  const base = (path) => path.replace(/\/+$/, "").split("/").pop();
  // Changes made outside Herdr (an editor's save, a commit in another app): looked
-@@ -210,6 +210,16 @@
+@@ -210,6 +235,16 @@
      // Another screen may have changed them: read every machine's file again now and then.
      this.loadFolders(cx);
      cx.timer.every(15000, cx => this.loadFolders(cx));
-+    // Frozen spaces (the space-freeze mod): another Herdr window may freeze or thaw one.
-+    // This machine's state folder is watched, so a space here frozen from another window shows
-+    // at once; other machines are read again every 15 s, as the folders are.
++    // Frozen spaces come from terminal labels, live (see frozenSpaces). The state files are only
++    // the fallback for a frozen terminal that is gone: read them at start, when this machine's
++    // folder changes, and every 60 s.
 +    this.loadFrozen(cx);
-+    cx.timer.every(15000, cx => this.loadFrozen(cx));
++    cx.timer.every(60000, cx => this.loadFrozen(cx));
 +    cx.spawn(async (cx) => {
 +      try {
 +        for (;;) { const got = await watchFolder(`${home()}/.local/state/space-freeze`); if (!got?.length) break; this.loadFrozen(cx); }
@@ -35,7 +60,7 @@
      // `git status` walks the whole tree, on another machine a process there:
      // only when its answer could have changed (see `due`).
      cx.timer.every(250, (cx) => this.checkNew(cx));
-@@ -367,8 +377,31 @@
+@@ -367,8 +402,31 @@
    }
 
    menu(w) {
@@ -43,11 +68,11 @@
 -    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
 +    // A popup is as tall as its items; height is only the most. The space-freeze mod's menu
 +    // adds Freeze or Thaw to Herdr's own space items.
-+    openOverlay({ mod: "space-freeze", kind: "popup", width: 210, height: 290, props: { menu: w.id } });
++    openOverlay({ mod: "space-freeze", kind: "popup", width: 210, height: 290, props: { menu: w.id, frozen: frozenSpaces().has(w.id) } });
 +  }
 +
 +  // Mirror each machine's frozen spaces (~/.local/state/space-freeze there) into
-+  // shared("space-freeze.frozen"), which the rows read.
++  // shared("space-freeze.frozen"), the fallback of frozenSpaces.
 +  loadFrozen(cx) {
 +    if (checking()) return;
 +    cx.spawn(async (cx) => {
@@ -61,7 +86,7 @@
 +        try { list = r?.code === 0 ? JSON.parse(r.stdout) : null; } catch { list = null; }
 +        // Not reachable now: keep what this machine had.
 +        if (!list) { for (const [id, v] of Object.entries(shared("space-freeze.frozen") ?? {})) if ((id.includes("/") ? id.split("/")[0] : null) === m) mirror[id] = v; continue; }
-+        for (const f of list) mirror[(m ? `${m}/` : "") + f.space] = { count: f.count, at: f.frozen_at };
++        for (const f of list) mirror[(m ? `${m}/` : "") + f.space] = { count: f.count, at: f.frozen_at, addresses: f.addresses ?? [] };
 +      }
 +      if ((shared("space-freeze.frozen.rev") ?? 0) !== rev) return;
 +      if (JSON.stringify(mirror) !== JSON.stringify(shared("space-freeze.frozen") ?? {})) { setShared("space-freeze.frozen", mirror); cx.notify(); }
@@ -69,7 +94,7 @@
    }
 
    // ---- folders ----
-@@ -552,7 +585,7 @@
+@@ -552,7 +610,7 @@
      // A folder dragged over this one: a line where it would go, as for spaces.
      const moving = this.moving, aimed = moving && moving.id !== f.id && this.overMove === f.id;
      // As tall as a space's row, with an 18px tile where a space has its avatar.
@@ -78,7 +103,7 @@
        .text_color(t.foreground).cursor_pointer()
        .when(target, (el) => el.bg(t.selected).border_1().border_color(t.accent))
        .when(!target, (el) => el.hover((s) => s.bg(t.hover)))
-@@ -574,8 +607,8 @@
+@@ -574,8 +632,8 @@
        .on_click(() => this.toggleFolder(machine, f.id))
        .on_mouse_down("right", () => openOverlay({ mod: "space-folders", kind: "popup", width: 210, height: 160, props: { folderMenu: f.id, machine } }));
      // Built like a space's avatar: a filled 18px tile in the folder's color, its mark in white.
@@ -89,7 +114,7 @@
      if (collapsed) return head.justify_center().child(tile);
      return head
        .child(tile)
-@@ -639,7 +672,10 @@
+@@ -639,7 +697,10 @@
      for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
      const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null })).filter((r) => this.shown.has(r.w.id));
      const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
@@ -101,7 +126,7 @@
      const out = [];
      const placed = new Set(); // repos whose worktrees are listed (under the first of its spaces)
      for (const r of list) {
-@@ -661,7 +697,7 @@
+@@ -661,7 +722,7 @@
    }
 
    loadingRow(m, t, collapsed) {
@@ -110,7 +135,7 @@
    }
 
    // A machine's header and, unless it's folded, its folders and spaces. In a
-@@ -671,7 +707,7 @@
+@@ -671,7 +732,7 @@
      const machine = this.machines.find(k => k.name === m);
      const connected = !m || machine?.state === "connected";
      const folded = this.folded.has(m);
@@ -119,7 +144,7 @@
        .cursor_pointer().hover(s => s.bg(t.hover))
        .on_click((_e, cx) => {
          folded ? this.folded.delete(m) : this.folded.add(m);
-@@ -687,7 +723,7 @@
+@@ -687,7 +748,7 @@
            .on_click((_e, cx) => { cx.stop_propagation(); newSpaceIn(m, null); }).child("+")))
          .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
          .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
@@ -128,15 +153,15 @@
        .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
        .on_click(() => newSpaceIn(m, null))
        .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
-@@ -745,6 +781,7 @@
+@@ -745,6 +806,7 @@
      const colors = shared("space.colors") ?? {};
      const color = colors[w.id] ?? "ansi6";
      const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
-+    const frozen = Boolean((shared("space-freeze.frozen") ?? {})[w.id]);
++    const frozen = (this.frozen ?? frozenSpaces()).has(w.id);
      return v_flex()
        .relative()
        .id(`space-${w.id}`)
-@@ -753,7 +790,7 @@
+@@ -753,7 +815,7 @@
        .h(rowHeight({ tree }))
        .flex_none()
        .justify_center()
@@ -145,7 +170,7 @@
        .when(on, (el) => el.bg(t.selected))
        .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
        .when(this.pressed === i && this.over !== i, (el) => el.opacity(0.5))
-@@ -788,11 +825,12 @@
+@@ -788,11 +850,12 @@
        .on_mouse_down("right", () => this.menu(w))
        .child(
          h_flex()
@@ -162,18 +187,25 @@
            .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
        );
    }
-@@ -808,7 +846,9 @@
+@@ -808,13 +871,16 @@
        .hover((s) => s.bg(t.hover))
        .on_click(() => run("space.select", { id: w.id }))
        .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
 -      .child(div().text_color(tone(t, w.status)).child(glyph(w.status)));
-+      .child((shared("space-freeze.frozen") ?? {})[w.id]
++      .child((this.frozen ?? frozenSpaces()).has(w.id)
 +        ? svg("mods/space-freeze/snowflake.svg").size(10).text_color(t.ansi4 ?? t.dim)
 +        : div().text_color(tone(t, w.status)).child(glyph(w.status)));
    }
 
    render() {
-@@ -835,13 +875,13 @@
+     const t = theme();
+     if (this.folderMenu) return this.folderMenuView(t);
+     if (this.editing) return this.editView(t);
++    this.frozen = frozenSpaces();
+     const collapsed = narrow();
+     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
+     const sp = spaces();
+@@ -835,13 +901,13 @@
        .hover(s => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(svg(`mods/workspace-chrome/${icon}.svg`).size(14));
      const seen = [], rows = this.grouped(t, collapsed, seen);
      this.seen = seen;
