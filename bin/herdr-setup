@@ -156,7 +156,31 @@ cmd_install() {
     fi
     cp "$DATA/files/$f" "$app/$f"
   done
-  say "Done. Restart herdr-app to load the mods. Pick the asks-folders layout if it is not shown."
+  rename_layout asks-folders krog "$app"
+  say "Done. Restart herdr-app to load the mods. Pick the krog layout if it is not shown."
+}
+
+# One-time move of a renamed layout: keep its saved sizes and panel picks (.state), move
+# the old file aside, and switch a running window that still shows the old name.
+rename_layout() {
+  local old=$1 new=$2 app=$3
+  [ -f "$app/layouts/$old.json" ] || [ -f "$app/layouts/.state/$old.json" ] || return 0
+  say "=== Layout $old is now $new"
+  if [ -f "$app/layouts/.state/$old.json" ] && [ ! -f "$app/layouts/.state/$new.json" ]; then
+    cp -a "$app/layouts/.state/$old.json" "$app/layouts/.state/$new.json"
+    say "  saved state copied to layouts/.state/$new.json"
+  fi
+  if grep -q "\"layout\":\"$old\"" "$app/shared.json" 2>/dev/null; then
+    if HERDR_APP_HOME="$app" herdr-app do layout.switch "{\"name\":\"$new\"}" >/dev/null 2>&1; then
+      say "  window switched to $new"
+    else
+      say "  herdr-app is not running: pick the $new layout after it starts"
+    fi
+  fi
+  local f
+  for f in "layouts/$old.json" "layouts/.state/$old.json"; do
+    [ -f "$app/$f" ] && mv "$app/$f" "$app/$f.before-herdr-setup-$stamp" && say "  $f kept as $f.before-herdr-setup-$stamp"
+  done
 }
 
 cmd_check() {

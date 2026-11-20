@@ -115,7 +115,7 @@
     "ctrl-shift-u": "space-folders.prev",
     "ctrl-shift-up": "space-folders.prev"
   },
-  "layout:asks-folders": {
+  "layout:krog": {
     "cmd-shift-a": "tabs-asks.toggle",
     "alt-down": "space-folders.next",
     "alt-up": "space-folders.prev",
