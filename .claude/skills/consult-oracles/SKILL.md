@@ -194,7 +194,7 @@ mcp__pal__chat with:
 - thinking_mode: "max"
 ```
 
-Gemini 4 models read 1M tokens of input but write at most 32K tokens per reply (checked for Argon; assumed for Neon and Carbon). For a long
+Gemini 4 models read 1M tokens of input. Neon writes at most 64K tokens per reply, Carbon and Argon 32K (from the Gemini models API, 2026-11-20). For a long
 review, ask for findings only, not rewritten files. If `mcp__pal__chat` is missing,
 PAL is not registered in this session: run `claude mcp list` and see the PAL section
 of the dotfiles README.
