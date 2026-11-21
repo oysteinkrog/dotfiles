@@ -1,0 +1,16 @@
+#!/bin/bash
+# home-hold: submit holds for the home jobd queue, owned by manager-home.
+#   home-hold set UNTIL_EPOCH "reason"   start a hold
+#   home-hold clear                       end it
+#   home-hold check                       exit 0 = hold on (prints it), 1 = no hold
+# File: ~/.local/state/machine/home-hold, one line: until=<epoch> reason=<text>
+f=$HOME/.local/state/machine/home-hold
+case "$1" in
+  set) mkdir -p "${f%/*}" && printf 'until=%s reason=%s\n' "$2" "$3" > "$f.new" && mv "$f.new" "$f" ;;
+  clear) rm -f "$f" ;;
+  check) [ -f "$f" ] || exit 1
+         u=$(sed -n 's/^until=\([0-9]*\).*/\1/p' "$f")
+         [ -n "$u" ] && [ "$(date +%s)" -lt "$u" ] && { cat "$f"; exit 0; }
+         exit 1 ;;
+  *) echo "usage: home-hold set EPOCH REASON | clear | check" >&2; exit 2 ;;
+esac
