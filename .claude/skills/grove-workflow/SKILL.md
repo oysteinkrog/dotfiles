@@ -129,6 +129,19 @@ Verified against `/c/work/grove/src/cli/done.rs`:
   discards uncommitted work with no recovery path.
 - Deregisters the project from `registry.json` on success.
 
+### Lane delete command
+
+Delete lanes only after 22:00, and only one at a time. Run every delete through
+the lock, so the lock stays held for 2 minutes after each lane:
+
+```sh
+flock /var/tmp/claude/grove-delete.lock sh -c 'nice -n 19 ionice -c3 grove done <tag> && sleep 120'
+```
+
+Reason: back-to-back deletes stall disk IO and froze the desktop on 2026-11-11.
+Use this form for `grove done` and for any other lane delete. Never run a bare
+`grove done`, and never pass `--force` (see above).
+
 ### `grove list`: do not run it in agent context
 
 Do not run `grove list`. Use `grove path <tag>` for one project, or
@@ -162,7 +175,7 @@ status computation.
    new working copy under a grove-managed `work_dir` (e.g. `/c/work/desktop`) —
    an unregistered directory is invisible to `grove list`/`done` and becomes
    exactly the kind of untracked sprawl grove exists to prevent.
-2. **Finish with `grove done <tag>`**, not manual `git worktree remove`. Commit
+2. **Finish with `grove done <tag>`** (through the lock command in "Lane delete command" above, after 22:00), not manual `git worktree remove`. Commit
    or stash everything first — `done` refuses on any dirty state (including
    untracked files) unless you pass `--force`, and **agents must never pass
    `--force`**. If `done` refuses, that is a signal to actually finish or clean
