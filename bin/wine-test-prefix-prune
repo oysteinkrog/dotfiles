@@ -1,26 +1,194 @@
 #!/usr/bin/env bash
-# wine-test-prefix-prune: remove the Wine test prefixes that run-tests.sh made and nobody uses.
+# wine-test-prefix-prune: remove Wine test prefixes (motioncatalyst-tests-*) that nobody uses.
 #
-# Runs once a day from wine-test-prefix-prune.timer. It runs the copy of
-# tools/wine/prune-test-prefixes.sh on monorepo master (if/master), so the rules for what is
-# kept stay in the monorepo: a prefix whose lock a run holds, one a process uses, and one
-# changed in the last 3 days are all kept. Extra arguments are passed on; without --dry-run
-# it deletes.
-set -euo pipefail
+#   wine-test-prefix-prune [--dry-run] [--min-idle-days N]     (default N = 1)
+#
+# Runs daily at 22:30 from wine-test-prefix-prune.timer. Without --dry-run it deletes, one
+# prefix at a time, each delete under flock /var/tmp/claude/grove-delete.lock with nice 19
+# and ionice idle. A prefix is deleted only if every check passes; anything in doubt stays:
+#   1. no run holds its .lock (run-tests.sh holds it while Wine runs),
+#   2. no process has it as WINEPREFIX (this covers its wineserver),
+#   3. no process has an open file or working directory inside it (lsof),
+#   4. no queued or running jobd job names it (job cwd, lane or argv match),
+#   5. system.reg, user.reg, userdef.reg and .update-timestamp are all at least N days old,
+#   6. it is a real directory directly in the wineprefixes folder, not a link, and not the
+#      shared prefix.
+# Every prefix gets one log line: "removed" or "kept" with the reason. The log goes to the
+# journal and to ~/.local/state/wine-test-prefix-prune/YYYY-MM-DD.log.
+# Leftover .lock files of removed prefixes are deleted too. Temporary copies in
+# .motioncatalyst-tests-copies are not touched (tools/wine/prune-test-prefixes.sh owns them).
+set -uo pipefail
 
-git_dir=$HOME/work/desktop/master/.git
-ref=if/master:tools/wine/prune-test-prefixes.sh
-apply=--apply
-args=()
-for a in "$@"; do
-    case "$a" in
-        --dry-run) apply= ;;
-        *) args+=("$a") ;;
+BASE=$HOME/.local/share/wineprefixes
+SHARED=$BASE/motioncatalyst
+DELLOCK=/var/tmp/claude/grove-delete.lock
+LOGDIR=$HOME/.local/state/wine-test-prefix-prune
+apply=1
+min_days=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) apply=; shift ;;
+        --min-idle-days) min_days=${2:-}; shift 2 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+[[ $min_days =~ ^[0-9]{1,4}$ ]] || { echo "bad --min-idle-days" >&2; exit 2; }
+if [ -n "${WINEPREFIX:-}" ]; then
+    unset WINEPREFIX
+fi
+mkdir -p "$LOGDIR"
+LOG=$LOGDIR/$(date +%F).log
+log() { echo "$*" | tee -a "$LOG"; }
 
-tmp=$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$UID}/wine-test-prefix-prune.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
-git --git-dir="$git_dir" show "$ref" >"$tmp/prune-test-prefixes.sh"
-chmod +x "$tmp/prune-test-prefixes.sh"
-env -u WINEPREFIX "$tmp/prune-test-prefixes.sh" ${apply:+"$apply"} --min-idle-days 3 "${args[@]}"
+last_change() {
+    local newest=0 t f
+    for f in "$1"/system.reg "$1"/user.reg "$1"/userdef.reg "$1"/.update-timestamp; do
+        [ -e "$f" ] || continue
+        t=$(stat -c %Y "$f") || continue
+        [ "$t" -le "$newest" ] || newest=$t
+    done
+    echo "$newest"
+}
+
+# Pids whose WINEPREFIX is the same directory as $1 (device and inode). This also finds the
+# wineserver of the prefix, since it keeps WINEPREFIX in its environment.
+users_of() {
+    local id rec pid dir
+    id=$(stat -L -c %d:%i "$1" 2>/dev/null) || return 0
+    grep -sazH '^WINEPREFIX=' /proc/[0-9]*/environ 2>/dev/null | while IFS= read -r -d '' rec; do
+        pid=${rec#/proc/}; pid=${pid%%/*}
+        dir=${rec#*:WINEPREFIX=}
+        [[ $dir == /* ]] || continue
+        [ "$(stat -L -c %d:%i "$dir" 2>/dev/null)" != "$id" ] || echo "$pid"
+    done
+    return 0
+}
+
+# One lsof pass over all open files and working directories, saved to a file. A failed lsof
+# makes every prefix stay.
+LSOF_OUT=
+refresh_lsof() {
+    LSOF_OK=1
+    timeout 180 lsof -w -F n >"$LSOF_OUT" 2>/dev/null
+    local rc=$?
+    # lsof exits 1 when some entries could not be read, which is normal for other users.
+    if [ $rc -gt 1 ]; then LSOF_OK=; fi
+}
+open_inside() {
+    [ -n "$LSOF_OK" ] || { echo "lsof failed"; return 0; }
+    grep -m1 -F -- "$1/" "$LSOF_OUT" || true
+}
+
+# Prints the id of a queued or running jobd job that names prefix folder $1, or "queue?" when
+# the queue cannot be read (which keeps the prefix).
+job_for() {
+    python3 -I "$PYJOB" "$1" "$JOBS_JSON"
+}
+
+TMPD=$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$UID}/wtpp.XXXXXX") || exit 1
+trap 'rm -rf "$TMPD"' EXIT
+JOBS_JSON=$TMPD/jobs.json
+PYJOB=$TMPD/jobmatch.py
+LSOF_OUT=$TMPD/lsof.txt
+cat >"$PYJOB" <<'PY'
+import json, os, sys
+name, path = sys.argv[1], sys.argv[2]
+n = name[len("motioncatalyst-tests-"):]
+try:
+    jobs = json.load(open(path))["jobs"]
+except Exception:
+    print("queue?")
+    sys.exit(0)
+for j in jobs:
+    if j.get("state") not in ("waiting", "running", "queued", "held"):
+        continue
+    if name in json.dumps(j):
+        print(j.get("id", "?"))
+        sys.exit(0)
+    cwd = j.get("cwd") or ""
+    lanes = {os.path.basename(cwd), str(j.get("lane") or "")}
+    parts = cwd.split("/")
+    if ".scratch" in parts:
+        i = parts.index(".scratch")
+        if i + 1 < len(parts):
+            lanes.add(parts[i + 1])
+    for lane in lanes:
+        if len(lane) >= 3 and (n == lane or n.startswith(lane)):
+            print(j.get("id", "?"))
+            sys.exit(0)
+PY
+
+if ! timeout 60 job queue >"$JOBS_JSON" 2>/dev/null || ! python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))["jobs"]' "$JOBS_JSON" 2>/dev/null; then
+    log "ABORT: cannot read the jobd queue; nothing is removed."
+    exit 1
+fi
+command -v lsof >/dev/null || { log "ABORT: lsof is not installed; nothing is removed."; exit 1; }
+
+now=$(date +%s)
+limit=$((min_days * 86400))
+removed=0
+kept=0
+log "== $(date -Is) start ${apply:+apply}${apply:-dry-run} min-idle-days=$min_days"
+shopt -s nullglob
+for p in "$BASE"/motioncatalyst-tests-*; do
+    name=${p##*/}
+    case $name in *.lock) continue ;; esac
+    if [ -L "$p" ] || [ ! -d "$p" ]; then
+        log "kept    $name: not a plain directory"; kept=$((kept + 1)); continue
+    fi
+    if [ "$(stat -c %d:%i "$p")" = "$(stat -L -c %d:%i "$SHARED" 2>/dev/null)" ]; then
+        log "kept    $name: is the shared prefix"; kept=$((kept + 1)); continue
+    fi
+    age=$(( now - $(last_change "$p") ))
+    if [ "$age" -lt "$limit" ]; then
+        log "kept    $name: changed $((age / 3600)) h ago, limit $((min_days * 24)) h"; kept=$((kept + 1)); continue
+    fi
+    if [ -L "$p.lock" ]; then
+        log "kept    $name: lock is a link"; kept=$((kept + 1)); continue
+    fi
+    if [ -e "$p.lock" ] && ! ( exec 9>>"$p.lock" && flock -n 9 ) 2>/dev/null; then
+        log "kept    $name: a run holds its lock"; kept=$((kept + 1)); continue
+    fi
+    pids=$(users_of "$p" | paste -sd, -)
+    if [ -n "$pids" ]; then
+        log "kept    $name: WINEPREFIX of pid $pids (wineserver or test host)"; kept=$((kept + 1)); continue
+    fi
+    job=$(job_for "$name")
+    if [ -n "$job" ]; then
+        log "kept    $name: jobd job $job names it or its lane"; kept=$((kept + 1)); continue
+    fi
+    if [ -n "$apply" ] || [ ! -s "$LSOF_OUT" ]; then refresh_lsof; fi
+    open=$(open_inside "$p")
+    if [ -n "$open" ]; then
+        log "kept    $name: open file or cwd: $open"; kept=$((kept + 1)); continue
+    fi
+    if [ -z "$apply" ]; then
+        log "would remove $name (idle $((age / 86400)) d)"; removed=$((removed + 1)); continue
+    fi
+    # Delete under the prefix lock, after a second look, and refresh lsof for the next prefix.
+    (
+        exec 9>>"$p.lock" || exit 3
+        flock -n 9 || exit 4
+        [ -z "$(users_of "$p")" ] || exit 5
+        [ ! -L "$p" ] && [ "$(realpath -e -- "$p")" = "$(realpath -e -- "$BASE")/$name" ] || exit 6
+        [ -z "$(job_for "$name")" ] || exit 7
+        flock -w 1800 "$DELLOCK" nice -n 19 ionice -c3 rm -rf -- "$p" || exit 8
+        rm -f -- "$p.lock"
+    )
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        log "removed $name (idle $((age / 86400)) d)"; removed=$((removed + 1))
+    else
+        log "kept    $name: skipped at delete time (code $rc)"; kept=$((kept + 1))
+    fi
+done
+# Lock files whose prefix is gone.
+if [ -n "$apply" ]; then
+    for l in "$BASE"/motioncatalyst-tests-*.lock; do
+        [ -L "$l" ] && continue
+        [ ! -e "${l%.lock}" ] || continue
+        n=${l##*/}; [ ! -d "$BASE/.motioncatalyst-tests-copies/${n%.lock}" ] || continue
+        flock -n "$l" rm -f -- "$l" 2>/dev/null
+    done
+fi
+log "== done: ${apply:+removed}${apply:-would remove} $removed, kept $kept"
