@@ -1,0 +1,11 @@
+[Unit]
+Description=Budget model run-on-change check (if-admin, scripts/ifb-onchange)
+Documentation=file:///home/oystein/work/if-admin/finance/budget-2027/model/scripts/ifb_onchange.py
+
+[Service]
+Type=oneshot
+Slice=builds.slice
+Nice=10
+WorkingDirectory=/home/oystein/work/if-admin/finance/budget-2027/model
+Environment=PATH=/home/oystein/.local/bin:/home/oystein/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/oystein/work/if-admin/finance/budget-2027/model/scripts/ifb-onchange check --trigger "code change"

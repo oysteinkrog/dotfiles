@@ -1,0 +1,10 @@
+[Unit]
+Description=Budget model run-on-change check every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
