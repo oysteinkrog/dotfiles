@@ -1,0 +1,16 @@
+#!/bin/bash
+# Keeps the shared grove lane ~/work/desktop/managers on the latest monorepo master.
+# The manager sessions read the monorepo from there; nobody commits in it.
+# Fast-forward only. Skips (and says why) when the lane has changes or commits of its own.
+set -u
+lane="$HOME/work/desktop/managers"
+[ -d "$lane" ] || exit 0
+cd "$lane" || exit 1
+git fetch -q if master || { echo "fetch failed"; exit 1; }
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "skip: the managers lane has uncommitted changes"; exit 0
+fi
+if [ "$(git rev-list --count if/master..HEAD)" != 0 ]; then
+  echo "skip: the managers lane has commits that are not on master"; exit 0
+fi
+git merge -q --ff-only if/master && echo "at $(git log -1 --format='%h %cs')"

@@ -1,0 +1,8 @@
+[Unit]
+Description=Keep the shared managers lane on the latest monorepo master
+
+[Service]
+Type=oneshot
+Slice=background.slice
+Nice=10
+ExecStart=%h/.dotfiles/bin/managers-lane-sync
