@@ -357,5 +357,72 @@ check "a placeholder holds the tab while the stand-in shell goes" \
 check "the session gets its old name, space and tab" \
   'grep -q "^run --bg --name cto --label herdr.space=spA --label herdr.tab=tbB --cwd" "$T/hc.log"'
 
+# Regression, home reboot 2026-11-22: the last snapshot ran while hc went down
+# and saved the terminal with no name, space or tab; restore-hc then ran before
+# hc gave the kept terminals their shells. The session must still go back
+# into its old terminal's space and tab under its old name, in place of the
+# stand-in shell.
+setup hc-reboot-race
+mkdir -p "$T/bin"
+sleep 60 & idle=$!; BG+=("$idle")
+cat > "$T/bin/hc" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/hc.log"
+bump() { local c=\$(cat "$T/\$1" 2>/dev/null || echo 0); echo \$((c + 1)) > "$T/\$1"; echo \$((c + 1)); }
+case "\$1 \$2" in
+  "server status") echo "{\"pid\":1,\"uptime_ms\":\$(( \$(bump status) * 2000 ))}" ;;
+  "get t1v")
+    [ -f "$T/gone" ] && { echo '{"error":{"kind":"not_found"}}'; exit 3; }
+    if [ "\$(bump get)" -lt 2 ]; then
+      echo '{"address":"t1v","name":"voice-transcriber","state":"finished","keep":true,"labels":{"herdr.space":"spY"},"foreground":null}'
+    else
+      echo '{"address":"t1v","name":"voice-transcriber","state":"live","keep":true,"labels":{"herdr.space":"spY"},"foreground":{"name":"fish","pid":$idle}}'
+    fi ;;
+  "get "*) echo '{"error":{"kind":"not_found"}}'; exit 3 ;;
+  "rm t1v") [ "\$(bump rm)" -lt 2 ] && exit 4; touch "$T/gone" ;;
+esac
+exit 0
+EOF
+cat > "$T/bin/herdr-app" <<'EOF'
+#!/bin/bash
+echo '{"spaces":[{"id":"spY","tabs":[{"id":"tbY","terminals":[{"terminal":"t1v"}]}]}]}'
+EOF
+chmod +x "$T/bin/hc" "$T/bin/herdr-app"
+entry hc5 "$H/projects/life" null "$OLD"
+f=$(ls "$S/sessions/"hc5@*.json); jq '.hc = {terminal:"t1v", name:null, space:null, tab:null}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+printf 'mux %s\nhc5\n' "$OLD" > "$S/live"
+HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
+  CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
+  CLAUDE_PERSIST_HERDR_APP_BIN=$T/bin/herdr-app \
+  CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
+kill $idle 2>/dev/null
+first_get=$(grep -n '^get ' "$T/hc.log" | head -1 | cut -d: -f1)
+last_status=$(grep -n '^server status' "$T/hc.log" | tail -1 | cut -d: -f1)
+check "it waits for the core to settle before it looks for stand-ins" \
+  '[ -n "$first_get" ] && [ "$last_status" -lt "$first_get" ] && [ "$(cat "$T/status")" -ge 3 ]'
+check "it finds the stand-in by its saved address and uses its name, space and tab" \
+  'grep -q "^run --bg --name voice-transcriber --label herdr.space=spY --label herdr.tab=tbY --cwd .* -- bash .*/hc-run/hc5.sh" "$T/hc.log"'
+steps=$(grep -oE '^(run --bg --name voice-transcriber-hold|kill t1v|rm t1v|run --bg --name voice-transcriber |kill voice-transcriber-hold|rm voice-transcriber-hold)' "$T/hc.log" | tr '\n' '|')
+check "it waits until the stand-in is gone before it takes its name" \
+  '[ "$steps" = "run --bg --name voice-transcriber-hold|kill t1v|rm t1v|rm t1v|run --bg --name voice-transcriber |kill voice-transcriber-hold|rm voice-transcriber-hold|" ]'
+check "the log says the stand-in went" 'grep -q "removed stand-in shell t1v" "$S/restore.log"'
+
+# hc_info: a failed lookup (hc prints its error as JSON on stdout) returns 1,
+# so the snapshot keeps the saved terminal instead of overwriting it with nulls.
+setup hc-info-fail
+mkdir -p "$T/bin"
+printf '#!/bin/bash\necho %s; exit 5\n' "'{\"error\":{\"kind\":\"unavailable\"}}'" > "$T/bin/hc-down"
+printf '#!/bin/bash\necho %s\n' "'{\"address\":\"t7\",\"name\":\"cto\",\"labels\":{\"herdr.space\":\"spA\",\"herdr.tab\":\"tbA\"}}'" > "$T/bin/hc-up"
+chmod +x "$T/bin/hc-down" "$T/bin/hc-up"
+env HC_TERMINAL_ID=t7 sleep 30 & tp=$!; BG+=("$tp")
+sleep 0.2
+down=$( (CLAUDE_PERSIST_HC_BIN=$T/bin/hc-down; source "$T/hooks/claude-persist.sh"; hc_info "$tp"; echo "rc=$?") )
+up=$( (CLAUDE_PERSIST_HC_BIN=$T/bin/hc-up; source "$T/hooks/claude-persist.sh"; hc_info "$tp"; echo "rc=$?") )
+kill $tp 2>/dev/null
+check "hc_info fails when hc does not answer" 'printf "%s\n" "$down" | grep -q "rc=1"'
+check "hc_info reads name, space and tab when hc answers" \
+  'printf "%s\n" "$up" | grep -q "\"name\":\"cto\",\"space\":\"spA\",\"tab\":\"tbA\"" && printf "%s\n" "$up" | grep -q "rc=0"'
+check "the snapshot skips a failed lookup" 'grep -qF "hinfo=\$(hc_info \"\$epid\") || continue" "$T/hooks/claude-persist.sh"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
