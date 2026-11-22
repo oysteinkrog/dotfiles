@@ -1,0 +1,9 @@
+[Unit]
+Description=Budget model run-on-change daily check at 06:40
+
+[Timer]
+OnCalendar=*-*-* 06:40
+Persistent=true
+
+[Install]
+WantedBy=timers.target

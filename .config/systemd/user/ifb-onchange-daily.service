@@ -1,0 +1,14 @@
+[Unit]
+Description=Budget model run-on-change daily check (if-admin, scripts/ifb-onchange; no data pull)
+Documentation=file:///home/oystein/work/if-admin/finance/budget-2027/model/scripts/ifb_onchange.py
+
+# Option A (lead, 23 Nov 2026): no unattended `ifb snapshot` pull and no tracked writes.
+# This only runs the check, so a manual snapshot is tested within a day even if the 30-minute
+# timer is off. A no-write fetch that compares content hashes is a follow-up (AFTER-9-DEC.md).
+[Service]
+Type=oneshot
+Slice=builds.slice
+Nice=10
+WorkingDirectory=/home/oystein/work/if-admin/finance/budget-2027/model
+Environment=PATH=/home/oystein/.local/bin:/home/oystein/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/oystein/work/if-admin/finance/budget-2027/model/scripts/ifb-onchange check --trigger "daily check"
