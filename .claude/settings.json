@@ -144,6 +144,11 @@
             "type": "command",
             "command": "bash ~/.claude/hooks/claude-persist.sh hook-start",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/agent-definition.sh",
+            "timeout": 5
           }
         ]
       }
