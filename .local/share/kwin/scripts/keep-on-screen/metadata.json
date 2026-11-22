@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "keep-on-screen",
+        "Name": "Keep on screen",
+        "Description": "Move notification popups, OSDs and stranded windows back inside a monitor when the screen size changes.",
+        "Version": "1.0",
+        "License": "MIT",
+        "EnabledByDefault": false
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "KWin/Script"
+}

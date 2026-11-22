@@ -224,6 +224,7 @@ if [ -n "$native_linux" ]; then
     '.config/systemd/user/app-chrome\x2dpersonal@.service.d'
     '.config/systemd/user/app-org.fooyin.fooyin@.service.d'
     .local/share/kwin/scripts/pin-to-monitor
+    .local/share/kwin/scripts/keep-on-screen
     .local/share/plasma/plasmoids/org.oysteinkrog.agenda
     .local/share/plasma/plasmoids/org.oysteinkrog.buildqueue
     .local/share/applications/org.wezfurlong.wezterm.desktop
