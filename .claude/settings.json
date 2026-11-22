@@ -11,7 +11,8 @@
     "CLAUDE_CODE_TMPDIR": "/var/tmp/claude",
     "MSBUILDDISABLENODEREUSE": "1",
     "CLAUDE_CODE_TETHER_LIVE": "0",
-    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h",
+    "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1"
   },
   "permissions": {
     "defaultMode": "auto"
