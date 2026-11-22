@@ -174,14 +174,14 @@ class SubagentCache:
                 continue
             held = self.state.get(path)
             if held is None or held[0] != mtime:
-                desc = None
                 try:
                     with open(path) as f:
                         meta = json.load(f)
-                    if isinstance(meta, dict) and isinstance(meta.get("description"), str):
-                        desc = meta["description"].strip() or None
                 except (OSError, ValueError):
-                    pass
+                    continue  # not cached: read it again next pass
+                desc = None
+                if isinstance(meta, dict) and isinstance(meta.get("description"), str):
+                    desc = meta["description"].strip() or None
                 held = (mtime, desc)
                 self.state[path] = held
             if held[1]:
