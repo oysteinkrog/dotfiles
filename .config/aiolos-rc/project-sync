@@ -8,9 +8,11 @@ an `hc events` change:
 - sightings: session id -> (space id, tab id, terminal) on this machine, for
   Claude Code sessions (claude-persist snapshots) and running Codex
   processes (their HC_TERMINAL_ID and open rollout file);
-- names: the current names of spaces, tabs and terminals (herdr-app ls) and
+- names: the current names of spaces, tabs and terminals (herdr-app ls),
   of sessions (the newest /rename title in the transcript, else the
-  snapshot's name).
+  snapshot's name), and of each Claude session's subagents (the
+  description in subagents/agent-<id>.meta.json; only those metadata
+  files are read, never a subagent transcript).
 
 aiolos keeps one sighting per session and 5-minute bucket, and resolves
 names when a report runs, so renames and moves show correctly. A session
@@ -153,6 +155,41 @@ def herdr_layout():
     return where, names
 
 
+class SubagentCache:
+    """Subagent descriptions per session, from the agent-<id>.meta.json files
+    Claude Code writes next to the transcript. A file is read again only when
+    its mtime changes."""
+
+    def __init__(self):
+        self.state = {}  # path -> (mtime, description or None)
+
+    def names(self, session_dir):
+        """(agent id, description, mtime in ms) for each subagent of the
+        session whose transcript directory is `session_dir`."""
+        out = []
+        for path in glob.glob(os.path.join(session_dir, "subagents", "agent-*.meta.json")):
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            held = self.state.get(path)
+            if held is None or held[0] != mtime:
+                try:
+                    with open(path) as f:
+                        meta = json.load(f)
+                except (OSError, ValueError):
+                    continue  # not cached: read it again next pass
+                desc = None
+                if isinstance(meta, dict) and isinstance(meta.get("description"), str):
+                    desc = meta["description"].strip() or None
+                held = (mtime, desc)
+                self.state[path] = held
+            if held[1]:
+                aid = os.path.basename(path)[len("agent-") : -len(".meta.json")]
+                out.append((aid, held[1], int(mtime * 1000)))
+        return out
+
+
 class TitleCache:
     """Newest /rename title per transcript, reading only new bytes each time."""
 
@@ -225,7 +262,7 @@ def recently_written(path):
         return False
 
 
-def claude_sessions(where, titles, cutoff_s):
+def claude_sessions(where, titles, subagents, cutoff_s):
     """Sightings and session names from claude-persist snapshots.
 
     A live session is placed by the current layout (`where`), and skipped
@@ -277,6 +314,10 @@ def claude_sessions(where, titles, cutoff_s):
             names.append(("session", sid, name, seen))
         if terminal and hc.get("name"):
             names.append(("terminal", terminal, hc["name"], seen))
+        if snap.get("transcript"):
+            session_dir = snap["transcript"][: -len(".jsonl")]
+            for aid, desc, at in subagents.names(session_dir):
+                names.append(("subagent", aid, desc, at))
     return sightings, names
 
 
@@ -326,10 +367,10 @@ def codex_sessions(where):
     return sightings
 
 
-def collect(titles, cutoff_s):
+def collect(titles, subagents, cutoff_s):
     layout = herdr_layout()
     where, layout_names = layout if layout else (None, [])
-    sightings, session_names = claude_sessions(where, titles, cutoff_s)
+    sightings, session_names = claude_sessions(where, titles, subagents, cutoff_s)
     # The server keeps the newest sighting per session and 5-minute bucket,
     # so every distinct sighting goes up, oldest first.
     sightings = sorted(sightings + codex_sessions(where), key=lambda s: s["seen_at"])
@@ -398,10 +439,10 @@ def public(sightings):
     return [{k: v for k, v in s.items() if not k.startswith("_")} for s in sightings]
 
 
-def sync(url, key, titles, cutoff_s, memo, dry_run=False):
+def sync(url, key, titles, subagents, cutoff_s, memo, dry_run=False):
     """Post one pass. Raises on any failed post, so the caller knows the
     pass is incomplete; then nothing is marked as posted."""
-    sightings, names = memo.filter(*collect(titles, cutoff_s))
+    sightings, names = memo.filter(*collect(titles, subagents, cutoff_s))
     if dry_run:
         print(
             json.dumps(
@@ -474,9 +515,10 @@ def main():
     # else this job starts never sees it.
     key = os.environ.pop("AIOLOS_API_KEY", "")
     titles = TitleCache()
+    subagents = SubagentCache()
     memo = Memo()
     if args.dry_run:
-        sync("", "", titles, time.time() - MAX_AGE_S, memo, dry_run=True)
+        sync("", "", titles, subagents, time.time() - MAX_AGE_S, memo, dry_run=True)
         return
     url = os.environ.get("AIOLOS_URL", "").rstrip("/")
     if not url:
@@ -492,13 +534,13 @@ def main():
     # a day unless their session is still live.
     cutoff = time.time() - MAX_AGE_S
     if args.once:
-        sync(url, key, titles, cutoff, memo)
+        sync(url, key, titles, subagents, cutoff, memo)
         return
     trigger = queue.Queue()
     threading.Thread(target=watch_events, args=(trigger,), daemon=True).start()
     while True:
         try:
-            sync(url, key, titles, cutoff, memo)
+            sync(url, key, titles, subagents, cutoff, memo)
             cutoff = time.time() - 86400
         except Exception as e:  # keep running; the next pass retries
             log(f"pass failed: {type(e).__name__}: {getattr(e, 'reason', e)}")
