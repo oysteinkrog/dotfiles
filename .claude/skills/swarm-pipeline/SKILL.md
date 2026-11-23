@@ -149,9 +149,10 @@ Each agent prompt MUST include:
 Use Astra oracles (`codex exec` on `gpt-6.2-astra` via `/swarm-oracle`, effort `medium`,
 one bounded prompt per run) for adversarial review at decision points. Every review
 and verify stage also runs as bounded Astra runs (see `/consult-oracles`, Bounded Astra
-run; at most 4 at once). Add a Fable pair (fresh `Agent` subagents) for a security
-review or a contested call, and as the fallback when Codex fails; Opus is the last
-fallback. Implementation and fix-applying agents stay on Claude. Oracles challenge
+run; at most 4 at once). An oracle round on a design or plan also gets one neutral
+Gemini 4 Neon run (PAL) for a second view; review, verify, bead and security stages
+stay Astra alone. Fable (fresh `Agent` subagents) breaks ties when Astra and Neon
+disagree, and is the fallback when Codex or Neon fails; Opus is the last fallback. Implementation and fix-applying agents stay on Claude. Oracles challenge
 assumptions; review lanes cover breadth.
 
 ### Oracles vs More Agents
@@ -318,7 +319,7 @@ wizard flow, data model, integration, terminology, a11y, VM architecture.
 **Output:** Synthesize designs into plan → `foundation/product/features/`.
 
 ## Phase 4: Oracle Validation
-**Use:** `/swarm-oracle` | **Team:** 2 GPT-6.2 Astra (FOR + AGAINST); add 2 Fable if security or contested
+**Use:** `/swarm-oracle` | **Team:** 2 GPT-6.2 Astra (FOR + AGAINST) plus 1 Gemini 4 Neon (neutral); 1 Fable if Astra and Neon disagree
 
 Two rounds: (1) UX + interaction design, (2) architecture + data model.
 Apply corrections before proceeding.
@@ -482,12 +483,12 @@ Never auto-advance without confirmation.
 |-------|--------|-------|
 | Research (2 rounds) | 20 | Opus |
 | Design | 10 | Opus |
-| Oracle (2 rounds) | 4 | Astra (+ Fable if contested) |
+| Oracle (2 rounds) | 6 | Astra + Neon (+ Fable tiebreak) |
 | Planning | 20 | Opus |
 | Review (2 rounds) | 16 | Astra |
 | Bead creation | 6 | Opus |
 | Hardening (4 rounds) | 30 | Astra (review, verify) + Sonnet (fixes) |
-| Oracle (2 rounds) | 4 | Astra (+ Fable if contested) |
+| Oracle (2 rounds) | 4 | Astra (bead check, no Neon) |
 | Final pass | 4 + 1 | Astra |
 | **Total** | **~115** | |
 

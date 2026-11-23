@@ -1,18 +1,34 @@
 ---
 name: consult-oracles
-description: Consult GPT-6.2 Astra (primary oracle and default reviewer, Codex CLI at effort medium, one bounded prompt) for expert second opinions. Add Fable only for security reviews or contested questions, or when Astra is unavailable. Use Opus when both fail. Gemini 4 Neon (via PAL) is the optional third oracle and Gemini 4 Carbon the rare fourth (ultra) oracle; both run through Vertex AI. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
+description: Consult oracles for expert second opinions. Decision consults (design choices, tricky root causes, "which approach?", plans, research questions) ask two oracles in parallel by default, GPT-6.2 Astra (Codex CLI, effort medium, one bounded prompt) and Gemini 4 Neon (PAL on Vertex AI, capped at $250 a month), and Fable breaks ties when they disagree. Reviews (PR, security, bead or plan verify) stay Astra alone. Fable is the fallback when Astra or Neon is unavailable, then Opus. Gemini 4 Carbon is the rare fourth (ultra) oracle, only on request. Use for complex decisions, architecture choices, debugging hard problems, or when user says "consult oracles", "ask the experts", or wants a second opinion.
 argument-hint: "[--effort low|medium|high|xhigh|max|ultra] <question>"
 context: fork
 ---
 
 # Consult Oracles Skill
 
-Get expert analysis by consulting AI models. **GPT-6.2 Astra (`gpt-6.2-astra`, reached
-through the Codex CLI at effort `medium`) is the primary oracle and the default
-choice, used on its own.** Fable 5.2 (`claude-fable-5-2`, a fresh subagent spawned
-with the `Agent` tool and `model: "fable"`, which resolves to 5.2) is the secondary oracle: add it for security reviews and contested
-calls (Astra's answer looks wrong, or two oracles disagree), or use it when Codex
-fails. Opus is the last fallback when both fail.
+Get expert analysis by consulting AI models. There are two default shapes:
+
+- **Decision consults ask two oracles in parallel:** GPT-6.2 Astra
+  (`gpt-6.2-astra`, Codex CLI at effort `medium`) and Gemini 4 Neon
+  (`gemini-4-neon`, PAL on Vertex AI). Both get the same short, self-contained
+  brief. A decision consult is a design choice, the root cause of a tricky bug, a
+  "which approach?" question, a plan, a research question, or anything where a new
+  idea or a second view matters.
+- **Reviews use Astra alone:** PR review, security review, bead or plan polish
+  verify. Add Neon to a review only when judging English text or a design matters:
+  docs, user-facing text, plain-language reviews, plan or PRD reviews. Never add
+  Neon to a security review.
+
+Fable 5.2 (`claude-fable-5-2`, a fresh subagent spawned with the `Agent` tool and
+`model: "fable"`, which resolves to 5.2) is the **tiebreaker**: consult it when
+Astra and Neon disagree on something that matters. It is also the fallback when
+Astra or Neon is unavailable. Opus is the last fallback.
+
+Why two oracles (Oystein, 2026-11-23): the oracles are there to give a different
+view, not only a stronger model. Astra and Neon come from different providers and
+reason differently, so two of them find more than one. Fable is no longer added
+just because a decision is high-stakes; it breaks ties.
 
 Why Astra first (Oystein, 2026-10-24, widened to all reviews on 2026-10-28): the
 three OpenAI accounts ended the week at about 26% to 31% with reset credits unused,
@@ -25,6 +41,13 @@ prompt of about 60k tokens with the excerpts pasted in, runs from an empty direc
 with its shell tools off, and at most 4 runs go at once. Go back to Fable first only
 when every routable OpenAI account is past 70% of its week (Oystein, 2026-11-09: aiolos
 fills one account before the next).
+
+Neon budget (2026-11-23): Neon is paid per use on Vertex AI, about $0.20 for a
+typical 40k-token call ($3 in and $15 out per 1M tokens). The "Gemini oracles
+(Vertex AI)" budget is $250 a month. At the cap the `gemini-budget-stop` function
+turns off billing and Neon calls fail; then use Astra plus Fable. Keep Neon briefs
+bounded like Astra's (about 60k tokens at most, never a whole repo), and never call
+Neon in a loop from an automated pipeline.
 
 ## Arguments
 
@@ -44,36 +67,38 @@ for one high-stakes question, and say why.
 
 | Oracle | How to reach | When to Use |
 |--------|--------------|-------------|
-| **GPT-6.2 Astra** (`gpt-6.2-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default: every oracle consultation, second opinion and PR, plan, bead or code review.** Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
-| **Fable 5.2** (`claude-fable-5-2`) | Fresh subagent via `Agent` tool with `model: "fable"` (the alias resolves to 5.2; checked 2026-11-09) | Secondary oracle. Add it for security reviews and contested calls (Astra looks wrong, or two oracles disagree), or use it when Codex fails |
-| Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable and Astra both fail. Substitute oracle, flagged in the synthesis |
+| **GPT-6.2 Astra** (`gpt-6.2-astra`) | Codex CLI, always the bounded command under "Bounded Astra run" (empty folder, `--disable shell_tool --disable unified_exec --disable code_mode_host`, prompt on stdin). A PreToolUse hook (`astra-guard.py`) blocks Astra with the shell tool on | **Default for every consult and every review.** In a decision consult it runs beside Neon; in a review it runs alone. Effort `medium`, one bounded prompt (see Bounded Astra run). Not reachable via PAL. Pass the explicit tier ID; do not rely on the bare `gpt-6` alias |
+| **Fable 5.2** (`claude-fable-5-2`) | Fresh subagent via `Agent` tool with `model: "fable"` (the alias resolves to 5.2; checked 2026-11-09) | Tiebreaker when Astra and Neon disagree on something that matters. Fallback when Astra or Neon is unavailable |
+| Opus (fallback) | Fresh subagent via `Agent` tool with `model: "opus"` | Only when Fable also fails. Substitute oracle, flagged in the synthesis |
 | `gpt-5.5-pro` | `mcp__pal__chat` | When PAL's structured flow (consensus, continuations) is wanted and a GPT view is needed |
 | `gpt-6.2-sol` / `gpt-6.1-terra` | Codex CLI | Rarely; a faster GPT probe (Sol for code, Terra for images and computer use) |
-| **Gemini 4 Neon** (`gemini-4-neon`, released 2026-11-18) | `mcp__pal__chat` with `model: "gemini-4-neon"` | Optional third oracle from Google, and the first Gemini choice. $3 in and $15 out per 1M tokens. Runs through Vertex AI (see below) |
-| **Gemini 4 Carbon** (`gemini-4-carbon`, released 2026-11-10) | `mcp__pal__chat` with `model: "gemini-4-carbon"` | Fourth oracle, the "ultra" option: Google's top Gemini 4 tier. Use it rarely, only for the hardest or most contested calls where the other three have not settled it. $2 in and $10 out per 1M tokens, but long thinking at `max` makes each call large. Runs through Vertex AI |
+| **Gemini 4 Neon** (`gemini-4-neon`, released 2026-11-18) | `mcp__pal__chat` with `model: "gemini-4-neon"` | **Default second oracle in every decision consult**, run in parallel with Astra. In reviews only for English text or design (docs, user-facing text, plain-language, plan or PRD reviews), never for security. $3 in and $15 out per 1M tokens, capped at $250 a month. Runs through Vertex AI (see below) |
+| **Gemini 4 Carbon** (`gemini-4-carbon`, released 2026-11-10) | `mcp__pal__chat` with `model: "gemini-4-carbon"` | Fourth oracle, the "ultra" option: Google's top Gemini 4 tier. Use it only when Oystein asks for it. $2 in and $10 out per 1M tokens, but long thinking at `max` makes each call large. Runs through Vertex AI |
 | `gemini-4-argon` | `mcp__pal__chat` | Older Gemini 4 model. Only when a Neon or Carbon call fails on the model itself. Flag the substitution |
 
 **Rules:**
-1. Default to Astra for every oracle consultation and every review. One bounded Astra
-   run at `medium` is the normal shape; no pairing is required. Run at most 4 Astra
-   runs at once. Use `high` only for a high-stakes single question, and say why.
-2. **Add Fable as a second oracle** for a security review, when Astra's answer looks
-   wrong, when two oracles disagree, or when the user asks for a cross-provider
-   opinion. Put the same self-contained question to both and compare. Disagreements
-   between them are the signal.
-3. **Astra availability fallback:** if the Codex call fails (Codex missing, path not
-   trusted, auth error, rate limit, empty output after a real attempt), consult Fable
-   instead and say so in the synthesis. If Fable also fails, fall back to an Opus
-   subagent and say that too. Do not silently downgrade.
-4. **Gemini 4 Neon** is the optional third oracle, a different provider with
-   different training. Add it for high-stakes decisions or when Fable and Astra
-   disagree. **Gemini 4 Carbon** is the fourth, last-resort oracle: use it only when
-   the first three disagree on a high-stakes call, or when the user asks for it.
-5. Anthropic (Fable, Opus), OpenAI (Astra through Codex) and Google (Gemini through
+1. **Decision consults ask Astra and Neon in parallel**, with the same
+   self-contained brief, in one message. If they agree, act. Run at most 4 Astra
+   runs at once. Use Astra `high` only for one high-stakes question, and say why.
+2. **Reviews use Astra alone**: one bounded run at `medium`. Add Neon only for
+   reviews of English text or a design (docs, user-facing text, plain-language, plan
+   or PRD reviews). Never add Neon to a security review.
+3. **Fable breaks ties.** When Astra and Neon disagree on something that matters,
+   send Fable the brief and both answers in one short consult. Fable is no longer
+   added just because a call is high-stakes.
+4. **Fallbacks:** if the Codex call fails (Codex missing, path not trusted, auth
+   error, rate limit, empty output after a real attempt), or a Neon call fails
+   (auth, budget cap reached, model error), consult Fable in its place and say so
+   in the synthesis. If Fable also fails, use an Opus subagent and say that too. Do
+   not silently downgrade. When every routable OpenAI account is past 70% of its
+   week, Fable takes Astra's place.
+5. **Gemini 4 Carbon** is the rare fourth ("ultra") oracle. Use it only when
+   Oystein asks for it.
+6. Anthropic (Fable, Opus), OpenAI (Astra through Codex) and Google (Gemini through
    PAL) are all approved providers, so proprietary code can go to any of these
    oracles without asking first. Any other provider reached through PAL still needs
    approval.
-6. **Keep the cost rules.** Short briefs. Paste the needed excerpts in; do not let an
+7. **Keep the cost rules.** Short briefs. Paste the needed excerpts in; do not let an
    oracle explore the repo. Review only the change delta. One review per
    change: a backport or cherry-pick with the same `git patch-id --stable` as an
    already reviewed commit gets no second review.
@@ -138,7 +163,7 @@ rejected `none` and `minimal`):
 - `ultra`: fans out subagents and burns plan quota fast. Only when Oystein asks for
   it and the question splits into independent sub-analyses.
 
-### Secondary Consultation (Fable)
+### Tiebreaker and Fallback Consultation (Fable)
 
 Fable is not available via PAL. Consult it by spawning a fresh subagent with a clean
 context. The fresh context is the point: it gives an independent read, not an echo of
@@ -152,36 +177,41 @@ Agent with:
   prior context beyond what is in this prompt.
 
   <the same self-contained question, following the Question Formulation template
-  below, with the files to read named>"
+  below, with the files to read named>
+
+  <as tiebreaker: both oracle answers, labelled, and the point they disagree on>"
 ```
 
 Name the files it should read; an open-ended "look around the repo" brief is slow
 and expensive. If Fable also fails, run the same prompt on an Opus subagent
 (`model: "opus"`) and flag it in the synthesis.
 
-### Both Oracles (security review or contested call)
+### Decision Consult (Astra and Neon in parallel)
 
-Run them in parallel: a single message with two tool calls.
+Run them in parallel: a single message with two tool calls and the same brief.
 
 ```
-Bash with:                             Agent with:
-cd /var/tmp/claude/<task>/astra-empty  - subagent_type: "general-purpose"
-codex exec -m gpt-6.2-astra \            - model: "fable"
-  -c model_reasoning_effort=medium \   - prompt: "<same question>"
-  --disable shell_tool \
-  --disable unified_exec \
+Bash with:                             mcp__pal__chat with:
+cd /var/tmp/claude/<task>/astra-empty  - prompt: "<same brief, same excerpts>"
+codex exec -m gpt-6.2-astra \            - model: "gemini-4-neon"
+  -c model_reasoning_effort=medium \   - working_directory_absolute_path:
+  --disable shell_tool \                   "<repository root>"
+  --disable unified_exec \             - thinking_mode: "max"
   --disable code_mode_host \
   --skip-git-repo-check \
   -o <scratchpad>/oracle-astra.md \
   - < <scratchpad>/astra-prompt.md 2>/dev/null
 ```
 
-### Third and Fourth Oracles (Gemini 4 Neon and Carbon)
+Paste the excerpts into the Neon prompt too, and do not ask Neon to read files, so
+its input stays bounded like Astra's.
+
+### Gemini 4 Neon and Carbon (PAL)
 
 PAL sends Gemini calls through Vertex AI (Cloud project `gen-lang-client-0138044607`, billed after use) with Application Default Credentials. If a call fails with an auth or reauthentication error, ask Oystein to run `gcloud auth application-default login` (the old AI Studio key has no prepaid credit and returns 402; set up 2026-11-20).
-Consult Neon for a third provider's view, when Fable and Astra disagree, or for
-bug hunting and deep code analysis. Use Carbon (`model: "gemini-4-carbon"`) the same way,
-but only as the fourth oracle for the hardest calls:
+Neon is the default second oracle in decision consults (see above). Use Carbon
+(`model: "gemini-4-carbon"`) the same way, but only as the fourth oracle when
+Oystein asks for it:
 
 ```
 mcp__pal__chat with:
@@ -246,72 +276,79 @@ the whole module.
 
 ## Handling Responses
 
-### Astra Only (the normal case)
+### Astra Alone (reviews)
 
-Trust Astra's response unless:
+Trust Astra's review unless:
 - The reasoning seems flawed or looks wrong
 - Important constraints were missed
 - The answer contradicts well-established patterns
 - The answer cites none of the pasted excerpts
-- The question is a security review, which gets a Fable cross-check
 
-### Astra + Fable
+If one of these holds, send the same brief to Fable as a cross-check.
 
-When they agree, that convergence is strong evidence. Proceed.
-When they disagree, do NOT silently pick one:
+### Astra + Neon (decision consults)
+
+When they agree, that convergence is strong evidence. Act on it.
+When they disagree on something that matters, do NOT silently pick one:
 - Weigh concrete evidence (references, reproducible reasoning) over confidence
-- Consider sending each oracle the other's argument for a rebuttal round
+- Ask Fable to break the tie: one short consult with the brief, both answers and
+  the point in dispute
+- If Fable does not settle it, consider a rebuttal round
   (`codex exec resume <session-id> "<rebuttal>"` keeps Astra's context, and the
-  session id is in the run header; `SendMessage` to the Fable subagent keeps its)
-- Surface the disagreement to the user if the decision is high-stakes
+  session id is in the run header; PAL's `continuation_id` keeps Neon's), then take
+  it to Oystein if they still disagree
+- A difference in emphasis that does not change the decision is not a
+  disagreement. Note it and act
 
-### Synthesis Template (When Using Both)
+### Synthesis Template (Decision Consult)
 
 ```
 ## Oracle Consultation Results
 
-### GPT-6.2 Astra Analysis (Primary: name the effort, e.g. at medium)
+### GPT-6.2 Astra Analysis (name the effort, e.g. at medium)
 <summary of Astra response>
 
-### Fable Analysis (Secondary)
+### Gemini 4 Neon Analysis
+<summary of Neon response>
+
+### Fable Tiebreak (only if they disagreed)
 <summary of Fable response>
 
 ### Decision
 <recommendation, grounded in whichever reasoning held up>
 
 <If the oracles disagreed>
-Disagreement: Astra suggested <X>, Fable suggested <Y>.
-Resolution: <which was chosen and the evidence that decided it>.
+Disagreement: Astra suggested <X>, Neon suggested <Y>.
+Resolution: <which was chosen, Fable's view, and the evidence that decided it>.
 ```
 
 ## Example Use Cases
 
-### Architecture Decision (Primary: Astra alone)
+### Architecture Decision (Astra + Neon)
 ```
-astra-prompt.md:
+astra-prompt.md (the same text goes to Neon):
   "Independent expert oracle. Should we use WebSockets or SSE for our
    monitoring dashboard? Context: ~1000 concurrent users, 500ms update interval,
    must work through proxies. Excerpts below: src/dashboard/server.rs:1-180 and
    src/dashboard/client.ts:1-120. Provide assessment, recommendation, risks,
    alternatives."
-Run it with the bounded command above at medium.
+Single message: the bounded Astra run at medium and mcp__pal__chat with
+gemini-4-neon. If they disagree on the choice, ask Fable with both answers.
 ```
 
-### Security Review (Astra + Fable)
+### Security Review (Astra alone)
 ```
 User: /consult-oracles Is this token check in <file:lines> bypassable?
 
-Single message, two parallel tool calls:
-1. Bash   the bounded Astra run at medium, excerpts pasted in
-2. Agent  (model: "fable") "<same question, with the files named>"
-Then synthesize with the template above, naming "GPT-6.2 Astra at medium".
+One bounded Astra run at medium, excerpts pasted in. No Neon.
+If Astra's reasoning looks wrong, send the same brief to Fable as a cross-check.
 ```
 
-### Astra Answer Looks Wrong (add Fable)
+### Astra and Neon Disagree
 ```
-Astra says a lock ordering change cannot deadlock, but its reasoning skips a path.
-Send the same brief to Fable as a cross-provider check, then synthesize both.
-Escalate Astra to high only for one high-stakes question, and say why.
+Astra says a lock ordering change cannot deadlock; Neon names a path that can.
+Send Fable the brief, both answers and the disputed path. Act on the answer whose
+reasoning holds up, and say which oracle Fable sided with.
 ```
 
 ## Safety Notes
@@ -319,7 +356,7 @@ Escalate Astra to high only for one high-stakes question, and say why.
 - Proprietary code may go to Anthropic (Fable, Opus), OpenAI (Codex, and GPT models
   through PAL) and Google (Gemini models through PAL) without asking first. Any other
   provider reached through PAL needs approval. Without it, run the consultation on
-  Astra or Fable and say why
+  Astra, Neon or Fable and say why
 - Verify recommendations against project constraints
 - Document which recommendation was chosen and why, including which oracles ran and
   the Astra effort if Astra was used

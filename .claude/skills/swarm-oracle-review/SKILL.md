@@ -24,12 +24,14 @@ argument-hint: "<target: design|plan|beads|architecture> [--rounds N]"
 > and every review lane. Each is one bounded Astra run at effort `medium`: one prompt
 > of about 60k tokens with the diff and needed excerpts pasted in, run from an empty
 > directory with the shell tools off (see `/consult-oracles`, Bounded Astra run). At
-> most 4 Astra runs at once. Fable (fresh `Agent` subagent, `model: "fable"`) is the
-> secondary oracle: add it for a security review or a contested call (Astra looks
-> wrong, or two oracles disagree), and use it in place of Astra when Codex fails
-> (auth error, rate limit, empty output). Opus is the last fallback, only when Astra
-> and Fable both fail. Gemini 4 Neon (third) and Gemini 4 Carbon (fourth, "ultra")
-> are optional extra oracles through PAL (Vertex AI). Why: the OpenAI accounts ended last week at about 26% to 31% with
+> most 4 Astra runs at once. Since 2026-11-23 an oracle round on a design or plan
+> also gets one neutral Gemini 4 Neon run (PAL `chat`, `gemini-4-neon`, Vertex AI),
+> for a second view from a different provider; see `/swarm-oracle`. Review lanes,
+> bead checks and security reviews stay Astra alone, with no Neon. Fable (fresh
+> `Agent` subagent, `model: "fable"`) breaks ties when Astra and Neon disagree on
+> something that matters, and replaces Astra or Neon when that call fails (auth
+> error, rate limit, empty output, Neon budget cap). Opus is the last fallback.
+> Gemini 4 Carbon is the rare fourth ("ultra") oracle, only on request. Why: the OpenAI accounts ended last week at about 26% to 31% with
 > reset credits unused, while four Claude accounts hit 100%. Go back to Fable first only
 > when every routable OpenAI account is past 70% of its week (Oystein, 2026-11-09:
 > aiolos fills one account before the next). Use `high` only for
@@ -59,7 +61,9 @@ then (2) iterative hardening loop until findings converge to near-zero.
 
 Run 2 concurrent oracle sessions:
 - **Default tier:** two bounded Astra runs (`codex exec -m gpt-6.2-astra`, effort `medium`, `-o <scratchpad>/oracle-{for,against}.md`), one FOR stance, one AGAINST stance, made in a single message. See `/swarm-oracle` Step 2 for the exact command and prompts
-- **Cross-provider check / Codex fallback:** two fresh Fable subagents (`Agent`, `model: "fable"`), one FOR, one AGAINST, spawned in a single message. Use them for security reviews or contested calls, and as the whole debate when Codex fails. Opus subagents only when Astra and Fable both fail
+- **Neon (design and plan targets):** one neutral `mcp__pal__chat` call with `model: "gemini-4-neon"` in the same message, with the same prompt and excerpts. Skip it for beads and security targets. See `/swarm-oracle` Step 2
+- **Fable tiebreaker:** one fresh Fable subagent (`Agent`, `model: "fable"`) with all the oracle answers, when Astra and Neon disagree on something that matters
+- **Codex fallback:** two fresh Fable subagents, one FOR, one AGAINST, spawned in a single message, as the whole debate when Codex fails. Opus subagents only when Fable also fails
 - **Alternate route:** PAL MCP `consensus` with 2x GPT-5.5-Pro (FOR + AGAINST) when the structured consensus flow is wanted
 - **Cost rules:** give the oracles the change delta, not the whole artifact history, and validate each change once
 
@@ -97,8 +101,9 @@ valid answer; if you report zero, say why zero would be surprising.
 | 5-6 | Significant problems | Fix all issues, re-validate |
 | <5 | Fundamental issues | Redesign, then re-validate |
 
-Both oracles typically converge on similar scores. If they diverge by >2 points,
-investigate the disagreement — it usually reveals a genuine ambiguity.
+The oracles usually give similar scores. If they differ by more than 2 points,
+look into the disagreement, because it usually shows a real ambiguity. When the
+split is between Astra and Neon, ask the Fable tiebreaker.
 
 ### Apply Corrections
 
@@ -193,7 +198,7 @@ performance impact, data integrity, rollback strategy.
 ## Full Hardening Pipeline Example
 
 ```
-Phase 1: Oracle (2x Astra FOR/AGAINST; add 2x Fable if security or contested)
+Phase 1: Oracle (2x Astra FOR/AGAINST, plus 1x Neon for a design or plan; Fable if they disagree)
   -> Fix CRITICAL/HIGH findings
 Phase 2: Lens Review (6 bounded Astra runs, multi-lens)
   -> Fix all findings

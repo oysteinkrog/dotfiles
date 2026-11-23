@@ -118,7 +118,7 @@ Load `/swarm-oracle` and run its FOR/AGAINST debate on the scorecard. By default
 - **FOR:** score generously and name the strengths.
 - **AGAINST:** score critically and name the gaps.
 
-Add the Fable FOR/AGAINST pair when the result is high-stakes (a score that will be shared or acted on) or when the two Astra scores differ by more than 2 points on any pillar. `/swarm-oracle` owns the invocation, the Fable fallback when Codex fails, and the approval rule for sending proprietary code off the machine.
+A scorecard is a review, so it stays Astra alone, with no Neon run. When the two Astra scores differ by more than 2 points on any pillar, ask one Fable subagent to break the tie on those pillars. `/swarm-oracle` owns the invocation, the Fable fallback when Codex fails, and the approval rule for sending proprietary code off the machine.
 
 Pass your verified inventory analysis as the evaluation input. Use the agent findings, not assumptions.
 

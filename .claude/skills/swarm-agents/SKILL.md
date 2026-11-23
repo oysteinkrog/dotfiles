@@ -57,8 +57,8 @@ overrides. The model table below is a prompt-level convention, not a setting.
 | Lookup, classify, list files, check one fact, format output | `haiku` |
 | Search, grep, read and summarise, explore, mechanical edits, bead work with a clear spec, running builds and tests | `sonnet` |
 | Writing real code, design, hard debugging, synthesis the leader acts on | `opus` |
-| Decision points and tricky analysis | Consult Astra (`codex exec -m gpt-6.2-astra`, effort `medium`) by default with one bounded prompt (see `/consult-oracles`). Add `fable` for security reviews or contested decisions, or when Codex fails. Gemini 4 Neon (third oracle) and Gemini 4 Carbon (fourth, "ultra") via PAL are optional extra oracles |
-| All review and verify work (PR, code, plan, bead, logic, security) | Bounded Codex/Astra runs at effort `medium`, the diff and excerpts pasted in, at most 4 at once. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails, then `opus` |
+| Decision points and tricky analysis (design choices, root causes, "which approach?", plans, research questions) | Ask Astra (`codex exec -m gpt-6.2-astra`, effort `medium`) and Gemini 4 Neon (PAL `chat`, `gemini-4-neon`) in parallel with the same bounded brief (see `/consult-oracles`). If they disagree on something that matters, a short `fable` consult with both answers breaks the tie. `fable` is also the fallback when Codex or Neon fails. Gemini 4 Carbon (fourth, "ultra") only on request |
+| All review and verify work (PR, code, plan, bead, logic, security) | Bounded Codex/Astra runs at effort `medium`, the diff and excerpts pasted in, at most 4 at once. Add Neon only where English text or a design is judged (docs, user-facing text, plain-language, plan or PRD reviews), never to a security review. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails, then `opus` |
 | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
 - Pull the strongest model in for the decision, not for the whole job, and keep its brief small.

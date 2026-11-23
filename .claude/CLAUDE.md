@@ -86,11 +86,11 @@ same gate on anything about to reach a person and hands back findings on failure
   multiple-choice or clarifying question, and for open questions too, so there is a clear
   input affordance.
 - **Ask the oracles before you ask Oystein, and never stall on him.** Oystein, 2026-11-07:
-  when you are unsure about a decision, ask the oracle panel first (Astra, plus Fable for
-  high-stakes or contested calls, as in "Multi-agent work" below). If they all agree, act on
-  that answer, say what you decided and why, and do not ask him. Ask him only when the
-  oracles disagree, when the choice is his by nature (product direction, spending beyond a
-  task's normal cost, anything irreversible or outward-facing that the rules above do not
+  when you are unsure about a decision, ask the oracle panel first (Astra and Neon in
+  parallel, with Fable to break a tie, as in "Multi-agent work" below). If they agree, act
+  on that answer, say what you decided and why, and do not ask him. Ask him only when the
+  oracles still disagree after Fable's tiebreak, when the choice is his by nature (product
+  direction, spending beyond a task's normal cost, anything irreversible or outward-facing that the rules above do not
   already allow), or when he asked to decide it himself. While a question to him is open,
   keep every other line of work moving; never stop all progress to wait for his answer.
 - **A slow loop is a problem to fix, not to wait out.** Oystein, 2026-11-16: when a session
@@ -201,8 +201,8 @@ These rules hold whether or not a skill is loaded:
   | Lookup, classify, list files, check one fact, format output | `haiku` |
   | Search, read and summarise, explore, mechanical edits, builds, tests, UI checks, log scraping | `sonnet` |
   | Writing real code, normal debugging, coordinating lanes, the session's own main thread | `opus` |
-  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?" | Consult Astra (`codex exec -m gpt-6.2-astra`, effort `medium`) by default with a short, self-contained brief and a bounded reading list. Add `fable` for high-stakes or contested decisions, or when Astra is unavailable. Gemini 4 Neon (PAL) is the optional third oracle and Gemini 4 Carbon the rare fourth ("ultra") one; both run through Vertex AI. The answer comes back as text; the lane carries on on its own model |
-  | Review agents: PR review, security review, plan or bead polish review and verify | Codex/Astra at effort `medium`, with the diff and the named files pasted into one prompt of about 60k tokens. Use the bounded command below. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails |
+  | Decision points: design choices, root cause of a tricky bug, risky changes, "which approach?", plans, research questions | Ask two oracles in parallel with the same short, self-contained brief: Astra (`codex exec -m gpt-6.2-astra`, effort `medium`) and Gemini 4 Neon (PAL `chat`, `gemini-4-neon`, Vertex AI). If they agree, act. If they disagree on something that matters, a short `fable` consult with both answers breaks the tie. `fable` is also the fallback when Astra or Neon is unavailable. Gemini 4 Carbon is the rare fourth ("ultra") oracle, only on request. The answer comes back as text; the lane carries on on its own model |
+  | Review agents: PR review, security review, plan or bead polish review and verify | Codex/Astra alone at effort `medium`, with the diff and the named files pasted into one prompt of about 60k tokens. Use the bounded command below. Add Neon only where English text or a design is judged (docs, user-facing text, plain-language, plan or PRD reviews), never to a security review. Fall back to `sonnet` (verify) or `fable` (review) when Codex fails |
   | A whole long-running lane on `fable` | Only for frontier-hard work; say why in the spawn |
 
   **Every Astra call uses the bounded command**, run from an empty folder with the tools off:
@@ -225,6 +225,13 @@ These rules hold whether or not a skill is loaded:
   to Fable first only when every routable OpenAI account is past 70% of its week before
   its reset. aiolos sends all Astra calls to one account until it is used up, so a single
   account past 70% is normal while another still has room (Oystein, 2026-11-09).
+
+  Why Neon beside Astra (Oystein, 2026-11-23): the oracles are there for a second view,
+  and Neon reasons differently from Astra. Neon is paid per use on Vertex AI (about $0.20
+  for a 40k-token call). The "Gemini oracles (Vertex AI)" budget caps it at $250 a month;
+  at the cap `gemini-budget-stop` turns off billing and Neon calls fail, so use Astra plus
+  Fable. Bound Neon briefs like Astra's (about 60k tokens, never a whole repo) and never
+  loop Neon calls in an automated pipeline.
 
   Pull the strongest model in for the decision, not for the whole job, and keep its brief
   small. Do not reintroduce a `CLAUDE_CODE_SUBAGENT_MODEL` env pin: it silently forces one

@@ -1,6 +1,6 @@
 ---
 name: swarm-oracle
-description: Run 2x oracle sessions (FOR + AGAINST stances) to validate design decisions, plans, or bead readiness. Default = two GPT-6.2 Astra runs via Codex CLI (one per stance, one bounded prompt each); add two Fable subagents only for security-sensitive or contested validations, and use them as the fallback when Codex fails. Use after design rounds, before implementation, or to challenge architecture decisions.
+description: Run oracle sessions with FOR + AGAINST stances to validate design decisions, plans, or bead readiness. Default = two GPT-6.2 Astra runs via Codex CLI (one per stance, one bounded prompt each), plus one neutral Gemini 4 Neon run (PAL) for a design or plan. Bead and security checks stay Astra alone. Fable breaks ties when Astra and Neon disagree, and is the fallback when Codex or Neon fails. Use after design rounds, before implementation, or to challenge architecture decisions.
 argument-hint: "<topic or file to evaluate> [--rounds N]"
 ---
 
@@ -10,12 +10,19 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 > primary oracle. The default FOR/AGAINST debate runs as two bounded Astra runs at
 > effort `medium`, one per stance: one prompt of about 60k tokens each, with the diff
 > and the needed excerpts pasted in, run from an empty directory with the shell tools
-> off (see `/consult-oracles`, Bounded Astra run). Astra alone is the normal shape of
-> a validation; no pairing is required.
-> Fable is the **secondary oracle** (fresh `Agent` subagent, `model: "fable"`). Add a
-> Fable FOR/AGAINST pair only when the validation is a security review, when the two
-> Astra stances leave the call contested or one looks wrong, or when the user asks
-> for a cross-provider opinion.
+> off (see `/consult-oracles`, Bounded Astra run).
+>
+> **Neon beside Astra (Oystein, 2026-11-23):** a design or plan validation also gets
+> one neutral **Gemini 4 Neon** run (PAL `chat`, `gemini-4-neon`) with the same
+> evaluation prompt and excerpts. Neon gives a second view from a different provider.
+> Bead readiness and security validations stay Astra alone; do not add Neon to them.
+> Neon costs about $0.20 per 40k-token call and is capped at $250 a month (see
+> `/consult-oracles`, Neon budget). Never loop Neon calls in an automated pipeline.
+>
+> Fable is the **tiebreaker** (fresh `Agent` subagent, `model: "fable"`). Consult it
+> when Astra and Neon disagree on something that matters: scores more than 2 points
+> apart, or a correction one of them calls critical and the other rejects. It is no
+> longer added just because a validation is high-stakes.
 >
 > Why: the three OpenAI accounts ended last week at about 26% to 31% with reset
 > credits unused, while four Claude accounts hit 100%. Go back to Fable first only when
@@ -29,12 +36,13 @@ argument-hint: "<topic or file to evaluate> [--rounds N]"
 >
 > **Availability fallback:** if Codex fails (auth error, rate limit, empty output), run
 > the same FOR/AGAINST debate as two Fable subagents and state the substitution in the
-> verdict. If Fable also fails, use Opus subagents (`model: "opus"`) and say so. Do not
-> silently downgrade.
+> verdict. If Neon fails (auth, budget cap reached), run its neutral assessment on
+> Fable instead and say so. If Fable also fails, use Opus subagents (`model: "opus"`)
+> and say so. Do not silently downgrade.
 >
-> **Gemini 4 Neon** (via PAL, `gemini-4-neon`) is the optional third oracle and
-> **Gemini 4 Carbon** (`gemini-4-carbon`) the rare fourth, "ultra" oracle for the
-> hardest contested calls. Both run through Vertex AI via PAL (set up 2026-11-20).
+> **Gemini 4 Carbon** (`gemini-4-carbon`) is the rare fourth, "ultra" oracle, only
+> when Oystein asks for it. Neon and Carbon run through Vertex AI via PAL (set up
+> 2026-11-20).
 >
 > **Sensitive code:** Anthropic, OpenAI and Google are approved providers. Proprietary
 > material can go to Astra, Fable and the Gemini 4 models without asking first.
@@ -54,7 +62,7 @@ Run a structured FOR/AGAINST debate between two high-capability oracle sessions 
 
 ## Prerequisites
 
-The default Astra tier needs Codex: confirm `codex` is on PATH and logged in. The Fable check needs nothing beyond the `Agent` tool. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user, because agents silently fall back to self-analysis without PAL, producing unreliable results.
+The default Astra tier needs Codex: confirm `codex` is on PATH and logged in. The Neon run needs PAL (see below). The Fable tiebreaker needs nothing beyond the `Agent` tool. For the PAL route: verify PAL MCP is running before launching those oracles. If `mcp__pal__listmodels` fails or returns empty, alert the user, because agents silently fall back to self-analysis without PAL, producing unreliable results.
 
 ## Workflow
 
@@ -109,13 +117,23 @@ forever. The shell tools are off, so Astra answers from the pasted text only. `-
 A stance answer that cites none of the pasted excerpts was given too little: add the
 excerpt and rerun.
 
-Then skip to Step 4 and synthesize the two responses yourself.
+**Neon (design and plan validations):** in the same message as the two Astra runs,
+make one `mcp__pal__chat` call with `model: "gemini-4-neon"`, `thinking_mode: "max"`
+and the same evaluation prompt and pasted excerpts, plus this stance: "Provide an
+independent assessment. Score honestly and name the risks, corrections and
+alternatives the other evaluators may miss." Do not ask Neon to read files. Skip
+Neon for bead readiness and security validations.
 
-**Cross-provider check (Fable):** for security reviews, when the two Astra stances
-leave the call contested or one looks wrong, or when Codex fails (auth error, rate
-limit, empty output), spawn two fresh Fable subagents in one message, one FOR and one
-AGAINST. Each prompt is self-contained; the two subagents share no context. Synthesize
-all four responses, or the two Fable responses when Fable replaces a failed Codex run.
+Then skip to Step 4 and synthesize the responses yourself.
+
+**Fable tiebreaker:** when Astra and Neon disagree on something that matters (scores
+more than 2 points apart, or a critical correction one accepts and the other
+rejects), spawn one fresh Fable subagent with the evaluation prompt, all the oracle
+answers and the disputed points, and ask it to rule on each one.
+
+**Fable fallback:** when Codex fails (auth error, rate limit, empty output), spawn two
+fresh Fable subagents in one message, one FOR and one AGAINST. Each prompt is
+self-contained; the two subagents share no context.
 
 ```
 Agent({ subagent_type: "general-purpose", model: "fable",
@@ -125,10 +143,10 @@ Agent({ subagent_type: "general-purpose", model: "fable",
   prompt: "<evaluation prompt>\n\nStance: Challenge this design. Find weaknesses, missing considerations, contradictions, and risks. Propose specific corrections for each issue found. Score honestly; 'against' does not mean blindly negative." })
 ```
 
-**Gemini 4 Neon:** a Gemini FOR/AGAINST
-pair is two `mcp__pal__chat` calls with `model: "gemini-4-neon"`, `thinking_mode: "max"`
-and the same two stance prompts. Use `gemini-4-carbon` instead only as the fourth
-oracle on the hardest calls.
+**Neon FOR/AGAINST pair:** when a full Gemini debate is wanted, it is two
+`mcp__pal__chat` calls with `model: "gemini-4-neon"`, `thinking_mode: "max"` and the
+same two stance prompts. Use `gemini-4-carbon` instead only when Oystein asks for the
+fourth oracle.
 
 *Alternate route, PAL 2x GPT-Pro* (when the structured consensus flow is wanted;
 PAL tops out at gpt-5.5-pro):
