@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "krdp-blank",
+        "Name": "KRDP blank",
+        "Description": "Hide the krdp-blank black overlay from screencasts, so an RDP client sees the desktop while the local monitors stay black.",
+        "Version": "1.0",
+        "License": "MIT",
+        "EnabledByDefault": false
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "KWin/Script"
+}

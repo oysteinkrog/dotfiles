@@ -22,6 +22,13 @@ the client, and restores the layout. Stopping matters: mstsc reconnects by itsel
 server restart. KRDP starts again once the office keyboard and mouse have been idle for
 HOLD seconds.
 
+Black local monitor: the streamed monitor stays on, because KRDP captures what KWin draws
+on it. So while a client is connected, this runs krdp-blank (~/.dotfiles/misc/krdp-blank,
+built on demand), a black layer-shell surface over every monitor and the lock screen, with
+no input region. Before that it loads the KWin script krdp-blank, which sets
+excludeFromCapture on that surface, so the RDP picture shows the desktop under it. If the
+script cannot be loaded, the overlay is not started: a black RDP picture is worse.
+
 The resize hook and this watcher both change the layout, so they take a lock file first.
 Without it a client reconnecting during a restore left the monitors in remote mode with
 no saved layout (2026-10-17). As a fallback, this keeps the last layout with two or more
@@ -70,8 +77,51 @@ KRDP_DROPIN = (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
                / "systemd/user" / f"{KRDP_UNIT}.d" / "zz-monitor.conf")
 
 
+DOTFILES = Path(__file__).resolve().parent.parent
+BLANK_SRC = DOTFILES / "misc/krdp-blank"
+BLANK_SCRIPT = DOTFILES / ".local/share/kwin/scripts/krdp-blank/contents/code/main.js"
+BLANK_BIN = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "krdp-blank/krdp-blank"
+blank_proc = None
+
+
 def log(msg):
     print(msg, flush=True)
+
+
+def kwin_call(*args):
+    return subprocess.run(["qdbus6", "org.kde.KWin", "/Scripting", *args],
+                          capture_output=True, text=True, timeout=10)
+
+
+def blank_on():
+    """Paint the local monitors black, leaving the RDP picture as it is."""
+    global blank_proc
+    if blank_proc and blank_proc.poll() is None:
+        return
+    newest = max(p.stat().st_mtime for p in BLANK_SRC.iterdir())
+    if not BLANK_BIN.exists() or BLANK_BIN.stat().st_mtime < newest:
+        subprocess.run([str(BLANK_SRC / "build.sh"), str(BLANK_BIN)], check=True,
+                       capture_output=True, timeout=120)
+    if kwin_call("org.kde.kwin.Scripting.isScriptLoaded", "krdp-blank").stdout.strip() != "true":
+        kwin_call("org.kde.kwin.Scripting.loadScript", str(BLANK_SCRIPT), "krdp-blank")
+        kwin_call("org.kde.kwin.Scripting.start")
+        if kwin_call("org.kde.kwin.Scripting.isScriptLoaded", "krdp-blank").stdout.strip() != "true":
+            log("blank: KWin script krdp-blank did not load; leaving the monitors as they are")
+            return
+    log("blank: local monitors black")
+    blank_proc = subprocess.Popen([str(BLANK_BIN)])
+
+
+def blank_off():
+    global blank_proc
+    if blank_proc and blank_proc.poll() is None:
+        log("blank: local monitors back")
+        blank_proc.terminate()
+        try:
+            blank_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            blank_proc.kill()
+    blank_proc = None
 
 
 @contextlib.contextmanager
@@ -334,6 +384,7 @@ def takeover():
 
 def main():
     def stop(*_):
+        blank_off()
         if not connected():
             remote_off()
         sys.exit(0)
@@ -389,6 +440,15 @@ def main():
                 remember_local()
         except Exception as e:  # keep watching; a failed switch retries next poll
             log(f"error: {e}")
+        # Black while a client is connected (past ON_AFTER, which skips failed handshakes)
+        # and through the OFF_AFTER grace for quick reconnects. Never after a takeover:
+        # someone is at the desk.
+        held = time.monotonic() - since
+        want = not TAKEOVER.exists() and ((now and held >= ON_AFTER) or (not now and on and held < OFF_AFTER))
+        try:
+            blank_on() if want else blank_off()
+        except Exception as e:
+            log(f"blank error: {e}")
         time.sleep(POLL)
 
 
