@@ -298,6 +298,7 @@ bin/logs/
 !.claude/skills/clipboard/
 !.claude/skills/close-spec/
 !.claude/skills/cm/
+!.claude/skills/moss-comfyui/
 !.claude/skills/code-review/
 !.claude/skills/codex/
 !.claude/skills/codex-look/

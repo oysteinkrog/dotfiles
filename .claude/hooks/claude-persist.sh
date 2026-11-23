@@ -79,19 +79,32 @@ hc_info() {
   # that too: restore-hc puts the session back in the same space.
   # The tab too, so the session goes back into its named tab: most terminals
   # carry no herdr.tab label, so ask the open herdr window (once per run).
-  local got space tab
-  got=$("$HC_BIN" get "$term" --json 2>/dev/null)
-  name=$(jq -r '.name // empty' <<<"$got" 2>/dev/null)
-  space=$(jq -r '.labels["herdr.space"] // empty' <<<"$got" 2>/dev/null)
-  tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$got" 2>/dev/null)
+  # When hc or the herdr app does not answer, still print the terminal, but
+  # return 1: the snapshot must then keep what it saved before. hc prints its
+  # errors as JSON on stdout, which reads as "no name, no space, no tab". On
+  # 2026-11-22 the last snapshot before a reboot ran while hc went down and
+  # wrote that over 6 of 7 sessions, so restore-hc lost their space and tab.
+  local got space="" tab="" rc=0
+  if got=$("$HC_BIN" get "$term" --json 2>/dev/null) && jq -e '.address' <<<"$got" >/dev/null 2>&1; then
+    name=$(jq -r '.name // empty' <<<"$got" 2>/dev/null)
+    space=$(jq -r '.labels["herdr.space"] // empty' <<<"$got" 2>/dev/null)
+    tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$got" 2>/dev/null)
+  else
+    name="" rc=1
+  fi
   if [ -z "$tab" ] && [ -n "$space" ]; then
     [ -n "${HC_APP_LS+x}" ] || HC_APP_LS=$(timeout 5 "$HERDR_APP_BIN" ls 2>/dev/null || true)
-    tab=$(jq -r --arg t "$term" '[.spaces[]?.tabs[]? | select(any(.terminals[]?; .terminal == $t)) | .id][0] // empty' \
-      <<<"$HC_APP_LS" 2>/dev/null)
+    if jq -e '.spaces' <<<"$HC_APP_LS" >/dev/null 2>&1; then
+      tab=$(jq -r --arg t "$term" '[.spaces[]?.tabs[]? | select(any(.terminals[]?; .terminal == $t)) | .id][0] // empty' \
+        <<<"$HC_APP_LS" 2>/dev/null)
+    else
+      rc=1
+    fi
   fi
   jq -cn --arg t "$term" --arg n "$name" --arg s "$space" --arg b "$tab" \
     '{terminal:$t, name:(if $n == "" then null else $n end), space:(if $s == "" then null else $s end),
       tab:(if $b == "" then null else $b end)}'
+  return $rc
 }
 
 # Did entry $1 run outside the Frankenterm mux? herdr-core sessions come back
@@ -264,6 +277,11 @@ record() {
   [ -n "$hc" ] && pane=""
   mkdir -p "$SESS_DIR"
   local f; f=$(entry_file "$sid" "$cwd")
+  # hc did not answer: keep what was saved for the same terminal (see hc_info).
+  if [ -n "$hc" ] && [ "$(jq -r '[.name, .space, .tab] | all(. == null)' <<<"$hc")" = true ] && [ -f "$f" ] \
+     && [ "$(jq -r '.hc.terminal // empty' "$f" 2>/dev/null)" = "$(jq -r .terminal <<<"$hc")" ]; then
+    hc=$(jq -c '.hc' "$f")
+  fi
   jq -n --arg sid "$sid" --arg cwd "$cwd" --arg transcript "$transcript" --arg name "$name" \
         --argjson pid "$pid" --argjson flags "$flags" --argjson launcher "$launcher" \
         --arg started "$(date -Is)" --arg pane "$pane" --arg hc "$hc" \
@@ -682,7 +700,8 @@ snapshot() {
     [ -e "$f" ] || continue
     epid=$(jq -r '.pid // 0' "$f")
     claude_alive "$epid" "$(jq -r .session_id "$f")" || continue
-    hinfo=$(hc_info "$epid")
+    # A failed lookup must not overwrite the saved terminal (see hc_info).
+    hinfo=$(hc_info "$epid") || continue
     if [ -n "$hinfo" ] && [ "$(jq -c '.hc // empty' "$f")" != "$hinfo" ]; then
       jq --argjson h "$hinfo" '.hc = $h | .pane = null' "$f" > "$f.tmp" && touch -r "$f" "$f.tmp" && mv "$f.tmp" "$f"
     fi
@@ -1192,6 +1211,36 @@ herdr_name() {
   printf '%s' "${n:-agent}"
 }
 
+# The old terminal of a session after a reboot, as `hc get` JSON: by address
+# $1 first, then by name $2. A kept terminal reads as "finished" until the core
+# gives it its shell, so wait up to 5 s for it to come back live.
+hc_standin() {
+  local key got n
+  for key in "$1" "$2"; do
+    [ -n "$key" ] || continue
+    got=$("$HC_BIN" get "$key" --json 2>/dev/null) && jq -e '.address' <<<"$got" >/dev/null 2>&1 || continue
+    n=0
+    while [ "$(jq -r '.state' <<<"$got")" != live ] && [ "$(jq -r '.keep // false' <<<"$got")" = true ] && [ $n -lt 10 ]; do
+      n=$((n + 1)); sleep 0.5
+      got=$("$HC_BIN" get "$key" --json 2>/dev/null) || break
+    done
+    printf '%s\n' "$got"
+    return 0
+  done
+  return 1
+}
+
+# End stand-in terminal $1 and remove it, so its name is free again. `hc kill`
+# returns before the program is gone, and `hc rm` refuses a live terminal.
+hc_remove() {
+  local n=0
+  "$HC_BIN" kill "$1" >/dev/null 2>&1 || return 1
+  until "$HC_BIN" rm "$1" >/dev/null 2>&1; do
+    n=$((n + 1)); [ $n -ge 20 ] && return 1
+    sleep 0.25
+  done
+}
+
 # Resume the sessions that ran in a herdr-core (hc) terminal into new hc
 # terminals on this machine. hc never reruns a program after a reboot, so this
 # does it, with these checks: only sessions whose Claude was
@@ -1206,6 +1255,16 @@ restore_hc() {
   until "$HC_BIN" server status --json 2>/dev/null | jq -e '.pid' >/dev/null 2>&1; do
     n=$((n + 1)); [ $n -ge 60 ] && { echo "hc core not running, giving up"; return 1; }
     sleep 1
+  done
+  # A fresh core gives the kept (parked) terminals their shells about 1.5 s
+  # after it starts; until then they read as "finished". On 2026-11-22 this ran
+  # 1 s too early, missed every stand-in, and put sessions outside their space
+  # or in a new tab beside the old shell. Wait until the core is settled.
+  local settle=${CLAUDE_PERSIST_HC_SETTLE_MS:-5000} up
+  n=0
+  while up=$("$HC_BIN" server status --json 2>/dev/null | jq -r '.uptime_ms // empty' 2>/dev/null) \
+        && [ -n "$up" ] && [ "$up" -lt "$settle" ] && [ $n -lt 30 ]; do
+    n=$((n + 1)); sleep 0.5
   done
   local -A live=()
   local a f sid cwd transcript script name lp space
@@ -1242,8 +1301,10 @@ restore_hc() {
     local was_name="$name"
     name="${name%-"${sid:0:4}"}"
     space=$(jq -r '.hc.space // empty' "$f")
-    local saved_tab
+    local saved_tab saved_term saved_name
     saved_tab=$(jq -r '.hc.tab // empty' "$f")
+    saved_term=$(jq -r '.hc.terminal // empty' "$f")
+    saved_name=$(jq -r '.hc.name // empty' "$f")
     mv "$f" "$STATE_DIR/restored/"
     # hc keeps each old terminal across the reboot as a plain shell under the
     # old name and in the old herdr space (2026-11-18: all 38 sessions came back
@@ -1251,14 +1312,30 @@ restore_hc() {
     # in its old space and tab (herdr.tab, full id: the app adds it to that
     # tab, which keeps its name), and remove the stand-in when it is an idle
     # shell.
-    local old="" fg="" fgpid="" tab="" standin=""
-    # The stand-in has the name the terminal had at the reboot.
-    if old=$("$HC_BIN" get "$was_name" --json 2>/dev/null) && [ "$(jq -r '.state' <<<"$old")" = live ]; then
+    local old="" fg="" fgpid="" tab="" standin="" oldaddr=""
+    # The stand-in is the terminal the session ran in: hc keeps its address
+    # across the reboot. Find it by that address first, by name second (the
+    # saved name can be missing, and a name from the title then misses it).
+    if old=$(hc_standin "$saved_term" "$was_name"); then
+      oldaddr=$(jq -r '.address' <<<"$old")
+      # The name the terminal had, when none was saved.
+      if [ -z "$saved_name" ]; then
+        local oname; oname=$(jq -r '.name // empty' <<<"$old")
+        [ -n "$oname" ] && was_name=$oname name="${oname%-"${sid:0:4}"}"
+      fi
       [ -n "$space" ] || space=$(jq -r '.labels["herdr.space"] // empty' <<<"$old")
-      [ "$(jq -r '.labels["herdr.space"] // empty' <<<"$old")" = "$space" ] && tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$old")
+      if [ "$(jq -r '.labels["herdr.space"] // empty' <<<"$old")" = "$space" ]; then
+        tab=$(jq -r '.labels["herdr.tab"] // empty' <<<"$old")
+        # Most terminals carry no herdr.tab label: ask the herdr app.
+        if [ -z "$tab" ] && [ -z "$saved_tab" ]; then
+          [ -n "${HC_APP_LS+x}" ] || HC_APP_LS=$(timeout 5 "$HERDR_APP_BIN" ls 2>/dev/null || true)
+          tab=$(jq -r --arg t "$oldaddr" '[.spaces[]?.tabs[]? | select(any(.terminals[]?; .terminal == $t)) | .id][0] // empty' \
+            <<<"$HC_APP_LS" 2>/dev/null)
+        fi
+      fi
       fg=$(jq -r '.foreground.name // empty' <<<"$old"); fgpid=$(jq -r '.foreground.pid // empty' <<<"$old")
-      [[ "$fg" =~ ^(fish|bash|zsh|sh)$ ]] && [ -n "$fgpid" ] && [ -z "$(pgrep -P "$fgpid")" ] \
-        && standin=$(jq -r '.address' <<<"$old")
+      [ "$(jq -r '.state' <<<"$old")" = live ] && [[ "$fg" =~ ^(fish|bash|zsh|sh)$ ]] && [ -n "$fgpid" ] \
+        && [ -z "$(pgrep -P "$fgpid")" ] && standin=$oldaddr
     fi
     [ -n "$tab" ] || tab="$saved_tab"
     local -a lbl=()
@@ -1271,8 +1348,11 @@ restore_hc() {
     if [ -n "$standin" ]; then
       hold=$(herdr_name "$name-hold-${sid:0:4}")
       [ -n "$tab" ] && "$HC_BIN" run --bg --name "$hold" "${lbl[@]}" --cwd "$cwd" -- sleep 120 >/dev/null 2>&1 || hold=""
-      "$HC_BIN" kill "$standin" >/dev/null 2>&1 && "$HC_BIN" rm "$standin" >/dev/null 2>&1 \
-        && echo "removed stand-in shell $standin ($was_name)"
+      if hc_remove "$standin"; then
+        echo "removed stand-in shell $standin ($was_name)"
+      else
+        echo "could not remove stand-in shell $standin ($was_name)"
+      fi
     fi
     if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
       echo "resume $sid ($cwd) in hc terminal $name${tab:+ (tab $tab)}"
@@ -1281,7 +1361,7 @@ restore_hc() {
     else
       echo "could not start $sid in hc"
     fi
-    [ -n "$hold" ] && { "$HC_BIN" kill "$hold" >/dev/null 2>&1; "$HC_BIN" rm "$hold" >/dev/null 2>&1; }
+    [ -n "$hold" ] && hc_remove "$hold"
   done
   exec 9>&-
 }
