@@ -251,7 +251,7 @@ def http_json(url: str, headers: dict, body: dict) -> dict:
         return json.loads(resp.read())
 
 
-def ask_member(member: dict, prompt: str, keys: dict) -> dict:
+def ask_member(member: dict, prompt: str, keys: dict, session: str = "") -> dict:
     t0 = time.monotonic()
     try:
         if member["provider"] == "anthropic":
@@ -262,6 +262,10 @@ def ask_member(member: dict, prompt: str, keys: dict) -> dict:
                     "x-api-key": keys["ANTHROPIC_API_KEY"],
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
+                    # aiolos labels the vote with the session's project and this agent
+                    # name, and strips both headers before forwarding.
+                    **({"x-aiolos-session": session} if session else {}),
+                    "x-aiolos-agent": "dcg-panel",
                 },
                 {
                     "model": member["model"],
@@ -313,10 +317,10 @@ def ask_member(member: dict, prompt: str, keys: dict) -> dict:
     }
 
 
-def run_panel(prompt: str) -> tuple[str, list[dict]]:
+def run_panel(prompt: str, session: str = "") -> tuple[str, list[dict]]:
     keys = {k: secret(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY")}
     with concurrent.futures.ThreadPoolExecutor(len(MEMBERS)) as pool:
-        votes = list(pool.map(lambda m: ask_member(m, prompt, keys), MEMBERS))
+        votes = list(pool.map(lambda m: ask_member(m, prompt, keys, session), MEMBERS))
     final = "allow" if all(v["verdict"] == "allow" for v in votes) else "deny"
     return final, votes
 
@@ -335,7 +339,7 @@ def panel_and_log(hook: dict, reason: str, mode: str, dcg_says: str) -> tuple[st
         cmd, cwd, reason, transcript_tail(hook.get("transcript_path", "")), git_status(cwd)
     )
     t0 = time.monotonic()
-    final, votes = run_panel(prompt)
+    final, votes = run_panel(prompt, hook.get("session_id", ""))
     log_line(
         {
             "ts": now_iso(),
