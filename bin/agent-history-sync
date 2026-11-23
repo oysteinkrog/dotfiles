@@ -133,6 +133,7 @@ STORES=(
   "voxtype-history|$HOME/.local/share/voxtype/history/|"
   "claude-throttle|$HOME/.local/state/claude-throttle/|"
   "var-tmp-claude|/var/tmp/claude/claude-$(id -u)/|scratch"
+  "claude-desktop|$HOME/.config/Claude/|"
 )
 
 store_rules() {
@@ -187,6 +188,20 @@ EOF
 + /corrections.jsonl
 + /trace/***
 + /words-learned.toml
+- *
+EOF
+    ;;
+    # Claude Desktop: its session history only, never the app, caches or
+    # credentials. claude-code/ holds only the bundled CLI binary, so it is out.
+    claude-desktop) cat <<'EOF'
+- *token*
+- ant-did
+- Cookies*
++ /local-agent-mode-sessions/***
++ /claude-code-sessions/***
++ /logs/***
++ /git-worktrees.json
++ /ccd-session-presets.json
 - *
 EOF
     ;;
