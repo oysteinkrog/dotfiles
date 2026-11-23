@@ -29,7 +29,7 @@ ADDONS=(
   "herdr-artifacts|https://github.com/jmoyers/herdr-artifacts.git|7d85899|artifacts=mods/claude-artifacts|claude-artifacts"
   "herdr-agent-ask|https://github.com/sachin-philip/herdr-agent-ask.git|764155f|mods/asks=mods/asks mods/tabs-asks=mods/tabs-asks mods/spaces-asks=mods/spaces-asks|herdr-agent-ask"
   # helm: one mod for the whole krog layout, tried as the krog-next layout beside krog. Our own repo, no patch.
-  "herdr-helm|https://github.com/oysteinkrog/herdr-helm.git|2c9676f|helm=mods/helm layouts/krog.json=layouts/krog-next.json|"
+  "herdr-helm|https://github.com/oysteinkrog/herdr-helm.git|4a52659|helm=mods/helm layouts/krog.json=layouts/krog-next.json|"
 )
 # Shepherdr from Oystein's fork: branch oystein/main is upstream 3.1.39 plus our commits (Ctrl+K switcher
 # keys and fuzzy search, Assistant in new spaces off by default). Our changes are commits there, not patches.

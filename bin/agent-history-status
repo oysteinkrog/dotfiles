@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# agent-history-status: one-screen health of the agent history archive on the NAS.
+#
+# Prints the last run and last successful run of each job per machine (from
+# <root>/status/ on the NAS), and the aiolos archive edge: newest and oldest
+# archived day against the 30-day prune. Exit 1 when something needs action:
+# a job's last success is older than 2 days, or the aiolos archive is behind.
+#
+# Usage: agent-history-status [--quiet]   (--quiet: print only problems)
+set -uo pipefail
+
+ROOT=${AGENT_HISTORY_ROOT:-/mnt/nas/media/Backup/agent-history}
+NAS_MOUNT=${AGENT_HISTORY_NAS_MOUNT:-/mnt/nas/media}
+NAS_SSH=${AGENT_HISTORY_NAS_SSH:-home}
+QUIET=; [ "${1:-}" = --quiet ] && QUIET=1
+MAX_AGE_H=50                        # daily jobs; allow one missed slot plus slack
+RETENTION_DAYS=30; MAX_LAG_DAYS=7; PRUNE_MARGIN_DAYS=3
+START_DAY=${AIOLOS_ARCHIVE_START_DAY:-2026-10-24}
+
+if findmnt -n -t cifs,nfs,nfs4 -M "$NAS_MOUNT" >/dev/null 2>&1; then
+  nas() { bash -s -- "$@"; }
+else
+  nas() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$NAS_SSH" bash -s -- "$@"; }
+fi
+
+# One round trip: status files plus the aiolos manifest day list.
+data=$(nas "$ROOT" "$NAS_MOUNT" <<'EOF'
+ls "$2" >/dev/null 2>&1
+findmnt -n -t cifs,nfs,nfs4 -M "$2" >/dev/null || { echo "NASDOWN"; exit 0; }
+for f in "$1"/status/*.json; do [ -f "$f" ] && printf 'STATUS %s %s\n' "$(basename "$f")" "$(cat "$f")"; done
+[ -f "$1/aiolos/manifest.tsv" ] && awk -F'\t' '{print "DAY", $1, $3, $4}' "$1/aiolos/manifest.tsv"
+ls "$1/aiolos/weekly" 2>/dev/null | sed -n 's/^aiolos-db-\(.*\)\.sqlite\.zst$/WEEKLY \1/p'
+EOF
+) || { echo "agent-history: ERROR cannot reach the NAS host ($NAS_SSH)"; exit 1; }
+if [ "$data" = NASDOWN ]; then echo "agent-history: ERROR NAS share not mounted on the NAS host"; exit 1; fi
+
+rc=0; now=$(date -u +%s); lines=()
+problem() { lines+=("PROBLEM: $*"); rc=1; }
+
+# Jobs: <machine>-<job>.json is the last run, <machine>-<job>.last-ok.json the last success.
+while read -r _ file json; do
+  case $file in *.last-ok.json) continue ;; esac
+  key=${file%.json}
+  result=$(sed -n 's/.*"result":"\([^"]*\)".*/\1/p' <<<"$json")
+  finished=$(sed -n 's/.*"finished":"\([^"]*\)".*/\1/p' <<<"$json")
+  okjson=$(grep "^STATUS $key.last-ok.json " <<<"$data" | cut -d' ' -f3-)
+  okat=$(sed -n 's/.*"finished":"\([^"]*\)".*/\1/p' <<<"$okjson")
+  age_h=-1; [ -n "$okat" ] && age_h=$(( (now - $(date -u -d "$okat" +%s)) / 3600 ))
+  lines+=("$(printf '%-48s last=%s %s  last_ok=%s (%sh ago)' "$key" "$result" "$finished" "${okat:-never}" "$age_h")")
+  if [ -z "$okat" ] || [ "$age_h" -gt "$MAX_AGE_H" ]; then problem "$key: no successful run in ${MAX_AGE_H}h (last: $result $finished)"; fi
+done < <(grep '^STATUS ' <<<"$data")
+grep -q '^STATUS .*agent-history-sync' <<<"$data" || problem "no agent-history-sync status on the NAS yet"
+
+# aiolos edge
+days=$(grep '^DAY ' <<<"$data" | awk '$2 ~ /^[0-9-]+$/ {print $2}' | sort -u)
+n=$(grep -c . <<<"$days"); newest=$(tail -1 <<<"$days"); oldest=$(head -1 <<<"$days")
+zst=$(grep '^DAY ' <<<"$data" | awk '{s+=$4} END {printf "%.2f", s/1e9}')
+raw=$(grep '^DAY ' <<<"$data" | awk '{s+=$3} END {printf "%.1f", s/1e9}')
+yesterday=$(date -u -d yesterday +%F)
+pending=; d=$START_DAY
+while [[ ! "$d" > "$yesterday" ]]; do grep -qx "$d" <<<"$days" || { pending=$d; break; }; d=$(date -u -d "$d + 1 day" +%F); done
+lag=999; [ -n "$newest" ] && lag=$(( ($(date -u -d "$yesterday" +%s) - $(date -u -d "$newest" +%s)) / 86400 ))
+prune_edge=$(date -u -d "now - $RETENTION_DAYS days" +%F)
+weekly=$(grep '^WEEKLY ' <<<"$data" | awk '{print $2}' | sort | tail -1)
+lines+=("$(printf 'aiolos: %s days archived (%s .. %s), %s GB compressed from %s GB; prune edge %s; oldest unarchived %s; last weekly %s' \
+  "$n" "${oldest:-none}" "${newest:-none}" "$zst" "$raw" "$prune_edge" "${pending:-none}" "${weekly:-none}")")
+(( lag > MAX_LAG_DAYS )) && problem "aiolos: newest archived day ${newest:-none} is $lag days behind yesterday"
+if [ -n "$pending" ]; then
+  margin=$(( ($(date -u -d "$pending" +%s) + 86400 * RETENTION_DAYS - now) / 86400 ))
+  (( margin <= PRUNE_MARGIN_DAYS )) && [ "$pending" != "$yesterday" ] && problem "aiolos: unarchived day $pending is $margin days from the prune"
+fi
+if [ -n "$weekly" ] && (( now - $(date -u -d "$weekly" +%s) > 9 * 86400 )); then problem "aiolos: last weekly backup $weekly is over 9 days old"; fi
+
+for l in "${lines[@]}"; do
+  [ -n "$QUIET" ] && [[ $l != PROBLEM:* ]] && continue
+  echo "$l"
+done
+[ -z "$QUIET" ] && [ $rc -eq 0 ] && echo "agent-history: OK"
+exit $rc
