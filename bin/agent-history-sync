@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# agent-history-sync: copy this machine's agent history to the NAS, append-only.
+#
+# Each store (Claude Code transcripts, Codex, Gemini, MCP logs, jobd logs and
+# so on) goes to <root>/<machine>/<store>/. Nothing is ever deleted on the NAS:
+#   - no --delete, so a file deleted here stays there;
+#   - pass 1 appends to *.jsonl files (--append-verify), which is how
+#     transcripts grow, without keeping a copy of every old prefix;
+#   - pass 2 copies everything else, and any file that changed in place, with
+#     --backup into <root>/<machine>/versions/<date>/<store>/, so overwritten
+#     content is kept;
+#   - live SQLite files are never copied raw: once a week each one is written
+#     as a compressed .dump to <root>/<machine>/sqlite/<store>/.
+# Known gap: a *.jsonl file whose existing start was rewritten (not just
+# appended to) is replaced in pass 1 without a version copy. rsync prints
+# "failed verification" for it; the count goes into the log and the status.
+#
+# On a machine with the NAS mounted it writes directly. Elsewhere it goes
+# through ssh to $AGENT_HISTORY_NAS_SSH (default: home) with a bandwidth limit.
+#
+# Usage: agent-history-sync [--dry-run] [--only STORE[,STORE]] [--list]
+# Env:   AGENT_HISTORY_ROOT (default /mnt/nas/media/Backup/agent-history)
+#        AGENT_HISTORY_BWLIMIT (remote mode only, rsync units, default 12m)
+set -uo pipefail
+
+ROOT=${AGENT_HISTORY_ROOT:-/mnt/nas/media/Backup/agent-history}
+NAS_MOUNT=${AGENT_HISTORY_NAS_MOUNT:-/mnt/nas/media}
+NAS_SSH=${AGENT_HISTORY_NAS_SSH:-home}
+BWLIMIT=${AGENT_HISTORY_BWLIMIT:-12m}   # office to home is ~41 MB/s over Tailscale (measured 2026-11-23); 12 MB/s leaves most of it
+MAX_SIZE=100M                          # cap for single files in scratch-like stores (bigger ones are logged)
+MACHINE=$(hostname -s)
+DATE=$(date +%F)
+STATE_DIR="$HOME/.local/state/agent-history-sync"
+LOG="$STATE_DIR/sync.log"
+DRY=; ONLY=; LIST=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dry-run) DRY=1 ;;
+    --only) ONLY=",$2,"; shift ;;
+    --list) LIST=1 ;;
+    *) echo "usage: agent-history-sync [--dry-run] [--only STORE[,STORE]] [--list]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+mkdir -p "$STATE_DIR"
+exec 9>"$STATE_DIR/sync.lock"
+flock -n 9 || { echo "agent-history-sync: another run holds the lock" >&2; exit 75; }
+TMP=$(mktemp -d -p /var/tmp agent-history-sync.XXXXXX)
+trap 'rm -rf -- "$TMP"' EXIT
+
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
+
+# --- destination -------------------------------------------------------------
+if findmnt -n -t cifs,nfs,nfs4 -M "$NAS_MOUNT" >/dev/null 2>&1 || { ls "$NAS_MOUNT" >/dev/null 2>&1 && findmnt -n -t cifs,nfs,nfs4 -M "$NAS_MOUNT" >/dev/null 2>&1; }; then
+  MODE=local; DEST_PREFIX=
+  nas() { bash -s -- "$@"; }
+  BW=()
+else
+  MODE=remote; DEST_PREFIX="$NAS_SSH:"
+  nas() { ssh -o BatchMode=yes -o ServerAliveInterval=30 "$NAS_SSH" bash -s -- "$@"; }
+  BW=(--bwlimit="$BWLIMIT")
+fi
+BASE="$ROOT/$MACHINE"
+nas "$NAS_MOUNT" "$BASE" <<'EOF' || { log "ERROR: NAS not mounted ($NAS_MOUNT, mode $MODE); refusing to write"; exit 1; }
+ls "$1" >/dev/null 2>&1
+findmnt -n -t cifs,nfs,nfs4 -M "$1" >/dev/null || exit 1
+mkdir -p "$2"
+EOF
+
+# --- filters -----------------------------------------------------------------
+# Secrets never leave the machine, whatever store they sit in.
+cat > "$TMP/secrets.rules" <<'EOF'
+- .credentials.json
+- credentials.json
+- auth.json
+- auth.json.lock
+- .env
+- .env.*
+- *.env
+- .netrc
+- *.pem
+- *.key
+- *.p12
+- id_rsa*
+- id_ed25519*
+- id_ecdsa*
+- mcp-oauth-tokens*.json
+- oauth_creds.json
+- google_accounts.json
+- /secrets/
+- /.ssh/
+- /ssh/
+EOF
+# Build output and checkouts in scratch-like stores.
+cat > "$TMP/build.rules" <<'EOF'
+- .git/
+- target/
+- node_modules/
+- bin/
+- obj/
+- .venv/
+- venv/
+- __pycache__/
+EOF
+# Live SQLite files: dumped weekly instead.
+cat > "$TMP/sqlite.rules" <<'EOF'
+- *.sqlite
+- *.sqlite-wal
+- *.sqlite-shm
+- *.sqlite-journal
+- *.db
+- *.db-wal
+- *.db-shm
+EOF
+
+# --- stores ------------------------------------------------------------------
+# name | source dir | flags (scratch = skip git trees, build output and files > MAX_SIZE)
+# Store rules are read from a heredoc named after the store (store_rules_<name>).
+STORES=(
+  "claude-projects|$HOME/.claude/projects/|"
+  "claude-state|$HOME/.claude/|"
+  "claude-jobs|$HOME/.claude/jobs/|scratch"
+  "codex|$HOME/.codex/|"
+  "gemini|$HOME/.gemini/|"
+  "claude-cli-mcp-logs|$HOME/.cache/claude-cli-nodejs/|"
+  "pal-logs|$HOME/projects/pal-mcp-server/logs/|"
+  "jobd|$HOME/.local/state/jobd/|"
+  "heavy-build|$HOME/.local/state/heavy-build/|"
+  "claude-persist|$HOME/.local/state/claude-persist/|"
+  "dcg|$HOME/.local/share/dcg/|"
+  "ytring|$HOME/.local/state/ytring/|"
+  "voxtype-history|$HOME/.local/share/voxtype/history/|"
+  "claude-throttle|$HOME/.local/state/claude-throttle/|"
+  "var-tmp-claude|/var/tmp/claude/claude-$(id -u)/|scratch"
+)
+
+store_rules() {
+  case $1 in
+    claude-state) cat <<'EOF'
++ /history.jsonl
++ /todos/***
++ /plans/***
++ /tasks/***
++ /teams/***
++ /shell-snapshots/***
++ /session-env/***
++ /telemetry/***
++ /uploads/***
++ /paste-cache/***
++ /file-history/***
++ /debug/***
++ /sessions/***
++ /output/***
++ /feedback/***
++ /agent-mail/***
++ /daemon.log
+- *
+EOF
+    ;;
+    codex) cat <<'EOF'
++ /sessions/***
++ /archived_sessions/***
++ /history.jsonl
++ /history.json
++ /session_index.jsonl
++ /log/***
++ /memories/***
++ /generated_images/***
++ /db-backups/***
+- *
+EOF
+    ;;
+    gemini) cat <<'EOF'
++ /tmp/***
++ /history/***
++ /settings.json
++ /projects.json
++ /state.json
++ /GEMINI.md
+- *
+EOF
+    ;;
+    ytring) cat <<'EOF'
++ /delivery-texts/***
++ /delivery.jsonl
++ /corrections.jsonl
++ /trace/***
++ /words-learned.toml
+- *
+EOF
+    ;;
+    var-tmp-claude) cat <<'EOF'
++ /*/
++ /*/*/
++ /*/*/tasks/***
++ /*/*/scratchpad/***
+- *
+EOF
+    ;;
+  esac
+}
+
+# SQLite files to dump weekly, per store (globs relative to the source dir).
+sqlite_files() {
+  case $1 in
+    codex) echo "*.sqlite" ;;
+    jobd)  echo "*.db" ;;
+  esac
+}
+
+# For scratch stores, one walk (idle I/O) that
+#  - excludes every checkout (a dir holding .git);
+#  - logs the files over MAX_SIZE (rsync --max-size skips them);
+#  - for var-tmp-claude, finds oversized scratchpads (CI artifact dumps and
+#    the like: over BIG_ROOT_BYTES or BIG_ROOT_FILES after the exclusions) and
+#    keeps only their top two levels, so notes and scripts stay but extracted
+#    trees do not. Measured 2026-11-23: scratchpads held 287 GB in 3.8M files,
+#    206 GB of it in one CI scratchpad.
+BIG_ROOT_BYTES=3000000000
+BIG_ROOT_FILES=50000
+scratch_rules() { # SRC NAME
+  local src=$1 name=$2 roots=() depth=1 skipglob='*.jsonl'
+  [ "$name" = var-tmp-claude ] && skipglob='/'   # matches no file name: report big .jsonl too
+  if [ "$name" = var-tmp-claude ]; then
+    shopt -s nullglob; roots=("$src"*/*/tasks "$src"*/*/scratchpad); shopt -u nullglob; depth=3
+  else
+    roots=("$src")
+  fi
+  [ ${#roots[@]} -gt 0 ] || return 0
+  nice -n 19 ionice -c3 find "${roots[@]}" \( -name target -o -name node_modules -o -name obj -o -name bin -o -name .venv -o -name venv -o -name __pycache__ \) -prune \
+      -o -name .git -printf 'G 0 %p\n' -prune -o -type f ! -name "$skipglob" -printf 'F %s %p\n' 2>/dev/null |
+    awk -v src="$src" -v depth="$depth" -v maxb="$BIG_ROOT_BYTES" -v maxf="$BIG_ROOT_FILES" -v maxsize="$(numfmt --from=iec "$MAX_SIZE")" \
+        -v gitf="$TMP/$name.git" -v bigf="$TMP/$name.big" -v rootf="$TMP/$name.roots" '
+      { t=$1; s=$2; p=substr($0, length(t)+length(s)+3); rel=substr(p, length(src)+1) }
+      t=="G" { d=rel; sub(/\/\.git$/, "", d); print d > gitf; next }
+      {
+        n=split(rel, a, "/"); r=a[1]; for (i=2; i<=depth && i<n; i++) r=r "/" a[i]
+        if (depth==1) r=""
+        if (s > maxsize) { printf "%s (%.2f GB)\n", rel, s/1e9 > bigf; next }
+        B[r]+=s; N[r]++
+      }
+      END { for (r in B) if (r != "" && (B[r] > maxb || N[r] > maxf)) printf "%s %.1f %d\n", r, B[r]/1e9, N[r] > rootf }'
+  touch "$TMP/$name.git" "$TMP/$name.big" "$TMP/$name.roots"
+  # A checkout inside another checkout is covered by the outer one.
+  sort -u "$TMP/$name.git" | awk 'NR==1 || index($0, prev "/") != 1 { print; prev=$0 }' > "$TMP/$name.git.top"
+  local n
+  n=$(grep -c . "$TMP/$name.git.top")
+  [ "$n" -gt 0 ] && log "$name: skipping $n checkout dir(s) (.git inside): $(head -15 "$TMP/$name.git.top" | tr '\n' ' ')$([ "$n" -gt 15 ] && echo ...)"
+  n=$(grep -c . "$TMP/$name.big")
+  [ "$n" -gt 0 ] && log "$name: skipping $n file(s) over $MAX_SIZE: $(head -15 "$TMP/$name.big" | tr '\n' ' ' | cut -c1-2000)"
+  n=$(grep -c . "$TMP/$name.roots")
+  [ "$n" -gt 0 ] && log "$name: $n oversized scratchpad(s), keeping only their top two levels: $(sort -k2 -rn "$TMP/$name.roots" | awk '{printf "%s (%s GB, %s files) ", $1, $2, $3}')"
+  sed 's|.*|- /&/|' "$TMP/$name.git.top"
+  awk '{ print "- /" $1 "/*/*/" }' "$TMP/$name.roots"
+}
+
+RSYNC_BASE=(rsync -rt --no-links --modify-window=1 --partial --timeout=900
+            --human-readable --stats --itemize-changes)
+
+# 24 = files vanished during the run. 23 counts as ok when every error is an
+# unreadable dir (root-owned overlay work dirs in scratchpads, for example).
+rc_ok() { # RC OUTFILE
+  case $1 in
+    0|24) return 0 ;;
+    23) ! grep -E '^rsync: |^rsync error' "$2" | grep -v 'Permission denied (13)' | grep -qv 'some files/attrs were not transferred' ;;
+    *) return 1 ;;
+  esac
+}
+
+sync_store() { # NAME SRC FLAGS
+  local name=$1 src=$2 flags=$3 rules="$TMP/$1.rules" out="$TMP/$1.out" rc1 rc2 extra=() t0
+  [ -d "$src" ] || { log "$name: source $src missing, skipped"; return 0; }
+  {
+    cat "$TMP/secrets.rules"
+    [ -n "$(sqlite_files "$name")" ] && cat "$TMP/sqlite.rules"
+    if [ "$flags" = scratch ]; then scratch_rules "$src" "$name"; cat "$TMP/build.rules"; fi
+  } > "$rules.pre"
+  store_rules "$name" > "$rules.store"
+  local cap=()
+  # Scratch caps: claude-jobs keeps its transcripts whole (cap on pass 2 only);
+  # in var-tmp-claude a big .jsonl is data, not a transcript, so both passes cap.
+  local cap1=()
+  [ "$flags" = scratch ] && cap=(--max-size="$MAX_SIZE")
+  [ "$name" = var-tmp-claude ] && cap1=(--max-size="$MAX_SIZE")
+  [ -n "$DRY" ] && extra+=(--dry-run)
+  local dst="$DEST_PREFIX$BASE/$name/"
+  t0=$(date +%s)
+  # Pass 1: grow *.jsonl files by appending (only inside dirs the store includes).
+  { cat "$rules.pre"; printf '+ *.jsonl\n-! */\n'; cat "$rules.store"; } > "$rules.p1"
+  nice -n 10 ionice -c3 "${RSYNC_BASE[@]}" "${BW[@]}" "${extra[@]}" "${cap1[@]}" -m --append-verify \
+    --filter="merge $rules.p1" "$src" "$dst" > "$out.p1" 2>&1; rc1=$?
+  # Pass 2: everything else; keep the old content of anything replaced.
+  { cat "$rules.pre"; cat "$rules.store"; } > "$rules.p2"
+  nice -n 10 ionice -c3 "${RSYNC_BASE[@]}" "${BW[@]}" "${extra[@]}" "${cap[@]}" \
+    --partial-dir=.rsync-partial --backup --backup-dir="$BASE/versions/$DATE/$name" \
+    --filter="merge $rules.p2" "$src" "$dst" > "$out.p2" 2>&1; rc2=$?
+  local sent1 sent2 files2 verify_fail
+  sent1=$(sed -n 's/^Total transferred file size: //p' "$out.p1"); sent2=$(sed -n 's/^Total transferred file size: //p' "$out.p2")
+  files2=$(sed -n 's/^Number of regular files transferred: //p' "$out.p2")
+  verify_fail=$(grep -c 'failed verification' "$out.p1")
+  log "$name: pass1(rc=$rc1, appended ${sent1:-?}) pass2(rc=$rc2, ${files2:-?} files, ${sent2:-?}) $(( $(date +%s) - t0 ))s${verify_fail:+ rewritten_jsonl=$verify_fail}"
+  [ "$verify_fail" -gt 0 ] 2>/dev/null && grep 'failed verification' "$out.p1" | head -20 | sed "s/^/  $name: /" >> "$LOG"
+  {
+    echo "=== $(date -u +%FT%TZ) $name pass1 rc=$rc1"; grep -Ev '^([<>.c][fdL]|skipping non-regular)' "$out.p1" | tail -60
+    echo "=== $name pass2 rc=$rc2"; grep -Ev '^([<>.c][fdL]|skipping non-regular)' "$out.p2" | tail -60
+  } >> "$STATE_DIR/rsync-detail.log"
+  local denied; denied=$(grep -hc 'Permission denied (13)' "$out.p2")
+  [ "$denied" -gt 0 ] && log "$name: $denied unreadable path(s) skipped (see rsync-detail.log)"
+  if ! rc_ok "$rc1" "$out.p1" || ! rc_ok "$rc2" "$out.p2"; then
+    grep -hE '^rsync: |failed|error' "$out.p1" "$out.p2" | grep -v 'some files/attrs were not' | head -10 | sed "s/^/  $name: /" >> "$LOG"
+    return 1
+  fi
+}
+
+dump_sqlite() { # NAME SRC  (weekly per file)
+  local name=$1 src=$2 pat f base stamp dst
+  pat=$(sqlite_files "$name"); [ -n "$pat" ] || return 0
+  shopt -s nullglob
+  for f in "$src"$pat; do
+    base=$(basename "$f")
+    stamp="$STATE_DIR/sqlite-$name-$base.stamp"
+    if [ -f "$stamp" ] && [ $(( $(date +%s) - $(stat -c %Y "$stamp") )) -lt $(( 6 * 86400 )) ]; then continue; fi
+    [ -n "$DRY" ] && { log "$name: would dump $base"; continue; }
+    dst="$BASE/sqlite/$name/$base.$DATE.sql.zst"
+    nas "$(dirname "$dst")" <<<'mkdir -p "$1"'
+    local t0; t0=$(date +%s)
+    if [ "$MODE" = local ]; then
+      nice -n 10 ionice -c3 sqlite3 "file:$f?mode=ro" .dump | nice -n 10 zstd -q -T2 -12 > "$dst.part"
+    else
+      nice -n 10 ionice -c3 sqlite3 "file:$f?mode=ro" .dump | nice -n 10 zstd -q -T2 -12 |
+        ssh -o BatchMode=yes "$NAS_SSH" "cat > '$dst.part'"
+    fi
+    local prc=("${PIPESTATUS[@]}")
+    if [ "${prc[0]}" = 0 ] && nas "$dst.part" "$dst" <<<'zstd -q -t "$1" && mv -f "$1" "$2"'; then
+      touch "$stamp"
+      log "$name: dumped $base -> sqlite/$name/$(basename "$dst") ($(( $(date +%s) - t0 ))s)"
+    else
+      log "ERROR $name: dump of $base failed (${prc[*]})"; FAILED+=("$name-sqlite")
+    fi
+  done
+  shopt -u nullglob
+}
+
+if [ -n "$LIST" ]; then for s in "${STORES[@]}"; do echo "${s%%|*}"; done; exit 0; fi
+
+log "start machine=$MACHINE mode=$MODE dest=$BASE ${BW[*]} ${DRY:+dry-run}"
+FAILED=()
+for s in "${STORES[@]}"; do
+  IFS='|' read -r name src flags <<<"$s"
+  [ -n "$ONLY" ] && [[ $ONLY != *",$name,"* ]] && continue
+  sync_store "$name" "$src" "$flags" || FAILED+=("$name")
+  dump_sqlite "$name" "$src"
+done
+
+result=ok
+[ ${#FAILED[@]} -gt 0 ] && result="partial(${FAILED[*]})"
+log "done result=$result"
+if [ -z "$DRY" ] && [ -z "$ONLY" ]; then
+  printf '{"job":"agent-history-sync","machine":"%s","result":"%s","finished":"%s"}\n' "$MACHINE" "$result" "$(date -u +%FT%TZ)" \
+    > "$STATE_DIR/agent-history-sync.last.json"
+  [ "$result" = ok ] && cp "$STATE_DIR/agent-history-sync.last.json" "$STATE_DIR/agent-history-sync.last-ok.json"
+  if [ "$MODE" = local ]; then
+    mkdir -p "$ROOT/status"; cp "$STATE_DIR/agent-history-sync.last.json" "$ROOT/status/$MACHINE-agent-history-sync.json"
+    [ "$result" = ok ] && cp "$STATE_DIR/agent-history-sync.last.json" "$ROOT/status/$MACHINE-agent-history-sync.last-ok.json"
+  else
+    ssh -o BatchMode=yes "$NAS_SSH" "mkdir -p '$ROOT/status' && cat > '$ROOT/status/$MACHINE-agent-history-sync.json'" < "$STATE_DIR/agent-history-sync.last.json"
+    [ "$result" = ok ] && ssh -o BatchMode=yes "$NAS_SSH" "cat > '$ROOT/status/$MACHINE-agent-history-sync.last-ok.json'" < "$STATE_DIR/agent-history-sync.last.json"
+  fi
+fi
+[ "$result" = ok ]

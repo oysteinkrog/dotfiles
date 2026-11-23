@@ -1,0 +1,13 @@
+[Unit]
+Description=Copy agent history (Claude, Codex, Gemini, logs) to the NAS (agent-history-sync)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Append-only rsync to the NAS. I/O heavy, light on memory.
+ExecStart=%h/bin/agent-history-sync
+Slice=builds.slice
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=infinity
