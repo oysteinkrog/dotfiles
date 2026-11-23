@@ -1,6 +1,6 @@
 ---
 name: herdr-sessions
-description: Find, inspect, freeze and thaw the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, freezing an idle space to free memory or thawing one, when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "park this session", "frozen spaces" or "snowflake".
+description: Find, inspect, make, freeze and thaw the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "park this session", "frozen spaces" or "snowflake".
 ---
 
 # Herdr sessions: find, freeze, thaw
@@ -23,6 +23,46 @@ herdr-app ls                     # spaces and tabs with ids, and which are activ
   `~/.local/state/claude-persist/sessions/<sid>@<project-dir>.json` (field `.hc`), refreshed
   every 30 s. Each desktop has its own folder.
 - `status` is `working`, `blocked` (waiting for the user), `idle`, `done` or `error`.
+
+## Make a new space from an agent
+
+Oystein, 2026-11-23: spaces that agents make kept landing at the bottom of the sidebar,
+outside every folder. When you make a space for a new agent or task, choose its sidebar
+folder on purpose.
+
+Two kinds of "folder", do not mix them up:
+
+- The **working directory** of its first terminal: `herdr-app do space.new --folder DIR`.
+- The **sidebar folder** that groups spaces in the window (Managers, Company, Machine and
+  tools, Swing Catalyst, ...). The `space-folders` mod keeps these in
+  `~/.config/herdr-space-folders.json` (`list` of folders, `of` maps space id to folder id).
+  `space.new` knows nothing about them.
+
+Use `herdr-space-new`, never a bare `herdr-app do space.new`:
+
+```sh
+herdr-space-new --name eng-123 --cwd ~/work/desktop/eng-123 --argv '["claude"]' \
+  --task "Implement ENG-123"                  # same sidebar folder as your own space
+herdr-space-new --name ledger-fix --group "Machine and tools" --cwd ~/src/cass ...
+herdr-space-new --name scratch --group none ...    # no folder, only when nothing fits
+```
+
+Before you run it, decide:
+
+1. **Which folder.** The default is your own space's folder, and it is right when the new
+   space is part of your work (a lane, a helper, a follow-up). Pick another when the new
+   work belongs to another area: a manager goes in Managers, monorepo and product work in
+   Swing Catalyst, company admin in Company, machine, tool and dotfiles work in Machine and
+   tools. `--group bogus` lists the folders that exist. Do not make a new folder; ask
+   Oystein if none fits.
+2. **A clear name** (`--name`, required). Name the task, not the tool.
+3. **Focus.** It stays in the background (`--focus false`) unless Oystein asked to see it.
+
+Say in your report which folder you put it in. The script labels the new space's
+terminals `herdr.space-folder=<folder id>` and `herdr.space-after=<your space id>`; the
+`space-folders` mod files the space from those labels and puts it under yours. It works on
+this computer only for now. For a remote space, use `space.new --machine` and tell Oystein
+it needs filing by hand.
 
 ## Freeze and Thaw
 

@@ -1,0 +1,78 @@
+#!/bin/bash
+# Make a new herdr space from an agent and put it in a sidebar folder on purpose.
+#
+# Usage: herdr-space-new --name NAME [--group FOLDER|none] [--cwd DIR] [--argv JSON]
+#                        [--task TEXT] [--focus true]
+#
+#   --name    the space's name (required: never leave a space unnamed)
+#   --group   the sidebar folder (Managers, Company, ...) by name or id, or "none"
+#             for no folder. Default: the folder of the space this runs in.
+#   --cwd     the working directory of its first terminal (herdr-app's --folder)
+#   --argv    the program, as JSON, e.g. '["claude"]'
+#   --task    the agent's first message
+#   --focus   true shows the new space now; default false (Oystein stays where he is)
+#
+# Sidebar folders live in ~/.config/herdr-space-folders.json, kept by the
+# space-folders mod. This script does not write that file. It labels the new
+# space's terminals with herdr.space-folder=<folder id> and
+# herdr.space-after=<spawning space id>; the mod files the space from the labels.
+# This computer only for now (no --machine).
+set -uo pipefail
+FILE=$HOME/.config/herdr-space-folders.json
+name= group=__caller__ cwd= argv= task= focus=false
+while [ $# -gt 0 ]; do
+  case $1 in
+    --name) name=$2; shift 2;;
+    --group) group=$2; shift 2;;
+    --cwd) cwd=$2; shift 2;;
+    --argv) argv=$2; shift 2;;
+    --task) task=$2; shift 2;;
+    --focus) focus=$2; shift 2;;
+    -h|--help) sed -n 2,22p "$0"; exit 0;;
+    *) echo "herdr-space-new: unknown argument $1 (see --help)" >&2; exit 2;;
+  esac
+done
+[ -n "$name" ] || { echo "herdr-space-new: --name is required" >&2; exit 2; }
+
+# The spawning space, when this runs inside an hc terminal.
+caller=
+[ -n "${HC_TERMINAL_ID:-}" ] && caller=$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null | jq -r '.labels["herdr.space"] // empty')
+
+# Resolve the sidebar folder to an id ("" = none).
+folders_json=$(cat "$FILE" 2>/dev/null || echo '{}')
+if [ "$group" = __caller__ ]; then
+  gid=$(jq -r --arg s "$caller" '.of[$s] // ""' <<<"$folders_json")
+elif [ "$group" = none ]; then
+  gid=
+else
+  gid=$(jq -r --arg g "$group" '[.list[]? | select(.id == $g or (.name|ascii_downcase) == ($g|ascii_downcase)) | .id][0] // empty' <<<"$folders_json")
+  if [ -z "$gid" ]; then
+    echo "herdr-space-new: no sidebar folder \"$group\". Folders:" >&2
+    jq -r '.list[]? | "  " + .name + " (" + .id + ")"' <<<"$folders_json" >&2
+    exit 2
+  fi
+fi
+gname=$(jq -r --arg g "$gid" '[.list[]? | select(.id == $g) | .name][0] // "none"' <<<"$folders_json")
+
+before=$(herdr-app ls | jq -r '.spaces[].id' | sort)
+args=(--name "$name" --focus "$focus")
+[ -n "$cwd" ] && args+=(--folder "$cwd")
+[ -n "$argv" ] && args+=(--argv "$argv")
+[ -n "$task" ] && args+=(--task "$task")
+herdr-app do space.new "${args[@]}" >/dev/null || { echo "herdr-space-new: space.new failed" >&2; exit 1; }
+
+# herdr-app names no id back: find the space that was not there before.
+new=
+for _ in $(seq 40); do
+  new=$(herdr-app ls | jq -r '.spaces[].id' | sort | comm -13 <(echo "$before") - | head -1)
+  [ -n "$new" ] && break
+  sleep 0.25
+done
+[ -n "$new" ] || { echo "herdr-space-new: made the space but could not find it; file it by hand" >&2; exit 1; }
+
+terms=$(herdr-app ls | jq -r --arg s "$new" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
+for t in $terms; do
+  hc label "$t" "herdr.space-folder=${gid:-none}" >/dev/null
+  [ -n "$caller" ] && hc label "$t" "herdr.space-after=$caller" >/dev/null
+done
+echo "space $new ($name) in sidebar folder: $gname; terminals: $(echo $terms)"
