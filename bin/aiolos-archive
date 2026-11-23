@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# aiolos-archive: keep the aiolos databases forever on the NAS.
+#
+# aiolos prunes most observe.db tables (and some aiolos.db tables) after 30
+# days. This script exports every complete UTC day into its own SQLite file on
+# the VPS, compresses it there, streams it to the NAS through the home desktop,
+# verifies it and records it in a manifest on the NAS. Weekly it also stores a
+# full .backup of aiolos.db and a snapshot of the observe.db tables that are
+# never pruned (sessions and friends).
+#
+# Usage:
+#   aiolos-archive run          archive every missing day (oldest first), weekly
+#                               snapshots when due, then the health check
+#   aiolos-archive day DAY      archive one day (YYYY-MM-DD), even if listed
+#   aiolos-archive weekly       force the weekly snapshots now
+#   aiolos-archive check        health check only (exit 1 when behind)
+#
+# Coordinates come from local config at run time, never from this file:
+#   ~/.config/aiolos/deploy.env   AIOLOS_REMOTE_HOST (ssh target of the VPS)
+#   AGENT_HISTORY_NAS_SSH          ssh alias of the machine with the NAS mount (default: home)
+#   AGENT_HISTORY_ROOT             NAS root (default: /mnt/nas/media/Backup/agent-history)
+#
+# Never modifies the VPS databases: every read is a read-only attach inside one
+# read transaction (WAL mode, so the proxy keeps writing).
+set -euo pipefail
+
+START_DAY=${AIOLOS_ARCHIVE_START_DAY:-2026-10-24}   # oldest row in observe.db when this began
+RETENTION_DAYS=30                                    # aiolos hardcoded prune window
+MAX_LAG_DAYS=7                                       # newest archived day may trail yesterday by this much
+PRUNE_MARGIN_DAYS=3                                  # alarm when an unarchived day is this close to the prune edge
+SETTLE_HOURS=2                                       # wait this long after midnight UTC before a day counts as complete
+DAILY_LEVEL=19                                       # measured: ~36 s CPU per 100 MB, ~4 min per day on the VPS
+WEEKLY_LEVEL=15                                      # aiolos.db is ~3.5 GB; -19 would take ~20 min
+NAS_SSH=${AGENT_HISTORY_NAS_SSH:-home}
+ROOT=${AGENT_HISTORY_ROOT:-/mnt/nas/media/Backup/agent-history}
+NAS_MOUNT=${AGENT_HISTORY_NAS_MOUNT:-/mnt/nas/media}
+ARCH="$ROOT/aiolos"
+MANIFEST="$ARCH/manifest.tsv"
+STATE_DIR="$HOME/.local/state/agent-history-sync"
+LOG="$STATE_DIR/aiolos-archive.log"
+MACHINE=$(hostname -s)
+VPS_TMP=/var/tmp/aiolos-archive
+
+mkdir -p "$STATE_DIR"
+exec 9>"$STATE_DIR/aiolos-archive.lock"
+if ! flock -n 9; then echo "aiolos-archive: another run holds the lock" >&2; exit 75; fi
+
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+# shellcheck disable=SC1090
+[ -r "$HOME/.config/aiolos/deploy.env" ] && { set -a; . "$HOME/.config/aiolos/deploy.env"; set +a; }
+[ -n "${AIOLOS_REMOTE_HOST:-}" ] || die "AIOLOS_REMOTE_HOST not set (expected in ~/.config/aiolos/deploy.env)"
+
+vps() { ssh -o BatchMode=yes -o ServerAliveInterval=30 "$AIOLOS_REMOTE_HOST" "$@"; }
+# Run a bash script (stdin) on the NAS machine. The remote login shell may be fish.
+nas_script() { ssh -o BatchMode=yes -o ServerAliveInterval=30 "$NAS_SSH" bash -s -- "$@"; }
+
+# Refuse to write unless the NAS share is really mounted (an unmounted
+# mountpoint would fill the home disk instead).
+nas_check() {
+  nas_script "$NAS_MOUNT" "$ARCH" <<'EOF' || die "NAS not mounted on $NAS_SSH ($NAS_MOUNT)"
+ls "$1" >/dev/null 2>&1          # trigger autofs
+findmnt -n -t cifs,nfs,nfs4 -M "$1" >/dev/null || exit 1
+mkdir -p "$2/daily" "$2/weekly"
+touch "$2/manifest.tsv"
+EOF
+}
+
+manifest_days() { nas_script "$MANIFEST" <<<'[ -f "$1" ] || exit 0; cut -f1 "$1" | grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" | sort -u'; }
+
+# ---------------------------------------------------------------------------
+# VPS-side script: export one day, compress, print facts. Args: DAY TMPDIR LEVEL
+# ---------------------------------------------------------------------------
+read -r -d '' REMOTE_DAY <<'REMOTE' || true
+set -euo pipefail
+DAY=$1; DIR=$2; LEVEL=$3
+OBS=/root/.config/aiolos/observe.db; AIO=/opt/aiolos/data/aiolos.db
+S=$(( $(date -u -d "$DAY" +%s) * 1000 )); E=$(( S + 86400000 ))
+mkdir -p "$DIR"; cd "$DIR"
+DB=$DAY.db; Z=$DAY.db.zst
+if [ ! -s "$DB" ]; then
+  rm -f "$DB.tmp"
+  nice -n 19 ionice -c3 sqlite3 "$DB.tmp" >/dev/null <<SQL
+PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA page_size=65536;
+ATTACH 'file:$OBS?mode=ro' AS o;
+ATTACH 'file:$AIO?mode=ro' AS a;
+BEGIN;
+CREATE TABLE _meta(k TEXT, v TEXT);
+INSERT INTO _meta VALUES('day','$DAY'),('start_ms','$S'),('end_ms','$E'),('exported_at',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+CREATE TABLE _schema AS SELECT 'observe.db' AS db, type, name, tbl_name, sql FROM o.sqlite_master UNION ALL SELECT 'aiolos.db', type, name, tbl_name, sql FROM a.sqlite_master;
+CREATE TABLE traces AS SELECT * FROM o.traces WHERE started_at >= $S AND started_at < $E;
+CREATE TABLE trace_decisions AS SELECT * FROM o.trace_decisions WHERE started_at >= $S AND started_at < $E;
+CREATE TABLE trace_agents AS SELECT * FROM o.trace_agents WHERE started_at >= $S AND started_at < $E;
+CREATE TABLE hook_events AS SELECT * FROM o.hook_events WHERE timestamp_ms >= $S AND timestamp_ms < $E;
+CREATE TABLE quota_snapshots AS SELECT * FROM o.quota_snapshots WHERE ts >= $S AND ts < $E;
+CREATE TABLE routing_snapshots AS SELECT * FROM o.routing_snapshots WHERE ts >= $S AND ts < $E;
+CREATE TABLE pool_budget_calibration AS SELECT * FROM o.pool_budget_calibration WHERE hour_ms >= $S AND hour_ms < $E;
+CREATE TABLE requests AS SELECT * FROM a.requests WHERE timestamp >= $S AND timestamp < $E;
+CREATE TABLE request_payloads AS SELECT p.* FROM a.request_payloads p JOIN a.requests r ON r.id = p.request_id WHERE r.timestamp >= $S AND r.timestamp < $E;
+CREATE TABLE xfactor_observations AS SELECT * FROM a.xfactor_observations WHERE timestamp_ms >= $S AND timestamp_ms < $E;
+CREATE TABLE snapshot_session_mappings AS SELECT * FROM o.session_mappings;
+CREATE TABLE snapshot_entity_names AS SELECT * FROM o.entity_names;
+CREATE TABLE snapshot_conversation_ownership AS SELECT * FROM a.conversation_ownership;
+COMMIT;
+SQL
+  mv "$DB.tmp" "$DB"
+fi
+counts=$(sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('_meta','_schema') ORDER BY name" |
+  while read -r t; do printf '%s=%s,' "$t" "$(sqlite3 "$DB" "SELECT count(*) FROM \"$t\"")"; done)
+first=$(sqlite3 "$DB" "SELECT COALESCE(strftime('%H:%M',min(started_at)/1000,'unixepoch'),'-') FROM traces")
+if [ ! -s "$Z" ]; then
+  t0=$(date +%s)
+  nice -n 19 ionice -c3 zstd -q -T1 --long=27 -"$LEVEL" "$DB" -o "$Z.tmp"
+  mv "$Z.tmp" "$Z"
+  echo "zst_seconds=$(( $(date +%s) - t0 ))"
+fi
+echo "raw=$(stat -c %s "$DB")"
+echo "zst=$(stat -c %s "$Z")"
+echo "sha=$(sha256sum "$Z" | cut -d' ' -f1)"
+echo "first_trace=$first"
+echo "counts=${counts%,}"
+REMOTE
+
+# NAS side: verify a .part file and move it into place. Args: PART FINAL SIZE SHA
+read -r -d '' NAS_VERIFY <<'EOF' || true
+set -euo pipefail
+part=$1; final=$2; size=$3; sha=$4
+got=$(stat -c %s "$part")
+[ "$got" = "$size" ] || { echo "size mismatch: $got != $size" >&2; exit 1; }
+gsha=$(sha256sum "$part" | cut -d' ' -f1)
+[ "$gsha" = "$sha" ] || { echo "sha256 mismatch" >&2; exit 1; }
+zstd -q -t --long=27 "$part" || { echo "zstd -t failed" >&2; exit 1; }
+mv -f "$part" "$final"
+EOF
+
+stream_to_nas() { # REMOTE_FILE NAS_PATH SIZE SHA
+  local src=$1 dst=$2 size=$3 sha=$4
+  nas_script "$(dirname "$dst")" <<<'mkdir -p "$1"'
+  vps "cat '$src'" | ssh -o BatchMode=yes "$NAS_SSH" "cat > '$dst.part'"
+  nas_script "$dst.part" "$dst" "$size" "$sha" <<<"$NAS_VERIFY"
+}
+
+kv() { sed -n "s/^$1=//p" <<<"$2" | tail -1; }
+
+archive_day() {
+  local day=$1 out raw zst sha counts secs first dst
+  log "day $day: export+compress on VPS"
+  out=$(vps bash -s -- "$day" "$VPS_TMP" "$DAILY_LEVEL" <<<"$REMOTE_DAY") || die "day $day: VPS export failed"
+  raw=$(kv raw "$out"); zst=$(kv zst "$out"); sha=$(kv sha "$out"); counts=$(kv counts "$out")
+  secs=$(kv zst_seconds "$out"); first=$(kv first_trace "$out")
+  [ -n "$raw" ] && [ -n "$zst" ] && [ -n "$sha" ] || die "day $day: VPS output incomplete: $out"
+  dst="$ARCH/daily/${day:0:4}/$day.sqlite.zst"
+  log "day $day: raw=$raw zst=$zst (${secs:-reused}s) first_trace=$first; streaming"
+  stream_to_nas "$VPS_TMP/$day.db.zst" "$dst" "$zst" "$sha" || die "day $day: transfer/verify failed"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$day" "daily/${day:0:4}/$day.sqlite.zst" "$raw" "$zst" "$sha" \
+    "$(date -u +%FT%TZ)" "first_trace=$first" "$counts" |
+    ssh -o BatchMode=yes "$NAS_SSH" "cat >> '$MANIFEST'" || die "day $day: manifest append failed"
+  vps "rm -f '$VPS_TMP/$day.db' '$VPS_TMP/$day.db.zst'"
+  log "day $day: archived ($counts)"
+}
+
+# ---------------------------------------------------------------------------
+# Weekly snapshots
+# ---------------------------------------------------------------------------
+read -r -d '' REMOTE_WEEKLY <<'REMOTE' || true
+set -euo pipefail
+STAMP=$1; DIR=$2; LEVEL=$3
+OBS=/root/.config/aiolos/observe.db; AIO=/opt/aiolos/data/aiolos.db
+PRUNED="traces trace_decisions trace_agents hook_events quota_snapshots routing_snapshots pool_budget_calibration session_mappings entity_names"
+mkdir -p "$DIR"; cd "$DIR"
+A=aiolos-db-$STAMP.sqlite; O=observe-unpruned-$STAMP.sqlite
+if [ ! -s "$A.zst" ]; then
+  rm -f "$A" "$A.zst.tmp"
+  nice -n 19 ionice -c3 sqlite3 "file:$AIO?mode=ro" ".backup '$A'"
+  nice -n 19 ionice -c3 zstd -q -T1 --long=27 -"$LEVEL" "$A" -o "$A.zst.tmp"
+  echo "aiolos_raw=$(stat -c %s "$A")"
+  rm -f "$A"; mv "$A.zst.tmp" "$A.zst"
+fi
+if [ ! -s "$O.zst" ]; then
+  rm -f "$O" "$O.zst.tmp"
+  tables=$(sqlite3 "file:$OBS?mode=ro" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+  {
+    echo "PRAGMA journal_mode=OFF; ATTACH 'file:$OBS?mode=ro' AS o; BEGIN;"
+    echo "CREATE TABLE _schema AS SELECT type, name, tbl_name, sql FROM o.sqlite_master;"
+    for t in $tables; do
+      case " $PRUNED " in *" $t "*) continue ;; esac
+      echo "CREATE TABLE \"$t\" AS SELECT * FROM o.\"$t\";"
+    done
+    echo "COMMIT;"
+  } | nice -n 19 ionice -c3 sqlite3 "$O" >/dev/null
+  echo "observe_counts=$(for t in $(sqlite3 "$O" "SELECT name FROM sqlite_master WHERE type='table' AND name<>'_schema'"); do printf '%s=%s,' "$t" "$(sqlite3 "$O" "SELECT count(*) FROM \"$t\"")"; done)"
+  echo "observe_raw=$(stat -c %s "$O")"
+  nice -n 19 ionice -c3 zstd -q -T1 --long=27 -"$LEVEL" "$O" -o "$O.zst.tmp"
+  rm -f "$O"; mv "$O.zst.tmp" "$O.zst"
+fi
+for f in "$A.zst" "$O.zst"; do echo "file=$f $(stat -c %s "$f") $(sha256sum "$f" | cut -d' ' -f1)"; done
+REMOTE
+
+weekly_due() {
+  local newest
+  newest=$(nas_script "$ARCH/weekly" <<<'ls "$1" 2>/dev/null | sed -n "s/^aiolos-db-\([0-9-]*\)\.sqlite\.zst$/\1/p" | sort | tail -1')
+  [ -z "$newest" ] && return 0
+  (( $(date -u +%s) - $(date -u -d "$newest" +%s) >= 6 * 86400 ))
+}
+
+run_weekly() {
+  local stamp out line f size sha
+  stamp=$(date -u +%F)
+  log "weekly $stamp: aiolos.db backup + observe unpruned snapshot on VPS"
+  out=$(vps bash -s -- "$stamp" "$VPS_TMP" "$WEEKLY_LEVEL" <<<"$REMOTE_WEEKLY") || die "weekly: VPS step failed"
+  while read -r line; do
+    case $line in file=*) ;; *) continue ;; esac
+    read -r f size sha <<<"${line#file=}"
+    stream_to_nas "$VPS_TMP/$f" "$ARCH/weekly/$f" "$size" "$sha" || die "weekly: transfer of $f failed"
+    vps "rm -f '$VPS_TMP/$f'"
+    log "weekly: stored $f ($size bytes)"
+  done <<<"$out"
+  log "weekly $stamp: $(grep -v '^file=' <<<"$out" | tr '\n' ' ')"
+  printf 'weekly-%s\t%s\n' "$stamp" "$(tr '\n' ' ' <<<"$out")" | ssh -o BatchMode=yes "$NAS_SSH" "cat >> '$ARCH/weekly/manifest.tsv'"
+}
+
+# ---------------------------------------------------------------------------
+pending_days() { # complete days not in the manifest, oldest first
+  local done_days last d
+  done_days=$(manifest_days)
+  last=$(date -u -d "now - $SETTLE_HOURS hours - 1 day" +%F)
+  d=$START_DAY
+  while [[ ! "$d" > "$last" ]]; do
+    grep -qx "$d" <<<"$done_days" || echo "$d"
+    d=$(date -u -d "$d + 1 day" +%F)
+  done
+}
+
+health() { # prints a line; returns 1 when behind
+  local done_days newest oldest_pending yesterday lag edge_margin rc=0
+  done_days=$(manifest_days)
+  newest=$(tail -1 <<<"$done_days")
+  oldest_pending=$(pending_days | head -1) || true
+  yesterday=$(date -u -d yesterday +%F)
+  if [ -z "$newest" ]; then lag=999; else lag=$(( ($(date -u -d "$yesterday" +%s) - $(date -u -d "$newest" +%s)) / 86400 )); fi
+  if [ -n "$oldest_pending" ]; then
+    # Days until the prune starts deleting the oldest pending day (cutoff = now - 30 d).
+    edge_margin=$(( ($(date -u -d "$oldest_pending" +%s) + 86400 * RETENTION_DAYS - $(date -u +%s)) / 86400 ))
+  else edge_margin=-; fi
+  echo "aiolos: archived=$(grep -c . <<<"$done_days") newest=${newest:-none} lag_days=$lag oldest_pending=${oldest_pending:-none} days_to_prune=${edge_margin}"
+  if (( lag > MAX_LAG_DAYS )); then echo "ALERT: newest archived day is $lag days behind yesterday (limit $MAX_LAG_DAYS)"; rc=1; fi
+  if [ "$edge_margin" != - ] && (( edge_margin <= PRUNE_MARGIN_DAYS )); then
+    echo "ALERT: unarchived day $oldest_pending is $edge_margin days from the 30-day prune"; rc=1; fi
+  return $rc
+}
+
+write_status() { # JOB RESULT
+  printf '{"job":"%s","machine":"%s","result":"%s","finished":"%s"}\n' "$1" "$MACHINE" "$2" "$(date -u +%FT%TZ)" \
+    > "$STATE_DIR/$1.last.json"
+  [ "$2" = ok ] && cp "$STATE_DIR/$1.last.json" "$STATE_DIR/$1.last-ok.json"
+  ssh -o BatchMode=yes "$NAS_SSH" "mkdir -p '$ROOT/status' && cat > '$ROOT/status/$MACHINE-$1.json'" < "$STATE_DIR/$1.last.json" || true
+  [ "$2" = ok ] && ssh -o BatchMode=yes "$NAS_SSH" "cat > '$ROOT/status/$MACHINE-$1.last-ok.json'" < "$STATE_DIR/$1.last.json" || true
+}
+
+trap 'rc=$?; [ $rc -ne 0 ] && write_status aiolos-archive "fail(rc=$rc)"' EXIT
+
+cmd=${1:-run}
+case $cmd in
+  run)
+    nas_check
+    mapfile -t days < <(pending_days)
+    log "run: ${#days[@]} pending day(s): ${days[*]:-none}"
+    for d in "${days[@]}"; do archive_day "$d"; done
+    if weekly_due; then run_weekly; fi
+    if out=$(health); then log "$out"; write_status aiolos-archive ok
+    else log "$out"; write_status aiolos-archive "behind"; trap - EXIT; exit 1; fi
+    ;;
+  day)    nas_check; [[ ${2:-} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "usage: aiolos-archive day YYYY-MM-DD"; archive_day "$2" ;;
+  weekly) nas_check; run_weekly ;;
+  check)  trap - EXIT; health ;;
+  *) echo "usage: aiolos-archive [run|day DAY|weekly|check]" >&2; exit 2 ;;
+esac

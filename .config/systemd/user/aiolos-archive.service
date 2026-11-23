@@ -1,0 +1,14 @@
+[Unit]
+Description=Archive aiolos observe.db and aiolos.db days to the NAS (aiolos-archive)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Exports each complete UTC day on the VPS and streams it to the NAS through
+# the home desktop. Mostly waiting on the VPS and the network, so low priority.
+ExecStart=%h/bin/aiolos-archive run
+Slice=builds.slice
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=12h

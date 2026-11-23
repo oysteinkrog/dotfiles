@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily aiolos archive to the NAS at 03:40 (enable on the office desktop only)
+
+[Timer]
+OnCalendar=*-*-* 03:40
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
