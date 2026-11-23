@@ -1,3 +1,4 @@
+diff --color -ruN a/mods/space-folders/main.js b/mods/space-folders/main.js
 --- a/mods/space-folders/main.js
 +++ b/mods/space-folders/main.js
 @@ -12,8 +12,8 @@
@@ -45,7 +46,12 @@
  const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
  const base = (path) => path.replace(/\/+$/, "").split("/").pop();
  // Changes made outside Herdr (an editor's save, a commit in another app): looked
-@@ -205,11 +230,32 @@
+@@ -201,15 +226,37 @@
+     this.known = new Set(spaces().map((s) => s.id));
+     this.front = null;
+     this.coming = {}; // a new space -> { at, from: this.front then }
++    this.labelled = {}; // a new space on this computer -> until when its labels are looked for (see byLabels)
+     this.pressed = null;
      this.over = null;
      this.machines = [];
      this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
@@ -78,7 +84,7 @@
      // `git status` walks the whole tree, on another machine a process there:
      // only when its answer could have changed (see `due`).
      cx.timer.every(250, (cx) => this.checkNew(cx));
-@@ -220,13 +266,48 @@
+@@ -220,13 +267,48 @@
        for (;;) {
          const c = String(await nextCommand()).split(".").pop();
          if (c === "next" || c === "prev") this.step(c === "next" ? 1 : -1);
@@ -128,7 +134,7 @@
    step(dir) {
      const seen = this.seen, len = seen.length;
      if (!len) return;
-@@ -367,8 +448,31 @@
+@@ -367,8 +449,31 @@
    }
 
    menu(w) {
@@ -162,7 +168,57 @@
    }
 
    // ---- folders ----
-@@ -521,8 +625,15 @@
+@@ -446,8 +551,10 @@
+     for (const s of fresh) {
+       this.known.add(s.id);
+       if (fresh.length === 1 && s.id !== made && this.front) this.coming[s.id] = { at: now, from: this.front };
++      if (!s.machine && s.id !== made) this.labelled[s.id] = now + 60000;
+     }
+     for (const [id, c] of Object.entries(this.coming)) if (now - c.at > 3000) delete this.coming[id];
++    this.byLabels(sp, now);
+     const front = sp.find((s) => s.active), c = front && this.coming[front.id];
+     if (c) {
+       delete this.coming[front.id];
+@@ -460,6 +567,38 @@
+     }
+   }
+
++  // A space an agent made with herdr-space-new (dotfiles bin/): the helper labels its terminals
++  // herdr.space-folder=<folder id, or "none"> and herdr.space-after=<the space it was made from>.
++  // Such a space goes in that folder, unless it already has a place in `of`, and right after that
++  // space in Herdr's order. Once per space, within 60 s of it appearing, and only for spaces on
++  // this computer (each computer files its own), so a later drag always wins and a reload or a
++  // machine coming in never pulls a space back. Same rule as helm's NewSpaces.byLabels.
++  byLabels(sp, now) {
++    const ids = Object.keys(this.labelled);
++    if (!ids.length) return;
++    const by = {};
++    for (const t of terminals()) {
++      const l = t.labels, id = l?.["herdr.space"];
++      if (t.state !== "live" || !id || String(t.address).includes("/")) continue;
++      if (l["herdr.space-folder"] || l["herdr.space-after"]) by[id] ??= l;
++    }
++    for (const id of ids) {
++      const s = sp.find((w) => w.id === id);
++      if (!s || now > this.labelled[id]) { delete this.labelled[id]; continue; }
++      const l = by[id];
++      if (!l) continue;
++      delete this.labelled[id];
++      delete this.coming[id];
++      const folder = l["herdr.space-folder"], f = folders(null);
++      if (folder && folder !== "none" && f.of[localId(s)] === undefined && f.list.some((x) => x.id === folder)) {
++        saveFolders(null, { ...f, of: { ...f.of, [localId(s)]: folder } });
++      }
++      const after = l["herdr.space-after"];
++      const i = after && after !== id ? sp.findIndex((w) => w.id === after) : -1, j = sp.findIndex((w) => w.id === id);
++      if (i >= 0 && j >= 0 && j !== i + 1) run("space.move", { id, index: j > i ? i + 2 : i + 1 });
++    }
++  }
++
+   // A new space `s` under the space it was made from: in that one's folder, and
+   // after it in Herdr's order, which the list keeps inside a folder (a checkout's
+   // worktrees stay between them). space.move's index is where it ends up, from 1.
+@@ -521,8 +660,15 @@
    // for the keys that step through the list.
    foldered(rows, machine, t, collapsed, { guests = [], nested = false, hidden = false, seen = [] } = {}) {
      const draw = (r, away) => {
@@ -179,7 +235,7 @@
      };
      const f = folders(machine), { list } = f, ps = panes();
      let parent = null;
-@@ -536,8 +647,10 @@
+@@ -536,8 +682,10 @@
          const visitors = guests.filter((g) => g.folder === f.id);
          const counted = [...inside, ...visitors.flatMap((g) => g.rows)];
          const away = hidden || f.folded;
@@ -191,7 +247,7 @@
            ...inside.flatMap((r) => draw(r, away)),
            ...visitors.flatMap((g) => this.machineSection(g.m, g.rows, t, collapsed, { nested: true, hidden: away, seen })),
          ];
-@@ -552,15 +665,16 @@
+@@ -552,15 +700,16 @@
      // A folder dragged over this one: a line where it would go, as for spaces.
      const moving = this.moving, aimed = moving && moving.id !== f.id && this.overMove === f.id;
      // As tall as a space's row, with an 18px tile where a space has its avatar.
@@ -210,7 +266,7 @@
          if (this.pressed !== null && this.overFolder !== f.id) { this.overFolder = f.id; this.over = null; cx.notify(); }
          const over = this.moving && (this.moving.machine ?? null) === (machine ?? null) ? f.id : null;
          if (this.moving && this.overMove !== over) { this.overMove = over; cx.notify(); }
-@@ -574,8 +688,8 @@
+@@ -574,8 +723,8 @@
        .on_click(() => this.toggleFolder(machine, f.id))
        .on_mouse_down("right", () => openOverlay({ mod: "space-folders", kind: "popup", width: 210, height: 160, props: { folderMenu: f.id, machine } }));
      // Built like a space's avatar: a filled 18px tile in the folder's color, its mark in white.
@@ -221,7 +277,7 @@
      if (collapsed) return head.justify_center().child(tile);
      return head
        .child(tile)
-@@ -639,7 +753,10 @@
+@@ -639,7 +788,10 @@
      for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
      const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null })).filter((r) => this.shown.has(r.w.id));
      const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
@@ -233,7 +289,7 @@
      const out = [];
      const placed = new Set(); // repos whose worktrees are listed (under the first of its spaces)
      for (const r of list) {
-@@ -661,7 +778,7 @@
+@@ -661,7 +813,7 @@
    }
 
    loadingRow(m, t, collapsed) {
@@ -242,7 +298,7 @@
    }
 
    // A machine's header and, unless it's folded, its folders and spaces. In a
-@@ -671,7 +788,7 @@
+@@ -671,7 +823,7 @@
      const machine = this.machines.find(k => k.name === m);
      const connected = !m || machine?.state === "connected";
      const folded = this.folded.has(m);
@@ -251,7 +307,7 @@
        .cursor_pointer().hover(s => s.bg(t.hover))
        .on_click((_e, cx) => {
          folded ? this.folded.delete(m) : this.folded.add(m);
-@@ -687,7 +804,7 @@
+@@ -687,7 +839,7 @@
            .on_click((_e, cx) => { cx.stop_propagation(); newSpaceIn(m, null); }).child("+")))
          .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
          .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
@@ -260,7 +316,7 @@
        .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
        .on_click(() => newSpaceIn(m, null))
        .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
-@@ -745,6 +862,7 @@
+@@ -745,6 +897,7 @@
      const colors = shared("space.colors") ?? {};
      const color = colors[w.id] ?? "ansi6";
      const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
@@ -268,7 +324,7 @@
      return v_flex()
        .relative()
        .id(`space-${w.id}`)
-@@ -753,7 +871,7 @@
+@@ -753,7 +906,7 @@
        .h(rowHeight({ tree }))
        .flex_none()
        .justify_center()
@@ -277,7 +333,7 @@
        .when(on, (el) => el.bg(t.selected))
        .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
        .when(this.pressed === i && this.over !== i, (el) => el.opacity(0.5))
-@@ -765,8 +883,10 @@
+@@ -765,8 +918,10 @@
        .on_mouse_down("left", () => {
          this.pressed = i;
          this.over = i;
@@ -288,7 +344,7 @@
          const source = spaces()[this.pressed];
          const over = source && (source.machine ?? null) === (w.machine ?? null) ? i : null;
          if (this.pressed !== null && (this.over !== over || this.overFolder !== null)) {
-@@ -782,17 +902,18 @@
+@@ -782,17 +937,18 @@
          this.over = null;
          // Dropped on a space: it goes to that place, and into that space's folder.
          if (from !== null && over === i && from !== i) { this.drop(from, folder); run("space.move", { id: spaces()[from].id, index: i + 1 }); }
@@ -312,7 +368,7 @@
            .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
        );
    }
-@@ -806,15 +927,18 @@
+@@ -806,15 +962,18 @@
        .gap(4)
        .when(w.active, (el) => el.bg(t.raised))
        .hover((s) => s.bg(t.hover))
@@ -333,7 +389,7 @@
      const collapsed = narrow();
      const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
      const sp = spaces();
-@@ -833,26 +957,59 @@
+@@ -833,26 +992,59 @@
      const leaving = Boolean(dragged && folderOf(dragged, folders(dragged.machine ?? null), panes()));
      const button = (id, icon, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6)
        .hover(s => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(svg(`mods/workspace-chrome/${icon}.svg`).size(14));
