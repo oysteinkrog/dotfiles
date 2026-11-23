@@ -102,6 +102,9 @@ cat > "$TMP/build.rules" <<'EOF'
 - .venv/
 - venv/
 - __pycache__/
+# The NAS share (CIFS) rejects a backslash in a name ("Invalid argument").
+# Only Wine prefix copies in scratchpads have such names (2026-11-23).
+- *\\*
 EOF
 # Live SQLite files: dumped weekly instead.
 cat > "$TMP/sqlite.rules" <<'EOF'
