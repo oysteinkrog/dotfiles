@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily agent history copy to the NAS at 04:20
+
+[Timer]
+OnCalendar=*-*-* 04:20
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
