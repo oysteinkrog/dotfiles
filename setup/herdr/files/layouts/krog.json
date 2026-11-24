@@ -215,5 +215,8 @@
   "font": "DejaVu Sans Mono",
   "font_size": 15.33,
   "font_weight": 400,
-  "ui_font": "DejaVu Sans"
+  "ui_font": "DejaVu Sans",
+  "link_handlers": [
+    "chrome-profile"
+  ]
 }
