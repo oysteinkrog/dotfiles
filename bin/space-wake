@@ -1,0 +1,140 @@
+#!/bin/bash
+# Wake a frozen herdr space for one job, then freeze it again when the job is done.
+#
+# Usage: space-wake SPACE "JOB TEXT" [--terminal tXX] [--max-hours N] [--foreground]
+#
+#   SPACE        space id (sp...) on this desktop. For a home space: ssh home space-wake ...
+#   JOB TEXT     the message typed into the Claude session after thaw
+#   --terminal   which Claude terminal gets the job (default: the first Claude in the space)
+#   --max-hours  give up waiting after this long and leave the space running (default 4)
+#   --foreground run here instead of in a detached user unit
+#
+# Steps: thaw, label the terminals herdr.autothawed=1, wait until Claude is ready, send the
+# job, wait until it stops working, then freeze again only when all of these hold:
+#   - the terminal still has herdr.autothawed=1 (nobody took the space over);
+#   - claude-persist-resume.py <transcript> idle prints nothing (no /loop, /goal, open
+#     question or cut-off turn);
+#   - nobody typed in it after the job (Oystein's own messages count; peer and hook
+#     wrappers that start with "<" do not);
+#   - no jobd job from it waits or runs, and Claude has no background shell left.
+# Otherwise it leaves the space running, clears the label and logs why. It never touches a
+# space that was not frozen when it started, so a space Oystein thawed himself is safe.
+# Log: ~/.local/state/space-wake/<SPACE>.log (one "result:" line at the end).
+set -uo pipefail
+F=$HOME/.config/herdr-app/mods/space-freeze/freeze.sh
+RESUMECHK=$HOME/.claude/hooks/claude-persist-resume.py
+STATE=$HOME/.local/state/space-wake
+SPACE= JOB= TERM_ADDR= MAXH=4 FG=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --terminal) TERM_ADDR=$2; shift 2;;
+    --max-hours) MAXH=$2; shift 2;;
+    --foreground) FG=1; shift;;
+    -h|--help) sed -n 2,24p "$0"; exit 0;;
+    *) if [ -z "$SPACE" ]; then SPACE=$1; elif [ -z "$JOB" ]; then JOB=$1; else echo "space-wake: extra argument $1" >&2; exit 2; fi; shift;;
+  esac
+done
+[ -n "$SPACE" ] && [ -n "$JOB" ] || { echo "usage: space-wake SPACE \"JOB TEXT\" [--terminal tXX] [--max-hours N] [--foreground]" >&2; exit 2; }
+mkdir -p "$STATE"
+LOG=$STATE/$SPACE.log
+
+if [ "$FG" = 0 ]; then
+  bash "$F" list | jq -e --arg s "$SPACE" 'any(.[]; .space == $s)' >/dev/null ||
+    { echo "space-wake: $SPACE is not frozen on this desktop; nothing to wake" >&2; exit 3; }
+  unit=space-wake-${SPACE:2:12}-$$
+  args=("$SPACE" "$JOB" --max-hours "$MAXH" --foreground); [ -n "$TERM_ADDR" ] && args+=(--terminal "$TERM_ADDR")
+  systemd-run --user --unit="$unit" --collect --quiet -E PATH -E HOME \
+    bash -c 'exec "$0" "$@" >>"'"$LOG"'" 2>&1' "$(readlink -f "$0")" "${args[@]}" || exit 1
+  echo "space-wake: started unit $unit; log $LOG"
+  exit 0
+fi
+
+log() { echo "$(date +%T) $*"; }
+result() { log "result: $*"; exit "${2:-0}"; }
+state() { hc get "$1" --json 2>/dev/null | jq -r '.status.state // empty'; }
+entry_for() {  # claude-persist entry file for a terminal, with a live pid
+  local f
+  for f in "$HOME"/.local/state/claude-persist/sessions/*.json; do
+    [ "$(jq -r '.hc.terminal // .hc.id // .hc // empty' "$f" 2>/dev/null)" = "$1" ] || continue
+    kill -0 "$(jq -r .pid "$f")" 2>/dev/null && { echo "$f"; return; }
+  done
+}
+
+log "space-wake $SPACE: $(printf %.80s "$JOB")"
+bash "$F" list | jq -e --arg s "$SPACE" 'any(.[]; .space == $s)' >/dev/null || result "not frozen at start; left alone" 3
+out=$(bash "$F" thaw "$SPACE" 2>&1); rc=$?; log "thaw: $out"
+[ $rc -eq 0 ] || result "thaw failed (exit $rc); check by hand" 1
+
+terms=$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
+for t in $terms; do hc label "$t" herdr.autothawed=1 >/dev/null; done
+clear_label() { for t in $terms; do hc label "$t" herdr.autothawed= >/dev/null 2>&1; done; }
+
+# Wait (max 10 min) for the resumed Claude to be ready and its persist entry to be fresh.
+T=$TERM_ADDR entry=
+for _ in $(seq 60); do
+  sleep 10
+  if [ -z "$TERM_ADDR" ]; then
+    T=; for t in $terms; do [ "$(hc get "$t" --json | jq -r '.status.app // empty')" = claude-code ] && { T=$t; break; }; done
+  fi
+  [ -n "$T" ] || continue
+  entry=$(entry_for "$T")
+  case $(state "$T") in done|idle) [ -n "$entry" ] && break;; esac
+done
+[ -n "$T" ] && [ -n "$entry" ] || { clear_label; result "no ready Claude in the space after 10 min; left running" 1; }
+tr=$(jq -r .transcript "$entry"); cpid=$(jq -r .pid "$entry"); cwd=$(readlink "/proc/$cpid/cwd")
+log "ready: terminal $T, pid $cpid, transcript $tr"
+
+mark=$(date -u +%Y-%m-%dT%H:%M:%S)
+hc send "$T" "$JOB" >/dev/null || { clear_label; result "hc send failed; left running" 1; }
+log "job sent"
+
+# Wait until it has been done or idle for two checks in a row, or blocked, or out of time.
+deadline=$(( $(date +%s) + MAXH * 3600 )); quiet=0
+sleep 30
+while :; do
+  s=$(state "$T")
+  case $s in
+    done|idle) quiet=$((quiet + 1)); [ $quiet -ge 2 ] && break;;
+    blocked) clear_label; result "Claude is waiting for an answer; left running for Oystein" 0;;
+    "") clear_label; result "terminal $T is gone; check by hand" 1;;
+    *) quiet=0;;
+  esac
+  [ "$(date +%s)" -lt "$deadline" ] || { clear_label; result "still working after $MAXH h; left running" 0; }
+  sleep 30
+done
+log "job finished ($s)"
+
+# The checks before freezing again.
+why=
+[ "$(hc get "$T" --json | jq -r '.labels["herdr.autothawed"] // empty')" = 1 ] || why="autothawed label is gone (someone took the space over)"
+if [ -z "$why" ]; then
+  r=$(python3 "$RESUMECHK" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
+fi
+if [ -z "$why" ]; then
+  typed=$(jq -n --arg m "$mark" --arg job "$JOB" '[inputs | select(.type=="user" and (.isMeta|not) and .timestamp > $m)
+      | .message.content | if type=="string" then . else (map(select(.type=="text") | .text) | join(" ")) end
+      | select(length > 0)
+      | if startswith("<hc ") then (sub("^<hc [^>]*>"; "") | sub("</hc>\\s*$"; "")) else . end
+      | select(startswith("<") | not) | select((. | rtrimstr("\n")) != $job)] | length' "$tr" 2>/dev/null)
+  [ "${typed:-0}" -eq 0 ] || why="someone typed in it after the job ($typed message(s))"
+fi
+if [ -z "$why" ]; then
+  # jobd names a job's session by the session's name; match every name it may use. A folder
+  # match counts only for a folder of its own (not ~, where many sessions run).
+  sid=$(basename "$tr" .jsonl)
+  title=$(grep -o '"customTitle":"[^"]*"' "$tr" | tail -1 | cut -d'"' -f4)
+  names=$(jq -nc --arg a "$sid" --arg b "$title" --arg c "$(hc get "$T" --json | jq -r '.name // empty')" \
+    --arg d "$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .name')" '[$a,$b,$c,$d] | map(select(length > 0))')
+  n=$(job queue 2>/dev/null | jq --arg c "$cwd" --arg h "$HOME" --argjson names "$names" \
+    '[.jobs[]? | select((.session as $s | $names | index($s)) or ($c != $h and .cwd == $c))] | length')
+  [ "${n:-0}" -eq 0 ] || why="$n jobd job(s) from its folder still waiting or running"
+fi
+if [ -z "$why" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zsh|sh|fish|timeout|sleep|tail|inotifywait)$'; then
+  why="Claude still has a background shell or Monitor"
+fi
+[ -z "$why" ] || { clear_label; result "not frozen again: $why" 0; }
+
+out=$(bash "$F" freeze "$SPACE" space-wake 2>&1); rc=$?; log "freeze: $out"
+clear_label
+[ $rc -eq 0 ] || result "freeze again failed (exit $rc); space left running" 1
+result "done and frozen again"

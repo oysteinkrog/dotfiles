@@ -1,6 +1,6 @@
 ---
 name: herdr-sessions
-description: Find, inspect, make, freeze and thaw the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "park this session", "frozen spaces" or "snowflake".
+description: Find, inspect, make, freeze, thaw and wake the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, waking a frozen session for one job (space-wake, also when a SendMessage says "not reachable"), when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "park this session", "frozen spaces" or "snowflake".
 ---
 
 # Herdr sessions: find, freeze, thaw
@@ -103,6 +103,28 @@ and its pending wakeup, a `/goal`, background shells and Monitors, and an unansw
 Thaw resumes the conversation, not those. So a session that has any of them must not be frozen
 by anyone but Oystein.
 
+## Wake a frozen session for one job
+
+A SendMessage to a frozen session fails with "not reachable". Do not stop there: wake it.
+
+```sh
+space-wake SPACE "Check your hub inbox and answer what is there."
+```
+
+`space-wake` thaws the space, labels its terminals `herdr.autothawed=1`, types the job into
+its Claude once it is ready, waits until the job is done, and then freezes the space again.
+It runs in its own user unit and returns at once. It freezes again only if nobody typed in
+the session after the job, the session has no `/loop`, `/goal`, open question, jobd job or
+background shell, and the label is still there. Otherwise it leaves the space running and
+says why. The log ends with one `result:` line: `~/.local/state/space-wake/<SPACE>.log`.
+
+- Find SPACE with `bash $F list` (the frozen spaces, by name). For a home space, run it there:
+  `ssh home space-wake SPACE "..."`.
+- Hub messages wait in the server inbox, so "check your hub inbox" is enough for hub mail.
+- `--terminal tXX` picks the Claude in a space with more than one; `--max-hours N`
+  (default 4) is how long it waits for the job.
+- Oystein can take a woken space over at any time: anything he types stops the refreeze.
+
 ## Auto-freeze (manager-resources and manager-home)
 
 Oystein, 2026-11-20: idle Claude sessions use too much memory on both desktops, and he wants
@@ -128,6 +150,8 @@ A space may be frozen when **all** of these hold:
 6. It is not a protected space: the manager-* sessions, agentic-oystein, the session in space
    "herdr mods", and any space with a terminal labelled `herdr.nofreeze=1`
    (`hc label tXX herdr.nofreeze=1` protects it).
+7. No terminal in it has `herdr.autothawed=1`. That space belongs to a running `space-wake`,
+   which freezes it again itself; leave it alone.
 
 How to run it:
 
