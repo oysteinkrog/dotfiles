@@ -176,7 +176,7 @@ fi
 # --- call API ---
 if [[ "$EDIT_MODE" -eq 1 ]]; then
   # v1/images/edits takes multipart/form-data, one image[] field per reference.
-  FORM=(-F "model=$MODEL" -F "prompt=$PROMPT" -F "size=$SIZE"
+  FORM=(-F "model=$MODEL" --form-string "prompt=$PROMPT" -F "size=$SIZE"
         -F "quality=$QUALITY" -F "n=$N" -F "output_format=$FORMAT")
   for f in "${INPUT_IMAGES[@]}"; do FORM+=(-F "image[]=@$f"); done
   [[ -n "$MASK" ]]           && FORM+=(-F "mask=@$MASK")
