@@ -15,8 +15,9 @@
     "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1"
   },
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "bypassPermissions"
   },
+  "model": "opus[1m]",
   "disabledMcpjsonServers": [
     "mcp-agent-mail"
   ],
@@ -268,9 +269,9 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/job-wake.sh",
+            "timeout": 11000,
             "asyncRewake": true,
-            "rewakeMessage": "Detached job finished (job-wake hook):",
-            "timeout": 11000
+            "rewakeMessage": "Detached job finished (job-wake hook):"
           }
         ]
       }
