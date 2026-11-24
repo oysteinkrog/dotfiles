@@ -33,6 +33,8 @@
 #   TASKS      tasks per claude-*.scope 1000 warn, 2000 crit; 4000/8000 for a
 #              critical-class session (class cached 10 min, failed lookup retried after 60 s, default on failure).
 #   DUP_SESSION two live Claude processes resuming the same session id.
+#   TARGET     weekly, when / is over 85% used: the 10 biggest target/ dirs under
+#              /var/tmp/claude and ~/work (warn line, toast, events.log).
 #   TIMER      watched units skipped or failed, watched timers not active,
 #              slab-guard not active (every 5 min); other failed units (info).
 #
@@ -627,6 +629,25 @@ timer_state() {
   fi
 }
 
+# Weekly: when / is over MM_TARGET_PCT used, list the 10 biggest target/ dirs.
+# du runs in the background under nice and ionice with a timeout, so it stays cheap.
+# Test overrides: MM_TARGET_PCT (threshold), MM_TARGET_FORCE=1 (ignore the weekly gate).
+check_target_growth() {
+  local t last pct thr=${MM_TARGET_PCT:-85}
+  t=$(now); last=$(state_get target_warned 0)
+  (( t - last >= 604800 || ${MM_TARGET_FORCE:-0} == 1 )) || return 0
+  pct=$(df --output=pcent / 2>/dev/null | tr -dc '0-9')
+  [[ $pct =~ ^[0-9]+$ ]] && (( pct > thr )) || return 0
+  state_set target_warned "$t"
+  (
+    local top
+    top=$(find /var/tmp/claude "$HOME/work" -maxdepth 6 -type d -name target -prune 2>/dev/null \
+      | timeout 120 xargs -r nice -n 19 ionice -c3 du -s --block-size=1G 2>/dev/null \
+      | sort -rn | head -10 | awk '{printf "%s GiB %s; ", $1, $2}')
+    emit warn TARGET "/ is ${pct}% used (limit ${thr}%). Biggest target/ dirs: ${top%; }${top:+.}${top:-none found}. Owners: delete merged lanes' target/ and worktrees (see heavy-build skill) and tell manager-home."
+  ) &
+}
+
 heartbeat() {
   emit info HEARTBEAT "swap ${SWAP_PCT:-?}%, disk ${DISK_FREE:-?} GiB free, psi cpu ${PSI_CPU:-?}% mem ${PSI_MEMORY:-?}%, kmalloc-128 $(state_get slab_mb '?') MB, ${PROC_COUNTS:-}"
 }
@@ -649,7 +670,7 @@ main() {
       check_disk; check_oom; check_cass; check_procs; check_tasks; check_dup_sessions
     fi
     (( n % 4 == 0 )) && check_slab
-    (( n % 20 == 0 )) && { check_btrfs; check_timers; }
+    (( n % 20 == 0 )) && { check_btrfs; check_timers; check_target_growth; }
     if (( t - $(state_get heartbeat 0) >= 3600 )); then heartbeat; state_set heartbeat "$t"; fi
     n=$((n + 1))
     sleep "$MM_TICK"

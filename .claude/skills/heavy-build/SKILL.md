@@ -239,7 +239,16 @@ have enough information to rank its own build, so:
 A subagent prompt that builds must say "use `heavy-build` and load the `heavy-build`
 skill". Do not copy the old `flock ... systemd-run ...` line into prompts.
 
-## 11. Where to look
+## 11. Disk after the build
+
+- **Clean up a merged lane's build output.** When a lane or worktree's work has merged,
+  its owner deletes that worktree's `target/` (and removes the worktree itself once its
+  refs are kept) in the same turn. Keep one warm tree only if it is the next cut, and say
+  so to manager-home. On 2026-11-24 126 lane worktrees under `/var/tmp/claude` held
+  473 GB of `target/` and free disk on `/` fell to 493 GB. machine-monitor warns once a
+  week when `/` is over 85% used and lists the 10 biggest `target/` dirs.
+
+## 12. Where to look
 
 - `heavy-build --help`: the full admission rules, lock keys and environment variables.
 - `~/.local/state/heavy-build/live.log`: every admission decision.

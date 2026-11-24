@@ -287,6 +287,12 @@ directory instead.
   80 GiB clear `target/debug/incremental`. For another repo in `~/projects`, run
   `cargo-target-prune --targets <repo>/target` from a timer, or copy the tasklens
   script. Never sweep while that repo's build runs.
+- **Clean up a merged lane's build output.** When a lane or worktree's work has merged,
+  its owner deletes that worktree's `target/` (and removes the worktree itself once its
+  refs are kept) in the same turn. Keep one warm tree only if it is the next cut, and say
+  so to manager-home. On 2026-11-24 126 lane worktrees under `/var/tmp/claude` held
+  473 GB of `target/` and free disk on `/` fell to 493 GB. machine-monitor warns once a
+  week when `/` is over 85% used and lists the 10 biggest `target/` dirs.
 - `debug = "line-tables-only"` and dependency `debug = false` are the cheapest disk
   win (section 5).
 - Each extra feature set or `-p` set is another full copy of the affected crates in
