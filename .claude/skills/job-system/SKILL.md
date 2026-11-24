@@ -59,6 +59,32 @@ declare it with `HEAVY_BUILD_WINE_PREFIX=<prefix path>` in the submit environmen
 it takes the shared prefix's lock key and blocks other Wine jobs (heavy-build skill,
 section 8).
 
+**Holding an app run (headless MC) for work you do from another shell.** The
+job-wake hook wakes you only when a job *ends*. It never tells you a job has
+*started*, and a hold job does not end until you finish with it. So:
+
+- Submit with `--ready-file`. jobd writes that file (with `admitted=`, `unit=`
+  and `jobd_request=` lines) the moment it starts the job, and removes an old
+  one at submit.
+- In the same turn, wait for it in a background until-loop, then carry on:
+
+  ```bash
+  R=/var/tmp/claude/<task>/started
+  job submit --detach --class app-run --ready-file "$R" -- ./hold.sh
+  # then, as its own Bash call with run_in_background:
+  until [ -s "$R" ]; do sleep 5; done; cat "$R"
+  ```
+
+- Never end the turn waiting for a start wake. None comes, so the job holds an
+  app slot and its memory with nobody using it (2026-11-24: ca025841 sat idle for about
+  30 min while a kpp high job waited for an app slot).
+- A plain subagent cannot be woken by any hook. It must keep the until-loop in
+  its own turn, or return the request id and the ready-file path to its parent.
+- End the hold as soon as the work is done (your script's own stop file, or
+  `job cancel <id>`). jobd stops counting an app run toward the app-slot limit
+  after 20 min under 0.25 cores (`event=app-uncap`), but it never stops the
+  job: about a third of app runs that sat idle for 10 min got busy again.
+
 ## 3. Killed clients
 
 If a `job submit` client is killed (SIGKILL, a dead tool call) while its job
