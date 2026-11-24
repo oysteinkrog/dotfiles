@@ -1,7 +1,7 @@
 ---
 name: lab-deploy
 description: >-
-  Reach the lab PC, the Windows machine "trd-lab-pc" (formerly Hawk) at 192.168.1.143 in the Trondheim
+  Reach the lab PC, the Windows machine "trd-lab-pc" (formerly Hawk) at 192.168.1.160 in the Trondheim
   office: log in over ssh, run PowerShell there, copy a build or file to it, and pull
   the newest Swing Catalyst logs back. Use when the user mentions the lab PC, the lab
   machine, trd-lab-pc, Hawk (its old name), testing on the lab rig, or wants logs from the lab.
@@ -11,7 +11,7 @@ description: >-
 
 | | |
 |---|---|
-| Address | `192.168.1.143`, office LAN only. Not on Tailscale, so it is unreachable from outside the office network |
+| Address | `192.168.1.160`, office LAN only. Not on Tailscale, so it is unreachable from outside the office network |
 | Name | `trd-lab-pc` (Windows computer name `TRD-LAB-PC` since 2026-11-05). It used to be called Hawk. Do not use the old name in new text |
 | Login | `ssh labpc` (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` |
 | Auth | Keys only. sshd has `PasswordAuthentication no`. Backup config: `C:\ProgramData\ssh\sshd_config.bak-2026-09-29` |

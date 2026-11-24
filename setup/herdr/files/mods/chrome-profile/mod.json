@@ -1,0 +1,5 @@
+{
+  "place": "none",
+  "title": "Chrome profile for links",
+  "link_handlers": [{ "kind": "url", "pattern": "^https?://" }]
+}

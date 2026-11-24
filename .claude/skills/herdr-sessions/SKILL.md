@@ -141,3 +141,17 @@ How to run it:
 
 `hc label <address> herdr.nofreeze=1` on any terminal in the space. Remove with
 `hc label <address> herdr.nofreeze=`.
+
+## Which Chrome profile a link opens
+
+Ctrl-click on a web link in a herdr-app terminal opens Chrome through the `chrome-profile` mod
+(dotfiles `setup/herdr/files/mods/chrome-profile`):
+
+1. The terminal's label `herdr.browser=work` or `herdr.browser=personal` wins.
+2. Otherwise the machine that runs the terminal: a home terminal opens the personal profile,
+   an office terminal the work profile.
+
+Chrome opens on the desktop whose window was clicked, through `~/.local/bin/chrome-work` or
+`chrome-personal`. Set the label only when a session's links belong to the other profile, for
+example personal work in an office session: `hc label <address> herdr.browser=personal`.
+Remove it with `hc label <address> herdr.browser=`.
