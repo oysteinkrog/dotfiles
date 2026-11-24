@@ -1,0 +1,12 @@
+#!/bin/bash
+# `claude` for herdr terminals: config.fish puts this folder first on PATH inside herdr (HC_TERMINAL_ID set).
+# herdr-app starts a program as `/usr/bin/fish -ic 'command $argv[2..]; exec $argv[1] -i' /usr/bin/fish claude ...`.
+# fish's `command` skips the fish function `c`, so Claude would start without aiolos-rc (bypass mode,
+# account routing, remote control). When that wrapper is this process's parent, start through
+# claude-start instead, the same path as a manual start. Every other `claude` (a `claude -p` inside a
+# session, a hook, a script) runs the real binary unchanged.
+mapfile -d '' -t parent < "/proc/$PPID/cmdline" 2>/dev/null
+if [ "${parent[1]:-}" = -ic ] && [[ "${parent[2]:-}" == 'command $argv[2..]'* ]]; then
+  exec "$HOME/bin/claude-start" "$@"
+fi
+exec "$HOME/.local/bin/claude" "$@"

@@ -61,3 +61,10 @@ set -gx CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS 1   # was conf.d/superbot2.fish
 # Keep the `current` symlink path: tools/wine/build-wine.sh finds stock Wine
 # by skipping this exact directory.
 fish_add_path -g -p -m ~/.local/share/motioncatalyst-wine/current/bin
+
+# In herdr terminals, `claude` started by herdr-app goes through claude-start (aiolos-rc), the same
+# path as a manual start. herdr's spawn wrapper runs `command claude`, which skips the fish function
+# `c`. The shim (bin/herdr-shim/claude) passes every other `claude` call to the real binary.
+if set -q HC_TERMINAL_ID
+    fish_add_path -g -p -m ~/bin/herdr-shim
+end
