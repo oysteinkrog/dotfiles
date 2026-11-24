@@ -22,6 +22,7 @@ os.environ["CHROME_IDLE_MODE_FILE"] = f"{_tmp}/mode"
 os.environ.pop("CHROME_IDLE_MODE", None)
 os.environ["CHROME_IDLE_JOBD_LOG"] = f"{_tmp}/no-log"
 os.environ["CHROME_IDLE_JOB_QUEUE_CMD"] = "false"
+os.environ["CHROME_IDLE_PRESSURE_LEVEL"] = f"{_tmp}/pressure-level"
 
 _path = os.environ.get("CHROME_IDLE_SCRIPT") or str(
     Path(__file__).with_name("chrome-idle-close")
@@ -313,6 +314,35 @@ class Memory(unittest.TestCase):
             self.assertEqual(cic.hb_memory_waits(now, None, {"a"}), 1)
         finally:
             cic.JOBD_LOG, cic.HB_TAIL_BYTES = old
+
+
+class Pressure(unittest.TestCase):
+    def check(self, text, now=10_000.0):
+        return cic.pressure_tight(*cic.pressure_level(now, text))
+
+    def test_pause_is_tight(self):
+        self.assertTrue(self.check('level=pause since=9990 reason="x y"\n'))
+
+    def test_slow_six_minutes_is_tight(self):
+        self.assertTrue(self.check(f"level=slow since={10_000 - 360} updated=1\n"))
+
+    def test_slow_two_minutes_is_not(self):
+        self.assertFalse(self.check(f"level=slow since={10_000 - 120}\n"))
+
+    def test_normal_is_not(self):
+        self.assertFalse(self.check("level=normal since=1\n"))
+
+    def test_missing_file_is_not(self):
+        f = Path(os.environ["CHROME_IDLE_PRESSURE_LEVEL"])
+        f.unlink(missing_ok=True)
+        self.assertEqual(cic.pressure_level(10_000.0), ("unknown", 0.0))
+        self.assertFalse(cic.pressure_tight(*cic.pressure_level(10_000.0)))
+
+    def test_reads_file(self):
+        f = Path(os.environ["CHROME_IDLE_PRESSURE_LEVEL"])
+        f.write_text('level=pause since=9400 reason="memory full"\nmore\n')
+        self.assertEqual(cic.pressure_level(10_000.0), ("pause", 10.0))
+        f.unlink()
 
 
 class Decide(unittest.TestCase):

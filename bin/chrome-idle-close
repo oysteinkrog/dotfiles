@@ -15,6 +15,9 @@ default) is closed only when both hold:
      Or Oystein is away: presence-detect has said "away" for AWAY_MIN
      minutes (chrome_away_min in ~/.config/presence.conf, default 60, 0
      turns it off). Remote does not count. Approved 2026-10-26.
+     Or pressure-coordinator's level file (~/.local/state/pressure/level)
+     says level=pause, or has said level=slow for PRESSURE_SLOW_MIN minutes
+     (5) by its since= field. A missing or unreadable file adds nothing.
 
 Focus: a small KWin script (chrome-idle-focus.kwin.js, next to this file)
 writes a journal line each time the active window changes. Each run reads the
@@ -68,6 +71,10 @@ PRESENCE_STATE = Path(
 PRESENCE_CONF = Path(
     os.environ.get("CHROME_IDLE_PRESENCE_CONF", HOME / ".config/presence.conf")
 )
+PRESSURE_LEVEL = Path(
+    os.environ.get("CHROME_IDLE_PRESSURE_LEVEL", HOME / ".local/state/pressure/level")
+)
+PRESSURE_SLOW_MIN = float(os.environ.get("CHROME_IDLE_PRESSURE_SLOW_MIN", "5"))
 PRESENCE_FRESH_S = 60  # presence-detect rewrites its state about every 5 s
 CLOSE_WAIT = 60.0
 STATE_DIR = Path(
@@ -413,6 +420,34 @@ def swap_pct(meminfo: str | None = None) -> float:
     if total <= 0:
         return 0.0
     return 100.0 * (total - vals.get("SwapFree", 0)) / total
+
+
+def pressure_level(now: float, text: str | None = None) -> tuple[str, float]:
+    """(level, minutes at that level) from pressure-coordinator's level file.
+
+    Returns ("unknown", 0) when the file is missing or unreadable. Minutes
+    are 0 when since= is missing or not a number.
+    """
+    if text is None:
+        try:
+            text = PRESSURE_LEVEL.read_text()
+        except (OSError, UnicodeDecodeError):
+            return "unknown", 0.0
+    first = text.splitlines()[0] if text.strip() else ""
+    fields = dict(
+        part.split("=", 1) for part in first.split() if "=" in part
+    )
+    level = fields.get("level", "").strip('"') or "unknown"
+    try:
+        since = float(fields.get("since", ""))
+        mins = max(0.0, (now - since) / 60.0)
+    except ValueError:
+        mins = 0.0
+    return level, mins
+
+
+def pressure_tight(level: str, mins: float) -> bool:
+    return level == "pause" or (level == "slow" and mins >= PRESSURE_SLOW_MIN)
 
 
 def job_queue_waiting() -> set[str] | None:
@@ -774,11 +809,13 @@ def run(mode: str, status: bool) -> int:
 
         sw = swap_pct()
         waits = hb_memory_waits(now)
-        tight = sw > SWAP_PCT or waits > 0
+        plevel, pmins = pressure_level(now)
+        tight = sw > SWAP_PCT or waits > 0 or pressure_tight(plevel, pmins)
         away = away_min(now)
         away_limit = away_limit_min()
         mem_note = (
-            f"swap={sw:.1f}% hb_stuck_mem_jobs={waits} tight={'yes' if tight else 'no'}"
+            f"swap={sw:.1f}% hb_stuck_mem_jobs={waits} "
+            f"pressure={plevel}/{pmins:.0f}min tight={'yes' if tight else 'no'}"
             f" away_min={away:.0f}"
         )
         pids = main_pids()
@@ -792,7 +829,8 @@ def run(mode: str, status: bool) -> int:
             )
             print(
                 f"memory: {mem_note} (swap limit {SWAP_PCT:.0f}%, "
-                f"jobd memory wait {HB_MIN_WAIT:.0f} s)"
+                f"jobd memory wait {HB_MIN_WAIT:.0f} s, pressure pause or slow "
+                f"{PRESSURE_SLOW_MIN:.0f} min)"
             )
             print(
                 f"active window: pid={active.get('pid')} class={active.get('class')} "
