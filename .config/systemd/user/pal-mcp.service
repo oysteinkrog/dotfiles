@@ -1,0 +1,24 @@
+[Unit]
+Description=PAL MCP server, shared by all Claude Code sessions (SSE on 127.0.0.1:4801)
+# One PAL for the whole desktop instead of one stdio PAL per Claude session.
+# On 2026-11-25 the office desktop ran 38 PAL processes, and 15 of them had
+# started before Gemini 4 Neon was added on 11-20, so those sessions had no
+# Neon. PAL reads its models and .env once at start: after a PAL pull or an
+# .env change, run `systemctl --user restart pal-mcp` and every session gets it.
+# Model calls run in worker threads (asyncio.to_thread), so sessions do not
+# wait on each other.
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/pal-mcp-server
+Environment=MCP_TRANSPORT=sse
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=4801
+ExecStart=%h/projects/pal-mcp-server/.pal_venv/bin/python %h/projects/pal-mcp-server/server.py
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=default.target

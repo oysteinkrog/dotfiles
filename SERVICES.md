@@ -9,6 +9,7 @@ are listed in that machine's `host.sh` (`HOST_USER_UNITS`) in the life repo.
 
 | Unit | Port | What |
 |------|------|------|
+| `pal-mcp.service` | 4801 | PAL MCP server (SSE, localhost) shared by every Claude session: GPT and Gemini oracles. Restart after a PAL pull or `.env` change. |
 | `qmd-ifkb.service` | 8181 | qmd search server for the ifkb knowledge base (GPU, localhost, no auth). |
 | `aiolos-rc-shim.service` | | Shared TLS shim for `--no-pin` aiolos-rc Claude sessions. See `.config/aiolos-rc/README.md`. |
 | `voxtype.service` | | Voxtype dictation, the localbuilds package in `/usr/lib/voxtype-local`. Package, models and settings: `setup/steps/55-voxtype.sh`. Restart only when `/usr/lib/voxtype-local/voxtype status` prints `idle`. |

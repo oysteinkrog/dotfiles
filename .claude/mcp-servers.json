@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "pal": {
-      "type": "stdio",
-      "command": "/home/oystein/projects/pal-mcp-server/.pal_venv/bin/python",
-      "args": ["/home/oystein/projects/pal-mcp-server/server.py"]
+      "type": "sse",
+      "url": "http://127.0.0.1:4801/sse"
     },
-"cdb-interactive": {
+    "cdb-interactive": {
       "type": "stdio",
       "command": "cmd.exe",
       "args": [
@@ -14,14 +13,15 @@
         "C:\\WORK\\mcp-cdb-interactive\\server.py",
         "--cdb-path",
         "C:\\Users\\oystein\\AppData\\Local\\Microsoft\\WindowsApps\\cdbX64.exe",
-        "--timeout", "120",
+        "--timeout",
+        "120",
         "--verbose"
       ],
       "env": {
         "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
       }
     },
-"github": {
+    "github": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": {

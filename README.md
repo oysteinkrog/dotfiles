@@ -52,9 +52,11 @@ claude mcp add -s user fff -- ~/.local/bin/fff-mcp
 
 #### PAL MCP server (GPT and Gemini models, including Gemini 4 Neon and Carbon)
 
-[PAL](https://github.com/oysteinkrog/pal-mcp-server) runs as a stdio MCP server from
-its own checkout at `~/projects/pal-mcp-server`. Its API keys live in that checkout's
-gitignored `.env`, so nothing secret is in this repo. The entry in
+[PAL](https://github.com/oysteinkrog/pal-mcp-server) runs once per desktop as the
+systemd user service `pal-mcp.service` (SSE on `127.0.0.1:4801`), from its own checkout
+at `~/projects/pal-mcp-server`, and every Claude session connects to it. After a PAL pull
+or an `.env` change, run `systemctl --user restart pal-mcp`. Its API keys live in that
+checkout's gitignored `.env`, so nothing secret is in this repo. The entry in
 `.claude/mcp-servers.json` is the source of truth. Register it at user scope:
 
 ```bash
