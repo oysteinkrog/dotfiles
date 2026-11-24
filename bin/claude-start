@@ -1,0 +1,6 @@
+#!/bin/bash
+# Start Claude Code the same way a manual start does (the fish function `c`):
+# through aiolos-rc, which adds bypass permissions, account routing and remote
+# control. herdr spawns, forks and breakouts call this instead of a bare `claude`,
+# because herdr's fish wrapper runs `command claude` and so skips the fish function.
+exec "$HOME/.config/aiolos-rc/aiolos-rc" --no-pin "$@"

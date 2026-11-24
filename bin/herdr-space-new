@@ -33,6 +33,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$name" ] || { echo "herdr-space-new: --name is required" >&2; exit 2; }
+# A bare "claude" would start without aiolos-rc (herdr's shell wrapper runs
+# `command claude`, which skips the fish function). Use the manual start path.
+if [ -n "$argv" ] && [ "$(jq -r '.[0] // empty' <<<"$argv")" = claude ]; then
+  argv=$(jq -c --arg l "$HOME/bin/claude-start" '.[0] = $l' <<<"$argv")
+fi
 
 # The spawning space, when this runs inside an hc terminal.
 caller=
