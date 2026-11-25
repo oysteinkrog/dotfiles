@@ -262,12 +262,16 @@ record() {
   if [ ! -s "$transcript" ]; then
     local -a found=("$HOME"/.claude/projects/*/"$sid".jsonl)
     if [ ${#found[@]} -eq 1 ] && [ -s "${found[0]}" ]; then
-      local home
-      home=$(grep -a -m1 -o '"cwd":"[^"]*"' "${found[0]}" | cut -d'"' -f4)
-      if [ -n "$home" ] && [ -d "$home" ] \
-         && [ "$(project_slug "$home")" = "$(basename "$(dirname "${found[0]}")")" ]; then
-        cwd=$home transcript=${found[0]}
-      fi
+      # The transcript's first cwd is not always its project folder: a session
+      # copied from another project starts with that project's cwd (2026-11-25,
+      # first cwd ~/work/ifkb in a ~/work/if-admin transcript). Take the first
+      # recorded cwd whose slug is the folder the transcript lives in.
+      local home want c
+      want=$(basename "$(dirname "${found[0]}")") home=
+      while IFS= read -r c; do
+        [ -d "$c" ] && [ "$(project_slug "$c")" = "$want" ] && { home=$c; break; }
+      done < <(grep -a -o '"cwd":"[^"]*"' "${found[0]}" | cut -d'"' -f4 | awk '!s[$0]++')
+      [ -n "$home" ] && cwd=$home transcript=${found[0]}
     fi
   fi
   # the mux pane the session runs in, to put its tab back in the same place
