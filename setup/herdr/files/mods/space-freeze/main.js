@@ -1,5 +1,5 @@
 // Freeze and Thaw for a whole space (krog layout). Opened by space-folders:
-//   props { menu: spaceId, frozen }  the space's right-click menu: Freeze or Thaw, then Herdr's own items
+//   props { menu: spaceId, frozen }  the space's right-click menu: Freeze or Thaw, Kill, then Herdr's own items
 //   props { confirm: spaceId } the dialog that lists what Freeze stops, and does it
 //   props { thaw: spaceId }    the dialog that thaws it at once and shows the result
 // Every step finishes before the overlay closes: a closed overlay's pending work never lands.
@@ -120,6 +120,8 @@ export default class SpaceFreeze extends View {
     const frozen = Boolean(props()?.frozen);
     return [
       frozen ? ["Thaw space", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 420, props: { thaw: s.id } })] : ["Freeze space…", () => openOverlay({ mod: "space-freeze", kind: "dialog", width: 480, props: { confirm: s.id } })],
+      // Kill and the Killed list are helm's dialogs (mods/helm, installed beside this mod).
+      ["Kill space…", () => openOverlay({ mod: "helm", kind: "dialog", width: 460, props: { part: "kill", space: s.id } })],
       ["Rename", () => run("space.rename", { id: s.id })],
       ...(this.git ? [["New worktree", () => this.worktree("new")], ["Open worktree", () => this.worktree("open")]] : []),
       ...(this.git === "linked" ? [["Remove worktree", () => this.worktree("remove")]] : []),
