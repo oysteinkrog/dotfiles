@@ -5,6 +5,7 @@
 #   space-kill revive SPACE [--dry-run]
 #   space-kill list                 JSON: the killed spaces on this desktop
 #   space-kill drain [--now]        remove queued worktrees, one at a time (22:00 to 07:00)
+#   space-kill forget SPACE         take a record off the killed list without reviving it
 #   (space-revive and space-killed are links to this script: revive and list.)
 #
 # Freeze stops a space's programs and keeps its shells, tabs and worktree. Kill keeps only
@@ -189,9 +190,14 @@ cmd_kill() {
 
   # Stop the programs the way Freeze does (clean Claude exit, transcript copy), then close.
   if [ $frozen = 0 ]; then
-    local out; out=$(bash "$F" freeze "$space" "killing") || die "freeze failed: $out"
-    jq -e '.failed | length == 0' <<<"$out" >/dev/null || die "freeze left programs running: $out"
-    fj=$(cat "$FS/$space.json")
+    if [ "$(jq '[.terminals[] | select(.kind != "shell")] | length' <<<"$plan")" -gt 0 ]; then
+      local out; out=$(bash "$F" freeze "$space" "killing") || die "freeze failed: $out"
+      jq -e '.failed | length == 0' <<<"$out" >/dev/null || die "freeze left programs running: $out"
+      fj=$(cat "$FS/$space.json")
+    else
+      # Only shells: nothing to stop. The plan is the record of the terminals.
+      fj=$(jq -c '{space, frozen_at:null, terminals:[.terminals[] | del(.pid, .claude_pid, .status)]}' <<<"$plan")
+    fi
   fi
 
   # Snapshots after the programs stopped, so nothing changes under them.
@@ -219,7 +225,7 @@ cmd_kill() {
     > "$K/$space.json.tmp" && mv "$K/$space.json.tmp" "$K/$space.json" || die "could not write the kill record"
 
   # The freeze state moves into the kill folder, so the space leaves the frozen list.
-  mv "$FS/$space.json" "$K/$space.freeze.json"
+  [ -f "$FS/$space.json" ] && mv "$FS/$space.json" "$K/$space.freeze.json"
   herdr-app do space.close --id "$space" --confirmed true >/dev/null || note "space.close failed; close space $space by hand"
 
   local n=0
@@ -309,7 +315,16 @@ cmd_revive() {
       herdr-app do tab.new --space "$new" --folder "$cwd" --argv "$argv" ${tab:+--name "$tab"} --focus false >/dev/null || note "could not open a tab for ${sid:0:8}"
     fi
   done < <(jq -c '.terminals[] | select(.kind == "claude")' "$rec")
-  [ $first = 0 ] || die "no Claude session in the record"
+  if [ $first = 1 ]; then
+    # No Claude in the record: a plain space with a shell, same name and sidebar folder,
+    # in the first recorded folder that still exists.
+    local cwd=$HOME d
+    while IFS= read -r d; do [ -n "$d" ] && [ -d "$d" ] && { cwd=$d; break; }; done < <(jq -r '.terminals[].cwd // empty' "$rec")
+    local g=(--group none)
+    [ -n "$folder" ] && jq -e --arg f "$folder" 'any(.list[]?; .id == $f)' "$FOLDERS" >/dev/null 2>&1 && g=(--group "$folder")
+    local out; out=$(HC_TERMINAL_ID= herdr-space-new --name "$name" "${g[@]}" --cwd "$cwd") || die "could not make the new space"
+    new=$(sed -n 's/^space \([^ ]*\) .*/\1/p' <<<"$out")
+  fi
 
   local stamp; stamp=$(date +%Y%m%d-%H%M%S)
   mv "$rec" "$K/revived/$space.$stamp.json"
@@ -372,6 +387,20 @@ cmd_drain() {
   done
 }
 
+# Take a killed space off the list without reviving it. The record moves to revived/ (it is
+# never deleted). Refused while a worktree of the space still waits in the removal queue,
+# because then nothing would bring that worktree back.
+cmd_forget() {
+  local space=${1:-}; [ -n "$space" ] || die "usage: space-kill forget SPACE"
+  local rec=$K/$space.json; [ -f "$rec" ] || die "space $space is not in the killed list"
+  ls "$K"/queue/"$space".*.json >/dev/null 2>&1 && die "a worktree of $space is still queued for removal; revive it instead, or wait for the drain"
+  local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+  mv "$rec" "$K/revived/$space.$stamp.forgotten.json"
+  [ -f "$K/$space.freeze.json" ] && mv "$K/$space.freeze.json" "$K/revived/$space.$stamp.freeze.json"
+  history forget "$space"
+  jq -cn --arg s "$space" '{forgotten:$s}'
+}
+
 case "$(basename "$0")" in
   space-revive) cmd_revive "$@"; exit $?;;
   space-killed) cmd_list; exit $?;;
@@ -381,6 +410,7 @@ case "${1:-}" in
   revive) shift; cmd_revive "$@";;
   list) cmd_list;;
   drain) shift; cmd_drain "$@";;
+  forget) shift; cmd_forget "$@";;
   -h|--help|"") sed -n 2,33p "$0";;
   *) die "unknown command $1 (see --help)";;
 esac
