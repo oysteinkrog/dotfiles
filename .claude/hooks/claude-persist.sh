@@ -280,7 +280,7 @@ record() {
   local hc; hc=$(hc_info "$pid")
   [ -n "$hc" ] && pane=""
   mkdir -p "$SESS_DIR"
-  local f; f=$(entry_file "$sid" "$cwd")
+  local f; f=$(entry_file "$sid" "$cwd"); RECORDED=$f
   # hc did not answer: keep what was saved for the same terminal (see hc_info).
   if [ -n "$hc" ] && [ "$(jq -r '[.name, .space, .tab] | all(. == null)' <<<"$hc")" = true ] && [ -f "$f" ] \
      && [ "$(jq -r '.hc.terminal // empty' "$f" 2>/dev/null)" = "$(jq -r .terminal <<<"$hc")" ]; then
@@ -293,7 +293,15 @@ record() {
           pane:(if $pane == "" then null else ($pane | tonumber) end),
           launcher:$launcher, flags:$flags, started:$started}
          + (if $hc == "" then {} else {hc:($hc | fromjson)} end)' \
-    > "$f.tmp" && mv "$f.tmp" "$f"
+    > "$f.tmp" && mv "$f.tmp" "$f" || return
+  # Drop other entries of this session that point at a transcript that does not
+  # exist: they came from the old folder lookup and would resume nothing.
+  [ -s "$transcript" ] || return 0
+  local o
+  for o in "$SESS_DIR/$sid@"*.json; do
+    [ "$o" = "$f" ] || [ ! -f "$o" ] && continue
+    [ -s "$(jq -r '.transcript // empty' "$o" 2>/dev/null)" ] || rm -f "$o"
+  done
 }
 
 hook_start() {
@@ -383,10 +391,13 @@ capture() {
     sid=$(jq -r '.sessionId // empty' "$f"); cwd=$(jq -r '.cwd // empty' "$f")
     name=$(jq -r '.name // empty' "$f")
     [ -n "$sid" ] && [ -n "$cwd" ] || continue
-    record "$pid" "$sid" "$cwd" "$name"
+    RECORDED=; record "$pid" "$sid" "$cwd" "$name"
     # plan restores oldest first; date the entry by when the session started
     local started_ms; started_ms=$(jq -r '.startedAt // empty' "$f")
-    [ -n "$started_ms" ] && touch -d "@$((started_ms / 1000))" "$(entry_file "$sid" "$cwd")"
+    # record may file the entry under the transcript's project folder, not this
+    # cwd; touch the file it wrote, and never create one (-c): a touch on the
+    # cwd path left empty entries behind (2026-11-23 to 11-25).
+    [ -n "$started_ms" ] && [ -n "$RECORDED" ] && touch -c -d "@$((started_ms / 1000))" "$RECORDED"
     n=$((n + 1)); echo "recorded $sid ${name:+($name) }$cwd"
   done
   echo "$n session(s) recorded"
