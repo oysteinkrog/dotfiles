@@ -257,11 +257,34 @@ restore_worktree() {
     lane=$(jq -c '.grove // empty' <<<"$w")
     if [ -n "$lane" ]; then
       tag=$(jq -r .tag <<<"$lane")
+      local gd; gd=$(jq -r .common_dir <<<"$w")
       local args=(new "$tag" --repo "$(jq -r .repo <<<"$lane")" --no-fetch)
       [ -n "$branch" ] && args+=(--branch "$branch")
       [ "$(jq -r .ephemeral <<<"$lane")" = true ] && args+=(--ephemeral --ttl 14d)
-      grove "${args[@]}" >&2 || return 1
-      [ "$(grove path "$tag" 2>/dev/null)" = "$root" ] || note "grove put $tag at $(grove path "$tag"), not $root"
+      # `grove new --branch B` always makes B anew and fails when the kept branch exists.
+      # Move the kept branch aside, let grove make the lane (reflink copy, its registry
+      # entry names B), then point B back at the kept commit and upstream.
+      local aside=
+      if [ -n "$branch" ] && git --git-dir="$gd" show-ref -q --verify "refs/heads/$branch"; then
+        if git --git-dir="$gd" worktree list --porcelain | grep -qx "branch refs/heads/$branch"; then
+          note "branch $branch is checked out in another worktree"; return 1
+        fi
+        aside="space-kill-aside/$branch"
+        git --git-dir="$gd" branch -m "$branch" "$aside" >&2 || return 1
+      fi
+      if ! grove "${args[@]}" >&2; then
+        [ -n "$aside" ] && ! git --git-dir="$gd" show-ref -q --verify "refs/heads/$branch" \
+          && git --git-dir="$gd" branch -m "$aside" "$branch" >&2
+        return 1
+      fi
+      root=$(grove path "$tag" --repo "$(jq -r .repo <<<"$lane")" 2>/dev/null || echo "$root")
+      [ "$root" = "$(jq -r .root <<<"$w")" ] || note "grove put $tag at $root, not $(jq -r .root <<<"$w")"
+      if [ -n "$aside" ]; then
+        git -C "$root" reset -q --hard "$aside" || return 1
+        git --git-dir="$gd" config --remove-section "branch.$branch" 2>/dev/null
+        git --git-dir="$gd" config --rename-section "branch.$aside" "branch.$branch" 2>/dev/null
+        git --git-dir="$gd" branch -D "$aside" >/dev/null || note "could not drop $aside"
+      fi
     else
       git --git-dir="$(jq -r .common_dir <<<"$w")" worktree add "$root" "${branch:-$head}" >&2 || return 1
     fi
