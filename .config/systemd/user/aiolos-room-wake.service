@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake manager-tokens when aiolos pool room is low (aiolos-room-wake)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/aiolos-room-wake
+Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin
+TimeoutStartSec=5min

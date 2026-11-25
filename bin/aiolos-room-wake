@@ -1,0 +1,81 @@
+#!/bin/bash
+# Wake the manager-tokens session when aiolos pool room drops low.
+#
+# Usage: aiolos-room-wake [--dry-run]
+#
+# Run by aiolos-room-wake.timer every 5 minutes on the office desktop.
+# Each run reads the Claude pool room (capacity.now_avail from
+# /dashboard/api/accounts/pool-data) 3 times, 20 s apart, and uses the highest
+# reading, because probe 429s make room dip for about a minute.
+# When that reading is below AIOLOS_ROOM_WAKE_MIN (default 4.0):
+#   - manager-tokens space frozen: space-wake thaws it and types the loop prompt.
+#     The loop arms a wakeup, so space-wake leaves the space running.
+#   - session running and idle: types the loop prompt so it ticks now.
+#   - session working: does nothing, it is busy and will see the room itself.
+# It fires at most once per AIOLOS_ROOM_WAKE_COOLDOWN_MIN minutes (default 60).
+# Settings can go in ~/.config/aiolos-room-wake.conf (KEY=VALUE lines).
+# Log: ~/.local/state/aiolos-room-wake/log
+set -uo pipefail
+DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
+CONF=$HOME/.config/aiolos-room-wake.conf
+# shellcheck disable=SC1090
+[ -f "$CONF" ] && . "$CONF"
+MIN=${AIOLOS_ROOM_WAKE_MIN:-4.0}
+COOLDOWN=${AIOLOS_ROOM_WAKE_COOLDOWN_MIN:-60}
+NAME=${AIOLOS_ROOM_WAKE_SESSION:-manager-tokens}
+PROMPT="/loop Run one tick of your loop, as written in ~/work/life/agents/manager-tokens.md."
+F=$HOME/.config/herdr-app/mods/space-freeze/freeze.sh
+STATE=$HOME/.local/state/aiolos-room-wake
+mkdir -p "$STATE"
+log() { echo "$(date -u +%FT%TZ) $*" >> "$STATE/log"; [ $DRY = 1 ] && echo "$*"; }
+
+poll() {
+  with-secrets ANTHROPIC_BASE_URL AIOLOS_API_KEY -- sh -c \
+    'curl -s -m 20 -H "x-api-key: $AIOLOS_API_KEY" "$ANTHROPIC_BASE_URL/dashboard/api/accounts/pool-data?pool=anthropic"' \
+    | jq -r '.capacity.now_avail // empty' 2>/dev/null
+}
+
+best=
+for i in 1 2 3; do
+  v=$(poll)
+  if [ -n "$v" ]; then
+    if [ -z "$best" ] || awk "BEGIN{exit !($v > $best)}"; then best=$v; fi
+  fi
+  [ $i -lt 3 ] && sleep 20
+done
+if [ -z "$best" ]; then log "no reading from aiolos"; exit 0; fi
+if awk "BEGIN{exit !($best >= $MIN)}"; then
+  [ $DRY = 1 ] && echo "room $best >= $MIN, nothing to do"
+  exit 0
+fi
+
+last=$(cat "$STATE/last-fire" 2>/dev/null || echo 0)
+now=$(date +%s)
+if [ $((now - last)) -lt $((COOLDOWN * 60)) ]; then
+  log "room $best < $MIN, cooldown (last fire $(( (now - last) / 60 )) min ago)"
+  exit 0
+fi
+
+# Find the session's terminal and space from claude-persist (newest entry with that name).
+entry=$(for f in "$HOME"/.local/state/claude-persist/sessions/*.json; do
+  jq -r --arg n "$NAME" 'select((.hc.name // "") | startswith($n)) | [.hc.space, .hc.terminal] | @tsv' "$f" 2>/dev/null \
+    | sed "s|^|$(stat -c %Y "$f")\t|"
+done | sort -rn | head -1)
+space=$(echo "$entry" | cut -f2); term=$(echo "$entry" | cut -f3)
+if [ -z "$space" ]; then log "room $best < $MIN, but no session named $NAME found"; exit 0; fi
+
+if bash "$F" list 2>/dev/null | grep -q "$space"; then
+  log "room $best < $MIN, space $space frozen: space-wake"
+  [ $DRY = 1 ] || space-wake "$space" "$PROMPT"
+else
+  status=$(hc get "$term" --json 2>/dev/null | jq -r 'if (.status|type)=="object" then .status.state else .status end // empty')
+  case $status in
+    idle|done)
+      log "room $best < $MIN, $term $status: sending loop prompt"
+      [ $DRY = 1 ] || hc send "$term" "$PROMPT" ;;
+    *)
+      log "room $best < $MIN, $term status '${status:-unknown}': left alone"
+      exit 0 ;;
+  esac
+fi
+[ $DRY = 1 ] || echo "$now" > "$STATE/last-fire"
