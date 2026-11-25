@@ -1,5 +1,6 @@
 #!/bin/bash
-# `claude` for herdr terminals: config.fish puts this folder first on PATH inside herdr (HC_TERMINAL_ID set).
+# `claude` for herdr terminals: config.fish puts this folder first on PATH inside herdr (HC_TERMINAL_ID set),
+# and environment.d/10-user-path.conf does the same for programs herdr-core starts with `hc run`.
 # herdr-app starts a program as `/usr/bin/fish -ic 'command $argv[2..]; exec $argv[1] -i' /usr/bin/fish claude ...`.
 # fish's `command` skips the fish function `c`, so Claude would start without aiolos-rc (bypass mode,
 # account routing, remote control). When that wrapper is this process's parent, start through
@@ -7,6 +8,11 @@
 # session, a hook, a script) runs the real binary unchanged.
 mapfile -d '' -t parent < "/proc/$PPID/cmdline" 2>/dev/null
 if [ "${parent[1]:-}" = -ic ] && [[ "${parent[2]:-}" == 'command $argv[2..]'* ]]; then
+  exec "$HOME/bin/claude-start" "$@"
+fi
+# `hc run claude`: the program's parent is `herdr-core hold`. environment.d/10-user-path.conf
+# puts this folder first on the user manager's PATH, so hc runs find this shim (2026-11-25).
+if [ "${parent[0]##*/}" = herdr-core ] && [ "${parent[1]:-}" = hold ]; then
   exec "$HOME/bin/claude-start" "$@"
 fi
 exec "$HOME/.local/bin/claude" "$@"
