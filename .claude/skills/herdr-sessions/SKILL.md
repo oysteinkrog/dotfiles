@@ -155,6 +155,9 @@ space-kill drain                    # removes queued worktrees; its timer runs a
 - State: `~/.local/state/space-kill/` (one record per killed space, `queue/`, and
   `history.jsonl`, which is never cleared).
 - Run it on the desktop that owns the space: `ssh home space-kill kill SPACE` for home.
+- In herdr-app (krog and krog-next): right-click a space and pick "Kill space…" (it asks once,
+  and counts as Oystein's own kill). An "N killed" row under the spaces list opens the Killed
+  list (name, folder, when, by whom) with Revive. Both are helm parts (`kill`, `killed`).
 
 ## Auto-freeze (manager-resources and manager-home)
 
