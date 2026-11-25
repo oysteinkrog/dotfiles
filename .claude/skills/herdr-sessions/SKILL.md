@@ -1,6 +1,6 @@
 ---
 name: herdr-sessions
-description: Find, inspect, make, freeze, thaw and wake the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, waking a frozen session for one job (space-wake, also when a SendMessage says "not reachable"), when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "park this session", "frozen spaces" or "snowflake".
+description: Find, inspect, make, freeze, thaw, wake, kill and revive the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, killing a space (closing it and its worktree, keeping the Claude session) or reviving a killed one, waking a frozen session for one job (space-wake, also when a SendMessage says "not reachable"), when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "kill", "revive", "killed spaces", "park this session", "frozen spaces" or "snowflake".
 ---
 
 # Herdr sessions: find, freeze, thaw
@@ -125,6 +125,37 @@ says why. The log ends with one `result:` line: `~/.local/state/space-wake/<SPAC
   (default 4) is how long it waits for the job.
 - Oystein can take a woken space over at any time: anything he types stops the refreeze.
 
+## Kill and Revive
+
+Kill is the deeper sleep below Freeze (Oystein, 2026-11-25). A frozen space keeps its shells,
+tabs and worktree. A killed space keeps only what brings the work back: each Claude session
+(the transcript stays forever), the space's name, sidebar folder and tab names, and each
+worktree's repo, branch and commit. The space closes with its shells.
+
+```sh
+space-kill kill SPACE [--dry-run]   # Oystein's kill; also for an agent he asked
+space-revive SPACE                  # back: worktree, saved changes, a new space, Claude resumed
+space-killed                        # JSON: the killed spaces on this desktop
+space-kill drain                    # removes queued worktrees; its timer runs at 22:40
+```
+
+- A linked worktree (grove lane or plain `git worktree`) is not removed at once. It waits in a
+  queue that `space-kill-drain.timer` empties at 22:40, one at a time under
+  `/var/tmp/claude/grove-delete.lock`, because grove deletes stall the disk by day. The branch
+  always stays, local and remote. A main checkout (`~`, `~/work/ifkb`) is never removed, and
+  neither is a worktree another space's terminal uses.
+- Oystein's kill saves uncommitted changes, untracked files too, as a commit on
+  `refs/space-kill/<SPACE>/<lane>`, and pins HEAD on `refs/space-kill/<SPACE>/<lane>-head`.
+  Gitignored files (build output, a local `.env`) are not saved.
+- Revive before 22:40 just reopens the worktree that is still there. After it, the worktree
+  comes back at the same path on the same branch, so `claude --resume` finds the transcript,
+  and the saved changes are put back.
+- Kill refuses what Freeze refuses (an agent working or blocked) and also a `/loop`, `/goal`,
+  open question or jobd job, and the protected spaces listed under Auto-freeze.
+- State: `~/.local/state/space-kill/` (one record per killed space, `queue/`, and
+  `history.jsonl`, which is never cleared).
+- Run it on the desktop that owns the space: `ssh home space-kill kill SPACE` for home.
+
 ## Auto-freeze (manager-resources and manager-home)
 
 Oystein, 2026-11-20: idle Claude sessions use too much memory on both desktops, and he wants
@@ -160,6 +191,12 @@ How to run it:
 - Report every freeze in the tick report: space name, the sessions in it, how long they were
   idle, and the memory freed (RSS of the Claude processes before the freeze, from `/proc`).
 - If a freeze reports `failed` terminals, leave the space alone and report it.
+
+Auto-kill (Oystein, 2026-11-25): the same managers may kill a space on their own desktop that
+has been frozen for 14 days or more: `space-kill kill SPACE --by <manager name>`. The script
+refuses a younger freeze, and a worktree with uncommitted changes or unpushed commits; then
+tell the session's owner, or Oystein, to commit or push. Report every kill in the tick report:
+space name, sessions, how long it was frozen, the worktrees queued for removal.
 
 ## Keep a session from being frozen
 
