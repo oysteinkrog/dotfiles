@@ -1,0 +1,9 @@
+[Unit]
+Description=Remove the worktrees of killed herdr spaces, one at a time under grove-delete.lock (space-kill drain)
+
+[Service]
+Type=oneshot
+Slice=background.slice
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/bin/space-kill drain

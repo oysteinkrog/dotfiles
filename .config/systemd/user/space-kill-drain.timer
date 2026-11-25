@@ -1,0 +1,9 @@
+[Unit]
+Description=Drain the space-kill worktree queue each night at 22:40
+
+[Timer]
+OnCalendar=*-*-* 22:40:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
