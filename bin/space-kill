@@ -1,0 +1,386 @@
+#!/bin/bash
+# Kill and Revive for herdr spaces: the deeper sleep below Freeze and Thaw (2026-11-25).
+#
+#   space-kill kill SPACE [--by WHO] [--snapshot-dirty] [--dry-run]
+#   space-kill revive SPACE [--dry-run]
+#   space-kill list                 JSON: the killed spaces on this desktop
+#   space-kill drain [--now]        remove queued worktrees, one at a time (22:00 to 07:00)
+#   (space-revive and space-killed are links to this script: revive and list.)
+#
+# Freeze stops a space's programs and keeps its shells, tabs and worktree. Kill keeps only
+# what is needed to bring the work back: each Claude session (its transcript stays forever),
+# the space's name, sidebar folder and tabs, and each worktree's repo, branch and commit.
+# The space closes with its shells. A linked worktree (a grove lane or a plain
+# `git worktree`) goes in a removal queue that `drain` empties at night, one at a time
+# under /var/tmp/claude/grove-delete.lock. Its branch always stays, local and remote. A
+# main checkout (~, ~/work/ifkb, ...) is never removed.
+#
+# Revive puts it back: the worktree again at the same path on the same branch (so
+# `claude --resume` finds the transcript), the saved uncommitted changes, a new space with
+# the same name and sidebar folder, and each Claude resumed in its own tab.
+#
+# Who may kill (Oystein, 2026-11-25):
+#   --by oystein (the default; the right-click menu and agents he asks): a dirty worktree
+#     is saved as a commit on refs/space-kill/<SPACE>/<lane> before removal, and
+#     unpushed commits stay on the kept branch. Removal then needs grove's --force.
+#   --by <a manager> (manager-office, manager-home): only a space frozen for 14 days or
+#     more, and never one with uncommitted changes or unpushed commits.
+# Refused for everyone: a protected space (manager-*, agentic-oystein, herdr mods,
+# herdr.nofreeze=1), an agent that is working or blocked, a /loop, /goal or open question,
+# a jobd job of the session, or a worktree another space or process is using.
+#
+# State: ~/.local/state/space-kill/<SPACE>.json per killed space; queue/<SPACE>.<n>.json per
+# worktree waiting for removal; history.jsonl (append only, never cleared).
+set -uo pipefail
+K=${XDG_STATE_HOME:-$HOME/.local/state}/space-kill
+FS=${XDG_STATE_HOME:-$HOME/.local/state}/space-freeze
+F=$HOME/.config/herdr-app/mods/space-freeze/freeze.sh
+RESUMECHK=$HOME/.claude/hooks/claude-persist-resume.py
+FOLDERS=$HOME/.config/herdr-space-folders.json
+LOCK=/var/tmp/claude/grove-delete.lock
+GROVE_REPOS=$HOME/.config/grove/repos.json
+MANAGER_MIN_DAYS=14
+mkdir -p "$K/queue" "$K/revived"
+
+die() { jq -cn --arg e "$*" '{error:$e}'; exit 1; }
+note() { echo "space-kill: $*" >&2; }
+history() { local x=${3:-'{}'}; jq -cn --arg at "$(date -Is)" --arg ev "$1" --arg s "$2" --argjson x "$x" '{at:$at, event:$ev, space:$s} + $x' >> "$K/history.jsonl"; }
+
+space_json() { herdr-app ls | jq -c --arg s "$1" '.spaces[] | select(.id == $s)'; }
+
+# The grove lane whose path is DIR: {tag, repo, ephemeral} or nothing.
+grove_lane() {
+  local dir=$1 wd repo
+  [ -f "$GROVE_REPOS" ] || return 0
+  while IFS=$'\t' read -r repo wd; do
+    [ -f "$wd/.grove/registry.json" ] || continue
+    jq -c --arg p "$dir" --arg r "$repo" \
+      '.projects | to_entries[] | select(.value.path == $p) | {tag:.key, repo:$r, branch:.value.branch, base:.value.base, issue:.value.issue, ephemeral:(.value.expires_at != null)}' \
+      "$wd/.grove/registry.json" | head -1
+  done < <(jq -r '.repos | to_entries[] | [.key, .value.work_dir] | @tsv' "$GROVE_REPOS")
+}
+
+# Facts about the worktree that holds DIR, as JSON (nothing when DIR is not in git).
+worktree_info() {
+  local dir=$1 root gd cd linked branch head dirty unpushed lane
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 0
+  gd=$(cd "$root" && realpath "$(git rev-parse --git-dir)")
+  cd=$(cd "$root" && realpath "$(git rev-parse --git-common-dir)")
+  linked=false; [ "$gd" != "$cd" ] && linked=true
+  branch=$(git -C "$root" symbolic-ref -q --short HEAD || echo "")
+  head=$(git -C "$root" rev-parse HEAD)
+  dirty=$(git -C "$root" status --porcelain --untracked-files=all | wc -l)
+  unpushed=$(git -C "$root" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0)
+  lane=$(grove_lane "$root")
+  jq -cn --arg root "$root" --arg common "$cd" --argjson linked $linked --arg branch "$branch" \
+    --arg head "$head" --argjson dirty "$dirty" --argjson unpushed "$unpushed" --argjson lane "${lane:-null}" \
+    '{root:$root, common_dir:$common, linked:$linked, branch:$branch, head:$head, dirty:$dirty, unpushed:$unpushed, grove:$lane}'
+}
+
+# Terminals outside SPACE whose folder is in ROOT.
+terminal_users() {
+  local root=$1 space=$2 t
+  for t in $(hc ls --json 2>/dev/null | jq -r --arg r "$root" '.terminals[] | select((.cwd // "") as $c | ($c == $r or ($c | startswith($r + "/")))) | .address'); do
+    [ "$(hc get "$t" --json 2>/dev/null | jq -r '.labels["herdr.space"] // empty')" = "$space" ] || echo "terminal $t"
+  done
+}
+
+# Any process whose folder is in ROOT (the drain runs after the space has closed).
+process_users() {
+  local root=$1 p c
+  for p in /proc/[0-9]*; do
+    c=$(readlink "$p/cwd" 2>/dev/null) || continue
+    case "$c" in "$root"|"$root"/*) echo "process ${p#/proc/} ($(cat "$p/comm" 2>/dev/null))";; esac
+  done
+}
+
+# Save every change in ROOT (untracked files too) as a commit on REF, without touching
+# the worktree or its index.
+snapshot() {
+  local root=$1 ref=$2 idx tree commit
+  idx=$K/.snapshot-index
+  cp "$(git -C "$root" rev-parse --git-path index)" "$idx" 2>/dev/null || : > "$idx"
+  GIT_INDEX_FILE=$idx git -C "$root" add -A . || return 1
+  tree=$(GIT_INDEX_FILE=$idx git -C "$root" write-tree) || return 1
+  commit=$(git -C "$root" commit-tree "$tree" -p HEAD -m "space-kill snapshot of $root ($(date -Is))") || return 1
+  git -C "$root" update-ref "$ref" "$commit" || return 1
+  : > "$idx"
+  echo "$commit"
+}
+
+protected() {
+  local sj=$1
+  jq -e '.name as $n | ($n | test("^manager-")) or $n == "manager-agentic" or $n == "herdr mods"' <<<"$sj" >/dev/null && return 0
+  local t
+  for t in $(jq -r '.tabs[].terminals[].terminal' <<<"$sj"); do
+    [ "$(hc get "$t" --json 2>/dev/null | jq -r '.labels["herdr.nofreeze"] // empty')" = 1 ] && return 0
+    [ "$(hc get "$t" --json 2>/dev/null | jq -r '.name // empty' | sed 's/-[0-9a-f]\{4\}$//')" = agentic-oystein ] && return 0
+  done
+  return 1
+}
+
+cmd_kill() {
+  local space= by=oystein snap=0 dry=0
+  while [ $# -gt 0 ]; do
+    case $1 in --by) by=$2; shift 2;; --snapshot-dirty) snap=1; shift;; --dry-run) dry=1; shift;; *) space=$1; shift;; esac
+  done
+  [ -n "$space" ] || die "usage: space-kill kill SPACE [--by WHO] [--snapshot-dirty] [--dry-run]"
+  [ "$by" = oystein ] && snap=1   # Oystein's own kill always keeps uncommitted work as a snapshot
+  [ -f "$K/$space.json" ] && die "already killed"
+  local sj; sj=$(space_json "$space"); [ -n "$sj" ] || die "no space $space on this desktop"
+  protected "$sj" && die "protected space ($(jq -r .name <<<"$sj")): kill it by hand only after removing the protection"
+
+  local frozen=0 fj=
+  [ -f "$FS/$space.json" ] && { frozen=1; fj=$(cat "$FS/$space.json"); }
+  if [ "$by" != oystein ]; then
+    [ $frozen = 1 ] || die "a manager kills only a frozen space"
+    local age=$(( ( $(date +%s) - $(date -d "$(jq -r .frozen_at <<<"$fj")" +%s) ) / 86400 ))
+    [ $age -ge $MANAGER_MIN_DAYS ] || die "frozen $age days; a manager kills only after $MANAGER_MIN_DAYS"
+  fi
+
+  # Which folders the space works in, and what each Claude still has open.
+  local plan cwds
+  if [ $frozen = 1 ]; then plan=$fj; else plan=$(bash "$F" plan "$space") || die "freeze.sh plan failed"; fi
+  if [ $frozen = 0 ]; then
+    local busy; busy=$(jq -r '[.terminals[] | select(.kind != "shell" and (.status == "working" or .status == "blocked")) | (.name // .address)] | join(", ")' <<<"$plan")
+    [ -z "$busy" ] || die "still busy: $busy"
+    local sid tr r
+    for sid in $(jq -r '.terminals[] | select(.kind == "claude") | .session // empty' <<<"$plan"); do
+      tr=$(ls "$HOME"/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)
+      [ -n "$tr" ] || continue
+      r=$(python3 "$RESUMECHK" "$tr" idle 2>/dev/null)
+      [ -z "$r" ] || die "session ${sid:0:8} has an open /loop, /goal, question or cut-off turn: $(printf %.100s "$r")"
+      if job queue 2>/dev/null | jq -e --arg s "$sid" '[.jobs[]? | select(.session == $s)] | length > 0' >/dev/null; then
+        die "session ${sid:0:8} has a jobd job waiting or running"
+      fi
+    done
+  fi
+  cwds=$(jq -r '[.terminals[].cwd // empty] | unique | .[]' <<<"$plan")
+
+  # Each worktree: may it go, and what must be saved first?
+  local lanes=() d w seen=" "
+  while IFS= read -r d; do
+    [ -n "$d" ] && [ -d "$d" ] || continue
+    w=$(worktree_info "$d"); [ -n "$w" ] || continue
+    local root; root=$(jq -r .root <<<"$w")
+    case "$seen" in *" $root "*) continue;; esac; seen+="$root "
+    if [ "$(jq -r .linked <<<"$w")" = true ]; then
+      local users; users=$(terminal_users "$root" "$space" | head -5)
+      if [ -n "$users" ]; then
+        w=$(jq -c --arg u "$users" '. + {remove:false, why:("in use: " + ($u | gsub("\n"; ", ")))}' <<<"$w")
+      else
+        if [ $snap = 0 ] && { [ "$(jq .dirty <<<"$w")" -gt 0 ] || [ "$(jq .unpushed <<<"$w")" -gt 0 ]; }; then
+          die "$root has $(jq .dirty <<<"$w") uncommitted change(s) and $(jq .unpushed <<<"$w") unpushed commit(s); a manager does not kill that"
+        fi
+        w=$(jq -c '. + {remove:true}' <<<"$w")
+      fi
+    else
+      w=$(jq -c '. + {remove:false, why:"main checkout"}' <<<"$w")
+    fi
+    lanes+=("$w")
+  done <<<"$cwds"
+
+  local folder; folder=$(jq -r --arg s "$space" '.of[$s] // ""' "$FOLDERS" 2>/dev/null)
+  if [ $dry = 1 ]; then
+    printf '%s\n' "${lanes[@]}" | jq -s --argjson sj "$sj" --arg f "$folder" --argjson fr $frozen \
+      '{dry_run:true, space:$sj.id, name:$sj.name, folder:$f, frozen:($fr == 1), worktrees:.}'
+    return 0
+  fi
+
+  # Stop the programs the way Freeze does (clean Claude exit, transcript copy), then close.
+  if [ $frozen = 0 ]; then
+    local out; out=$(bash "$F" freeze "$space" "killing") || die "freeze failed: $out"
+    jq -e '.failed | length == 0' <<<"$out" >/dev/null || die "freeze left programs running: $out"
+    fj=$(cat "$FS/$space.json")
+  fi
+
+  # Snapshots after the programs stopped, so nothing changes under them.
+  local i out_lanes=()
+  for i in "${!lanes[@]}"; do
+    w=${lanes[$i]}
+    if [ "$(jq -r .remove <<<"$w")" = true ]; then
+      local root name ref c
+      root=$(jq -r .root <<<"$w"); name=$(jq -r '.grove.tag // empty' <<<"$w"); name=${name:-$(basename "$root")}
+      git -C "$root" update-ref "refs/space-kill/$space/$name-head" "$(jq -r .head <<<"$w")"
+      w=$(jq -c --arg r "refs/space-kill/$space/$name-head" '. + {head_ref:$r}' <<<"$w")
+      if [ "$(git -C "$root" status --porcelain --untracked-files=all | wc -l)" -gt 0 ]; then
+        ref="refs/space-kill/$space/$name"
+        c=$(snapshot "$root" "$ref") || die "snapshot of $root failed; nothing removed, space $space is frozen"
+        w=$(jq -c --arg r "$ref" --arg c "$c" '. + {snapshot_ref:$r, snapshot:$c}' <<<"$w")
+      fi
+    fi
+    out_lanes+=("$w")
+  done
+
+  local tabs; tabs=$(jq -c '[.tabs[] | {id, name, terminals:[.terminals[].terminal]}]' <<<"$sj")
+  printf '%s\n' "${out_lanes[@]}" | jq -s --argjson sj "$sj" --arg f "$folder" --arg by "$by" --arg at "$(date -Is)" \
+    --argjson tabs "$tabs" --argjson fz "$fj" \
+    '{space:$sj.id, name:$sj.name, folder:$f, killed_at:$at, by:$by, tabs:$tabs, terminals:$fz.terminals, frozen_at:$fz.frozen_at, worktrees:.}' \
+    > "$K/$space.json.tmp" && mv "$K/$space.json.tmp" "$K/$space.json" || die "could not write the kill record"
+
+  # The freeze state moves into the kill folder, so the space leaves the frozen list.
+  mv "$FS/$space.json" "$K/$space.freeze.json"
+  herdr-app do space.close --id "$space" --confirmed true >/dev/null || note "space.close failed; close space $space by hand"
+
+  local n=0
+  for w in "${out_lanes[@]}"; do
+    [ "$(jq -r .remove <<<"$w")" = true ] || continue
+    n=$((n + 1))
+    jq -c --arg s "$space" '. + {space:$s}' <<<"$w" > "$K/queue/$space.$n.json"
+  done
+  history kill "$space" "$(jq -c '{name, by, worktrees:[.worktrees[] | {root, remove, snapshot_ref}]}' "$K/$space.json")"
+  jq -c '{killed:.space, name, worktrees_queued:([.worktrees[] | select(.remove)] | length), kept:[.worktrees[] | select(.remove | not) | {root, why}]}' "$K/$space.json"
+}
+
+cmd_list() {
+  local f
+  for f in "$K"/sp*.json; do
+    case $f in *.freeze.json) continue;; esac
+    [ -f "$f" ] || continue
+    jq -c --arg q "$K/queue" '{space, name, folder, killed_at, by,
+      sessions:[.terminals[] | select(.kind == "claude") | .session],
+      worktrees:[.worktrees[] | {root, branch, remove, snapshot_ref}]}' "$f"
+  done | jq -s '.'
+}
+
+# Put a removed worktree back at its old path on its branch, then its saved changes.
+restore_worktree() {
+  local w=$1 root branch head lane tag
+  root=$(jq -r .root <<<"$w"); branch=$(jq -r .branch <<<"$w"); head=$(jq -r .head <<<"$w")
+  if [ ! -d "$root" ]; then
+    lane=$(jq -c '.grove // empty' <<<"$w")
+    if [ -n "$lane" ]; then
+      tag=$(jq -r .tag <<<"$lane")
+      local args=(new "$tag" --repo "$(jq -r .repo <<<"$lane")" --no-fetch)
+      [ -n "$branch" ] && args+=(--branch "$branch")
+      [ "$(jq -r .ephemeral <<<"$lane")" = true ] && args+=(--ephemeral --ttl 14d)
+      grove "${args[@]}" >&2 || return 1
+      [ "$(grove path "$tag" 2>/dev/null)" = "$root" ] || note "grove put $tag at $(grove path "$tag"), not $root"
+    else
+      git --git-dir="$(jq -r .common_dir <<<"$w")" worktree add "$root" "${branch:-$head}" >&2 || return 1
+    fi
+  fi
+  # A detached HEAD comes back at its old commit.
+  [ -z "$branch" ] && git -C "$root" checkout -q --detach "$head"
+  local snapc; snapc=$(jq -r '.snapshot // empty' <<<"$w")
+  if [ -n "$snapc" ]; then
+    git -C "$root" read-tree -u --reset "$snapc" && git -C "$root" reset -q || return 1
+  fi
+}
+
+cmd_revive() {
+  local space= dry=0
+  while [ $# -gt 0 ]; do case $1 in --dry-run) dry=1; shift;; *) space=$1; shift;; esac; done
+  [ -n "$space" ] || die "usage: space-kill revive SPACE"
+  local rec=$K/$space.json; [ -f "$rec" ] || die "space $space is not in the killed list"
+  [ $dry = 1 ] && { jq '{revive:.space, name, folder, sessions:[.terminals[] | select(.kind == "claude") | {session, cwd}], worktrees:[.worktrees[] | {root, branch, exists:false, snapshot_ref}]}' "$rec"; return 0; }
+
+  # Worktrees first: drop each from the queue, recreate the removed ones.
+  local w q
+  while IFS= read -r w; do
+    for q in "$K"/queue/"$space".*.json; do
+      [ -f "$q" ] && [ "$(jq -r .root "$q")" = "$(jq -r .root <<<"$w")" ] && mv "$q" "$K/revived/$(basename "$q").cancelled"
+    done
+    [ "$(jq -r .remove <<<"$w")" = true ] || continue
+    restore_worktree "$w" || die "could not restore $(jq -r .root <<<"$w"); the space stays killed"
+  done < <(jq -c '.worktrees[]' "$rec")
+
+  # Each Claude gets its transcript back if it is missing (freeze's copy), then a tab.
+  local name folder first=1 new= t
+  name=$(jq -r .name "$rec"); folder=$(jq -r '.folder // ""' "$rec")
+  while IFS= read -r t; do
+    local sid resume cwd tab
+    sid=$(jq -r .session <<<"$t"); cwd=$(jq -r .cwd <<<"$t"); resume=$(jq -r .resume <<<"$t")
+    tab=$(jq -r --arg a "$(jq -r .address <<<"$t")" '[.tabs[] | select(.terminals | index($a)) | .name][0] // empty' "$rec")
+    if ! ls "$HOME"/.claude/projects/*/"$sid".jsonl >/dev/null 2>&1; then
+      local b; b=$(ls "$FS/transcripts/$sid/"*.jsonl 2>/dev/null | head -1)
+      local slug; slug=$(printf '%s' "$cwd" | sed 's/[^A-Za-z0-9]/-/g')
+      [ -n "$b" ] && mkdir -p "$HOME/.claude/projects/$slug" && cp --reflink=auto -n "$b" "$HOME/.claude/projects/$slug/$sid.jsonl"
+    fi
+    local argv; argv=$(jq -cn --arg c "$resume" '["/bin/bash", "-c", $c]')
+    if [ $first = 1 ]; then
+      local g=(--group none)
+      [ -n "$folder" ] && jq -e --arg f "$folder" 'any(.list[]?; .id == $f)' "$FOLDERS" >/dev/null 2>&1 && g=(--group "$folder")
+      local out; out=$(HC_TERMINAL_ID= herdr-space-new --name "$name" "${g[@]}" --cwd "$cwd" --argv "$argv") || die "could not make the new space"
+      new=$(sed -n 's/^space \([^ ]*\) .*/\1/p' <<<"$out")
+      [ -n "$tab" ] && [ -n "$new" ] && herdr-app do tab.rename --id "$(herdr-app ls | jq -r --arg s "$new" '.spaces[] | select(.id == $s) | .tabs[0].id')" --name "$tab" >/dev/null
+      first=0
+    else
+      herdr-app do tab.new --space "$new" --folder "$cwd" --argv "$argv" ${tab:+--name "$tab"} --focus false >/dev/null || note "could not open a tab for ${sid:0:8}"
+    fi
+  done < <(jq -c '.terminals[] | select(.kind == "claude")' "$rec")
+  [ $first = 0 ] || die "no Claude session in the record"
+
+  local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+  mv "$rec" "$K/revived/$space.$stamp.json"
+  [ -f "$K/$space.freeze.json" ] && mv "$K/$space.freeze.json" "$K/revived/$space.$stamp.freeze.json"
+  history revive "$space" "$(jq -cn --arg n "$new" '{new_space:$n}')"
+  jq -cn --arg old "$space" --arg new "$new" --arg n "$name" '{revived:$old, new_space:$new, name:$n}'
+}
+
+cmd_drain() {
+  local now=0; [ "${1:-}" = --now ] && now=1
+  local h; h=$(date +%-H)
+  [ $now = 1 ] || [ "$h" -ge 22 ] || [ "$h" -lt 7 ] || die "drain runs from 22:00 to 07:00 (grove deletes stall the disk by day); --now to force"
+  local q
+  for q in "$K"/queue/*.json; do
+    [ -f "$q" ] || continue
+    local w space root head tag why=
+    w=$(cat "$q"); space=$(jq -r .space <<<"$w"); root=$(jq -r .root <<<"$w"); head=$(jq -r .head <<<"$w")
+    tag=$(jq -r '.grove.tag // empty' <<<"$w")
+    [ -f "$K/$space.json" ] || why="space was revived"
+    [ -n "$why" ] || [ -d "$root" ] || why="already gone"
+    if [ -z "$why" ]; then
+      [ "$(git -C "$root" rev-parse HEAD 2>/dev/null)" = "$head" ] || why="HEAD moved since the kill"
+    fi
+    if [ -z "$why" ]; then
+      local u; u=$(process_users "$root" | head -3)
+      [ -z "$u" ] || why="in use: $(tr '\n' ',' <<<"$u")"
+    fi
+    if [ -z "$why" ]; then
+      local snapc; snapc=$(jq -r '.snapshot // empty' <<<"$w")
+      if [ -n "$snapc" ]; then
+        # Remove only what the snapshot holds: the tree now must equal the saved one.
+        local cur ix=$K/.drain-index
+        cp "$(git -C "$root" rev-parse --git-path index)" "$ix" 2>/dev/null || : > "$ix"
+        cur=$(GIT_INDEX_FILE=$ix sh -c 'git -C "$1" add -A . && git -C "$1" write-tree' _ "$root"); : > "$ix"
+        [ "$cur" = "$(git -C "$root" rev-parse "$snapc^{tree}")" ] || why="changed since the snapshot"
+      elif [ "$(git -C "$root" status --porcelain --untracked-files=all | wc -l)" -gt 0 ]; then
+        why="has uncommitted changes and no snapshot"
+      fi
+    fi
+    if [ -n "$why" ]; then
+      note "not removed: $root ($why)"
+      jq -c --arg y "$why" '. + {skipped:$y}' <<<"$w" > "$K/revived/$(basename "$q").skipped" && mv "$q" "$K/revived/$(basename "$q").done"
+      history drain-skip "$space" "$(jq -cn --arg r "$root" --arg y "$why" '{root:$r, why:$y}')"
+      continue
+    fi
+    # Force only where the snapshot and the kept branch hold everything (Oystein, 2026-11-25).
+    local force=(); { [ -n "$(jq -r '.snapshot // empty' <<<"$w")" ] || [ "$(jq .unpushed <<<"$w")" -gt 0 ]; } && force=(--force)
+    local rc
+    if [ -n "$tag" ]; then
+      flock "$LOCK" sh -c 'grove done "$@" && sleep 120' _ "$tag" --repo "$(jq -r .grove.repo <<<"$w")" --keep-local --keep-remote "${force[@]}" >&2; rc=$?
+    else
+      flock "$LOCK" sh -c 'git --git-dir="$1" worktree remove $2 "$3" && sleep 120' _ "$(jq -r .common_dir <<<"$w")" "${force[*]}" "$root" >&2; rc=$?
+    fi
+    if [ $rc -eq 0 ]; then
+      mv "$q" "$K/revived/$(basename "$q").removed"
+      history drain-removed "$space" "$(jq -cn --arg r "$root" '{root:$r}')"
+    else
+      note "removal of $root failed (exit $rc); it stays in the queue"
+    fi
+  done
+}
+
+case "$(basename "$0")" in
+  space-revive) cmd_revive "$@"; exit $?;;
+  space-killed) cmd_list; exit $?;;
+esac
+case "${1:-}" in
+  kill) shift; cmd_kill "$@";;
+  revive) shift; cmd_revive "$@";;
+  list) cmd_list;;
+  drain) shift; cmd_drain "$@";;
+  -h|--help|"") sed -n 2,33p "$0";;
+  *) die "unknown command $1 (see --help)";;
+esac
