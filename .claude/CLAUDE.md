@@ -64,7 +64,8 @@ same gate on anything about to reach a person and hands back findings on failure
   and the allowed places are in ifkb `knowledge-base/company/data-storage-policy.md`. The
   Azure data lake is the long-term store; rigel and vega hold batches for processing for a
   limited time (30 + 30 days, later 90 + 90) and never the only copy. Never copy athlete
-  or research data to this desktop, Google Drive, Slack, a pool host or a scratchpad, and
+  or research data to this desktop (only the contracted PGA tour cohort is allowed), Google
+  Drive, Slack, a pool host or a scratchpad, and
   never print it; golf data is location-locked (monorepo
   `docs/golf-data-processing-locations.md`).
 - **Verify state before assuming it.** Check `git log` and the file tree to see what is
