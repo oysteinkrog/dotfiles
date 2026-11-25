@@ -266,6 +266,7 @@ if [ -n "$native_linux" ]; then
     .config/environment.d/cass.conf
     .config/environment.d/motioncatalyst-wine.conf
     .config/environment.d/herdr-fonts.conf
+    .config/environment.d/10-user-path.conf
     .cargo/config.toml
   )
   for item in "${linux_items[@]}"; do
