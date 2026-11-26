@@ -16,7 +16,7 @@
 # Steps: refuse if a run is already going; write brief.md (ee resume + ee pack for the loop);
 # find the agent's Claude terminal in its space; end a leftover idle Claude there; start a
 # fresh Claude with the run prompt; wait until it stops; then type /exit when nobody typed in
-# it, it asked nothing, and nothing of it still runs. Otherwise leave it open and log why.
+# it, it asked nothing, and nothing of it still runs (ctrl+c twice). Otherwise leave it open and log why.
 # The Stop hook agent-run-stop.sh keeps the run from ending before the state file is updated.
 # Log: ~/.local/share/agents/NAME/runs.log (one "result:" line per run).
 set -uo pipefail
@@ -91,6 +91,13 @@ entry_for() {
   done
 }
 
+# End the Claude in terminal $1: ctrl+c twice exits an idle Claude Code (a pasted /exit is
+# sent as a chat message, seen 2026-11-26); ctrl+d twice as the fallback.
+end_claude() {
+  hc keys "$1" ctrl+c ctrl+c >/dev/null 2>&1; sleep 6
+  [ -z "$(entry_for "$1")" ] || { hc keys "$1" ctrl+d ctrl+d >/dev/null 2>&1; sleep 6; }
+}
+
 # The terminal: the one named after the agent in its space, else the first one there.
 terms=$(hc ls --json | jq -r --arg s "$SPACE" '.. | objects | select(has("address") and (.labels? // {})["herdr.space"] == $s) | .address' 2>/dev/null)
 [ -n "$terms" ] || terms=$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
@@ -104,7 +111,7 @@ bash "$HOME/.config/herdr-app/mods/space-freeze/freeze.sh" list | jq -e --arg s 
 # A Claude still open from an earlier run: end it when idle, skip this run when it is busy.
 if [ "$(app "$T")" = claude-code ] && [ -n "$(entry_for "$T")" ]; then
   case $(state "$T") in
-    done|idle) log "ending the Claude left open in $T"; hc send "$T" "/exit" >/dev/null; sleep 15;;
+    done|idle) log "ending the Claude left open in $T"; end_claude "$T";;
     *) result "the Claude in $T is $(state "$T"); run skipped" 0;;
   esac
   [ -z "$(entry_for "$T")" ] || result "the Claude in $T did not exit; run skipped" 1
@@ -158,5 +165,5 @@ if [ -z "$why" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zs
   why="background shell or Monitor still running"
 fi
 [ -z "$why" ] || result "left open: $why (session $(basename "$tr" .jsonl))" 0
-hc send "$T" "/exit" >/dev/null
+end_claude "$T"
 result "done in $(( ($(date +%s) - START) / 60 )) min, session $(basename "$tr" .jsonl) ended"
