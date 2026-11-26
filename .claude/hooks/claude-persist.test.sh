@@ -332,34 +332,40 @@ check "a session not running at the last snapshot is dropped" '! grep -q hc3 "$T
 # name: the session goes back into its old space and tab under that name.
 setup hc-standin
 mkdir -p "$T/bin"
-sleep 60 & idle=$!
+sleep 60 & idle=$!; BG+=("$idle")
 cat > "$T/bin/hc" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/hc.log"
 case "\$1 \$2" in
   "server status") echo '{"pid":1}' ;;
-  "get cto-hc4") [ -f "$T/gone" ] && exit 1
-    echo '{"address":"t9","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":$idle}}' ;;
-  "rm t9") touch "$T/gone" ;;
+  "get t9"|"get cto-hc4")
+    if [ -f "$T/sent" ]; then
+      echo '{"address":"t9","name":"cto","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"bash","pid":2}}'
+    else
+      echo '{"address":"t9","name":"cto","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":$idle}}'
+    fi ;;
+  "send t9") touch "$T/sent" "\${3##* }.started" ;;
 esac
+exit 0
 EOF
 chmod +x "$T/bin/hc"
 entry hc4 "$H/projects/life" null "$OLD"
-f=$(ls "$S/sessions/"hc4@*.json); jq '.hc = {terminal:"t9", name:"cto-hc4", space:"spA", tab:"tbB"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+f=$(ls "$S/sessions/"hc4@*.json); jq '.hc = {terminal:"t9", name:"cto", space:"spA", tab:"tbB"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 printf 'mux %s\nhc4\n' "$OLD" > "$S/live"
 HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
   CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
   CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
 kill $idle 2>/dev/null
-steps=$(grep -oE '^(run --bg --name hold-hc4|kill t9|rm t9|run --bg --name cto |kill hold-hc4)' "$T/hc.log" | tr '\n' '|')
-check "a placeholder holds the tab while the stand-in shell goes" \
-  '[ "$steps" = "run --bg --name hold-hc4|kill t9|rm t9|run --bg --name cto |kill hold-hc4|" ]'
-check "the session gets its old name, space and tab" \
-  'grep -q "^run --bg --name cto --label herdr.space=spA --label herdr.tab=tbB --cwd" "$T/hc.log"'
+check "the session resumes inside the idle stand-in shell" \
+  'grep -q "^keys t9 ctrl+c" "$T/hc.log" && grep -q "^send t9 .*exec bash .*/hc-run/hc4.sh" "$T/hc.log"'
+check "the stand-in keeps its terminal, so the window layout does not change" \
+  '! grep -qE "^(run --bg|kill t9|rm t9)" "$T/hc.log" && grep -q "resume hc4 .* in stand-in t9 (cto)" "$S/restore.log"'
 
-# Regression, office reboot 2026-11-26: a stand-in whose name is already 32
-# characters (herdr_name's limit) gave the placeholder the same name, so hc
-# refused both runs and six sessions were not restored.
+# A stand-in that is busy at the last check before typing (here: its fish pid
+# changed) gets nothing typed into it: the session starts in a new terminal
+# under the stand-in's name. Regression, office reboot 2026-11-26: with a name
+# that is already 32 characters (herdr_name's limit) the placeholder got the
+# same name, hc refused both runs, and six sessions were not restored.
 setup hc-long-name
 mkdir -p "$T/bin"
 sleep 60 & idle=$!; BG+=("$idle")
@@ -367,10 +373,12 @@ long=swing-catalyst-sheepdog-voice-ag
 cat > "$T/bin/hc" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/hc.log"
+bump() { local c=\$(cat "$T/\$1" 2>/dev/null || echo 0); echo \$((c + 1)) > "$T/\$1"; echo \$((c + 1)); }
 case "\$1 \$2" in
   "server status") echo '{"pid":1}' ;;
   "get t6f") [ -f "$T/gone" ] && exit 1
-    echo '{"address":"t6f","name":"$long","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":$idle}}' ;;
+    if [ "\$(bump get)" -lt 2 ]; then p=$idle; else p=1; fi
+    echo '{"address":"t6f","name":"$long","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":'"\$p"'}}' ;;
   "rm t6f") touch "$T/gone" ;;
   "run --bg") [ -e "$T/taken-\$4" ] && exit 1; touch "$T/taken-\$4" ;;
   "kill "*) rm -f "$T/taken-\$2" ;;
@@ -378,6 +386,7 @@ esac
 exit 0
 EOF
 chmod +x "$T/bin/hc"
+touch "$T/taken-$long"   # the busy stand-in still holds the name
 entry hc6 "$H/projects/life" null "$OLD"
 f=$(ls "$S/sessions/"hc6@*.json); jq '.hc = {terminal:"t6f", name:null, space:"spA", tab:"tbB"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 printf 'mux %s\nhc6\n' "$OLD" > "$S/live"
@@ -385,14 +394,15 @@ HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/u
   CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
   CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
 kill $idle 2>/dev/null
-check "a 32-character name still gets its session back under that name" \
-  'grep -q "^run --bg --name $long --label herdr.space=spA --label herdr.tab=tbB --cwd .* -- bash .*/hc-run/hc6.sh" "$T/hc.log" && grep -q "resume hc6 .* in hc terminal $long " "$S/restore.log"'
+check "a busy stand-in gets nothing typed into it and keeps running" \
+  '! grep -qE "^(send|kill|rm) t6f" "$T/hc.log" && grep -q "stand-in t6f ($long) was not idle" "$S/restore.log"'
+check "a 32-character name held by the stand-in still gets a new terminal in its space and tab" \
+  'grep -q "^run --bg --name ${long:0:27}-hc6 --label herdr.space=spA --label herdr.tab=tbB --cwd .* -- bash .*/hc-run/hc6.sh" "$T/hc.log" && grep -q "resume hc6 .* in hc terminal ${long:0:27}-hc6 " "$S/restore.log"'
 
 # Regression, home reboot 2026-11-22: the last snapshot ran while hc went down
 # and saved the terminal with no name, space or tab; restore-hc then ran before
 # hc gave the kept terminals their shells. The session must still go back
-# into its old terminal's space and tab under its old name, in place of the
-# stand-in shell.
+# into its old terminal, found by its saved address.
 setup hc-reboot-race
 mkdir -p "$T/bin"
 sleep 60 & idle=$!; BG+=("$idle")
@@ -403,14 +413,15 @@ bump() { local c=\$(cat "$T/\$1" 2>/dev/null || echo 0); echo \$((c + 1)) > "$T/
 case "\$1 \$2" in
   "server status") echo "{\"pid\":1,\"uptime_ms\":\$(( \$(bump status) * 2000 ))}" ;;
   "get t1v")
-    [ -f "$T/gone" ] && { echo '{"error":{"kind":"not_found"}}'; exit 3; }
     if [ "\$(bump get)" -lt 2 ]; then
       echo '{"address":"t1v","name":"voice-transcriber","state":"finished","keep":true,"labels":{"herdr.space":"spY"},"foreground":null}'
+    elif [ -f "$T/sent" ]; then
+      echo '{"address":"t1v","name":"voice-transcriber","state":"live","keep":true,"labels":{"herdr.space":"spY"},"foreground":{"name":"bash","pid":2}}'
     else
       echo '{"address":"t1v","name":"voice-transcriber","state":"live","keep":true,"labels":{"herdr.space":"spY"},"foreground":{"name":"fish","pid":$idle}}'
     fi ;;
   "get "*) echo '{"error":{"kind":"not_found"}}'; exit 3 ;;
-  "rm t1v") [ "\$(bump rm)" -lt 2 ] && exit 4; touch "$T/gone" ;;
+  "send t1v") touch "$T/sent" "\${3##* }.started" ;;
 esac
 exit 0
 EOF
@@ -431,12 +442,9 @@ first_get=$(grep -n '^get ' "$T/hc.log" | head -1 | cut -d: -f1)
 last_status=$(grep -n '^server status' "$T/hc.log" | tail -1 | cut -d: -f1)
 check "it waits for the core to settle before it looks for stand-ins" \
   '[ -n "$first_get" ] && [ "$last_status" -lt "$first_get" ] && [ "$(cat "$T/status")" -ge 3 ]'
-check "it finds the stand-in by its saved address and uses its name, space and tab" \
-  'grep -q "^run --bg --name voice-transcriber --label herdr.space=spY --label herdr.tab=tbY --cwd .* -- bash .*/hc-run/hc5.sh" "$T/hc.log"'
-steps=$(grep -oE '^(run --bg --name hold-hc5|kill t1v|rm t1v|run --bg --name voice-transcriber |kill hold-hc5|rm hold-hc5)' "$T/hc.log" | tr '\n' '|')
-check "it waits until the stand-in is gone before it takes its name" \
-  '[ "$steps" = "run --bg --name hold-hc5|kill t1v|rm t1v|rm t1v|run --bg --name voice-transcriber |kill hold-hc5|rm hold-hc5|" ]'
-check "the log says the stand-in went" 'grep -q "removed stand-in shell t1v" "$S/restore.log"'
+check "it finds the stand-in by its saved address and resumes in it" \
+  'grep -q "^send t1v .*exec bash .*/hc-run/hc5.sh" "$T/hc.log" && grep -q "resume hc5 .* in stand-in t1v (voice-transcriber)" "$S/restore.log"'
+check "it leaves the stand-in terminal in place" '! grep -qE "^(run --bg|rm t1v)" "$T/hc.log"'
 
 # hc_info: a failed lookup (hc prints its error as JSON on stdout) returns 1,
 # so the snapshot keeps the saved terminal instead of overwriting it with nulls.

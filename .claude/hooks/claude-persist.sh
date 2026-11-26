@@ -1245,22 +1245,33 @@ hc_standin() {
   return 1
 }
 
-# End stand-in terminal $1 and remove it, so its name is free again. `hc kill`
-# returns before the program is gone, and `hc rm` refuses a live terminal.
-hc_remove() {
-  local n=0
-  "$HC_BIN" kill "$1" >/dev/null 2>&1 || return 1
-  until "$HC_BIN" rm "$1" >/dev/null 2>&1; do
-    n=$((n + 1)); [ $n -ge 20 ] && return 1
-    sleep 0.25
+# Run a resume script inside an idle stand-in shell ($1, its fish pid $3). The
+# script's first step writes "$2.started", which is the proof it ran.
+# Returns 0 when the script started, 1 when nothing was typed (the shell was
+# busy or hc failed), 2 when it was typed but did not start.
+hc_resume_in_standin() {
+  local addr=$1 script=$2 pid=$3 fg n=0
+  rm -f -- "$script.started"
+  # Check again right before typing: the same fish in front, with no children.
+  fg=$("$HC_BIN" get "$addr" --json 2>/dev/null | jq -r '.foreground.pid // empty' 2>/dev/null)
+  [ -n "$pid" ] && [ "$fg" = "$pid" ] && [ -z "$(pgrep -P "$pid")" ] || return 1
+  # ctrl+c in fish clears the whole command line, all lines of it.
+  "$HC_BIN" keys "$addr" ctrl+c >/dev/null 2>&1 || return 1
+  # The leading space keeps the line out of fish history.
+  "$HC_BIN" send "$addr" " exec bash $(printf '%q' "$script")" >/dev/null 2>&1 || return 1
+  while [ $n -lt "${CLAUDE_PERSIST_STANDIN_WAIT_TICKS:-40}" ]; do
+    [ -e "$script.started" ] && return 0
+    n=$((n + 1)); sleep 0.25
   done
+  return 2
 }
 
-# Resume the sessions that ran in a herdr-core (hc) terminal into new hc
-# terminals on this machine. hc never reruns a program after a reboot, so this
-# does it, with these checks: only sessions whose Claude was
-# running at the last snapshot, with a transcript and an existing folder. Each
-# gets its old terminal name when that name is free, else one from its title.
+# Resume the sessions that ran in a herdr-core (hc) terminal on this machine.
+# hc never reruns a program after a reboot, so this does it, with these checks:
+# only sessions whose Claude was running at the last snapshot, with a
+# transcript and an existing folder. Each resumes inside its old terminal (the
+# idle stand-in shell hc keeps), so its name, space and tab stay as they were.
+# Without an idle stand-in it gets a new terminal in its old space and tab.
 # claude-persist-hc.service runs this each time hc-core.service starts.
 restore_hc() {
   mkdir -p "$SESS_DIR" "$STATE_DIR/restored" "$STATE_DIR/hc-run"
@@ -1306,6 +1317,7 @@ restore_hc() {
     {
       echo '#!/bin/bash'
       [ -n "$lp" ] && echo "export PATH=$(printf '%q' "$lp")"
+      echo ": > $(printf '%q' "$script.started")"
       echo 'unset LD_PRELOAD AIOLOS_RC_PORT AIOLOS_RC_SCOPED CLAUDECODE CLAUDE_CODE_ENTRYPOINT ANTHROPIC_BASE_URL CLAUDE_CODE_CHILD_SESSION'
       resume_cmd "$f"
       echo 'exec fish -l'
@@ -1356,21 +1368,30 @@ restore_hc() {
     local -a lbl=()
     [ -n "$space" ] && lbl=(--label "herdr.space=$space")
     [ -n "$tab" ] && lbl+=(--label "herdr.tab=$tab")
-    # The stand-in holds the name, and hc cannot rename. A short placeholder
-    # keeps the tab open while the stand-in goes, so the session gets both
-    # its old name and its old tab.
-    local hold=""
+    # Resume inside the stand-in itself. It keeps its address, name, space and
+    # tab, so the window's layout stays as it was. Starting a new terminal and
+    # removing the stand-in lost 15 space names and 14 tab names on 2026-11-26:
+    # the window reconnected after the restore and dropped the tabs whose
+    # terminals were gone.
     if [ -n "$standin" ]; then
-      # herdr_name cuts at 32 characters, so "$name-hold-..." gave a long name's
-      # hold the session's own name, and both runs below failed (2026-11-26).
-      hold=$(herdr_name "hold-${sid:0:8}")
-      [ -n "$tab" ] && "$HC_BIN" run --bg --name "$hold" "${lbl[@]}" --cwd "$cwd" -- sleep 120 >/dev/null 2>&1 || hold=""
-      if hc_remove "$standin"; then
-        echo "removed stand-in shell $standin ($was_name)"
-      else
-        echo "could not remove stand-in shell $standin ($was_name)"
+      local rc=0
+      hc_resume_in_standin "$standin" "$script" "$fgpid" || rc=$?
+      if [ $rc -eq 0 ]; then
+        echo "resume $sid ($cwd) in stand-in $standin ($was_name)"
+        continue
+      elif [ $rc -eq 2 ]; then
+        # Typed, but the start was not seen. Starting a second copy would run
+        # the session twice, so leave it and say so.
+        echo "sent resume of $sid to stand-in $standin ($was_name), start not confirmed: check it"
+        continue
       fi
+      # Busy now: leave it running, and start the session beside it.
+      echo "stand-in $standin ($was_name) was not idle: start $sid in a new terminal"
+      standin=""
     fi
+    # No usable stand-in: start a new terminal. When a busy stand-in still
+    # holds the name, the second run adds the session id (cut first, since
+    # herdr_name stops at 32 characters).
     if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
       echo "resume $sid ($cwd) in hc terminal $name${tab:+ (tab $tab)}"
     elif "$HC_BIN" run --bg --name "$(herdr_name "${name:0:27}")-${sid:0:4}" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
@@ -1378,7 +1399,6 @@ restore_hc() {
     else
       echo "could not start $sid in hc"
     fi
-    [ -n "$hold" ] && hc_remove "$hold"
   done
   exec 9>&-
 }
