@@ -1,27 +1,34 @@
 ---
 name: lab-deploy
 description: >-
-  Reach the lab PC, the Windows machine "trd-lab-pc" (formerly Hawk) at 192.168.1.160 in the Trondheim
-  office: log in over ssh, run PowerShell there, copy a build or file to it, and pull
-  the newest Swing Catalyst logs back. Use when the user mentions the lab PC, the lab
-  machine, trd-lab-pc, Hawk (its old name), testing on the lab rig, or wants logs from the lab.
+  Reach the office test PCs, the Windows machines trd-pc-1-lab (the lab PC, formerly
+  trd-lab-pc and Hawk) and trd-pc-2-lowend (formerly trd-lab-pc2) in the Trondheim office:
+  log in over ssh from anywhere through Headscale, run PowerShell there, copy a build or file
+  to them, and pull the newest Swing Catalyst logs back. Use when the user mentions the lab
+  PC, the test PCs, the low-end PC, trd-pc-1-lab, trd-pc-2-lowend, their old names, testing on
+  the lab rig, or wants logs from the lab.
 ---
 
-# Lab PC (trd-lab-pc)
+# Office test PCs
 
-| | |
-|---|---|
-| Address | `192.168.1.160`, office LAN only. Not on Tailscale, so it is unreachable from outside the office network |
-| Name | `trd-lab-pc` (Windows computer name `TRD-LAB-PC` since 2026-11-05). It used to be called Hawk. Do not use the old name in new text |
-| Login | `ssh labpc` (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` |
-| Auth | Keys only. sshd has `PasswordAuthentication no`. Backup config: `C:\ProgramData\ssh\sshd_config.bak-2026-09-29` |
-| Remote shell | `cmd`. Run PowerShell through the script below rather than quoting it by hand |
-| Installed app | `C:\Program Files\Initial Force\Swing Catalyst` (plus an old `Swing Catalyst Alpha` from 2026-06) |
-| Logs | `C:\ProgramData\Swing Catalyst\logs` (`log.txt`, `log.YYYYMMDD.txt`, `log_error.txt`, `log_hwreport.txt`) |
+The full description of both PCs (access, rules, specs, how to add a PC) is in the monorepo's
+`tools/qa/lab/LAB-PCS.md`. The short version:
+
+| | `trd-pc-1-lab` | `trd-pc-2-lowend` |
+|---|---|---|
+| Login | `ssh trd-pc-1-lab` (old: `labpc`, `hawk`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` | `ssh trd-pc-2-lowend` (old: `labpc2`), user `labqa`, key `~/.ssh/labpc2_ed25519` |
+| Network | Office LAN 192.168.1.160; Headscale once joined | Headscale 100.64.0.8 (`tag:trd-pc`, only Oystein's devices), office LAN 192.168.1.189 |
+| Who uses it | People, with hardware connected | Agents; `labqa` logs on by itself |
+| Windows password | `LAB_PC_LOGIN_PASSWORD` (same value as `LAB_DEPLOY_PASSWORD`) | `LAB_PC2_LOGIN_PASSWORD` |
+
+Both: keys only (`PasswordAuthentication no`), remote shell `cmd`, app in
+`C:\Program Files\Initial Force\Swing Catalyst`, logs in `C:\ProgramData\Swing Catalyst\logs`
+(`log.txt`, `log.YYYYMMDD.txt`, `log_error.txt`, `log_hwreport.txt`).
 
 ## Script
 
-`~/.claude/skills/lab-deploy/lab-deploy.sh`:
+`~/.claude/skills/lab-deploy/lab-deploy.sh` works on `trd-pc-1-lab`. Set
+`LAB_SSH_HOST=trd-pc-2-lowend` for the other PC:
 
 ```sh
 lab-deploy.sh run 'Get-Process MotionCatalyst* | Select Id,StartTime'   # PowerShell on the lab PC
@@ -34,7 +41,7 @@ lab-deploy.sh logs 3                                                    # newest
 
 ## Rules
 
-- **People use this PC.** Someone may be running Swing Catalyst with hardware connected. Never
+- **People use trd-pc-1-lab.** Someone may be running Swing Catalyst with hardware connected. Never
   stop or restart the app, install over it, or reboot without asking the user first.
 - **Test a fix or feature from a branch build, not an installer.** Oystein, 2026-10-14: waiting
   for a merge plus a ~20 min CI installer "slows everything down massively". Build the branch here
@@ -47,14 +54,14 @@ lab-deploy.sh logs 3                                                    # newest
   test hive like any `C:\LabQa\ri` build. Use a CI installer only when the installer itself is
   under test (`desktop-classic-release-installers` finds the link, then `push`).
   `ri-push --name <name>` installs under `C:\LabQa\ri\<name>`, so several builds can sit side by side.
-- **Portable tools are fine on the lab PC without asking.** Oystein, 2026-10-20: a self-contained
+- **Portable tools are fine on the test PCs without asking.** Oystein, 2026-10-20: a self-contained
   tool you copy in and can delete again (a signed Sysinternals exe, a static binary) goes in
   `C:\LabQa\perf\tools` or another `C:\LabQa` task folder. Download it from the vendor's site,
   check the Authenticode signature (`(Get-AuthenticodeSignature <exe>).Status` must be `Valid`)
   and report the path. Installers, services, drivers and registry changes still need a yes.
   RAMMap64.exe is already at `C:\LabQa\perf\tools` (startup timing cold-cache runs).
-- **The Windows password is only for someone sitting at the PC.** It is `LAB_DEPLOY_PASSWORD`
-  in the secrets file. Never put it in a file or a command line.
+- **The Windows password is only for someone sitting at the PC,** or for RDP to
+  trd-pc-2-lowend. Never put it in a file or a command line.
 - **Adding a key:** append it to `C:\ProgramData\ssh\administrators_authorized_keys` (the account
   is an admin, so `~\.ssh\authorized_keys` is ignored). The file must allow only SYSTEM and
   Administrators: `icacls <file> /inheritance:r /grant "*S-1-5-32-544:F" /grant "SYSTEM:F"`.

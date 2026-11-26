@@ -278,11 +278,19 @@ spaces, tabs and terminals. The old `herdr` CLI (`herdr workspace list`, `herdr 
   2026-11-20, manager-resources (office) and manager-home freeze idle spaces on their own desktop
   under the rules in that skill. `hc label <terminal> herdr.nofreeze=1` protects a space.
 
-## Lab PC
+## Office test PCs
 
-The lab PC is the Windows machine `trd-lab-pc` at `192.168.1.160` on the office LAN (not on
-Tailscale). It used to be called Hawk; Windows was renamed to TRD-LAB-PC on 2026-11-05. The jobd worker id is `trd-lab-pc` (`hawk` still works as an alias). Never call it
-Hawk in new text. Log in with **`ssh labpc`** (alias `hawk`; `trd-lab-pc` once Oystein adds it to `~/.ssh/config`), which uses the key `~/.ssh/labpc_ed25519`; sshd there
+Two Windows PCs in the Trondheim office are for QA and performance runs. They follow one
+standard, described in the monorepo's `tools/qa/lab/LAB-PCS.md` (names, access, rules, specs,
+and how to add a PC). Oystein renamed them on 2026-11-26:
+
+- **`trd-pc-1-lab`** (was `trd-lab-pc`, and Hawk before that): the lab PC with real devices.
+- **`trd-pc-2-lowend`** (was `trd-lab-pc2`): a low-end PC for performance work.
+
+Never use the old names in new text. They still work as aliases in `labqa` and
+`~/.ssh/config`, and jobd still uses them as worker ids. Log in with **`ssh trd-pc-1-lab`** or
+**`ssh trd-pc-2-lowend`**. The PCs are on Headscale (`tag:trd-pc`, only Oystein's devices), so
+the aliases work from anywhere; trd-pc-1-lab uses the office LAN until it has joined. sshd
 accepts keys only. The shell is Windows, so wrap commands in `powershell -NoProfile -Command`.
 To deploy a build or pull logs, load `lab-deploy`.
 

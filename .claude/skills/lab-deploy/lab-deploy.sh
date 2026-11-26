@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run commands on, push files to, and pull logs from the lab PC (trd-lab-pc, formerly "Hawk").
-# Uses the "labpc" host entry in ~/.ssh/config (key login only).
+# Uses the "trd-pc-1-lab" host entry in ~/.ssh/config (key login only).
+# LAB_SSH_HOST=trd-pc-2-lowend targets the other office test PC.
 #
 # Usage:
 #   lab-deploy.sh run '<powershell>'           run PowerShell on the lab PC
@@ -9,7 +10,7 @@
 
 set -euo pipefail
 
-HOST="${LAB_SSH_HOST:-labpc}"
+HOST="${LAB_SSH_HOST:-trd-pc-1-lab}"
 DROP_DIR="C:/lab-drop"
 LOG_DIR="C:/ProgramData/Swing Catalyst/logs"
 
