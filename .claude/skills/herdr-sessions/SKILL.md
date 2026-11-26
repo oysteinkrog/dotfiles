@@ -1,6 +1,6 @@
 ---
 name: herdr-sessions
-description: Find, inspect, make, freeze, thaw, wake, kill and revive the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, killing a space (closing it and its worktree, keeping the Claude session) or reviving a killed one, waking a frozen session for one job (space-wake, also when a SendMessage says "not reachable"), when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "kill", "revive", "killed spaces", "park this session", "frozen spaces" or "snowflake".
+description: Find, inspect, make, freeze, thaw, wake, kill and revive the Claude sessions that run in herdr-core (hc) and the herdr-app window, on the office and home desktops. Use when listing which sessions run where, finding the session in a space or terminal, making a new space for an agent (which sidebar folder it goes in), freezing an idle space to free memory or thawing one, killing a space (closing it and its worktree, keeping the Claude session) or reviving a killed one, waking a frozen session for one job (space-wake, also when a SendMessage says "not reachable"), when a manager loop looks for spaces to freeze, when memory is tight because of many idle Claude processes, or when the user says "freeze", "thaw", "kill", "revive", "killed spaces", "park this session", "frozen spaces" or "snowflake". Also for scheduled agents: running one now, leaving it an inbox message (agent-inbox), its timers and run log (agent-run, agent-schedule).
 ---
 
 # Herdr sessions: find, freeze, thaw
@@ -219,3 +219,24 @@ Chrome opens on the desktop whose window was clicked, through `~/.local/bin/chro
 `chrome-personal`. Set the label only when a session's links belong to the other profile, for
 example personal work in an office session: `hc label <address> herdr.browser=personal`.
 Remove it with `hc label <address> herdr.browser=`.
+
+## Scheduled agents
+
+Some long-running agents do not stay alive. They run on a schedule, as a fresh Claude
+session in their own space, and end after one round of their loop (since 2026-11-26, first
+manager-security). Their memory is a working state file plus an ee store, not the
+conversation. The full description is in the life repo, `agents/README.md`, "Scheduled agents".
+
+```sh
+agent-schedule list                         # scheduled agents on this desktop, next run, last result
+agent-inbox NAME "text" --from ME           # leave a message for its next run
+agent-inbox NAME "text" --from ME --urgent  # start a run now, or tell the run that is going
+agent-run NAME --why "by hand"              # start one run now
+agent-schedule sync                         # rewrite the timers after a Runs: line changed
+```
+
+- Never freeze a scheduled agent's space, and never thaw-resume its old session: that loads
+  the whole old context again. Its terminal is a shell between runs; that is normal.
+- SendMessage cannot reach it between runs. Use `agent-inbox`.
+- Its run log is `~/.local/share/agents/NAME/runs.log`. A run that stayed open says why
+  (someone typed in it, questions for Oystein, something still running).
