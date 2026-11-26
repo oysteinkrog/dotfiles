@@ -240,3 +240,11 @@ agent-schedule sync                         # rewrite the timers after a Runs: l
 - SendMessage cannot reach it between runs. Use `agent-inbox`.
 - Its run log is `~/.local/share/agents/NAME/runs.log`. A run that stayed open says why
   (someone typed in it, questions for Oystein, something still running).
+
+Status for the herdr window: `agent-run` sets labels on the agent's terminal.
+- `herdr.agent`: the agent's name.
+- `herdr.agent-state`: `running`, `open` (left open after a run; read `herdr.agent-last-result`) or `waiting` (between runs).
+- `herdr.agent-next-run` and `herdr.agent-run-started`: times as `YYYY-MM-DD HH:MM`.
+- `herdr.agent-last-result`: the time and the last line of the run log.
+
+`agent-schedule list --json` prints one JSON line per scheduled agent. Fields: `agent`, `space`, `terminal`, `schedule`, `next_run`, `running`, `inbox_items`, `last_result`, `state_file`, `log`.
