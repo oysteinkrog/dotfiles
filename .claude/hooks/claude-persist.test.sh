@@ -351,11 +351,42 @@ HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/u
   CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
   CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
 kill $idle 2>/dev/null
-steps=$(grep -oE '^(run --bg --name cto-hold|kill t9|rm t9|run --bg --name cto |kill cto-hold)' "$T/hc.log" | tr '\n' '|')
+steps=$(grep -oE '^(run --bg --name hold-hc4|kill t9|rm t9|run --bg --name cto |kill hold-hc4)' "$T/hc.log" | tr '\n' '|')
 check "a placeholder holds the tab while the stand-in shell goes" \
-  '[ "$steps" = "run --bg --name cto-hold|kill t9|rm t9|run --bg --name cto |kill cto-hold|" ]'
+  '[ "$steps" = "run --bg --name hold-hc4|kill t9|rm t9|run --bg --name cto |kill hold-hc4|" ]'
 check "the session gets its old name, space and tab" \
   'grep -q "^run --bg --name cto --label herdr.space=spA --label herdr.tab=tbB --cwd" "$T/hc.log"'
+
+# Regression, office reboot 2026-11-26: a stand-in whose name is already 32
+# characters (herdr_name's limit) gave the placeholder the same name, so hc
+# refused both runs and six sessions were not restored.
+setup hc-long-name
+mkdir -p "$T/bin"
+sleep 60 & idle=$!; BG+=("$idle")
+long=swing-catalyst-sheepdog-voice-ag
+cat > "$T/bin/hc" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/hc.log"
+case "\$1 \$2" in
+  "server status") echo '{"pid":1}' ;;
+  "get t6f") [ -f "$T/gone" ] && exit 1
+    echo '{"address":"t6f","name":"$long","state":"live","labels":{"herdr.space":"spA"},"foreground":{"name":"fish","pid":$idle}}' ;;
+  "rm t6f") touch "$T/gone" ;;
+  "run --bg") [ -e "$T/taken-\$4" ] && exit 1; touch "$T/taken-\$4" ;;
+  "kill "*) rm -f "$T/taken-\$2" ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/hc"
+entry hc6 "$H/projects/life" null "$OLD"
+f=$(ls "$S/sessions/"hc6@*.json); jq '.hc = {terminal:"t6f", name:null, space:"spA", tab:"tbB"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+printf 'mux %s\nhc6\n' "$OLD" > "$S/live"
+HOME=$H XDG_STATE_HOME=$T/state CLAUDE_PERSIST_MUX_ID=$NEW CLAUDE_PERSIST_BIN=/usr/bin/claude \
+  CLAUDE_TAB_RUN_BIN=/nonexistent CLAUDE_CHANNEL_ARGS_BIN=/nonexistent \
+  CLAUDE_PERSIST_HC_BIN=$T/bin/hc bash "$T/hooks/claude-persist.sh" restore-hc
+kill $idle 2>/dev/null
+check "a 32-character name still gets its session back under that name" \
+  'grep -q "^run --bg --name $long --label herdr.space=spA --label herdr.tab=tbB --cwd .* -- bash .*/hc-run/hc6.sh" "$T/hc.log" && grep -q "resume hc6 .* in hc terminal $long " "$S/restore.log"'
 
 # Regression, home reboot 2026-11-22: the last snapshot ran while hc went down
 # and saved the terminal with no name, space or tab; restore-hc then ran before
@@ -402,9 +433,9 @@ check "it waits for the core to settle before it looks for stand-ins" \
   '[ -n "$first_get" ] && [ "$last_status" -lt "$first_get" ] && [ "$(cat "$T/status")" -ge 3 ]'
 check "it finds the stand-in by its saved address and uses its name, space and tab" \
   'grep -q "^run --bg --name voice-transcriber --label herdr.space=spY --label herdr.tab=tbY --cwd .* -- bash .*/hc-run/hc5.sh" "$T/hc.log"'
-steps=$(grep -oE '^(run --bg --name voice-transcriber-hold|kill t1v|rm t1v|run --bg --name voice-transcriber |kill voice-transcriber-hold|rm voice-transcriber-hold)' "$T/hc.log" | tr '\n' '|')
+steps=$(grep -oE '^(run --bg --name hold-hc5|kill t1v|rm t1v|run --bg --name voice-transcriber |kill hold-hc5|rm hold-hc5)' "$T/hc.log" | tr '\n' '|')
 check "it waits until the stand-in is gone before it takes its name" \
-  '[ "$steps" = "run --bg --name voice-transcriber-hold|kill t1v|rm t1v|rm t1v|run --bg --name voice-transcriber |kill voice-transcriber-hold|rm voice-transcriber-hold|" ]'
+  '[ "$steps" = "run --bg --name hold-hc5|kill t1v|rm t1v|rm t1v|run --bg --name voice-transcriber |kill hold-hc5|rm hold-hc5|" ]'
 check "the log says the stand-in went" 'grep -q "removed stand-in shell t1v" "$S/restore.log"'
 
 # hc_info: a failed lookup (hc prints its error as JSON on stdout) returns 1,

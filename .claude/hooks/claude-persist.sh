@@ -1361,7 +1361,9 @@ restore_hc() {
     # its old name and its old tab.
     local hold=""
     if [ -n "$standin" ]; then
-      hold=$(herdr_name "$name-hold-${sid:0:4}")
+      # herdr_name cuts at 32 characters, so "$name-hold-..." gave a long name's
+      # hold the session's own name, and both runs below failed (2026-11-26).
+      hold=$(herdr_name "hold-${sid:0:8}")
       [ -n "$tab" ] && "$HC_BIN" run --bg --name "$hold" "${lbl[@]}" --cwd "$cwd" -- sleep 120 >/dev/null 2>&1 || hold=""
       if hc_remove "$standin"; then
         echo "removed stand-in shell $standin ($was_name)"
@@ -1371,8 +1373,8 @@ restore_hc() {
     fi
     if "$HC_BIN" run --bg --name "$name" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
       echo "resume $sid ($cwd) in hc terminal $name${tab:+ (tab $tab)}"
-    elif "$HC_BIN" run --bg --name "$(herdr_name "$name-${sid:0:4}")" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
-      echo "resume $sid ($cwd) in hc terminal $name-${sid:0:4}${tab:+ (tab $tab)}"
+    elif "$HC_BIN" run --bg --name "$(herdr_name "${name:0:27}")-${sid:0:4}" "${lbl[@]}" --cwd "$cwd" -- bash "$script" >/dev/null 2>&1; then
+      echo "resume $sid ($cwd) in hc terminal ${name:0:27}-${sid:0:4}${tab:+ (tab $tab)}"
     else
       echo "could not start $sid in hc"
     fi
