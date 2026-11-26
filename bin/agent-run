@@ -15,7 +15,7 @@
 #
 # Steps: refuse if a run is already going; write brief.md (ee resume + ee pack for the loop);
 # find the agent's Claude terminal in its space; end a leftover idle Claude there; start a
-# fresh Claude with the run prompt; wait until it stops; then type /exit when nobody typed in
+# fresh Claude with the run prompt; wait until it stops; then end it when nobody typed in
 # it, it asked nothing, and nothing of it still runs (ctrl+c twice). Otherwise leave it open and log why.
 # The Stop hook agent-run-stop.sh keeps the run from ending before the state file is updated.
 # Log: ~/.local/share/agents/NAME/runs.log (one "result:" line per run).
