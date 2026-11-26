@@ -1,0 +1,8 @@
+[Unit]
+Description=Scheduled run of agent %i (agent-run)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/bin/bash -c 'mkdir -p %h/.local/share/agents/%i && exec %h/bin/agent-run %i --why timer --foreground >>%h/.local/share/agents/%i/runs.log 2>&1'
+TimeoutStartSec=4h

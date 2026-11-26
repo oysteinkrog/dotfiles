@@ -1,0 +1,41 @@
+#!/bin/bash
+# Leave a message for a scheduled agent; it reads its inbox at the start of its next run.
+#
+# Usage: agent-inbox NAME "TEXT" [--from WHO] [--urgent]
+#        agent-inbox NAME --show
+#
+#   --urgent  also start a run now (agent-run NAME --why "urgent inbox"), for things that
+#             cannot wait for the next scheduled run, like a service about to be exposed
+# Inbox: ~/.local/share/agents/NAME/inbox.md. The agent removes items it has handled.
+set -uo pipefail
+NAME=${1:-}; shift || true
+[ -n "$NAME" ] || { echo "usage: agent-inbox NAME \"TEXT\" [--from WHO] [--urgent] | --show" >&2; exit 2; }
+D=$HOME/.local/share/agents/$NAME
+TEXT= FROM=${HC_TERMINAL_ID:+terminal $HC_TERMINAL_ID} URG=0 SHOW=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --from) FROM=$2; shift 2;;
+    --urgent) URG=1; shift;;
+    --show) SHOW=1; shift;;
+    *) TEXT=$1; shift;;
+  esac
+done
+LIFE=$HOME/work/life; [ -d "$LIFE/agents" ] || LIFE=$HOME/projects/life
+[ -f "$LIFE/agents/$NAME.md" ] || { echo "agent-inbox: no agent $NAME" >&2; exit 2; }
+mkdir -p "$D"
+[ "$SHOW" = 1 ] && { cat "$D/inbox.md" 2>/dev/null || echo "(empty)"; exit 0; }
+[ -n "$TEXT" ] || { echo "agent-inbox: no text" >&2; exit 2; }
+exec 9>>"$D/inbox.md"; flock 9
+printf -- '- %s%s%s: %s\n' "$(date '+%F %H:%M')" "${FROM:+ from $FROM}" "$([ $URG = 1 ] && echo ' [urgent]')" "$TEXT" >&9
+exec 9>&-
+echo "agent-inbox: left for $NAME"
+if [ "$URG" = 1 ]; then
+  # A run is going: type a note into it. Otherwise start a run now.
+  if ! flock -n "$D/run.lock" true 2>/dev/null && [ -s "$D/terminal" ]; then
+    hc send "$(cat "$D/terminal")" "New urgent inbox item ($(date +%H:%M)): read $D/inbox.md and handle it in this run." >/dev/null &&
+      echo "agent-inbox: a run is going; told it in terminal $(cat "$D/terminal")"
+  else
+    agent-run "$NAME" --why "urgent inbox"
+  fi
+fi
+exit 0

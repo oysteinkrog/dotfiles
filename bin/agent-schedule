@@ -1,0 +1,61 @@
+#!/bin/bash
+# Keep one systemd user timer per scheduled agent, from the **Runs:** lines in the agent files.
+#
+# Usage: agent-schedule sync     write or remove timers so they match the agent files
+#        agent-schedule list     the scheduled agents on this desktop and their next run
+#
+# An agent is scheduled on this desktop when its file has a **Runs:** line with one or more
+# systemd calendar times in backticks, and its **Runs on:** line names this desktop
+# ("office desktop" or "home desktop"). Each timer starts agent-run NAME --why timer.
+set -uo pipefail
+LIFE=$HOME/work/life; [ -d "$LIFE/agents" ] || LIFE=$HOME/projects/life
+U=$HOME/.config/systemd/user
+case $(hostnamectl hostname 2>/dev/null || hostname) in
+  *) here=$( [ "$LIFE" = "$HOME/work/life" ] && echo office || echo home );;
+esac
+
+agents() {
+  local f n
+  for f in "$LIFE"/agents/*.md; do
+    n=$(basename "$f" .md); case $n in TEMPLATE|README) continue;; esac
+    grep -q '^\*\*Runs:\*\*' "$f" || continue
+    sed -n 's/^\*\*Runs on:\*\* *//p' "$f" | head -1 | grep -qi "$here desktop" || continue
+    echo "$n"
+  done
+}
+times() { sed -n 's/^\*\*Runs:\*\* *//p' "$LIFE/agents/$1.md" | head -1 | grep -o '`[^`]*`' | tr -d '`'; }
+
+case ${1:-} in
+  sync)
+    want=$(agents)
+    for n in $want; do
+      cal=$(times "$n")
+      [ -n "$cal" ] || { echo "$n: no calendar times in backticks on its Runs: line" >&2; continue; }
+      while IFS= read -r c; do systemd-analyze calendar "$c" >/dev/null 2>&1 || { echo "$n: bad calendar '$c'" >&2; continue 2; }; done <<< "$cal"
+      {
+        echo "# Written by agent-schedule from $LIFE/agents/$n.md. Do not edit; change the Runs: line."
+        echo "[Unit]"; echo "Description=Scheduled run of agent $n"
+        echo "[Timer]"; while IFS= read -r c; do echo "OnCalendar=$c"; done <<< "$cal"
+        echo "Unit=agent-run@$n.service"; echo "Persistent=false"; echo "RandomizedDelaySec=60"
+        echo "[Install]"; echo "WantedBy=timers.target"
+      } > "$U/agent-run-$n.timer.new" && mv -f "$U/agent-run-$n.timer.new" "$U/agent-run-$n.timer"
+    done
+    for t in "$U"/agent-run-*.timer; do
+      [ -e "$t" ] || continue
+      n=$(basename "$t" .timer); n=${n#agent-run-}
+      echo "$want" | grep -qx "$n" && continue
+      systemctl --user disable --now "agent-run-$n.timer" 2>/dev/null
+      mv -f "$t" "$t.removed"
+      echo "$n: no longer scheduled here; timer disabled"
+    done
+    systemctl --user daemon-reload
+    for n in $want; do [ -e "$U/agent-run-$n.timer" ] && systemctl --user enable --now "agent-run-$n.timer" >/dev/null 2>&1 && echo "$n: $(times "$n" | paste -sd ';' -)"; done
+    ;;
+  list)
+    for n in $(agents); do
+      nxt=$(systemctl --user show "agent-run-$n.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
+      echo "$n  next: ${nxt:-not installed}  last: $(grep 'result:' "$HOME/.local/share/agents/$n/runs.log" 2>/dev/null | tail -1)"
+    done
+    ;;
+  *) sed -n 2,10p "$0"; exit 2;;
+esac
