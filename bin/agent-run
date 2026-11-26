@@ -51,7 +51,24 @@ exec 9>"$DIR/run.lock"
 flock -n 9 || { echo "$(date '+%F %T') result: skipped, a run of $NAME is already going"; exit 0; }
 
 log() { echo "$(date '+%F %T') $*"; }
-result() { log "result: $*"; exit "${2:-0}"; }
+T=
+# Status for the herdr window, as labels on the agent's terminal (herdr.agent-*):
+# state running | open (left open after a run, see last result) | waiting (between runs).
+status() {
+  [ -n "$T" ] || return 0
+  local nxt
+  nxt=$(systemctl --user show "agent-run-$NAME.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
+  hc label "$T" herdr.agent="$NAME" herdr.agent-state="$1" \
+    herdr.agent-next-run="$(date -d "$nxt" '+%F %H:%M' 2>/dev/null)" ${2:+herdr.agent-last-result="$2"} >/dev/null 2>&1
+}
+result() {
+  log "result: $1"
+  case $1 in
+    "left open"*|"waiting for an answer"*|"still working"*) status open "$(date '+%H:%M') $1";;
+    *) status waiting "$(date '+%H:%M') $1";;
+  esac
+  exit "${2:-0}"
+}
 field() { sed -n "s/^\*\*$1:\*\* *//p" "$FILE" | head -1; }
 
 SPACE=$(field Space | grep -o 'sp[0-9a-f]\{8,\}' | head -1)
@@ -122,7 +139,8 @@ L=$DIR/launch.sh
 printf '#!/bin/bash\ncd %q || exit 1\nexport AGENT_RUN=%q AGENT_RUN_START=%q\n"$HOME/.config/aiolos-rc/aiolos-rc" --no-pin -- %q\n' \
   "$WORK" "$NAME" "$START" "$PROMPT" > "$L.new" && mv -f "$L.new" "$L"
 hc send "$T" "bash $L" >/dev/null || result "hc send to $T failed" 1
-hc label "$T" herdr.scheduled-run="$(date +%H:%M)" >/dev/null 2>&1
+hc label "$T" herdr.scheduled-run= herdr.agent-run-started="$(date '+%F %H:%M')" >/dev/null 2>&1
+status running
 echo "$T" > "$DIR/terminal"
 log "started in $T"
 

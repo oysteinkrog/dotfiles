@@ -2,6 +2,7 @@
 # Keep one systemd user timer per scheduled agent, from the **Runs:** lines in the agent files.
 #
 # Usage: agent-schedule sync     write or remove timers so they match the agent files
+#        agent-schedule list --json  one JSON line per agent, for the herdr window
 #        agent-schedule list     the scheduled agents on this desktop and their next run
 #
 # An agent is scheduled on this desktop when its file has a **Runs:** line with one or more
@@ -52,9 +53,22 @@ case ${1:-} in
     for n in $want; do [ -e "$U/agent-run-$n.timer" ] && systemctl --user enable --now "agent-run-$n.timer" >/dev/null 2>&1 && echo "$n: $(times "$n" | paste -sd ';' -)"; done
     ;;
   list)
+    json=0; [ "${2:-}" = --json ] && json=1
     for n in $(agents); do
       nxt=$(systemctl --user show "agent-run-$n.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
-      echo "$n  next: ${nxt:-not installed}  last: $(grep 'result:' "$HOME/.local/share/agents/$n/runs.log" 2>/dev/null | tail -1)"
+      nxt=$(date -d "$nxt" '+%F %H:%M' 2>/dev/null)
+      last=$(grep 'result:' "$HOME/.local/share/agents/$n/runs.log" 2>/dev/null | tail -1)
+      d=$HOME/.local/share/agents/$n
+      running=false; flock -n "$d/run.lock" true 2>/dev/null || running=true
+      if [ $json = 1 ]; then
+        jq -nc --arg n "$n" --arg next "$nxt" --arg last "$last" --argjson running $running \
+          --arg cal "$(times "$n" | paste -sd ';' -)" --arg term "$(cat "$d/terminal" 2>/dev/null)" \
+          --arg space "$(sed -n 's/^\*\*Space:\*\* *//p' "$LIFE/agents/$n.md" | grep -o 'sp[0-9a-f]*' | head -1)" \
+          --argjson inbox "$(grep -c '^- ' "$d/inbox.md" 2>/dev/null || echo 0)" \
+          '{agent:$n, space:$space, terminal:$term, schedule:($cal|split(";")), next_run:$next, running:$running, inbox_items:$inbox, last_result:$last, state_file:"agents/state/\($n).md", log:"~/.local/share/agents/\($n)/runs.log"}'
+      else
+        echo "$n  next: ${nxt:-not installed}  running: $running  last: $last"
+      fi
     done
     ;;
   *) sed -n 2,10p "$0"; exit 2;;
