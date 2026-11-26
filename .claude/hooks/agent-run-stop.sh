@@ -5,6 +5,9 @@
 set -u
 [ -n "${AGENT_RUN:-}" ] && [ -n "${AGENT_RUN_START:-}" ] || exit 0
 in=$(cat)
+# Mark each turn end, so agent-run can tell idle from working when hc cannot see this Claude
+# (it runs as another user under sudo). A later transcript write means it went on working.
+[ -z "${AGENT_RUN_SID:-}" ] || touch "$HOME/.local/share/agents/$AGENT_RUN/.stopped-$AGENT_RUN_SID" 2>/dev/null
 [ "$(printf '%s' "$in" | jq -r '.stop_hook_active // false' 2>/dev/null)" = true ] && exit 0
 paths=$("$HOME/bin/agent-paths" "$AGENT_RUN" 2>/dev/null) || exit 0
 eval "$paths"

@@ -99,6 +99,9 @@ if [ "${1:-}" = --inner ]; then
         "$(workdir)" "$extra" "$NAME" "$START" "$SID" "$(prompt "$WHY")" "$launch" > "$L.new" && mv -f "$L.new" "$L" && echo "$L" ;;
     transcript)  # path of session SID's transcript, empty while there is none
       transcript "$1" ;;
+    turn)  # idle when the Stop hook marked a turn end after the last transcript write, else working
+      tr=$(transcript "$1"); m=$DIR/.stopped-$1
+      if [ -n "$tr" ] && [ -f "$m" ] && [ "$(stat -c %Y "$m")" -ge "$(( $(stat -c %Y "$tr") - 1 ))" ]; then echo idle; else echo working; fi ;;
     finish)  # commit the state history; print why the run must stay open, empty when it can end
       WHY=$1 SID=$2 START=$3
       # Keep the state file's history (agents whose state lives in their own folder).
@@ -216,7 +219,17 @@ if [ "$DRY" = 1 ]; then
   as_target show "$WHY" "$SPACE"; exit 0
 fi
 
-state() { hc get "$1" --json 2>/dev/null | jq -r '.status.state // empty'; }
+# Under sudo hc cannot see the Claude's status (castor, 2026-11-26), so for another user the
+# Stop hook's turn marker decides: idle or working, empty when the terminal is gone.
+state() {
+  if [ -n "$RUNAS" ]; then
+    hc get "$1" --json >/dev/null 2>&1 || return 0
+    local sid; sid=${SID:-$(cat "$ODIR/sid" 2>/dev/null)}
+    if [ -n "$sid" ]; then as_target turn "$sid"; else echo idle; fi
+  else
+    hc get "$1" --json 2>/dev/null | jq -r '.status.state // empty'
+  fi
+}
 app() { hc get "$1" --json 2>/dev/null | jq -r '.status.app // empty'; }
 # Under sudo hc may see `sudo` as the terminal's program, so for another user a Claude that
 # agent-run started (it has --session-id) also counts.
@@ -263,7 +276,7 @@ else
 fi
 hc label "$T" herdr.scheduled-run= herdr.agent-run-started="$(date '+%F %H:%M')" >/dev/null 2>&1
 status running
-echo "$T" > "$ODIR/terminal"
+echo "$T" > "$ODIR/terminal"; echo "$SID" > "$ODIR/sid"
 log "started in $T, session $SID"
 
 # Wait for the transcript to appear, then until Claude is done or idle twice in a row (max 3 h).
