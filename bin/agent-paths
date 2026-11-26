@@ -7,17 +7,20 @@
 # personal ones in the life repo (agents/). The first match wins:
 #   $AGENT_DEFS_DIR, the office managers lane, a monorepo checkout at ~/src/monorepo (castor),
 #   the life repo (~/work/life on the office desktop, ~/projects/life at home).
-# State: a life-repo agent keeps agents/state/NAME.md in the life repo; any other agent keeps
-# state.md in its own folder, which agent-run commits to a local git history.
+# State: agents/state/NAME.md in the life repo when that file exists; otherwise state.md in
+# the agent's own folder, which agent-run commits to a local git history.
 name=${1:?usage: agent-paths NAME}
 dir=$HOME/.local/share/agents/$name
 for d in ${AGENT_DEFS_DIR:+"$AGENT_DEFS_DIR"} "$HOME/work/desktop/managers/tools/agents" \
          "$HOME/src/monorepo/tools/agents" "$HOME/work/life/agents" "$HOME/projects/life/agents"; do
   [ -f "$d/$name.md" ] || continue
-  case $d in
-    */life/agents) state=$d/state/$name.md ;;
-    *) state=$dir/state.md ;;
-  esac
+  # The life repo's state file wins while it exists (office desktop), so a definition that
+  # moves into the monorepo keeps its state there; elsewhere (castor) the local one.
+  state=$dir/state.md
+  case $d in */life/agents) state=$d/state/$name.md ;; esac
+  for l in "$HOME/work/life/agents/state" "$HOME/projects/life/agents/state"; do
+    [ -f "$l/$name.md" ] && { state=$l/$name.md; break; }
+  done
   printf 'FILE=%q STATE=%q DIR=%q\n' "$d/$name.md" "$state" "$dir"
   exit 0
 done
