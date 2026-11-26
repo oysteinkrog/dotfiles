@@ -248,3 +248,7 @@ Status for the herdr window: `agent-run` sets labels on the agent's terminal.
 - `herdr.agent-last-result`: the time and the last line of the run log.
 
 `agent-schedule list --json` prints one JSON line per scheduled agent. Fields: `agent`, `space`, `terminal`, `schedule`, `next_run`, `running`, `inbox_items`, `last_result`, `state_file`, `log`.
+
+In the herdr window (space-folders and space-freeze mods, 2026-11-26), a scheduled space shows
+a tag after its name: `running`, `open`, or the next run (`⏲ 17:00`, `⏲ fri 08:00`). Its
+right-click menu has "Run agent now" in place of Freeze and Thaw.

@@ -16,7 +16,9 @@
 # Steps: refuse if a run is already going; write brief.md (ee resume + ee pack for the loop);
 # find the agent's Claude terminal in its space; end a leftover idle Claude there; start a
 # fresh Claude with the run prompt; wait until it stops; then end it when nobody typed in
-# it, it asked nothing, and nothing of it still runs (ctrl+c twice). Otherwise leave it open and log why.
+# it, it is not waiting on a prompt, and nothing of it still runs (ctrl+c twice). Questions
+# for Oystein stay in the state file and go to him through manager-cto; they do not keep a
+# run open, since standing questions would keep every run open. Otherwise leave it open and log why.
 # The Stop hook agent-run-stop.sh keeps the run from ending before the state file is updated.
 # Log: ~/.local/share/agents/NAME/runs.log (one "result:" line per run).
 set -uo pipefail
@@ -175,9 +177,6 @@ if [ -z "$why" ]; then
 fi
 if [ -z "$why" ]; then
   r=$(python3 "$HOME/.claude/hooks/claude-persist-resume.py" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
-fi
-if [ -z "$why" ] && sed -n '/^## Questions for Oystein/,/^## /p' "$STATE" | grep -q '^[-*0-9]'; then
-  why="it has questions for Oystein"
 fi
 if [ -z "$why" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zsh|sh|fish|timeout|sleep|tail|inotifywait)$'; then
   why="background shell or Monitor still running"
