@@ -30,6 +30,14 @@ agents() {
     echo "$n"
   done
 }
+# Print one file from an agent's folder (runs.log, inbox.md). When the agent runs as another
+# user (~/.config/agents/run-as, see agent-paths), read it through sudo as that user.
+aread() {
+  local RUNAS= RUNAS_HOME= ra
+  ra=$("$(dirname "$(readlink -f "$0")")/agent-paths" --run-as "$1") && eval "$ra"
+  if [ -n "$RUNAS" ]; then sudo -n -u "$RUNAS" -- cat "$RUNAS_HOME/.local/share/agents/$1/$2" 2>/dev/null
+  else cat "$HOME/.local/share/agents/$1/$2" 2>/dev/null; fi
+}
 times() { sed -n 's/^\*\*Runs:\*\* *//p' "$(deffile "$1")" | head -1 | grep -o '`[^`]*`' | tr -d '`'; }
 
 case ${1:-} in
@@ -63,14 +71,14 @@ case ${1:-} in
     for n in $(agents); do
       nxt=$(systemctl --user show "agent-run-$n.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
       nxt=$(date -d "$nxt" '+%F %H:%M' 2>/dev/null)
-      last=$(grep 'result:' "$HOME/.local/share/agents/$n/runs.log" 2>/dev/null | tail -1)
+      last=$(aread "$n" runs.log | grep 'result:' | tail -1)
       d=$HOME/.local/share/agents/$n
       running=false; flock -n "$d/run.lock" true 2>/dev/null || running=true
       if [ $json = 1 ]; then
         jq -nc --arg n "$n" --arg next "$nxt" --arg last "$last" --argjson running $running \
           --arg cal "$(times "$n" | paste -sd ';' -)" --arg term "$(cat "$d/terminal" 2>/dev/null)" \
           --arg space "$(sed -n 's/^\*\*Space:\*\* *//p' "$(deffile "$n")" | grep -o 'sp[0-9a-f]*' | head -1)" \
-          --argjson inbox "$(grep -c '^- ' "$d/inbox.md" 2>/dev/null || echo 0)" \
+          --argjson inbox "$(aread "$n" inbox.md | grep -c '^- ' || true)" \
           --arg state "$(statefile "$n")" \
           '{agent:$n, space:$space, terminal:$term, schedule:($cal|split(";")), next_run:$next, running:$running, inbox_items:$inbox, last_result:$last, state_file:$state, log:"~/.local/share/agents/\($n)/runs.log"}'
       else

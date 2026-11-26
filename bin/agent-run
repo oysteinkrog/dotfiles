@@ -24,35 +24,166 @@
 # Claude starts through aiolos-rc where it exists (the desktops), else plain `claude` (castor,
 # whose settings point it at aiolos with its own key).
 # Log: ~/.local/share/agents/NAME/runs.log (one "result:" line per run).
+#
+# Another user (castor): when ~/.config/agents/run-as maps NAME to another user (see
+# agent-paths), that user's Claude does the run. This script, as the calling user, keeps the
+# lock, the terminal and every hc call. The steps that touch the agent's files (definition,
+# brief, launch.sh, transcript, state, git history) run as that user through
+# `sudo -n -u USER <its ~/bin/agent-run> --inner ...`. The runs.log of the calling user gets
+# every line, and the agent's own runs.log gets a copy. Without a mapping (the desktops) the
+# inner steps run as the same user, and nothing changes.
 set -uo pipefail
+
+# ---- Inner steps: they read and write the agent's own files, as the agent's user ----
+if [ "${1:-}" = --inner ]; then
+  cmd=${2:?} NAME=${3:?}; shift 3
+  if [ -n "${SUDO_USER:-}" ]; then
+    # Called through sudo: start from this user's home and tools, not the caller's.
+    cd "$HOME" || exit 1
+    export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+  fi
+  paths=$("$(dirname "$(readlink -f "$0")")/agent-paths" "$NAME") || { echo "agent-run: no definition for $NAME" >&2; exit 2; }
+  eval "$paths"
+  field() { sed -n "s/^\*\*$1:\*\* *//p" "$FILE" | head -1; }
+  workdir() {
+    local w
+    w=$(field 'Primary repo' | grep -o '`[^`]*`\|~[^ ,;]*\|/[^ ,;]*' | head -1 | tr -d '`' | sed 's/\.$//')
+    w=${w/#\~/$HOME}
+    [ -d "$w" ] || w=$HOME
+    echo "$w"
+  }
+  prompt() {
+    local keep
+    case $STATE in
+      "$DIR"/*) keep="agent-run keeps its history" ;;
+      *) keep="commit it with a pathspec" ;;
+    esac
+    echo "Scheduled run of $NAME ($1, $(date '+%F %H:%M')). You start fresh: your memory is the state file, inbox and ee brief that the session start printed. Do one round of your Loop as written in $FILE. Before you finish: (1) rewrite $STATE (open items, what you watch, questions for Oystein, this run's result); $keep; (2) save each lasting lesson, decision or fact with ee remember or ee decide record --workspace $DIR; (3) remove the inbox items you handled from $DIR/inbox.md, and read the inbox once more right before you finish, since urgent items can arrive during the run. Save memories only in your ee store, not in Claude's own memory folder (~/.claude/projects/*/memory), which other sessions share. If something needs Oystein, put it under 'Questions for Oystein' in the state file and end your reply with it."
+  }
+  transcript() { find "$HOME/.claude/projects" -maxdepth 2 -name "$1.jsonl" 2>/dev/null | head -1; }
+  case $cmd in
+    paths)  # FILE= STATE= DIR=, and make DIR
+      mkdir -p "$DIR" && echo "$paths" ;;
+    prepare)  # SPACE= WORK=, or ERR= ERRCODE= when the run cannot start
+      SPACE=$(field Space | grep -o 'sp[0-9a-f]\{8,\}' | head -1)
+      [ -n "$SPACE" ] || { printf 'ERR=%q ERRCODE=2\n' "no **Space:** line in $FILE"; exit 0; }
+      [ -d "$DIR/.ee" ] || ee init --workspace "$DIR" --json >/dev/null 2>&1 ||
+        { printf 'ERR=%q ERRCODE=1\n' "ee init failed in $DIR"; exit 0; }
+      printf 'SPACE=%q WORK=%q\n' "$SPACE" "$(workdir)" ;;
+    brief)  # write brief.md: the Loop section of the agent file is the task for ee pack
+      LOOP=$(awk '/^## Loop/{f=1;next} /^## /{f=0} f' "$FILE" | tr -s '\n' ' ' | cut -c1-600)
+      {
+        echo "# ee brief for $NAME ($(date '+%F %H:%M'))"
+        echo
+        echo "## Where you left off (ee resume)"
+        ee resume --workspace "$DIR" --format markdown 2>/dev/null | head -80
+        echo
+        echo "## Memories for this run (ee pack)"
+        ee pack "${LOOP:-run one round of your loop}" --workspace "$DIR" --max-tokens 3000 --format markdown 2>/dev/null
+      } > "$DIR/brief.md.new" && mv -f "$DIR/brief.md.new" "$DIR/brief.md" ;;
+    show)  # the --dry-run report: WHY SPACE
+      echo "file $FILE, space $2, work dir $(workdir), state $STATE"; echo "prompt: $(prompt "$1")"; echo; cat "$DIR/brief.md" ;;
+    launch)  # write launch.sh for WHY SID START, print its path
+      WHY=$1 SID=$2 START=$3
+      if [ -x "$HOME/.config/aiolos-rc/aiolos-rc" ]; then
+        launch='"$HOME/.config/aiolos-rc/aiolos-rc" --no-pin --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+      else
+        launch='claude --dangerously-skip-permissions --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+      fi
+      extra=
+      # Through sudo the shell may lack this user's tools on PATH; a test may point at its own definitions.
+      [ -z "${SUDO_USER:-}" ] || extra='export PATH="$HOME/bin:$HOME/.local/bin:$PATH"'$'\n'
+      [ -z "${AGENT_DEFS_DIR:-}" ] || extra+="export AGENT_DEFS_DIR=$(printf %q "$AGENT_DEFS_DIR")"$'\n'
+      L=$DIR/launch.sh
+      printf '#!/bin/bash\ncd %q || exit 1\n%sexport AGENT_RUN=%q AGENT_RUN_START=%q AGENT_RUN_SID=%q AGENT_RUN_PROMPT=%q\n%s\n' \
+        "$(workdir)" "$extra" "$NAME" "$START" "$SID" "$(prompt "$WHY")" "$launch" > "$L.new" && mv -f "$L.new" "$L" && echo "$L" ;;
+    transcript)  # path of session SID's transcript, empty while there is none
+      transcript "$1" ;;
+    finish)  # commit the state history; print why the run must stay open, empty when it can end
+      WHY=$1 SID=$2 START=$3
+      # Keep the state file's history (agents whose state lives in their own folder).
+      # git's own output goes to stderr, so stdout carries only the answer.
+      case $STATE in
+        "$DIR"/*)
+          [ -d "$DIR/.git" ] || { git -C "$DIR" init -q && printf '.ee/\n*.lock\nbrief.md*\nlaunch.sh*\n' > "$DIR/.gitignore"; }
+          # One file at a time: git adds nothing when one of the names does not exist yet.
+          for f in state.md inbox.md runs.log .gitignore; do [ ! -e "$DIR/$f" ] || git -C "$DIR" add -- "$f" 2>/dev/null; done
+          git -C "$DIR" -c user.name="$NAME" -c user.email="$NAME@agents.local" commit -qm "run $(date '+%F %H:%M') ($WHY)" >&2 2>/dev/null ;;
+      esac
+      tr=$(transcript "$SID")
+      why=
+      [ "$(stat -c %Y "$STATE" 2>/dev/null || echo 0)" -ge "$START" ] || why="state file not updated"
+      if [ -z "$why" ]; then
+        typed=$(jq -n --arg m "$(date -u -d "@$START" +%Y-%m-%dT%H:%M:%S)" '[inputs | select(.type=="user" and (.isMeta|not) and .timestamp > $m)
+            | .message.content | if type=="string" then . else (map(select(.type=="text") | .text) | join(" ")) end
+            | select(length > 0) | if startswith("<hc ") then (sub("^<hc [^>]*>"; "") | sub("</hc>\\s*$"; "")) else . end
+            | select(startswith("<") | not)] | length - 1' "$tr" 2>/dev/null)
+        [ "${typed:-0}" -le 0 ] || why="someone typed in it ($typed message(s))"
+      fi
+      R=$HOME/.claude/hooks/claude-persist-resume.py
+      if [ -z "$why" ] && [ -f "$R" ]; then
+        r=$(python3 "$R" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
+      fi
+      echo "$why" ;;
+    log)  # append one line to the agent's runs.log
+      mkdir -p "$DIR" && echo "$*" >> "$DIR/runs.log" ;;
+    *) echo "agent-run: unknown inner step $cmd" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
+
+# ---- Outer steps: lock, terminal and hc, as the calling user ----
 NAME= WHY="timer" FG=0 DRY=0
 while [ $# -gt 0 ]; do
   case $1 in
     --why) WHY=$2; shift 2;;
     --foreground) FG=1; shift;;
     --dry-run) DRY=1; FG=1; shift;;
-    -h|--help) sed -n 2,27p "$0"; exit 0;;
+    -h|--help) sed -n 2,34p "$0"; exit 0;;
     *) [ -z "$NAME" ] && NAME=$1 || { echo "agent-run: extra argument $1" >&2; exit 2; }; shift;;
   esac
 done
 [ -n "$NAME" ] || { echo "usage: agent-run NAME [--why TEXT] [--foreground] [--dry-run]" >&2; exit 2; }
 
-paths=$("$(dirname "$(readlink -f "$0")")/agent-paths" "$NAME") || { echo "agent-run: no definition for $NAME" >&2; exit 2; }
+SELF=$(readlink -f "$0")
+RUNAS= RUNAS_HOME=
+ra=$("$(dirname "$SELF")/agent-paths" --run-as "$NAME") || exit 2
+eval "$ra"
+# Run an inner step as the agent's user (see the top of this file).
+as_target() {
+  if [ -n "$RUNAS" ]; then
+    sudo -n -u "$RUNAS" -H -- env ${AGENT_DEFS_DIR:+AGENT_DEFS_DIR="$AGENT_DEFS_DIR"} \
+      "$RUNAS_HOME/bin/agent-run" --inner "$1" "$NAME" "${@:2}"
+  else
+    "$SELF" --inner "$1" "$NAME" "${@:2}"
+  fi
+}
+
+paths=$(as_target paths) || exit 2  # the inner step says why
 eval "$paths"
-mkdir -p "$DIR"
-LOG=$DIR/runs.log
+# This user's folder for the lock, the terminal file and the log. It is DIR itself unless
+# the agent runs as another user.
+ODIR=$HOME/.local/share/agents/$NAME
+mkdir -p "$ODIR"
+LOG=$ODIR/runs.log
 
 if [ "$FG" = 0 ]; then
   systemd-run --user --unit="agent-run-$NAME-$(date +%H%M%S)" --collect --quiet -E PATH -E HOME \
-    bash -c 'exec "$0" "$@" >>"'"$LOG"'" 2>&1' "$(readlink -f "$0")" "$NAME" --why "$WHY" --foreground || exit 1
+    bash -c 'exec "$0" "$@" >>"'"$LOG"'" 2>&1' "$SELF" "$NAME" --why "$WHY" --foreground || exit 1
   echo "agent-run: started; log $LOG"
   exit 0
 fi
 
-exec 9>"$DIR/run.lock"
+exec 9>"$ODIR/run.lock"
 flock -n 9 || { echo "$(date '+%F %T') result: skipped, a run of $NAME is already going"; exit 0; }
 
-log() { echo "$(date '+%F %T') $*"; }
+log() {
+  local l
+  l="$(date '+%F %T') $*"
+  echo "$l"
+  # A copy for the agent's own runs.log, which its git history keeps.
+  [ -z "$RUNAS" ] || [ "$DRY" = 1 ] || as_target log "$l" >/dev/null 2>&1
+}
 T=
 # Status for the herdr window, as labels on the agent's terminal (herdr.agent-*):
 # state running | open (left open after a run, see last result) | waiting (between runs).
@@ -71,42 +202,27 @@ result() {
   esac
   exit "${2:-0}"
 }
-field() { sed -n "s/^\*\*$1:\*\* *//p" "$FILE" | head -1; }
 
-SPACE=$(field Space | grep -o 'sp[0-9a-f]\{8,\}' | head -1)
-WORK=$(field 'Primary repo' | grep -o '`[^`]*`\|~[^ ,;]*\|/[^ ,;]*' | head -1 | tr -d '`' | sed 's/\.$//')
-WORK=${WORK/#\~/$HOME}
-[ -n "$SPACE" ] || result "no **Space:** line in $FILE" 2
-[ -d "$WORK" ] || WORK=$HOME
-[ -d "$DIR/.ee" ] || ee init --workspace "$DIR" --json >/dev/null 2>&1 || result "ee init failed in $DIR" 1
+SPACE= WORK= ERR= ERRCODE=1
+prep=$(as_target prepare) || result "could not read the definition of $NAME" 1
+eval "$prep"
+[ -z "$ERR" ] || result "$ERR" "$ERRCODE"
 
 log "run $NAME ($WHY)"
-
-# The loop text: the Loop section of the agent file, as the task for the ee brief.
-LOOP=$(awk '/^## Loop/{f=1;next} /^## /{f=0} f' "$FILE" | tr -s '\n' ' ' | cut -c1-600)
-{
-  echo "# ee brief for $NAME ($(date '+%F %H:%M'))"
-  echo
-  echo "## Where you left off (ee resume)"
-  ee resume --workspace "$DIR" --format markdown 2>/dev/null | head -80
-  echo
-  echo "## Memories for this run (ee pack)"
-  ee pack "${LOOP:-run one round of your loop}" --workspace "$DIR" --max-tokens 3000 --format markdown 2>/dev/null
-} > "$DIR/brief.md.new" && mv -f "$DIR/brief.md.new" "$DIR/brief.md"
-
-case $STATE in
-  "$DIR"/*) keep="agent-run keeps its history" ;;
-  *) keep="commit it with a pathspec" ;;
-esac
-PROMPT="Scheduled run of $NAME ($WHY, $(date '+%F %H:%M')). You start fresh: your memory is the state file, inbox and ee brief that the session start printed. Do one round of your Loop as written in $FILE. Before you finish: (1) rewrite $STATE (open items, what you watch, questions for Oystein, this run's result); $keep; (2) save each lasting lesson, decision or fact with ee remember or ee decide record --workspace $DIR; (3) remove the inbox items you handled from $DIR/inbox.md, and read the inbox once more right before you finish, since urgent items can arrive during the run. Save memories only in your ee store, not in Claude's own memory folder (~/.claude/projects/*/memory), which other sessions share. If something needs Oystein, put it under 'Questions for Oystein' in the state file and end your reply with it."
+as_target brief
 
 if [ "$DRY" = 1 ]; then
-  echo "file $FILE, space $SPACE, work dir $WORK, state $STATE"; echo "prompt: $PROMPT"; echo; cat "$DIR/brief.md"; exit 0
+  [ -z "$RUNAS" ] || echo "runs as $RUNAS"
+  as_target show "$WHY" "$SPACE"; exit 0
 fi
 
 state() { hc get "$1" --json 2>/dev/null | jq -r '.status.state // empty'; }
 app() { hc get "$1" --json 2>/dev/null | jq -r '.status.app // empty'; }
-has_claude() { [ "$(app "$1")" = claude-code ]; }
+# Under sudo hc may see `sudo` as the terminal's program, so for another user a Claude that
+# agent-run started (it has --session-id) also counts.
+has_claude() {
+  [ "$(app "$1")" = claude-code ] || { [ -n "$RUNAS" ] && pgrep -u "$RUNAS" -f -- '--session-id ' >/dev/null; }
+}
 
 # End the Claude in terminal $1: ctrl+c twice exits an idle Claude Code (a pasted /exit is
 # sent as a chat message, seen 2026-11-26); ctrl+d twice as the fallback.
@@ -138,25 +254,23 @@ fi
 
 START=$(date +%s)
 SID=$(cat /proc/sys/kernel/random/uuid)
-if [ -x "$HOME/.config/aiolos-rc/aiolos-rc" ]; then
-  launch='"$HOME/.config/aiolos-rc/aiolos-rc" --no-pin --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+L=$(as_target launch "$WHY" "$SID" "$START") && [ -n "$L" ] || result "could not write launch.sh" 1
+if [ -n "$RUNAS" ]; then
+  # A login shell as the agent's user, so its ~/.profile PATH applies.
+  hc send "$T" "sudo -n -u $RUNAS -H -i bash $L" >/dev/null || result "hc send to $T failed" 1
 else
-  launch='claude --dangerously-skip-permissions --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+  hc send "$T" "bash $L" >/dev/null || result "hc send to $T failed" 1
 fi
-L=$DIR/launch.sh
-printf '#!/bin/bash\ncd %q || exit 1\nexport AGENT_RUN=%q AGENT_RUN_START=%q AGENT_RUN_SID=%q AGENT_RUN_PROMPT=%q\n%s\n' \
-  "$WORK" "$NAME" "$START" "$SID" "$PROMPT" "$launch" > "$L.new" && mv -f "$L.new" "$L"
-hc send "$T" "bash $L" >/dev/null || result "hc send to $T failed" 1
 hc label "$T" herdr.scheduled-run= herdr.agent-run-started="$(date '+%F %H:%M')" >/dev/null 2>&1
 status running
-echo "$T" > "$DIR/terminal"
+echo "$T" > "$ODIR/terminal"
 log "started in $T, session $SID"
 
 # Wait for the transcript to appear, then until Claude is done or idle twice in a row (max 3 h).
 tr=
 for _ in $(seq 60); do
   sleep 10
-  tr=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$SID.jsonl" 2>/dev/null | head -1)
+  tr=$(as_target transcript "$SID")
   [ -n "$tr" ] && break
 done
 [ -n "$tr" ] || result "no Claude session $SID appeared in $T after 10 min" 1
@@ -175,27 +289,7 @@ while :; do
   sleep 30
 done
 
-# Keep the state file's history (agents whose state lives in their own folder).
-case $STATE in
-  "$DIR"/*)
-    [ -d "$DIR/.git" ] || { git -C "$DIR" init -q && printf '.ee/\n*.lock\nbrief.md*\nlaunch.sh*\n' > "$DIR/.gitignore"; }
-    git -C "$DIR" add state.md inbox.md runs.log .gitignore 2>/dev/null
-    git -C "$DIR" -c user.name="$NAME" -c user.email="$NAME@agents.local" commit -qm "run $(date '+%F %H:%M') ($WHY)" 2>/dev/null ;;
-esac
-
-why=
-[ "$(stat -c %Y "$STATE" 2>/dev/null || echo 0)" -ge "$START" ] || why="state file not updated"
-if [ -z "$why" ]; then
-  typed=$(jq -n --arg m "$(date -u -d "@$START" +%Y-%m-%dT%H:%M:%S)" '[inputs | select(.type=="user" and (.isMeta|not) and .timestamp > $m)
-      | .message.content | if type=="string" then . else (map(select(.type=="text") | .text) | join(" ")) end
-      | select(length > 0) | if startswith("<hc ") then (sub("^<hc [^>]*>"; "") | sub("</hc>\\s*$"; "")) else . end
-      | select(startswith("<") | not)] | length - 1' "$tr" 2>/dev/null)
-  [ "${typed:-0}" -le 0 ] || why="someone typed in it ($typed message(s))"
-fi
-R=$HOME/.claude/hooks/claude-persist-resume.py
-if [ -z "$why" ] && [ -f "$R" ]; then
-  r=$(python3 "$R" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
-fi
+why=$(as_target finish "$WHY" "$SID" "$START")
 if [ -z "$why" ] && [ -n "$cpid" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zsh|sh|fish|timeout|sleep|tail|inotifywait)$'; then
   why="background shell or Monitor still running"
 fi

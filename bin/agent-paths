@@ -2,6 +2,7 @@
 # Print where an agent's definition and working state live, as shell assignments:
 #   FILE=<agents/NAME.md>  STATE=<state file>  DIR=<~/.local/share/agents/NAME>
 # Usage: eval "$(agent-paths NAME)"; exits 2 when there is no definition.
+#        eval "$(agent-paths --run-as NAME)" prints RUNAS= RUNAS_HOME= (see below).
 #
 # Definitions: company manager agents live in the monorepo (tools/agents/, since 2026-11-26),
 # personal ones in the life repo (agents/). The first match wins:
@@ -9,6 +10,23 @@
 #   the life repo (~/work/life on the office desktop, ~/projects/life at home).
 # State: agents/state/NAME.md in the life repo when that file exists; otherwise state.md in
 # the agent's own folder, which agent-run commits to a local git history.
+#
+# Run as another user (castor): ~/.config/agents/run-as has lines "NAME USER" (# starts a
+# comment). When NAME maps to a user other than the caller, --run-as prints that user and
+# its home; agent-run, agent-inbox and agent-schedule then reach the agent's files through
+# `sudo -n -u USER`. With no file or no line for NAME both values are empty.
+if [ "${1:-}" = --run-as ]; then
+  name=${2:?usage: agent-paths --run-as NAME}
+  f=$HOME/.config/agents/run-as u= h=
+  [ -f "$f" ] && u=$(awk -v n="$name" '{sub(/#.*/, "")} $1 == n {print $2; exit}' "$f")
+  [ "$u" = "$(id -un)" ] && u=
+  if [ -n "$u" ]; then
+    h=$(getent passwd "$u" | cut -d: -f6)
+    [ -n "$h" ] || { echo "agent-paths: user $u for $name does not exist" >&2; exit 2; }
+  fi
+  printf 'RUNAS=%q RUNAS_HOME=%q\n' "$u" "$h"
+  exit 0
+fi
 name=${1:?usage: agent-paths NAME}
 dir=$HOME/.local/share/agents/$name
 for d in ${AGENT_DEFS_DIR:+"$AGENT_DEFS_DIR"} "$HOME/work/desktop/managers/tools/agents" \

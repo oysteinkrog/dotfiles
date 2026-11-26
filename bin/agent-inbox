@@ -7,31 +7,52 @@
 #   --urgent  also start a run now (agent-run NAME --why "urgent inbox"), for things that
 #             cannot wait for the next scheduled run, like a service about to be exposed
 # Inbox: ~/.local/share/agents/NAME/inbox.md. The agent removes items it has handled.
+# When the agent runs as another user (~/.config/agents/run-as, see agent-paths), the inbox
+# is that user's, and this script writes it through `sudo -n -u USER`. The run lock and the
+# terminal file stay with the user that runs agent-run.
 set -uo pipefail
 NAME=${1:-}; shift || true
 [ -n "$NAME" ] || { echo "usage: agent-inbox NAME \"TEXT\" [--from WHO] [--urgent] | --show" >&2; exit 2; }
 D=$HOME/.local/share/agents/$NAME
-TEXT= FROM=${HC_TERMINAL_ID:+terminal $HC_TERMINAL_ID} URG=0 SHOW=0
+BIN=$(dirname "$(readlink -f "$0")")
+TEXT= FROM=${HC_TERMINAL_ID:+terminal $HC_TERMINAL_ID} URG=0 TAG=0 SHOW=0
 while [ $# -gt 0 ]; do
   case $1 in
     --from) FROM=$2; shift 2;;
-    --urgent) URG=1; shift;;
+    --urgent) URG=1; TAG=1; shift;;
+    --urgent-tag) TAG=1; shift;;  # used through sudo: mark the item urgent, start nothing
     --show) SHOW=1; shift;;
     *) TEXT=$1; shift;;
   esac
 done
-"$(dirname "$(readlink -f "$0")")/agent-paths" "$NAME" >/dev/null || { echo "agent-inbox: no agent $NAME" >&2; exit 2; }
-mkdir -p "$D"
-[ "$SHOW" = 1 ] && { cat "$D/inbox.md" 2>/dev/null || echo "(empty)"; exit 0; }
-[ -n "$TEXT" ] || { echo "agent-inbox: no text" >&2; exit 2; }
-exec 9>>"$D/inbox.md"; flock 9
-printf -- '- %s%s%s: %s\n' "$(date '+%F %H:%M')" "${FROM:+ from $FROM}" "$([ $URG = 1 ] && echo ' [urgent]')" "$TEXT" >&9
-exec 9>&-
-echo "agent-inbox: left for $NAME"
+RUNAS= RUNAS_HOME=
+ra=$("$BIN/agent-paths" --run-as "$NAME") || exit 2
+eval "$ra"
+if [ -n "$RUNAS" ]; then
+  # The agent's own user writes or shows its inbox.
+  args=("$NAME")
+  if [ "$SHOW" = 1 ]; then args+=(--show)
+  else args+=("$TEXT" --from "$FROM"); [ "$TAG" = 0 ] || args+=(--urgent-tag); fi
+  sudo -n -u "$RUNAS" -H -- env ${AGENT_DEFS_DIR:+AGENT_DEFS_DIR="$AGENT_DEFS_DIR"} \
+    "$RUNAS_HOME/bin/agent-inbox" "${args[@]}" || exit $?
+  [ "$SHOW" = 0 ] && [ "$URG" = 1 ] || exit 0
+  INBOX=$RUNAS_HOME/.local/share/agents/$NAME/inbox.md
+else
+  "$BIN/agent-paths" "$NAME" >/dev/null || { echo "agent-inbox: no agent $NAME" >&2; exit 2; }
+  mkdir -p "$D"
+  [ "$SHOW" = 1 ] && { cat "$D/inbox.md" 2>/dev/null || echo "(empty)"; exit 0; }
+  [ -n "$TEXT" ] || { echo "agent-inbox: no text" >&2; exit 2; }
+  exec 9>>"$D/inbox.md"; flock 9
+  printf -- '- %s%s%s: %s\n' "$(date '+%F %H:%M')" "${FROM:+ from $FROM}" "$([ $TAG = 1 ] && echo ' [urgent]')" "$TEXT" >&9
+  exec 9>&-
+  echo "agent-inbox: left for $NAME"
+  INBOX=$D/inbox.md
+fi
 if [ "$URG" = 1 ]; then
+  mkdir -p "$D"
   # A run is going: type a note into it. Otherwise start a run now.
   if ! flock -n "$D/run.lock" true 2>/dev/null && [ -s "$D/terminal" ]; then
-    hc send "$(cat "$D/terminal")" "New urgent inbox item ($(date +%H:%M)): read $D/inbox.md and handle it in this run." >/dev/null &&
+    hc send "$(cat "$D/terminal")" "New urgent inbox item ($(date +%H:%M)): read $INBOX and handle it in this run." >/dev/null &&
       echo "agent-inbox: a run is going; told it in terminal $(cat "$D/terminal")"
   else
     agent-run "$NAME" --why "urgent inbox"
