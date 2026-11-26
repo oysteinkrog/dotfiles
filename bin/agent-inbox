@@ -20,8 +20,7 @@ while [ $# -gt 0 ]; do
     *) TEXT=$1; shift;;
   esac
 done
-LIFE=$HOME/work/life; [ -d "$LIFE/agents" ] || LIFE=$HOME/projects/life
-[ -f "$LIFE/agents/$NAME.md" ] || { echo "agent-inbox: no agent $NAME" >&2; exit 2; }
+"$(dirname "$(readlink -f "$0")")/agent-paths" "$NAME" >/dev/null || { echo "agent-inbox: no agent $NAME" >&2; exit 2; }
 mkdir -p "$D"
 [ "$SHOW" = 1 ] && { cat "$D/inbox.md" 2>/dev/null || echo "(empty)"; exit 0; }
 [ -n "$TEXT" ] || { echo "agent-inbox: no text" >&2; exit 2; }

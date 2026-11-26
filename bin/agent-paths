@@ -1,0 +1,24 @@
+#!/bin/bash
+# Print where an agent's definition and working state live, as shell assignments:
+#   FILE=<agents/NAME.md>  STATE=<state file>  DIR=<~/.local/share/agents/NAME>
+# Usage: eval "$(agent-paths NAME)"; exits 2 when there is no definition.
+#
+# Definitions: company manager agents live in the monorepo (tools/agents/, since 2026-11-26),
+# personal ones in the life repo (agents/). The first match wins:
+#   $AGENT_DEFS_DIR, the office managers lane, a monorepo checkout at ~/src/monorepo (castor),
+#   the life repo (~/work/life on the office desktop, ~/projects/life at home).
+# State: a life-repo agent keeps agents/state/NAME.md in the life repo; any other agent keeps
+# state.md in its own folder, which agent-run commits to a local git history.
+name=${1:?usage: agent-paths NAME}
+dir=$HOME/.local/share/agents/$name
+for d in ${AGENT_DEFS_DIR:+"$AGENT_DEFS_DIR"} "$HOME/work/desktop/managers/tools/agents" \
+         "$HOME/src/monorepo/tools/agents" "$HOME/work/life/agents" "$HOME/projects/life/agents"; do
+  [ -f "$d/$name.md" ] || continue
+  case $d in
+    */life/agents) state=$d/state/$name.md ;;
+    *) state=$dir/state.md ;;
+  esac
+  printf 'FILE=%q STATE=%q DIR=%q\n' "$d/$name.md" "$state" "$dir"
+  exit 0
+done
+exit 2

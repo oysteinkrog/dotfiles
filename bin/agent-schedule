@@ -15,16 +15,22 @@ case $(hostnamectl hostname 2>/dev/null || hostname) in
   *) here=$( [ "$LIFE" = "$HOME/work/life" ] && echo office || echo home );;
 esac
 
+# Definition folders, as agent-paths searches them; the first file for a name wins.
+DEFS="${AGENT_DEFS_DIR:-} $HOME/work/desktop/managers/tools/agents $HOME/src/monorepo/tools/agents $LIFE/agents"
+deffile() { local d; for d in $DEFS; do [ -f "$d/$1.md" ] && { echo "$d/$1.md"; return; }; done; }
+statefile() { case $(deffile "$1") in */life/agents/*) echo "$LIFE/agents/state/$1.md";; *) echo "$HOME/.local/share/agents/$1/state.md";; esac; }
 agents() {
-  local f n
-  for f in "$LIFE"/agents/*.md; do
+  local f n seen=" "
+  for f in $(for d in $DEFS; do ls "$d"/*.md 2>/dev/null; done); do
     n=$(basename "$f" .md); case $n in TEMPLATE|README) continue;; esac
+    case $seen in *" $n "*) continue;; esac; seen="$seen$n "
+    [ "$(deffile "$n")" = "$f" ] || continue
     grep -q '^\*\*Runs:\*\*' "$f" || continue
     sed -n 's/^\*\*Runs on:\*\* *//p' "$f" | head -1 | grep -qi "$here desktop" || continue
     echo "$n"
   done
 }
-times() { sed -n 's/^\*\*Runs:\*\* *//p' "$LIFE/agents/$1.md" | head -1 | grep -o '`[^`]*`' | tr -d '`'; }
+times() { sed -n 's/^\*\*Runs:\*\* *//p' "$(deffile "$1")" | head -1 | grep -o '`[^`]*`' | tr -d '`'; }
 
 case ${1:-} in
   sync)
@@ -34,7 +40,7 @@ case ${1:-} in
       [ -n "$cal" ] || { echo "$n: no calendar times in backticks on its Runs: line" >&2; continue; }
       while IFS= read -r c; do systemd-analyze calendar "$c" >/dev/null 2>&1 || { echo "$n: bad calendar '$c'" >&2; continue 2; }; done <<< "$cal"
       {
-        echo "# Written by agent-schedule from $LIFE/agents/$n.md. Do not edit; change the Runs: line."
+        echo "# Written by agent-schedule from $(deffile "$n"). Do not edit; change the Runs: line."
         echo "[Unit]"; echo "Description=Scheduled run of agent $n"
         echo "[Timer]"; while IFS= read -r c; do echo "OnCalendar=$c"; done <<< "$cal"
         echo "Unit=agent-run@$n.service"; echo "Persistent=false"; echo "RandomizedDelaySec=60"
@@ -63,9 +69,10 @@ case ${1:-} in
       if [ $json = 1 ]; then
         jq -nc --arg n "$n" --arg next "$nxt" --arg last "$last" --argjson running $running \
           --arg cal "$(times "$n" | paste -sd ';' -)" --arg term "$(cat "$d/terminal" 2>/dev/null)" \
-          --arg space "$(sed -n 's/^\*\*Space:\*\* *//p' "$LIFE/agents/$n.md" | grep -o 'sp[0-9a-f]*' | head -1)" \
+          --arg space "$(sed -n 's/^\*\*Space:\*\* *//p' "$(deffile "$n")" | grep -o 'sp[0-9a-f]*' | head -1)" \
           --argjson inbox "$(grep -c '^- ' "$d/inbox.md" 2>/dev/null || echo 0)" \
-          '{agent:$n, space:$space, terminal:$term, schedule:($cal|split(";")), next_run:$next, running:$running, inbox_items:$inbox, last_result:$last, state_file:"agents/state/\($n).md", log:"~/.local/share/agents/\($n)/runs.log"}'
+          --arg state "$(statefile "$n")" \
+          '{agent:$n, space:$space, terminal:$term, schedule:($cal|split(";")), next_run:$next, running:$running, inbox_items:$inbox, last_result:$last, state_file:$state, log:"~/.local/share/agents/\($n)/runs.log"}'
       else
         echo "$n  next: ${nxt:-not installed}  running: $running  last: $last"
       fi

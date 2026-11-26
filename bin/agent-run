@@ -3,23 +3,26 @@
 #
 # Usage: agent-run NAME [--why TEXT] [--foreground] [--dry-run]
 #
-#   NAME          the agent, as its file in the life repo: agents/NAME.md
+#   NAME          the agent: its definition NAME.md (found by agent-paths: monorepo
+#                 tools/agents/ first, then the life repo's agents/)
 #   --why         why this run starts (timer, inbox, by hand); shown to the agent and logged
 #   --foreground  run here instead of in a detached user unit
 #   --dry-run     print what it would do and the brief, start nothing
 #
 # A scheduled agent's file has a **Runs:** line with systemd calendar times in backticks and a
-# **Space:** line with its herdr space id (agents/README.md, "Scheduled agents"). Its memory:
-#   agents/state/NAME.md              working state, rewritten by the agent each run (life repo)
+# **Space:** line with its herdr space id. Its memory (see agent-paths):
+#   state file                        working state, rewritten by the agent each run
 #   ~/.local/share/agents/NAME/       ee store (.ee/), inbox.md, brief.md, runs.log
 #
 # Steps: refuse if a run is already going; write brief.md (ee resume + ee pack for the loop);
-# find the agent's Claude terminal in its space; end a leftover idle Claude there; start a
-# fresh Claude with the run prompt; wait until it stops; then end it when nobody typed in
-# it, it is not waiting on a prompt, and nothing of it still runs (ctrl+c twice). Questions
-# for Oystein stay in the state file and go to him through manager-cto; they do not keep a
-# run open, since standing questions would keep every run open. Otherwise leave it open and log why.
+# find the agent's terminal in its space; end a leftover idle Claude there; start a fresh
+# Claude with a fixed session id and the run prompt; wait until it stops; then end it when
+# nobody typed in it, it is not waiting on a prompt, and nothing of it still runs (ctrl+c
+# twice). Questions for Oystein stay in the state file and go to him through manager-cto;
+# they do not keep a run open. Otherwise leave it open and log why.
 # The Stop hook agent-run-stop.sh keeps the run from ending before the state file is updated.
+# Claude starts through aiolos-rc where it exists (the desktops), else plain `claude` (castor,
+# whose settings point it at aiolos with its own key).
 # Log: ~/.local/share/agents/NAME/runs.log (one "result:" line per run).
 set -uo pipefail
 NAME= WHY="timer" FG=0 DRY=0
@@ -28,17 +31,14 @@ while [ $# -gt 0 ]; do
     --why) WHY=$2; shift 2;;
     --foreground) FG=1; shift;;
     --dry-run) DRY=1; FG=1; shift;;
-    -h|--help) sed -n 2,22p "$0"; exit 0;;
+    -h|--help) sed -n 2,27p "$0"; exit 0;;
     *) [ -z "$NAME" ] && NAME=$1 || { echo "agent-run: extra argument $1" >&2; exit 2; }; shift;;
   esac
 done
 [ -n "$NAME" ] || { echo "usage: agent-run NAME [--why TEXT] [--foreground] [--dry-run]" >&2; exit 2; }
 
-LIFE=$HOME/work/life; [ -d "$LIFE/agents" ] || LIFE=$HOME/projects/life
-FILE=$LIFE/agents/$NAME.md
-[ -f "$FILE" ] || { echo "agent-run: no agent file $FILE" >&2; exit 2; }
-DIR=$HOME/.local/share/agents/$NAME
-STATE=$LIFE/agents/state/$NAME.md
+paths=$("$(dirname "$(readlink -f "$0")")/agent-paths" "$NAME") || { echo "agent-run: no definition for $NAME" >&2; exit 2; }
+eval "$paths"
 mkdir -p "$DIR"
 LOG=$DIR/runs.log
 
@@ -77,7 +77,7 @@ SPACE=$(field Space | grep -o 'sp[0-9a-f]\{8,\}' | head -1)
 WORK=$(field 'Primary repo' | grep -o '`[^`]*`\|~[^ ,;]*\|/[^ ,;]*' | head -1 | tr -d '`' | sed 's/\.$//')
 WORK=${WORK/#\~/$HOME}
 [ -n "$SPACE" ] || result "no **Space:** line in $FILE" 2
-[ -d "$WORK" ] || result "primary repo '$WORK' from $FILE is not a folder" 2
+[ -d "$WORK" ] || WORK=$HOME
 [ -d "$DIR/.ee" ] || ee init --workspace "$DIR" --json >/dev/null 2>&1 || result "ee init failed in $DIR" 1
 
 log "run $NAME ($WHY)"
@@ -94,64 +94,73 @@ LOOP=$(awk '/^## Loop/{f=1;next} /^## /{f=0} f' "$FILE" | tr -s '\n' ' ' | cut -
   ee pack "${LOOP:-run one round of your loop}" --workspace "$DIR" --max-tokens 3000 --format markdown 2>/dev/null
 } > "$DIR/brief.md.new" && mv -f "$DIR/brief.md.new" "$DIR/brief.md"
 
-PROMPT="Scheduled run of $NAME ($WHY, $(date '+%F %H:%M')). You start fresh: your memory is the state file, inbox and ee brief that the session start printed. Do one round of your Loop as written in $FILE. Before you finish: (1) rewrite $STATE (open items, what you watch, questions for Oystein, this run's result) and commit it with a pathspec; (2) save each lasting lesson, decision or fact with ee remember or ee decide record --workspace $DIR; (3) remove the inbox items you handled from $DIR/inbox.md, and read the inbox once more right before you finish, since urgent items can arrive during the run. Save memories only in your ee store, not in Claude's own memory folder (~/.claude/projects/*/memory), which other sessions share. If something needs Oystein, put it under 'Questions for Oystein' in the state file and end your reply with it."
+case $STATE in
+  "$DIR"/*) keep="agent-run keeps its history" ;;
+  *) keep="commit it with a pathspec" ;;
+esac
+PROMPT="Scheduled run of $NAME ($WHY, $(date '+%F %H:%M')). You start fresh: your memory is the state file, inbox and ee brief that the session start printed. Do one round of your Loop as written in $FILE. Before you finish: (1) rewrite $STATE (open items, what you watch, questions for Oystein, this run's result); $keep; (2) save each lasting lesson, decision or fact with ee remember or ee decide record --workspace $DIR; (3) remove the inbox items you handled from $DIR/inbox.md, and read the inbox once more right before you finish, since urgent items can arrive during the run. Save memories only in your ee store, not in Claude's own memory folder (~/.claude/projects/*/memory), which other sessions share. If something needs Oystein, put it under 'Questions for Oystein' in the state file and end your reply with it."
 
 if [ "$DRY" = 1 ]; then
-  echo "space $SPACE, work dir $WORK, state $STATE"; echo "prompt: $PROMPT"; echo; cat "$DIR/brief.md"; exit 0
+  echo "file $FILE, space $SPACE, work dir $WORK, state $STATE"; echo "prompt: $PROMPT"; echo; cat "$DIR/brief.md"; exit 0
 fi
 
 state() { hc get "$1" --json 2>/dev/null | jq -r '.status.state // empty'; }
 app() { hc get "$1" --json 2>/dev/null | jq -r '.status.app // empty'; }
-entry_for() {
-  local f
-  for f in "$HOME"/.local/state/claude-persist/sessions/*.json; do
-    [ "$(jq -r '.hc.terminal // .hc.id // .hc // empty' "$f" 2>/dev/null)" = "$1" ] || continue
-    kill -0 "$(jq -r .pid "$f")" 2>/dev/null && { echo "$f"; return; }
-  done
-}
+has_claude() { [ "$(app "$1")" = claude-code ]; }
 
 # End the Claude in terminal $1: ctrl+c twice exits an idle Claude Code (a pasted /exit is
 # sent as a chat message, seen 2026-11-26); ctrl+d twice as the fallback.
 end_claude() {
   hc keys "$1" ctrl+c ctrl+c >/dev/null 2>&1; sleep 6
-  [ -z "$(entry_for "$1")" ] || { hc keys "$1" ctrl+d ctrl+d >/dev/null 2>&1; sleep 6; }
+  ! has_claude "$1" || { hc keys "$1" ctrl+d ctrl+d >/dev/null 2>&1; sleep 6; }
 }
 
 # The terminal: the one named after the agent in its space, else the first one there.
 terms=$(hc ls --json | jq -r --arg s "$SPACE" '.. | objects | select(has("address") and (.labels? // {})["herdr.space"] == $s) | .address' 2>/dev/null)
-[ -n "$terms" ] || terms=$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
+[ -n "$terms" ] || ! command -v herdr-app >/dev/null ||
+  terms=$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
 T=
 for t in $terms; do case $(hc get "$t" --json | jq -r '.name // empty') in "$NAME"*) T=$t; break;; esac; done
 [ -n "$T" ] || T=$(echo "$terms" | head -1)
 [ -n "$T" ] || result "no terminal in space $SPACE" 1
-bash "$HOME/.config/herdr-app/mods/space-freeze/freeze.sh" list | jq -e --arg s "$SPACE" 'any(.[]; .space == $s)' >/dev/null &&
+F=$HOME/.config/herdr-app/mods/space-freeze/freeze.sh
+[ -f "$F" ] && bash "$F" list | jq -e --arg s "$SPACE" 'any(.[]; .space == $s)' >/dev/null &&
   result "space $SPACE is frozen; a scheduled agent's space must not be (thaw it or clear the freeze)" 1
 
 # A Claude still open from an earlier run: end it when idle, skip this run when it is busy.
-if [ "$(app "$T")" = claude-code ] && [ -n "$(entry_for "$T")" ]; then
+if has_claude "$T"; then
   case $(state "$T") in
     done|idle) log "ending the Claude left open in $T"; end_claude "$T";;
     *) result "the Claude in $T is $(state "$T"); run skipped" 0;;
   esac
-  [ -z "$(entry_for "$T")" ] || result "the Claude in $T did not exit; run skipped" 1
+  ! has_claude "$T" || result "the Claude in $T did not exit; run skipped" 1
 fi
 
 START=$(date +%s)
+SID=$(cat /proc/sys/kernel/random/uuid)
+if [ -x "$HOME/.config/aiolos-rc/aiolos-rc" ]; then
+  launch='"$HOME/.config/aiolos-rc/aiolos-rc" --no-pin --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+else
+  launch='claude --dangerously-skip-permissions --session-id "$AGENT_RUN_SID" -- "$AGENT_RUN_PROMPT"'
+fi
 L=$DIR/launch.sh
-printf '#!/bin/bash\ncd %q || exit 1\nexport AGENT_RUN=%q AGENT_RUN_START=%q\n"$HOME/.config/aiolos-rc/aiolos-rc" --no-pin -- %q\n' \
-  "$WORK" "$NAME" "$START" "$PROMPT" > "$L.new" && mv -f "$L.new" "$L"
+printf '#!/bin/bash\ncd %q || exit 1\nexport AGENT_RUN=%q AGENT_RUN_START=%q AGENT_RUN_SID=%q AGENT_RUN_PROMPT=%q\n%s\n' \
+  "$WORK" "$NAME" "$START" "$SID" "$PROMPT" "$launch" > "$L.new" && mv -f "$L.new" "$L"
 hc send "$T" "bash $L" >/dev/null || result "hc send to $T failed" 1
 hc label "$T" herdr.scheduled-run= herdr.agent-run-started="$(date '+%F %H:%M')" >/dev/null 2>&1
 status running
 echo "$T" > "$DIR/terminal"
-log "started in $T"
+log "started in $T, session $SID"
 
-# Wait for the session to appear, then until it is done or idle twice in a row (max 3 h).
-entry=
-for _ in $(seq 60); do sleep 10; entry=$(entry_for "$T"); [ -n "$entry" ] && break; done
-[ -n "$entry" ] || result "no Claude session appeared in $T after 10 min" 1
-tr=$(jq -r .transcript "$entry"); cpid=$(jq -r .pid "$entry")
-log "session $(basename "$tr" .jsonl), pid $cpid"
+# Wait for the transcript to appear, then until Claude is done or idle twice in a row (max 3 h).
+tr=
+for _ in $(seq 60); do
+  sleep 10
+  tr=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$SID.jsonl" 2>/dev/null | head -1)
+  [ -n "$tr" ] && break
+done
+[ -n "$tr" ] || result "no Claude session $SID appeared in $T after 10 min" 1
+cpid=$(pgrep -n -f -- "--session-id $SID" || true)
 deadline=$(( START + 3 * 3600 )); quiet=0
 sleep 60
 while :; do
@@ -166,6 +175,14 @@ while :; do
   sleep 30
 done
 
+# Keep the state file's history (agents whose state lives in their own folder).
+case $STATE in
+  "$DIR"/*)
+    [ -d "$DIR/.git" ] || { git -C "$DIR" init -q && printf '.ee/\n*.lock\nbrief.md*\nlaunch.sh*\n' > "$DIR/.gitignore"; }
+    git -C "$DIR" add state.md inbox.md runs.log .gitignore 2>/dev/null
+    git -C "$DIR" -c user.name="$NAME" -c user.email="$NAME@agents.local" commit -qm "run $(date '+%F %H:%M') ($WHY)" 2>/dev/null ;;
+esac
+
 why=
 [ "$(stat -c %Y "$STATE" 2>/dev/null || echo 0)" -ge "$START" ] || why="state file not updated"
 if [ -z "$why" ]; then
@@ -175,12 +192,13 @@ if [ -z "$why" ]; then
       | select(startswith("<") | not)] | length - 1' "$tr" 2>/dev/null)
   [ "${typed:-0}" -le 0 ] || why="someone typed in it ($typed message(s))"
 fi
-if [ -z "$why" ]; then
-  r=$(python3 "$HOME/.claude/hooks/claude-persist-resume.py" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
+R=$HOME/.claude/hooks/claude-persist-resume.py
+if [ -z "$why" ] && [ -f "$R" ]; then
+  r=$(python3 "$R" "$tr" idle 2>/dev/null); [ -z "$r" ] || why="resume check: $(printf %.120s "$r")"
 fi
-if [ -z "$why" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zsh|sh|fish|timeout|sleep|tail|inotifywait)$'; then
+if [ -z "$why" ] && [ -n "$cpid" ] && ps -o comm= --ppid "$cpid" 2>/dev/null | grep -qE '^(bash|zsh|sh|fish|timeout|sleep|tail|inotifywait)$'; then
   why="background shell or Monitor still running"
 fi
-[ -z "$why" ] || result "left open: $why (session $(basename "$tr" .jsonl))" 0
+[ -z "$why" ] || result "left open: $why (session $SID)" 0
 end_claude "$T"
-result "done in $(( ($(date +%s) - START) / 60 )) min, session $(basename "$tr" .jsonl) ended"
+result "done in $(( ($(date +%s) - START) / 60 )) min, session $SID ended"
