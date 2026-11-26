@@ -245,8 +245,15 @@ end_claude() {
 }
 
 # The terminal: the one named after the agent in its space, else the first one there.
-terms=$(hc ls --json | jq -r --arg s "$SPACE" '.. | objects | select(has("address") and (.labels? // {})["herdr.space"] == $s) | .address' 2>/dev/null)
-[ -n "$terms" ] || ! command -v herdr-app >/dev/null ||
+# `hc ls` leaves labels out, so read each local terminal's herdr.space label with
+# `hc get`. This needs no herdr window on this machine (the window may run on
+# the other desktop: 2026-11-26 runs failed with "no Herdr window").
+terms=
+for t in $(hc ls --json | jq -r '.. | objects | select(has("address")) | .address | select(contains("/") | not)' 2>/dev/null); do
+  [ "$(hc get "$t" --json 2>/dev/null | jq -r '.labels["herdr.space"] // empty' 2>/dev/null)" = "$SPACE" ] \
+    && terms="$terms $t"
+done
+[ -n "$terms" ] || ! herdr-app ls >/dev/null 2>&1 ||
   terms=$(herdr-app ls | jq -r --arg s "$SPACE" '.spaces[] | select(.id == $s) | .tabs[].terminals[].terminal')
 T=
 for t in $terms; do case $(hc get "$t" --json | jq -r '.name // empty') in "$NAME"*) T=$t; break;; esac; done
