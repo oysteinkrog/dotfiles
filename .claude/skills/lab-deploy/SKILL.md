@@ -17,7 +17,7 @@ The full description of both PCs (access, rules, specs, how to add a PC) is in t
 | | `trd-pc-1-lab` | `trd-pc-2-lowend` |
 |---|---|---|
 | Login | `ssh trd-pc-1-lab` (old: `labpc`, `hawk`), user `trondheim golfsenter`, key `~/.ssh/labpc_ed25519` | `ssh trd-pc-2-lowend` (old: `labpc2`), user `labqa`, key `~/.ssh/labpc2_ed25519` |
-| Network | Office LAN 192.168.1.160; Headscale once joined | Headscale 100.64.0.8 (`tag:trd-pc`, only Oystein's devices), office LAN 192.168.1.189 |
+| Network | Headscale 100.64.0.9 (`tag:trd-pc`, only Oystein's devices), office LAN 192.168.1.160 | Headscale 100.64.0.8 (`tag:trd-pc`, only Oystein's devices), office LAN 192.168.1.189 |
 | Who uses it | People, with hardware connected | Agents; `labqa` logs on by itself |
 | Windows password | `LAB_PC_LOGIN_PASSWORD` (same value as `LAB_DEPLOY_PASSWORD`) | `LAB_PC2_LOGIN_PASSWORD` |
 

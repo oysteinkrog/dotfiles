@@ -290,7 +290,7 @@ and how to add a PC). Oystein renamed them on 2026-11-26:
 Never use the old names in new text. They still work as aliases in `labqa` and
 `~/.ssh/config`, and jobd still uses them as worker ids. Log in with **`ssh trd-pc-1-lab`** or
 **`ssh trd-pc-2-lowend`**. The PCs are on Headscale (`tag:trd-pc`, only Oystein's devices), so
-the aliases work from anywhere; trd-pc-1-lab uses the office LAN until it has joined. sshd
+the aliases work from anywhere. sshd
 accepts keys only. The shell is Windows, so wrap commands in `powershell -NoProfile -Command`.
 To deploy a build or pull logs, load `lab-deploy`.
 
