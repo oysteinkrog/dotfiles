@@ -19,6 +19,7 @@ esac
 DEFS="${AGENT_DEFS_DIR:-} $HOME/work/desktop/managers/tools/agents $HOME/src/monorepo/tools/agents $LIFE/agents"
 deffile() { local d; for d in $DEFS; do [ -f "$d/$1.md" ] && { echo "$d/$1.md"; return; }; done; }
 statefile() { case $(deffile "$1") in */life/agents/*) echo "$LIFE/agents/state/$1.md";; *) echo "$HOME/.local/share/agents/$1/state.md";; esac; }
+listed() { [ -f "$HOME/.config/agents/$1" ] && awk -v n="$2" '{sub(/#.*/, "")} $1 == n {f=1} END {exit !f}' "$HOME/.config/agents/$1"; }
 agents() {
   local f n seen=" "
   for f in $(for d in $DEFS; do ls "$d"/*.md 2>/dev/null; done); do
@@ -26,7 +27,10 @@ agents() {
     case $seen in *" $n "*) continue;; esac; seen="$seen$n "
     [ "$(deffile "$n")" = "$f" ] || continue
     grep -q '^\*\*Runs:\*\*' "$f" || continue
-    sed -n 's/^\*\*Runs on:\*\* *//p' "$f" | head -1 | grep -qi "$here desktop" || continue
+    # ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine (castor);
+    # no timer here. ~/.config/agents/local "NAME": schedule it here whatever Runs on says.
+    listed remote "$n" && continue
+    listed local "$n" || sed -n 's/^\*\*Runs on:\*\* *//p' "$f" | head -1 | grep -qi "$here desktop" || continue
     echo "$n"
   done
 }

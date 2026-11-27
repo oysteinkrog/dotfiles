@@ -25,6 +25,16 @@ while [ $# -gt 0 ]; do
     *) TEXT=$1; shift;;
   esac
 done
+# ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine (castor). Hand the
+# message to agent-inbox there, which also starts the urgent run.
+R=$( [ -f "$HOME/.config/agents/remote" ] && awk -v n="$NAME" '{sub(/#.*/, "")} $1 == n {print $2; exit}' "$HOME/.config/agents/remote")
+if [ -n "$R" ]; then
+  args=("$NAME")
+  if [ "$SHOW" = 1 ]; then args+=(--show)
+  else args+=("$TEXT" --from "${FROM:-?} ($(hostnamectl hostname 2>/dev/null || hostname))"); [ "$URG" = 0 ] || args+=(--urgent); fi
+  ssh -o BatchMode=yes -o ConnectTimeout=20 "$R" "PATH=\$HOME/bin:\$HOME/.local/bin:\$PATH agent-inbox $(printf '%q ' "${args[@]}")"
+  exit $?
+fi
 RUNAS= RUNAS_HOME=
 ra=$("$BIN/agent-paths" --run-as "$NAME") || exit 2
 eval "$ra"

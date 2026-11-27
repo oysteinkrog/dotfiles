@@ -120,7 +120,27 @@ EOF
 # --- stores ------------------------------------------------------------------
 # name | source dir | flags (scratch = skip git trees, build output and files > MAX_SIZE)
 # Store rules are read from a heredoc named after the store (store_rules_<name>).
+# Agents on other machines (castor): ~/.config/agents/history-pull has lines
+# "LABEL SSH-TARGET DIR [DIR...]" (dirs relative to that account's home). Each is pulled
+# append-only (no --delete) into ~/.local/share/agent-history-remote/LABEL/ before the stores
+# below are copied, so the remote-agents store carries them to the NAS.
+REMOTE=$HOME/.local/share/agent-history-remote
+pull_remote() {
+  local f=$HOME/.config/agents/history-pull label target d
+  [ -f "$f" ] || return 0
+  while read -r label target rest; do
+    case $label in ''|'#'*) continue;; esac
+    for d in $rest; do
+      mkdir -p "$REMOTE/$label/$d"
+      rsync -a --append-verify --include='*/' --include='*.jsonl' --exclude='*' -e 'ssh -o BatchMode=yes -o ConnectTimeout=20' \
+        "$target:$d/" "$REMOTE/$label/$d/" >>"$LOG" 2>&1 || echo "$(date '+%F %T') pull $label $d failed" >>"$LOG"
+      rsync -a --exclude='*.jsonl' --exclude='*.lock' --backup --backup-dir="$REMOTE/.versions/$DATE/$label/$d" \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=20' "$target:$d/" "$REMOTE/$label/$d/" >>"$LOG" 2>&1 || true
+    done
+  done < "$f"
+}
 STORES=(
+  "remote-agents|$REMOTE/|"
   "claude-projects|$HOME/.claude/projects/|"
   "claude-state|$HOME/.claude/|"
   "claude-jobs|$HOME/.claude/jobs/|scratch"
@@ -364,6 +384,7 @@ if [ -n "$LIST" ]; then for s in "${STORES[@]}"; do echo "${s%%|*}"; done; exit 
 
 log "start machine=$MACHINE mode=$MODE dest=$BASE ${BW[*]} ${DRY:+dry-run}"
 FAILED=()
+[ -n "$DRY" ] || { [ -n "$ONLY" ] && [[ $ONLY != *",remote-agents,"* ]]; } || pull_remote
 for s in "${STORES[@]}"; do
   IFS='|' read -r name src flags <<<"$s"
   [ -n "$ONLY" ] && [[ $ONLY != *",$name,"* ]] && continue
