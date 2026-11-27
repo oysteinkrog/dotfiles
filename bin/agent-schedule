@@ -27,7 +27,7 @@ agents() {
     case $seen in *" $n "*) continue;; esac; seen="$seen$n "
     [ "$(deffile "$n")" = "$f" ] || continue
     grep -q '^\*\*Runs:\*\*' "$f" || continue
-    # ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine (castor);
+    # ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine;
     # no timer here. ~/.config/agents/local "NAME": schedule it here whatever Runs on says.
     listed remote "$n" && continue
     listed local "$n" || sed -n 's/^\*\*Runs on:\*\* *//p' "$f" | head -1 | grep -qi "$here desktop" || continue

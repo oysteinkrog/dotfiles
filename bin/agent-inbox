@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     *) TEXT=$1; shift;;
   esac
 done
-# ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine (castor). Hand the
+# ~/.config/agents/remote "NAME SSH-TARGET": the agent runs on another machine. Hand the
 # message to agent-inbox there, which also starts the urgent run.
 R=$( [ -f "$HOME/.config/agents/remote" ] && awk -v n="$NAME" '{sub(/#.*/, "")} $1 == n {print $2; exit}' "$HOME/.config/agents/remote")
 if [ -n "$R" ]; then

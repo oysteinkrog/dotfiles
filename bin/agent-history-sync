@@ -120,7 +120,7 @@ EOF
 # --- stores ------------------------------------------------------------------
 # name | source dir | flags (scratch = skip git trees, build output and files > MAX_SIZE)
 # Store rules are read from a heredoc named after the store (store_rules_<name>).
-# Agents on other machines (castor): ~/.config/agents/history-pull has lines
+# Agents on other machines: ~/.config/agents/history-pull has lines
 # "LABEL SSH-TARGET DIR [DIR...]" (dirs relative to that account's home). Each is pulled
 # append-only (no --delete) into ~/.local/share/agent-history-remote/LABEL/ before the stores
 # below are copied, so the remote-agents store carries them to the NAS.
