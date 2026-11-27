@@ -6,8 +6,10 @@ Wants=wherdr.service
 [Service]
 EnvironmentFile=%h/.config/wherdr/wherdr.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/bin/sh -c 'for i in $(seq 120); do tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 1; done; echo "no tailnet IP after 120 s"; exit 1'
+TimeoutStartSec=150
 ExecStart=/bin/sh -c 'WHERDR_BIND=$(tailscale ip -4) exec caddy run --adapter caddyfile --config %h/.config/wherdr/Caddyfile'
-Restart=on-failure
+Restart=always
 RestartSec=10
 MemoryMax=256M
 
