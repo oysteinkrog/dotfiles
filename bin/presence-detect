@@ -43,10 +43,11 @@ Actions (each can be turned off in ~/.config/presence.conf, key=value):
                   remote: CPUWeight back to 20 and the file removed at once. Running
                   builds are never stopped or frozen.
   chrome_away_min=60  read by chrome-idle-close, not here.
-  voice_unload=1  while remote or away (anything but here), stop voxtype.service and
-                  ytring.service if active, within one check. The units that were active
-                  are listed in the voice-unloaded file and started again on here. RDP
-                  does not count as at the computer. (Approved 2026-11-18.)
+  voice_unload=1  stop voxtype.service when not here (remote or away), and ytring.service
+                  only when away, within one check. The units that were active are
+                  listed in the voice-unloaded file and started again when their state
+                  returns: voxtype on here, ytring on here or remote. (Approved
+                  2026-11-18; ytring runs over RDP since Oystein, 2026-11-28.)
 
 Signals:
   /run/local-input/last  mtime = last key press or click on local USB input,
@@ -83,6 +84,9 @@ CONF = Path(os.environ.get("PRESENCE_CONF", HOME / ".config/presence.conf"))
 STATE = STATE_DIR / "state"
 VOICE_FILE = STATE_DIR / "voice-unloaded"
 VOICE_UNITS = ("voxtype.service", "ytring.service")
+# The states in which each voice unit stays loaded. Oystein, 2026-11-28: ytring runs
+# over RDP too (on either desktop); voxtype still runs only at the desk.
+VOICE_RUN_STATES = {"voxtype.service": ("here",), "ytring.service": ("here", "remote")}
 LOG = STATE_DIR / "log"
 OVERRIDE = STATE_DIR / "heavy-build.override"
 RDP_PORT = os.environ.get("KRDP_PORT", "3389")
@@ -588,7 +592,7 @@ def unit_ctl(action: str, unit: str) -> bool:
 
 
 class Voice:
-    """Stops voxtype and ytring when not here, starts back only those it stopped.
+    """Stops voxtype when not here and ytring when away; starts back only those it stopped.
 
     The list of units it stopped lives in VOICE_FILE, so a restart of the detector
     (or a reboot while away) still brings them back on here. Starting happens on
@@ -618,20 +622,21 @@ class Voice:
         if state is None:
             return
         saved = self.stopped()
-        if state == "here":
-            keep = []
-            for u in saved:
-                if unit_active(u) or unit_ctl("start", u):
-                    log(f'action=voice-start unit={u} reason="state here"')
-                else:
-                    keep.append(u)  # retry on the next check
-            if keep != saved:
-                self.save(keep)
-            return
+        keep = []
+        for u in saved:
+            if state not in VOICE_RUN_STATES[u]:
+                keep.append(u)
+            elif unit_active(u) or unit_ctl("start", u):
+                log(f'action=voice-start unit={u} reason="state {state}"')
+            else:
+                keep.append(u)  # retry on the next check
+        if keep != saved:
+            saved = keep
+            self.save(saved)
         if not enabled:
             return
         for u in VOICE_UNITS:
-            if not unit_active(u):
+            if state in VOICE_RUN_STATES[u] or not unit_active(u):
                 continue
             if u not in saved:
                 saved.append(u)
