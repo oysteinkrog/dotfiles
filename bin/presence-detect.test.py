@@ -331,14 +331,24 @@ class VoiceRule(unittest.TestCase):
 
         pd.unit_active, pd.unit_ctl = active, ctl
 
-    def test_remote_stops_both_and_here_restores_both(self):
+    def test_remote_stops_voxtype_only_and_here_restores_it(self):
         v = pd.Voice()
         v.tick({"state": "here"}, True)
         self.assertEqual(self.calls, [])
         v.tick({"state": "remote"}, True)
+        self.assertEqual(self.active, {"ytring.service"})  # ytring runs over RDP
+        v.tick({"state": "remote"}, True)
+        self.assertEqual(len(self.calls), 1)  # nothing more to stop
+        v.tick({"state": "here"}, True)
+        self.assertEqual(self.active, {"voxtype.service", "ytring.service"})
+        self.assertFalse(pd.VOICE_FILE.exists())
+
+    def test_away_stops_both_and_remote_restores_ytring(self):
+        v = pd.Voice()
+        v.tick({"state": "away"}, True)
         self.assertEqual(self.active, set())
         v.tick({"state": "remote"}, True)
-        self.assertEqual(len(self.calls), 2)  # nothing more to stop
+        self.assertEqual(self.active, {"ytring.service"})
         v.tick({"state": "here"}, True)
         self.assertEqual(self.active, {"voxtype.service", "ytring.service"})
         self.assertFalse(pd.VOICE_FILE.exists())
